@@ -1,5 +1,6 @@
 //! Original canvas tools project native primitives through existing Craft painters.
 use super::*;
+use crate::path_edit::{Canvas as PathCanvas, Drag as PathDrag, VertexAction};
 use egui::{Rect, vec2};
 use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::{Tokens, board, grid, workspace};
@@ -8,6 +9,9 @@ use pcbcraft_engine::{
     board::definition::{self as foot, CopperBinding, GraphicPurpose, PadShape},
     schematic::{ElectricalType, Point, TextAlign},
 };
+
+mod paths;
+use paths::DefinitionPath;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Place {
@@ -59,6 +63,16 @@ pub(super) enum Tool {
         vertex: usize,
         original: Primitive,
         revision: u64,
+    },
+    EditPath {
+        object: u64,
+        drag: PathDrag,
+        revision: u64,
+    },
+    VertexMenu {
+        object: u64,
+        revision: u64,
+        action: VertexAction,
     },
     Move {
         object: u64,
@@ -168,6 +182,45 @@ fn points(primitive: &Primitive) -> Vec<Point> {
     }
 }
 impl Document {
+    /// Adapt an outline context action to the selected definition object and its own history.
+    fn show_vertex_menu(&mut self, response: &egui::Response, item: &Item, area: Rect, over: bool, active: bool) {
+        let popup = egui::Popup::default_response_id(response);
+        if matches!(self.tool, Tool::VertexMenu { .. })
+            && (!active || !egui::Popup::is_id_open(&response.ctx, popup) && !response.secondary_clicked())
+        {
+            self.tool = Tool::Select;
+        }
+        if over
+            && response.secondary_clicked()
+            && !self.pending()
+            && matches!(self.tool, Tool::Select)
+            && let Some(object) = self.selected
+            && let Some(path) = item.objects.get(&object).and_then(DefinitionPath::of)
+            && let Some(pointer) = response.interact_pointer_pos()
+            && let Some(action) = VertexAction::at(PathCanvas { camera: &self.camera, rect: area }, pointer, path.outline(), 64, |points| {
+                points.windows(2).all(|pair| pair[0] != pair[1]) && (!path.outline().closed || points.first() != points.last())
+            })
+        {
+            self.tool = Tool::VertexMenu { object, revision: self.session.revision(), action };
+        }
+        if let Tool::VertexMenu { object, revision, action } = &self.tool {
+            if *revision != self.session.revision() || self.selected != Some(*object) || self.pending() {
+                egui::Popup::close_id(&response.ctx, popup);
+                self.tool = Tool::Select;
+                return;
+            }
+            let object = *object;
+            let revision = *revision;
+            if let Some(points) = pcbcraft_chrome::menu::context(response, |ui| action.show(ui)).and_then(|popup| popup.inner)
+                && let Some(path) = item.objects.get(&object).and_then(DefinitionPath::of)
+            {
+                let result = self.execute(revision, Action::Replace { object, primitive: path.replace(points) });
+                self.error = result.err();
+                self.tool = Tool::Select;
+            }
+        }
+    }
+
     /// Start a tool without discarding fields, inheriting the selected pin/pad's physical defaults.
     fn start_tool(&mut self, kind: Place) {
         if self.pending() {
@@ -659,6 +712,13 @@ impl Document {
         painter.rect_filled(area, 0, if item.kind == Kind::Symbol { t.canvas } else { t.board_canvas });
         let origin = self.camera.screen(Point { x_nm: 0, y_nm: 0 }, area);
         grid::paint(&painter, area, origin, self.camera.snap_step(), authoring::GRID_OPACITY);
+        let path_cancelled = matches!(self.tool, Tool::EditPath { revision, .. } if revision != self.session.revision()
+            || !active || !ui.is_enabled()
+            || ui.input(|input| input.key_pressed(egui::Key::Escape) || input.pointer.secondary_pressed()));
+        if path_cancelled {
+            self.tool = Tool::Select;
+        }
+        self.show_vertex_menu(&response, &item, area, over && !path_cancelled, active && ui.is_enabled());
         let drawing_fill = self.drawing_fill;
         let graphic_object = |points: Vec<Point>, closed: bool, purpose, stroke_nm| {
             let graphic = Graphic {
@@ -674,8 +734,19 @@ impl Document {
         };
         let show_courtyard = self.show_courtyard;
         let visible = |p: &Primitive| show_courtyard || !pcbcraft_engine::authoring::courtyard::is_courtyard_primitive(p);
-        if over && response.drag_started() && selecting_at_start && !self.pending() {
+        if over && !path_cancelled && response.drag_started() && selecting_at_start && matches!(self.tool, Tool::Select) && !self.pending() {
             let start = ui.input(|i| i.pointer.press_origin()).unwrap_or_else(|| pointer.unwrap_or(area.center()));
+            let found = pick_visible(&item, &self.camera, area, start, show_courtyard);
+            let canvas = PathCanvas { camera: &self.camera, rect: area };
+            let path_drag = self
+                .selected
+                .filter(|id| found.is_none_or(|found| found == *id))
+                .filter(|_| response.drag_started_by(egui::PointerButton::Primary) && !ui.input(|i| i.modifiers.shift || i.modifiers.command))
+                .and_then(|id| {
+                    let path = DefinitionPath::of(item.objects.get(&id)?)?.outline();
+                    let handle = canvas.handle(start, path);
+                    (handle.is_some() || canvas.hit_body(start, path)).then(|| (id, PathDrag::new(canvas, path, start, handle)))
+                });
             if show_courtyard
                 && let Some((object, pts, _)) = self.selected_courtyard(&item)
                 && let Some(vertex) = courtyard::pick_vertex(pts, &self.camera, area, start)
@@ -683,7 +754,9 @@ impl Document {
             {
                 self.selected_vertex = Some(vertex);
                 self.tool = Tool::DragCourtyardVertex { object, vertex, original, revision: self.session.revision() };
-            } else if let Some(id) = pick_visible(&item, &self.camera, area, start, show_courtyard) {
+            } else if let Some((object, drag)) = path_drag {
+                self.tool = Tool::EditPath { object, drag, revision: self.session.revision() };
+            } else if let Some(id) = found {
                 if !self.selection.contains(&id) {
                     let _ = self.select(Some(id));
                 }
@@ -703,9 +776,36 @@ impl Document {
         }
         let mut preview = Vec::new();
         let mut drag_invalid: Option<Point> = None;
-        if let Some(point) = pointer.filter(|_| over) {
-            let at = self.camera.snap(point, area);
+        let mut path_preview = None;
+        let mut path_alignment = None;
+        if let Some(point) = pointer.filter(|_| over && !path_cancelled) {
+            let canvas = PathCanvas { camera: &self.camera, rect: area };
+            let bypass = ui.input(|input| input.modifiers.alt);
+            let at = if let Tool::Polyline { points, .. } = &self.tool {
+                let closure = if points.len() >= 3 { canvas.nearby_vertex(point, points.first().copied()) } else { None };
+                let snap = canvas.snap(point, points.last().copied(), closure, bypass);
+                path_alignment = Some(snap);
+                snap.point
+            } else {
+                self.camera.snap(point, area)
+            };
+            if let Tool::EditPath { object, drag, .. } = &mut self.tool {
+                let contact = canvas.nearby_vertex(
+                    point,
+                    item.objects
+                        .iter()
+                        .filter(|(id, _)| **id != *object)
+                        .filter_map(|(_, primitive)| DefinitionPath::of(primitive))
+                        .flat_map(|path| path.outline().points.iter().copied()),
+                );
+                drag.update(canvas, point, contact, bypass);
+                path_alignment = drag.alignment;
+            }
             preview = match &self.tool {
+                Tool::EditPath { object, drag, .. } => {
+                    path_preview = Some(*object);
+                    item.objects.get(object).and_then(DefinitionPath::of).map(|path| path.replace(drag.points.clone())).into_iter().collect()
+                }
                 Tool::Move { original, .. } => original
                     .translated(Point { x_nm: at.x_nm - original.anchor().x_nm, y_nm: at.y_nm - original.anchor().y_nm })
                     .into_iter()
@@ -797,6 +897,16 @@ impl Document {
                         .cloned()
                         .ok_or("No move preview.".into())
                         .and_then(|primitive| self.execute(revision, Action::Replace { object, primitive })),
+                    Tool::EditPath { object, revision, .. } => {
+                        let result = preview
+                            .first()
+                            .cloned()
+                            .ok_or("No outline preview.".into())
+                            .and_then(|primitive| self.execute(revision, Action::Replace { object, primitive }));
+                        self.tool = Tool::Select;
+                        result
+                    }
+                    Tool::VertexMenu { .. } => Ok(()),
                     Tool::MoveGroup { objects, originals, anchor, revision } => originals
                         .into_iter()
                         .map(|p| p.translated(Point { x_nm: at.x_nm - anchor.x_nm, y_nm: at.y_nm - anchor.y_nm }))
@@ -897,7 +1007,7 @@ impl Document {
                     self.tool = Tool::Select;
                 }
             }
-        } else if response.drag_stopped() {
+        } else if response.drag_stopped() || matches!(self.tool, Tool::EditPath { .. }) && !ui.input(|i| i.pointer.primary_down()) {
             self.tool = Tool::Select;
         }
         if keyboard_active && over {
@@ -1090,8 +1200,13 @@ impl Document {
                 || matches!(&self.tool, Tool::MoveGroup { objects, .. } if objects.contains(id))
         };
         for (id, p) in objects {
-            if !is_moving(id) || preview.is_empty() {
+            if (path_preview != Some(*id) && !is_moving(id)) || preview.is_empty() {
                 paint(&painter, p, &self.camera, area, self.selection.contains(id));
+                if self.selected == Some(*id)
+                    && let Some(path) = DefinitionPath::of(p)
+                {
+                    board::drawing_vertices(&painter, path.outline().points.iter().map(|point| self.camera.screen(*point, area)));
+                }
             }
         }
         if self.show_courtyard {
@@ -1103,6 +1218,14 @@ impl Document {
         }
         for p in &preview {
             paint(&painter, p, &self.camera, area, true);
+            if path_preview.is_some()
+                && let Some(path) = DefinitionPath::of(p)
+            {
+                board::drawing_vertices(&painter, path.outline().points.iter().map(|point| self.camera.screen(*point, area)));
+            }
+        }
+        if let Some(snap) = path_alignment {
+            (PathCanvas { camera: &self.camera, rect: area }).paint_guides(&painter, snap);
         }
         if self.show_courtyard
             && let Tool::Courtyard { points, .. } = &self.tool

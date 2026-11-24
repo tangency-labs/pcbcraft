@@ -77,9 +77,15 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>,
         }));
     }
     if selected {
-        for point in points {
-            p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);
-        }
+        drawing_vertices(p, points);
+    }
+}
+
+/// Draw the shared handles for an editable canvas path.
+pub fn drawing_vertices(p: &Painter, points: impl IntoIterator<Item = Pos2>) {
+    let accent = Tokens::get().accent;
+    for point in points {
+        p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, accent);
     }
 }
 
