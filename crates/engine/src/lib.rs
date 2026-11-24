@@ -3527,10 +3527,7 @@ impl Session {
             return true;
         }
         if board::relations::commands::handles(id) {
-            return self.project.as_ref().is_some_and(|p| {
-                p.board_target().is_some()
-                    && (p.board.arcs.is_empty() || matches!(id, board::relations::commands::LIST | board::relations::commands::FEATURES))
-            });
+            return self.relation_available(id);
         }
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());

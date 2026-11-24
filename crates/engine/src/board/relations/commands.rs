@@ -387,6 +387,29 @@ pub(crate) fn stale() -> CommandError {
 }
 
 impl Session {
+    /// Cancellation only needs a still-current review, not permission to edit board geometry.
+    pub(crate) fn relation_available(&self, command: &str) -> bool {
+        if command == CANCEL {
+            return self.current_relation_preview().is_some();
+        }
+        self.project.as_ref().is_some_and(|p| {
+            p.board_target().is_some()
+                && match command {
+                    LIST | FEATURES => true,
+                    ADD | EDIT | DELETE => p.board.arcs.is_empty() && p.board.teardrops.is_empty(),
+                    PREVIEW | APPLY => p.board.arcs.is_empty(),
+                    _ => false,
+                }
+        })
+    }
+
+    fn current_relation_preview(&self) -> Option<&Generic> {
+        match &self.update_plan {
+            Some(ReviewSlot::GenericPrepared(p)) if p.base.matches(self) => Some(p),
+            _ => None,
+        }
+    }
+
     /// Read the exact certified generic snapshot only for byte equivalence assertions.
     #[cfg(test)]
     pub(crate) fn checked_generic_candidate(&self) -> Option<&Arc<crate::Project>> {
@@ -412,7 +435,7 @@ impl Session {
             APPLY => self.apply_relation_preview(params, limit),
             CANCEL => {
                 let token = self::id(&params["token"])?;
-                if !matches!(&self.update_plan, Some(ReviewSlot::GenericPrepared(p)) if p.base.token == token && p.base.matches(self)) {
+                if !self.current_relation_preview().is_some_and(|p| p.base.token == token) {
                     return Err(stale());
                 }
                 let result = transaction::bounded_result(json!({"revision":self.revision}), limit)?;
@@ -534,6 +557,9 @@ impl Session {
         project.resolve_board(params.get("board").and_then(Value::as_str))?;
         if !project.board.arcs.is_empty() {
             return Err(transaction::reason("arc_board", crate::board::arc::UNSUPPORTED, Value::Null));
+        }
+        if !project.board.teardrops.is_empty() {
+            return Err(CommandError::Unavailable(crate::board::teardrop::UNSUPPORTED.into()));
         }
         let mut rows = project.board.relations.as_deref().map(|r| r.relations.clone()).unwrap_or_default();
         let response_id = match command {

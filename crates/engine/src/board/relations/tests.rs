@@ -73,12 +73,15 @@ pub(super) fn decision(preview: &Value) -> Value {
     json!({"token":preview["token"], "accept_loss":ids("losses"), "confirm_remaps":ids("remaps")})
 }
 
-/// Compare immutable snapshot, revision and both history cursors across a refusal.
+/// Compare immutable snapshot, revision and both history stacks across a refusal.
 pub(crate) fn unchanged(s: &mut Session, attempt: impl FnOnce(&mut Session) -> Result<Value, CommandError>) -> CommandError {
     let before = (s.snapshot().unwrap(), s.revision(), s.undo.len(), s.redo.len());
+    let (undo, redo) = (s.undo.clone(), s.redo.clone());
     let error = attempt(s).unwrap_err();
     assert!(Arc::ptr_eq(&before.0, &s.snapshot().unwrap()));
     assert_eq!((before.1, before.2, before.3), (s.revision(), s.undo.len(), s.redo.len()));
+    assert!(undo.iter().zip(&s.undo).all(|(before, after)| before.same_entry(after)), "refusal changed an undo entry");
+    assert!(redo.iter().zip(&s.redo).all(|(before, after)| before.same_entry(after)), "refusal changed a redo entry");
     error
 }
 
@@ -492,7 +495,9 @@ fn a_generic_exact_cancel_and_engine_result_bounds() {
     unchanged(&mut s, |s| run(s, board::clipboard::CUT, args.clone()));
     let expected_revision = s.revision();
     assert!(s.apply(board::clipboard::CUT, &json!({"items":items,"expected_revision":expected_revision})).is_err());
+    assert!(!s.available(CANCEL));
     let old = reviewed(&mut s, board::clipboard::CUT, args.clone());
+    assert!(s.available(CANCEL));
     assert!(old.get("clipboard").is_none());
     let copied = run(&mut s, board::clipboard::COPY, args.clone()).unwrap();
     assert_eq!(copied["clipboard"], board::clipboard::BoardFragment::capture(s.project().unwrap(), &selection, false).unwrap().to_text().unwrap());
@@ -505,9 +510,11 @@ fn a_generic_exact_cancel_and_engine_result_bounds() {
             .is_none()
     );
     run(&mut s, CANCEL, json!({"token":old["token"]})).unwrap();
+    assert!(!s.available(CANCEL));
     unchanged(&mut s, |s| run(s, APPLY, decision(&old)));
     let live = reviewed(&mut s, board::clipboard::CUT, args.clone());
     unchanged(&mut s, |s| run(s, CANCEL, json!({"token":old["token"]})));
+    assert!(s.available(CANCEL));
     unchanged(&mut s, |s| run(s, update::CANCEL_UPDATE, json!({"plan_token":live["token"]})));
     unchanged(&mut s, |s| run(s, PREVIEW, json!({"intent":{"command":"project.new","params":{}}})));
     unchanged(&mut s, |s| {
@@ -1494,7 +1501,17 @@ fn a_nest_raw_sites_are_explicit_and_unadvertised() {
         assert_eq!(source.matches("RelationStage::Raw").count(), expected);
     }
     let mut s = fixture(false);
-    unchanged(&mut s, |s| run(s, PREVIEW, json!({"intent":{"command":"pcb.cut","params":{"items":{},"relation_stage":"Raw"}}})));
+    run(&mut s, "edit.undo", json!({})).unwrap();
+    assert!(!s.undo.is_empty() && !s.redo.is_empty());
+    let fp = s.project().unwrap().board.footprints()[0].id;
+    let params = json!({"items":{"footprints":[format!("footprint-{fp}")]}});
+    let command = board::clipboard::CUT;
+    let mut request = json!({"intent":{"command":command,"params":params}});
+    let control = run(&mut s, PREVIEW, request.clone()).unwrap();
+    request["intent"]["params"]["relation_stage"] = json!("Raw");
+    let error = unchanged(&mut s, |s| run(s, PREVIEW, request));
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message == "`pcb.cut` has no parameter `relation_stage`"), "{error:?}");
+    run(&mut s, CANCEL, json!({"token":control["relation_preview"]["token"]})).unwrap();
 }
 
 /// F1 validation rejects `Kind::Gap` rows whose saved witness segments are perpendicular,

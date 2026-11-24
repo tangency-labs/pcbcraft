@@ -396,11 +396,7 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         }
         run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
         let final_docs = bytes(&s);
-        let final_board: Value = serde_json::from_slice(&final_docs[&test_board_path(&final_docs)]).unwrap();
-        let end_board: Value = serde_json::from_slice(&without_arcs[&test_board_path(&without_arcs)]).unwrap();
-        assert_eq!(final_board["format"], end_board["format"]);
-        assert!(final_board.get("relations").is_none());
-        assert_eq!(final_board["footprints"][0].get("locked").is_some(), lock);
+        assert_eq!(final_docs[&test_board_path(&final_docs)], without_arcs[&test_board_path(&without_arcs)], "arcs={arcs}, lock={lock}");
     }
 }
 
@@ -507,7 +503,7 @@ fn a_format_f1_composes_with_teardrops() {
     use crate::CommandError;
     use crate::board::{
         relations::{
-            commands::{ADD, DELETE, LIST},
+            commands::{ADD, DELETE, EDIT, FEATURES, LIST},
             tests::{add, bytes, origin, pick, run, unchanged},
         },
         rules::Values,
@@ -547,6 +543,9 @@ fn a_format_f1_composes_with_teardrops() {
     let control = bytes(&s);
     let control_board: Value = serde_json::from_slice(&control[&path]).unwrap();
     assert_eq!(control_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    assert!(s.project().unwrap().board.arcs.is_empty());
+    assert!(!s.available(ADD) && !s.available(EDIT) && !s.available(DELETE));
+    assert!(s.available(LIST) && s.available(FEATURES));
     let reference = pick(&mut s, 0, "fp.origin", None);
     let e = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[origin(), reference.clone()]}})));
     assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
@@ -569,11 +568,14 @@ fn a_format_f1_composes_with_teardrops() {
     s.open_snapshot(decode_packed(&packed).unwrap().project);
     assert_eq!(bytes(&s), saved);
     assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+    let e = unchanged(&mut s, |s| run(s, EDIT, json!({"id":id,"edit":{"suppressed":false}})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
     let e = unchanged(&mut s, |s| run(s, DELETE, json!({"ids":[id]})));
     assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
     assert_eq!(bytes(&s), saved);
     teardrop(&mut s, &[], &[record.id]);
     assert_eq!(bytes(&s), related);
+    assert!(s.available(ADD) && s.available(EDIT) && s.available(DELETE));
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
     assert_eq!(bytes(&s), native);
 }
