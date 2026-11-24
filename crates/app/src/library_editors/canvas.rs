@@ -55,6 +55,12 @@ pub(super) enum Tool {
         revision: u64,
     },
 }
+/// Which cancellable preview an input batch's last preview chord resolved to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preview {
+    Paste,
+    Duplicate,
+}
 /// Use the existing drawing-tool glyphs in Browser rows, without deriving identity from labels.
 pub(super) fn browser_icon(primitive: &Primitive) -> pcbcraft_chrome::workspace::ToolIcon {
     use pcbcraft_chrome::workspace::ToolIcon;
@@ -736,22 +742,33 @@ impl Document {
             self.tool = Tool::Select;
         }
         if active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
-            let command = ui.input(|i| i.modifiers.command);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.tool = Tool::Select;
             }
             if over {
-                if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
+                if ui.input(|i| {
+                    i.focused
+                        && i.events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command))
+                }) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
                 // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
                 // egui-winit emits Paste("") when the OS clipboard read is empty and
                 // PasteImage when it holds only an image — both mean "paste intent" here.
-                // Paste resolves in event order and only while focused: a later Escape
-                // in the same batch cancels the chord, and a focus-loss batch must not
-                // arm a preview the reset at the top of this canvas just cleared.
-                let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                // Paste and duplicate arm the same preview and resolve in event order, only
+                // while focused: a later Escape in the same batch cancels the chord, and a
+                // focus-loss batch must not arm a preview the reset just cleared.
+                let copied = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| match event {
+                            egui::Event::Copy => true,
+                            egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } => modifiers.command,
+                            _ => false,
+                        })
+                });
                 let cut = ui.input(|i| {
                     i.focused
                         && i.events.iter().any(|event| match event {
@@ -760,41 +777,67 @@ impl Document {
                             _ => false,
                         })
                 });
-                let pasted = ui.input(|i| {
-                    i.focused
-                        && i.events.iter().fold(false, |armed, event| match event {
-                            egui::Event::Paste(_) | egui::Event::PasteImage(_) => true,
-                            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => false,
-                            egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => true,
-                            _ => armed,
-                        })
+                let preview = ui.input(|i| {
+                    if !i.focused {
+                        return None;
+                    }
+                    i.events.iter().fold(None, |preview, event| match event {
+                        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(Preview::Paste),
+                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => None,
+                        egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Paste),
+                        egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Duplicate),
+                        _ => preview,
+                    })
                 });
-                if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
+                if copied {
                     self.copy(ui.ctx());
                 }
                 if cut {
                     self.cut(ui.ctx());
                 }
-                if pasted {
-                    self.paste(ui.ctx());
+                match preview {
+                    Some(Preview::Paste) => self.paste(ui.ctx()),
+                    Some(Preview::Duplicate) => self.duplicate(),
+                    None => {}
                 }
-                if command && ui.input(|i| i.key_pressed(egui::Key::D)) {
-                    self.duplicate();
-                }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::P)) {
+                // Tool letters and R's direction read the pressed event's own modifiers,
+                // like the command chords above: a command released before batch end
+                // cannot leak a chord into a tool start, and a shift released early
+                // cannot flip the rotation direction.
+                let tool_key = |key: egui::Key| {
+                    ui.input(|i| {
+                        i.focused
+                            && i.events.iter().any(|event| {
+                                matches!(
+                                    event,
+                                    egui::Event::Key { key: letter, pressed: true, modifiers, .. }
+                                        if *letter == key && !modifiers.command
+                                )
+                            })
+                    })
+                };
+                if tool_key(egui::Key::P) {
                     self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
                 }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::L)) {
+                if tool_key(egui::Key::L) {
                     self.start_tool(Place::Line);
                 }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::T)) {
+                if tool_key(egui::Key::T) {
                     self.start_tool(Place::Text);
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::M)) {
                     self.begin_move();
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::R)) {
-                    self.rotate_by(if ui.input(|i| i.modifiers.shift) { 1 } else { -1 });
+                if let Some(shifted) = ui.input(|i| {
+                    if !i.focused {
+                        return None;
+                    }
+                    i.events.iter().find_map(|event| match event {
+                        egui::Event::Key { key: egui::Key::R, pressed: true, modifiers, .. } => Some(modifiers.shift),
+                        _ => None,
+                    })
+                }) {
+                    self.rotate_by(if shifted { 1 } else { -1 });
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                     self.details_requested = true;
@@ -868,7 +911,14 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
     let min = Point { x_nm: start.x_nm.min(end.x_nm), y_nm: start.y_nm.min(end.y_nm) };
     let max = Point { x_nm: start.x_nm.max(end.x_nm), y_nm: start.y_nm.max(end.y_nm) };
     Ok(match kind {
-        Place::Pin => Primitive::Pin { number, name: None, electrical_type: ElectricalType::Passive, at: end, appearance: Some(Default::default()) },
+        Place::Pin => Primitive::Pin {
+            number,
+            name: None,
+            electrical_type: ElectricalType::Passive,
+            alternates: Vec::new(),
+            at: end,
+            appearance: Some(Default::default()),
+        },
         Place::Pad => Primitive::Pad {
             pad: foot::RectPad {
                 number,
@@ -880,6 +930,7 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
                 copper: CopperBinding::ComponentSide,
                 corner_radius_nm: 0,
                 drill_nm: None,
+                plated_slot: None,
             },
         },
         Place::Arc | Place::Polyline | Place::NonPlatedHole => return Err("Choose drawing geometry through its parameterized tool.".into()),
@@ -969,7 +1020,11 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                 color: Some(if pad.copper == CopperBinding::AllCopper { Tokens::get().board_through } else { board::copper_color(Some(true)) }),
                 number: pad.number.clone(),
                 center: at(pad.center),
-                copper: Some(corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)),
+                copper: Some(if pad.plated_slot.is_some() {
+                    pad.local_corners().map(at)
+                } else {
+                    corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)
+                }),
                 contour: match pad.shape {
                     PadShape::Rectangle => board::PadContour::Rectangle,
                     PadShape::Circle => board::PadContour::Circle,
@@ -977,6 +1032,10 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                     PadShape::RoundedRectangle => board::PadContour::RoundedRectangle { radius: pad.corner_radius_nm as f32 * scale },
                 },
                 drill_radius: pad.drill_nm.map(|r| r as f32 * scale / 2.0),
+                plated_slot: pad
+                    .plated_slot
+                    .and_then(|slot| slot.resolve(pad.center, 0, false))
+                    .map(|slot| (slot.cap_centres().map(at), slot.width_nm() as f32 * scale / 2.0)),
                 through_hole: pad.copper == CopperBinding::AllCopper,
                 net: None,
             }],

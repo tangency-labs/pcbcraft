@@ -8,6 +8,15 @@ same engine commands and undo history within each session.
 with affected object IDs, consent/refusal and a session-local token, even with
 `inspect: false`. `pcb.set_board_setup` optionally consumes that token;
 `pcb.cancel_board_setup_preview` revokes it without an authored edit.
+`pcb.inspect_layer_groups` returns derived outer/inner/plane/signal and user groups
+with layer IDs and names, including with `inspect: false`. It is read-only and also
+runs in a `--read-only` session. User
+memberships are edited in the complete setup candidate, not a separate mutation.
+Omitting `stackup.layer_groups` in a setup request preserves existing named groups
+(pruning memberships only for removed copper); pass an explicit `[]` to clear them.
+Mixed copper belongs to plane and signal. Preview reports
+members of removed copper by proposed group UUID, even for newly added groups.
+See [layer groups](board-materials.md#layer-groups).
 
 The built-in Assistant instructions and the server instructions sent to external
 MCP clients ask agents working in a live editor to keep the area they are editing
@@ -214,13 +223,13 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
-| `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
+| `pcb.align_footprints` | Align by bounds (`left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute along X or Y (`distribute_x`, `distribute_y`). Omit `pitch_nm` for equal gaps by bounds; supply it for exact origin spacing. See [set-pitch distribution](pcb-layout-workflow.md#set-pitch-distribution). Track ends follow moving pads in the same undo step |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
 | `pcb.delete_footprints` | Delete the addressed board placements atomically; retain schematic components and pinned physical assignments for re-placement |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing, remembered separately for schematic and PCB views; click and box selection in a schematic; footprint and Browser selection in a PCB view; optional `element: "reference"` selects one placement's text and Properties |
-| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
+| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state. On PCB views, optional `include_locked: false` excludes locked footprints, tracks and vias from selection (default: `true`); project inspection is unchanged. Selection commands refuse disabled targets |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
@@ -349,7 +358,9 @@ still work.
 
 The MCP bridge and raw live clients that need a guarantee across editor versions
 use `engine.execute_versioned` with a required non-null `params.version` beside
-`params.command`. For example:
+`params.command`. Use the `command_api_version` reported by the serving
+editor's command discovery (`list_commands` over MCP, `engine.commands` on the
+raw live endpoint). For example, if the editor reports version 1:
 
 ```json
 {"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
@@ -416,7 +427,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
 | `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
-| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
 | `denied` | The person declined the request in the editor's assistant. |
 | `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |
@@ -508,6 +519,21 @@ vertex order after the first, places a through via at `points[at]` and continues
 that copper layer; a change at the last vertex ends the route on a via. Omitted
 width, via diameter and drill use the board routing preferences, including layer
 changes; explicit drills must be smaller than their pads.
+
+`pcb.unroute_connection` takes `board`, `expected_revision`, and `from` and `to`
+addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
+arm to remove and `to` on the retained side. `execute` returns `revision`,
+`dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
+input pair), and `unrouted` (new ratsnest edges from the change to authored
+copper, as pairs of pad addresses), even with project inspection disabled. An
+edge may end at a different pad on the retained side than the requested `to`.
+Refilled zones can reconnect the pads and clear those edges. Without accepted
+connectivity there are no edges to report. Set `dry_run: true` to get the same
+report without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+`details`; a missing copper endpoint returns `not_found`. See
+[Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
+behavior and other refusal cases.
+
 `pcb.check_design` checks the addressed board without editing it; `execute` returns
 `design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
 representative `at` point and `items`), `counts` per kind and the `total`, listing at
@@ -515,7 +541,12 @@ most 1000 findings. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
-`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`. A
+`no_outline`, `ambiguous_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+Closed Board Outline drawings whose boundaries cross, touch or share an edge are grouped into one
+union component and reported as `ambiguous_outline` (listing those drawings' UUIDs), while
+disjoint closed outlines still nest by even-odd parity so a cut-out away from an overlap remains
+a cut-out. An `outside_board` finding for a copper item or
+non-plated hole inside a cut-out also lists the cut-out drawing's UUID after that item. A
 `courtyard_overlap` lists both footprints and marks a point inside the overlap; touching
 courtyards pass. When unsupported courtyard geometry (circles, arcs, open paths) decided
 the finding by bounds, its message says the comparison is conservative.
@@ -524,11 +555,12 @@ the finding by bounds, its message says the comparison is conservative.
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin used for coordinates in the generated
 files: Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the
-outline, plus one Excellon plated drill file. Export requires a board setup, a
+outline, plus one Excellon plated drill file. Boards with placed circular non-plated
+holes also get a separate non-plated drill file. Export requires a board setup, a
 resolvable placement origin, and at least one closed Board Outline loop. Open Board
-Outline paths are exported as drawn, without the Profile function. It refuses boards
-containing placed circular non-plated holes until separate non-plated drill export is
-available; no partial set is returned.
+Outline paths are exported as drawn, without the Profile function. Boards with copper
+zones or non-plated holes whose diameters round to zero in the drill file are refused
+before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -623,8 +655,14 @@ hides the others and cancels unfinished drawing in that view.
 personal board/layer palette across all views. `inspect_editor` reports effective
 `board.layer_colors` per view, including whether each value is overridden.
 The earlier `board.copper_colors` subset remains for compatibility.
-These values persist locally without changing project revision or undo. Physical
-pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
+`view.set_net_color` takes `view`, an active persistent `net` UUID and `color`
+(`#RRGGBB`, or null to use the layer palette). The shared personal color applies
+across layers. `view.set_net_colors_visibility` switches the addressed view
+between net and layer colors. `inspect_editor` exposes the saved overrides in
+`board.net_colors` and the display setting in `board.net_colors_visible`.
+Effective net and layer color changes enter the live editor’s Undo and Redo
+sequence. They persist locally and leave the project revision and files
+unchanged. Physical pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library
 binding without invented layers. Marker-only pins omit physical membership.
 `view.navigate_layer` takes `view` and `direction` (`next`, `previous`, `front`,
@@ -729,6 +767,29 @@ Schematic inspection reports `available_units` and `display_reference`; the
 base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
+
+`schematic.complete_packages` requires `expected_revision`. Set `scope` to
+`"sheet"` (include the addressed `sheet` UUID when several sheets exist) or
+`"project"` to opt in; omission or `"none"` does nothing. Set `dry_run: true` to
+validate the same plan without editing. Both modes return `{revision, changes,
+skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
+`from_part`, `from_unit`, `to_part`, `to_unit` and `remapped_terminals` (changed
+pin numbers as an old-to-new map). A source part in `changes` is retired; its
+symbol is retained. Skipped entries name `part` and `reason`. Authored
+no-connect markers or selected alternate pin functions report `terminal_intent`.
+A read-only session refuses the command with `out_of_scope`, even for a dry run, because the
+same command applies the transfer. In the live editor, Preview and Apply prepare
+the plan off the editor thread, so the canvas stays responsive; just before
+publishing, the editor re-checks the revision, open dialogs, the request deadline
+and the connection. If the report would exceed the 16 MiB live reply limit,
+Preview and Apply both return `cap_exceeded` and nothing is edited; use `"sheet"`
+scope or headless MCP for very large projects. For a live Apply, the editor
+checks its request deadline after preparing the transfer and does not publish if
+the deadline or an observed disconnect wins. Once publication is authorized, that server
+deadline no longer ends the reply wait. A client timeout or transport failure can
+still lose the reply to a committed edit; inspect before retrying. See [package
+completion](symbol-schema.md#complete-loose-packages) for the matching and
+electrical restrictions.
 
 ## Placement origin
 
