@@ -99,7 +99,8 @@ fn unmarked_polarized_diode_raises_one_finding() {
     let found = findings(&mut s);
     assert_eq!(found.len(), 1, "{found:#?}");
     let finding = &found[0];
-    let placed: Vec<_> = crate::board::track::tests::view(&s).footprints().map(|f| (f.id, f.reference.to_owned(), f.definition.to_owned())).collect();
+    let placed: Vec<_> =
+        crate::board::track::tests::view(&s).footprints().map(|f| (f.id, f.reference.into_owned(), f.definition.into_owned())).collect();
     let (id, reference, _) = placed.iter().find(|(.., definition)| definition == "diode-0402").unwrap();
     assert_eq!(finding["objects"], json!([{"id":id,"kind":"footprint","role":"placement","reference":reference}]));
     assert_eq!(finding["package"], json!({"library":LIBRARY,"id":"diode-0402","revision":1,"name":"Test diode-0402"}));
