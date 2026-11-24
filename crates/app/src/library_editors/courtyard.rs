@@ -647,6 +647,60 @@ mod tests {
         (h, id, cy_id)
     }
 
+    /// Backspace targets the vertex selected in Properties even when the layer is hidden.
+    #[test]
+    fn courtyard_backspace_with_hidden_selected_vertex_keeps_outline() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        crate::tests::click(&mut h, "View");
+        crate::tests::click(&mut h, "Courtyard layer");
+        assert!(!h.state().library_editors.documents[&id].show_courtyard);
+        crate::tests::click(&mut h, &format!("Courtyard outline · {cy_id}"));
+        assert_eq!(h.state().library_editors.documents[&id].selected, Some(cy_id));
+        crate::tests::click(&mut h, "Vertex");
+        crate::tests::click(&mut h, "Vertex 1");
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+
+        let before = doc_state(h.state(), id);
+        let point = empty_point_outside_edge(&h, id, cy_id, 0);
+        h.hover_at(point);
+        h.run();
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc_state(h.state(), id), before);
+        assert_eq!(doc.selected_vertex, Some(0));
+        assert_eq!(doc.error.as_deref(), Some("Show the Courtyard layer before removing a vertex."));
+    }
+
+    /// Backspace leaves both the saved outline and the draft alone while drawing a new outline.
+    #[test]
+    fn courtyard_backspace_during_drawing_keeps_existing_outline_and_draft() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+        let point = empty_point_outside_edge(&h, id, cy_id, 0);
+        h.hover_at(point);
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click_at(&mut h, point);
+        let doc = &h.state().library_editors.documents[&id];
+        let canvas::Tool::Courtyard { points, .. } = &doc.tool else { panic!("expected a courtyard draft") };
+        let draft_points = points.clone();
+
+        let before = doc_state(h.state(), id);
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc_state(h.state(), id), before);
+        assert!(matches!(&doc.tool, canvas::Tool::Courtyard { points, .. } if *points == draft_points));
+
+        h.key_press(egui::Key::Backspace);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(doc_state(h.state(), id), before);
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+    }
+
     /// Type `value` into the labelled property field, replacing its text, without committing it.
     fn type_into(h: &mut Harness<'_, PcbApp>, label: &str, value: &str) {
         h.get_by_label(label).click();

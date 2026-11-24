@@ -84,7 +84,7 @@ area, not covered by a panel or floating layer.
 | **R** / **Shift+R** | Rotates a quarter turn, in opposite directions. Applies to the Move, MoveGroup or Paste preview when one is armed, to the Draw-tool placement prototype otherwise — or to the current selection when neither applies. |
 | **E** | Opens the selected object's details — only when exactly one object is selected. Fires regardless of held modifiers. |
 | **Delete** | Deletes the selected objects. Fires regardless of held modifiers. |
-| **Backspace** | Shared deletion key (requires window focus and no held modifiers; **Ctrl+Backspace** / **Cmd+Backspace** is ignored). When the Courtyard layer is visible and a courtyard vertex is explicitly selected, removes only that vertex (refusing while property edits are pending or when only 3 vertices remain). Otherwise deletes the selected objects in one undoable edit. |
+| **Backspace** | In Select, deletes the selected objects in one undoable edit. If a courtyard vertex is explicitly selected, removes only that vertex and refuses if the layer is hidden, property edits are pending, or only 3 vertices remain. Requires window focus and no held modifiers. |
 | **Enter** | Commits the in-progress polyline or courtyard outline as a graphic object (closing a courtyard polygon and returning to Select); does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
@@ -151,7 +151,7 @@ so canvas keys do not fire while a field is focused.
 | R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
-| Backspace | `canvas` → `with_removed_vertex` + `Action::Replace` when a courtyard vertex is selected, else `delete` → `Action::Delete` (unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
+| Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
 | C | `canvas` → `start_tool(Place::Courtyard)` + `set_show_courtyard(true)` (Footprint Editor, unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_c_shortcut_ignores_copy_chord_and_shift_c` |
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit) |
 | Ctrl+A | `canvas` → `select_many(all)` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss) |

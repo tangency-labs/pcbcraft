@@ -642,6 +642,7 @@ impl Document {
         if !ui.input(|i| i.focused) {
             self.tool = Tool::Select;
         }
+        let selecting_at_start = matches!(self.tool, Tool::Select);
         let pointer = ui.input(|i| i.pointer.hover_pos());
         let over = active
             && ui.is_enabled()
@@ -673,7 +674,7 @@ impl Document {
         };
         let show_courtyard = self.show_courtyard;
         let visible = |p: &Primitive| show_courtyard || !pcbcraft_engine::authoring::courtyard::is_courtyard_primitive(p);
-        if over && response.drag_started() && matches!(self.tool, Tool::Select) && !self.pending() {
+        if over && response.drag_started() && selecting_at_start && !self.pending() {
             let start = ui.input(|i| i.pointer.press_origin()).unwrap_or_else(|| pointer.unwrap_or(area.center()));
             if show_courtyard
                 && let Some((object, pts, _)) = self.selected_courtyard(&item)
@@ -1009,24 +1010,28 @@ impl Document {
             if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                 self.details_requested = true;
             }
-            if ui.input(|i| {
-                i.focused
+            // Completing or cancelling another tool in this pass must not redirect its key
+            // events to the saved selection.
+            if selecting_at_start
+                && matches!(self.tool, Tool::Select)
+                && ui.input(|i| {
+                    i.focused
                     && i.events.iter().any(
                         |event| matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none()),
                     )
-            }) {
-                // With a courtyard vertex selected, Backspace only ever targets that vertex:
-                // pending property edits refuse it instead of falling through to deleting
-                // the whole outline. Without a selected vertex it deletes the selection.
+                })
+            {
+                // A selected vertex remains the target even when deletion is unavailable.
                 // Read the outline after this frame's edits: a midpoint click earlier in the
                 // same frame has already inserted the vertex that is now selected.
                 let current = self.session.snapshot();
-                if self.show_courtyard
-                    && let Some((object, pts, _)) = self.selected_courtyard(&current)
+                if let Some((object, pts, _)) = self.selected_courtyard(&current)
                     && let Some(vertex) = self.selected_vertex
                     && let Some(primitive) = current.objects.get(&object)
                 {
-                    if self.pending() {
+                    if !self.show_courtyard {
+                        self.error = Some("Show the Courtyard layer before removing a vertex.".into());
+                    } else if self.pending() {
                         self.error = Some("Apply or reset the property fields before removing a vertex.".into());
                     } else {
                         match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
@@ -1039,7 +1044,7 @@ impl Document {
                             Err(error) => self.error = Some(error),
                         }
                     }
-                } else if matches!(self.tool, Tool::Select) {
+                } else {
                     self.delete();
                 }
             }
