@@ -650,8 +650,8 @@ impl Item {
             .any(|p| matches!(p, Primitive::Pin { alternates, .. } if !alternates.is_empty()))
     }
 
-    /// Validate draft and native definitions through the same path. All newly authored symbol
-    /// definitions use the current native format regardless of optional records.
+    /// Validate draft and native definitions through the same path. Newly authored symbols
+    /// and footprints use their current native formats regardless of optional records.
     fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
         if self.kind == Kind::Symbol {
@@ -739,7 +739,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty(), &pads).into(),
+                format: footprint::CURRENT_FORMAT.into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,

@@ -95,11 +95,12 @@ within that version. Preserve stable identities and deterministic ordering.
 Pinned library items retain their published format and revision. Changes to
 authored library items go through publication of a new revision.
 
-The project entry point and [native symbol authoring](../libraries/symbol-schema.md)
-use fixed current write formats. Placing a version-5 symbol in an older project
-adopts the folder and occurrence metadata in the placement edit. Board, sheet,
-instance, board setup profile, footprint and part writers have separate schemas
-and still select formats by the records present.
+The project entry point and native library authoring use fixed current write
+formats for [symbols](../libraries/symbol-schema.md) and
+[footprints](../libraries/footprint-schema.md). Placing a version-5 symbol in an
+older project adopts the folder and occurrence metadata in the placement edit.
+Board, sheet, instance, board setup profile and part writers have separate
+schemas and still select formats by the records present.
 
 ## Bundled library address migration
 
