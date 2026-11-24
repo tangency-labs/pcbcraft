@@ -57,6 +57,12 @@ width. Handles still appear only for a single selected wire with an interior cor
 or a junction end. Repeated instances are not supported; appearance across them is
 tracked in [#441](https://github.com/tangency-labs/pcbcraft/issues/441).
 
+Selecting wires or net labels on distinct nets shows the selection’s appearance and class
+assignments. Mixed values are preserved until a field is set for all or reset to
+the theme default. **Assign class** and **Remove class** change membership in the
+selected rule class. **Apply changes** commits the pending fields together so one
+Undo restores the previous values on each net.
+
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without
 placing copper. Initial board placement stays a separate command. A placed

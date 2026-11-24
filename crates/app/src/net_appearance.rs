@@ -1,19 +1,32 @@
 //! Net-wide drawing overrides edited in the selected wire's Properties panel.
 
-use crate::{PcbApp, ViewInput};
+use crate::{PcbApp, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{controls, settings, shell, theme::Tokens};
 use pcbcraft_engine::{
-    nets::{Appearance, ClassTarget, DEFAULT_WIDTH_CP, INSPECT_APPEARANCE, MAX_WIDTH_CP, MIN_WIDTH_CP},
+    nets::{Appearance, ClassTarget, DEFAULT_WIDTH_CP, MAX_PROPERTY_TARGETS, MAX_WIDTH_CP, MIN_WIDTH_CP, SET_APPEARANCE, SET_PROPERTIES},
     selection::Selection,
 };
 use serde_json::{Value, json};
+
+mod bulk;
+
+/// A wire selection or several net labels can address logical nets in Properties.
+pub(super) fn has_net_selection(selection: &Selection) -> bool {
+    !selection.wires.is_empty() || selection.net_labels.len() > 1
+}
+
+#[derive(Debug)]
+enum Fields {
+    Single(Edit),
+    Bulk(bulk::Edit),
+}
 
 /// Resolve the net and its saved override once per selection and project revision.
 #[derive(Debug)]
 pub(super) struct Inspector {
     source: ViewInput,
     selection: Selection,
-    edit: Result<Option<Edit>, String>,
+    edit: Result<Option<Fields>, String>,
 }
 
 #[derive(Debug)]
@@ -75,23 +88,7 @@ impl Edit {
         });
         ui.horizontal(|ui| {
             controls::checkbox(ui, &mut self.use_width, "Set wire width");
-            ui.add_enabled_ui(self.use_width, |ui| {
-                let percent_per_cp = 100.0 / f64::from(DEFAULT_WIDTH_CP);
-                let mut percent = f64::from(self.width_cp) * percent_per_cp;
-                let response = ui
-                    .add(
-                        egui::DragValue::new(&mut percent)
-                            .range(f64::from(MIN_WIDTH_CP) * percent_per_cp..=f64::from(MAX_WIDTH_CP) * percent_per_cp)
-                            .speed(1.0)
-                            .max_decimals(2)
-                            .suffix("%"),
-                    )
-                    .on_hover_text("100% is the default wire width");
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, ui.is_enabled(), "Wire stroke width"));
-                if response.changed() {
-                    self.width_cp = (percent / percent_per_cp).round() as u16;
-                }
-            });
+            ui.add_enabled_ui(self.use_width, |ui| width_field(ui, &mut self.width_cp));
         });
         if self.appearance() != self.saved {
             let (apply, reset) =
@@ -109,13 +106,40 @@ impl Edit {
     }
 }
 
+/// Edit a displayed percentage while preserving the native stroke-width representation.
+fn width_field(ui: &mut egui::Ui, width_cp: &mut u16) {
+    let percent_per_cp = 100.0 / f64::from(DEFAULT_WIDTH_CP);
+    let mut percent = f64::from(*width_cp) * percent_per_cp;
+    let response = ui
+        .add(
+            egui::DragValue::new(&mut percent)
+                .range(f64::from(MIN_WIDTH_CP) * percent_per_cp..=f64::from(MAX_WIDTH_CP) * percent_per_cp)
+                .speed(1.0)
+                .max_decimals(2)
+                .suffix("%"),
+        )
+        .on_hover_text("100% is the default wire width");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, ui.is_enabled(), "Wire stroke width"));
+    if response.changed() {
+        *width_cp = (percent / percent_per_cp).round() as u16;
+    }
+}
+
 impl Inspector {
+    /// Bulk selections edit assignments here and use the Rules window to manage class definitions.
+    pub(super) fn is_bulk(&self) -> bool {
+        matches!(self.edit, Ok(Some(Fields::Bulk(_))))
+    }
+
     /// Present cached data and carry the captured revision with any requested edit.
-    pub(super) fn show(&mut self, ui: &mut egui::Ui) -> Option<Value> {
+    pub(super) fn show(&mut self, ui: &mut egui::Ui) -> Option<(&'static str, Value)> {
         match &mut self.edit {
-            Ok(Some(edit)) => {
-                edit.show(ui).map(|appearance| json!({"target":edit.target,"appearance":appearance,"expected_revision":self.source.revision}))
-            }
+            Ok(Some(Fields::Single(edit))) => edit
+                .show(ui)
+                .map(|appearance| (SET_APPEARANCE, json!({"target":edit.target,"appearance":appearance,"expected_revision":self.source.revision}))),
+            Ok(Some(Fields::Bulk(edit))) => edit
+                .show(ui)
+                .map(|changes| (SET_PROPERTIES, json!({"targets":edit.targets,"changes":changes,"expected_revision":self.source.revision}))),
             Ok(None) => None,
             Err(error) => {
                 ui.label(shell::dim(error.as_str()));
@@ -130,7 +154,7 @@ impl PcbApp {
     pub(super) fn sync_wire_appearance(&mut self) {
         let view = &mut self.views.active;
         let selection = &view.schematic.selection;
-        let Some(source) = view.input(&self.session).filter(|_| !selection.wires.is_empty()) else {
+        let Some(source) = view.input(&self.session).filter(|_| has_net_selection(selection)) else {
             view.schematic.properties.wire_appearance = None;
             return;
         };
@@ -139,11 +163,37 @@ impl PcbApp {
         }
         let edit = (|| {
             let project = self.session.project().ok_or("Project unavailable.")?;
-            let target = crate::net_class_editor::selected_target(project, view.target(), selection, &view.board.tracks.selected)?;
-            let Some(target) = target else { return Ok(None) };
-            let report = self.session.execute(INSPECT_APPEARANCE, &json!({"target":target})).map_err(|error| error.to_string())?;
-            let saved = serde_json::from_value(report["appearance"].clone()).map_err(|error| error.to_string())?;
-            Ok(Some(Edit::new(target, saved)))
+            let Some(DocumentTarget::Sheet(sheet)) = view.target() else { return Ok(None) };
+            let own = project.for_sheet(sheet).ok_or("Sheet unavailable.")?;
+            let wires = own.wires().iter().filter(|wire| selection.wires.contains(&wire.id())).map(|wire| wire.endpoints()[0]);
+            let labels = own
+                .net_labels()
+                .iter()
+                .filter(|label| selection.net_labels.contains(&label.object_id()))
+                .map(|label| pcbcraft_engine::schematic::WireEndpoint::NetLabel(label.id));
+            let mut targets = Vec::new();
+            let mut unsupported = false;
+            for target in project.net_class_targets_for_endpoints(sheet, wires.chain(labels)).map_err(|error| error.to_string())? {
+                match target {
+                    Some(target) if !targets.contains(&target) => targets.push(target),
+                    Some(_) => {}
+                    None => unsupported = true,
+                }
+                if targets.len() > MAX_PROPERTY_TARGETS {
+                    return Err(format!("Select up to {MAX_PROPERTY_TARGETS} nets to edit their properties."));
+                }
+            }
+            if targets.is_empty() {
+                return Ok(None);
+            }
+            if unsupported {
+                return Err("Selection includes wires without a supported current net.".to_owned());
+            }
+            let values = project.net_property_values(&targets).map_err(|error| error.to_string())?;
+            if targets.len() == 1 {
+                return Ok(Some(Fields::Single(Edit::new(targets.remove(0), values[0].appearance))));
+            }
+            Ok(Some(Fields::Bulk(bulk::Edit::new(targets, &values, project.net_classes()))))
         })();
         view.schematic.properties.wire_appearance = Some(Inspector { source, selection: selection.clone(), edit });
     }

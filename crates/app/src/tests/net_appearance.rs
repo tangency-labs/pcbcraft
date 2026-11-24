@@ -13,7 +13,15 @@ fn harness() -> Harness<'static, PcbApp> {
     for x in [0, 25_400_000] {
         app.run(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
     }
-    let pins: Vec<Value> = app.session.project().unwrap().symbols().iter().map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"})).collect();
+    let pins: Vec<Value> = app
+        .session
+        .project()
+        .unwrap()
+        .symbols()
+        .iter()
+        .zip(["2", "1"])
+        .map(|(symbol, terminal)| json!({"symbol":symbol.id(),"terminal":terminal}))
+        .collect();
     app.run(CONNECT_PINS, &json!({"from":pins[0],"to":pins[1],"expected_revision":app.session.revision()}));
     let wire = app.session.project().unwrap().wires()[0].id();
     app.views.active.schematic.selection = Selection::one_wire(wire);
@@ -253,7 +261,8 @@ fn labelled_wire(h: &mut Harness<'_, PcbApp>, sheet: SheetTarget, x_nm: i64, nam
         .iter()
         .rev()
         .take(2)
-        .map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"}))
+        .zip(["1", "2"])
+        .map(|(symbol, terminal)| json!({"symbol":symbol.id(),"terminal":terminal}))
         .collect();
     run(h, CONNECT_PINS, json!({"sheet":sheet.id(),"from":pins[1],"to":pins[0]}));
     let sheet_project = h.state().session.project().unwrap().for_sheet(sheet).unwrap();
@@ -347,4 +356,53 @@ fn net_appearance_scope_follows_shared_net_not_same_named_local_nets() {
 
     h.state_mut().run("edit.undo", &Value::Null);
     assert!(h.state().session.project().unwrap().wire_appearances().unwrap().is_empty(), "original state restored");
+}
+
+/// A mixed width and an added rule class commit together from the inline multi-net inspector.
+#[test]
+fn bulk_wire_properties_apply_only_changed_fields_in_one_undo_step() {
+    let mut h = harness();
+    let sheet = h.state().session.project().unwrap().sheet_target();
+    let wire = labelled_wire(&mut h, sheet, 50_800_000, "OTHER", "local");
+    let target = {
+        let project = h.state().session.project().unwrap();
+        let endpoint = project.wires().iter().find(|item| item.id() == wire).unwrap().endpoints()[0];
+        project.net_class_target_for_endpoint(sheet, endpoint).unwrap().unwrap()
+    };
+    run(&mut h, nets::SET_APPEARANCE, json!({"target":target,"appearance":{"width_cp":300}}));
+    run(&mut h, pcbcraft_engine::net_classes::CREATE, json!({"name":"Wide","rules":{}}));
+    let wires: Vec<_> = h.state().session.project().unwrap().wires().iter().map(|wire| wire.id()).collect();
+    h.state_mut().views.active.schematic.selection.wires = wires.iter().cloned().collect();
+    let revision = h.state().session.revision();
+    h.run();
+    h.get_by_label("2 nets selected");
+    click(&mut h, "Mixed");
+    click(&mut h, "Set for all");
+    set_spin(&mut h, "Wire stroke width", "200");
+    click(&mut h, "Assign class");
+    click(&mut h, "Apply changes");
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let project = h.state().session.project().unwrap();
+    let targets: Vec<_> = project
+        .net_class_targets_for_endpoints(sheet, project.wires().iter().map(|wire| wire.endpoints()[0]))
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect();
+    let values = project.net_property_values(&targets).unwrap();
+    let class = project.net_classes().definitions[0].id;
+    assert_eq!(values.len(), 2);
+    for value in &values {
+        assert_eq!(value.appearance, Some(nets::Appearance { color: None, width_cp: Some(320) }));
+        assert_eq!(value.classes, [class].into());
+    }
+    h.state_mut().run("edit.undo", &Value::Null);
+    let project = h.state().session.project().unwrap();
+    let restored = project.net_property_values(&targets).unwrap();
+    assert!(restored.iter().all(|value| value.classes.is_empty()));
+    let widths = project.wire_appearances().unwrap();
+    assert_eq!(widths.len(), 1);
+    assert_eq!(widths[&wire].width_cp, Some(300));
 }

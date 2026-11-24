@@ -13,12 +13,15 @@ mod graph;
 mod numbering;
 mod pairs;
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
+mod properties;
 mod reconcile;
 mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};
 pub use commands::{PROMOTE, RESOLVE_AMBIGUITY};
+pub use properties::{MAX_PROPERTY_TARGETS, PropertyValues, SET_PROPERTIES};
+pub(crate) use properties::{property_changes_schema, property_targets_schema, validate_property_changes, validate_property_targets};
 
 use crate::board::update::SourceCapture;
 use serde::{Deserialize, Serialize};

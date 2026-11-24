@@ -120,7 +120,7 @@ enum ClearChannel {
 /// An explicit null for either channel is rejected; use `clear` to remove a saved channel.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Patch {
+pub(super) struct Patch {
     #[serde(default, deserialize_with = "stored_color")]
     color: Option<[u8; 3]>,
     #[serde(default, deserialize_with = "stored_width")]
@@ -134,7 +134,7 @@ impl Patch {
     /// Parse a strictly typed patch, rejecting unknown keys, null channels, contradictory clear
     /// markers, an explicitly empty clear list and unbounded widths. A null patch and an object
     /// without a `clear` key are the documented full resets.
-    fn parse(value: &Value) -> Result<Self, CommandError> {
+    pub(super) fn parse(value: &Value) -> Result<Self, CommandError> {
         if value.is_null() {
             return Ok(Self { color: None, width_cp: None, clear: Vec::new() });
         }
@@ -156,7 +156,7 @@ impl Patch {
     /// Return the full sparse appearance after applying this patch to a saved override.
     /// An empty patch (or an explicit null) is the documented reset to theme defaults; a clear
     /// marker removes just that channel while the other is inherited from the saved override.
-    fn apply(self, saved: Option<Appearance>) -> Option<Appearance> {
+    pub(super) fn apply(&self, saved: Option<Appearance>) -> Option<Appearance> {
         let clear_color = self.clear.contains(&ClearChannel::Color);
         let clear_width = self.clear.contains(&ClearChannel::WidthCp);
         if self.color.is_none() && self.width_cp.is_none() && !clear_color && !clear_width {

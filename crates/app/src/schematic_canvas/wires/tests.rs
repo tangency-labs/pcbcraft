@@ -46,7 +46,15 @@ fn styled_harness_with_paper(color: egui::Color32, paper: impl Fn(&mut crate::pr
     for x in [0, 25_400_000] {
         app.run(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
     }
-    let pins: Vec<Value> = app.session.project().unwrap().symbols().iter().map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"})).collect();
+    let pins: Vec<Value> = app
+        .session
+        .project()
+        .unwrap()
+        .symbols()
+        .iter()
+        .zip(["2", "1"])
+        .map(|(symbol, terminal)| json!({"symbol":symbol.id(),"terminal":terminal}))
+        .collect();
     app.run(CONNECT_PINS, &json!({"from":pins[0],"to":pins[1],"expected_revision":app.session.revision()}));
 
     let expected =
@@ -670,7 +678,8 @@ fn wire_crossing_canvas_and_matching_custom_paper_keeps_a_cue() {
     let project = h.state().session.project().unwrap();
     let route = project.wire_path(&project.wires()[0]);
     let [from, to] = route.as_slice() else { panic!("expected a straight route, got {route:?}") };
-    assert!(from.x_nm < to.x_nm);
+    let symbols = project.symbols();
+    assert!(symbols[0].position.x_nm < from.x_nm && from.x_nm < to.x_nm && to.x_nm < symbols[1].position.x_nm);
     let midpoint = Point { x_nm: from.x_nm + (to.x_nm - from.x_nm) / 2, y_nm: from.y_nm };
     let paper_at = Point { x_nm: midpoint.x_nm + (to.x_nm - midpoint.x_nm) / 2, y_nm: midpoint.y_nm - 5_000_000 };
     let sheet = project.sheet_target().id();

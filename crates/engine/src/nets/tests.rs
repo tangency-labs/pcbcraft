@@ -11,6 +11,7 @@ mod appearance;
 mod codec;
 mod numbering;
 mod pairs;
+mod properties;
 mod reconciliation;
 mod selection;
 

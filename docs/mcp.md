@@ -272,6 +272,12 @@ path used by schematic Properties. The overrides are persisted against the
 [logical net registry](formats/native-project-storage.md#net-wire-appearance).
 These are additions to command API version 1.
 
+Use `nets.set_properties` to edit up to 64 distinct current logical nets in one
+Undo step. Send `targets`, `expected_revision` and a `changes` object with an
+optional `appearance` patch, `add_classes` and `remove_classes`. Omitted fields
+keep their values on each net. Class lists update assignments to existing rule
+definitions. An invalid or repeated electrical target rejects the entire edit.
+
 ## MCP reference
 
 - <a name="command-api-version"></a>[Command API version](automation/command-api.md#command-api-version),

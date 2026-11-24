@@ -204,6 +204,10 @@ enum ParamKind {
     ClassTarget,
     /// Sparse schematic wire appearance patch, or null to reset to theme defaults.
     NetAppearance,
+    /// Distinct scoped nets in one batch edit.
+    NetPropertyTargets,
+    /// Sparse wire appearance and class membership changes for a batch.
+    NetPropertyChanges,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -344,6 +348,8 @@ impl ParamKind {
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
             Self::NetAppearance => nets::appearance_param_schema(),
+            Self::NetPropertyTargets => nets::property_targets_schema(),
+            Self::NetPropertyChanges => nets::property_changes_schema(),
             Self::ClassId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
@@ -708,6 +714,8 @@ impl ParamKind {
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
             Self::NetAppearance => nets::validate_appearance_patch(value),
+            Self::NetPropertyTargets => nets::validate_property_targets(value),
+            Self::NetPropertyChanges => nets::validate_property_changes(value),
             Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
                 .ok()
                 .filter(|id| !id.is_nil())
@@ -2876,6 +2884,21 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: nets::SET_PROPERTIES,
+        title: "Set Selected Net Properties",
+        summary: "Apply the same sparse wire appearance and class membership changes to several logical nets in one undo step.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "targets", kind: ParamKind::NetPropertyTargets, required: true, summary: "Distinct scoped net targets" },
+            Param {
+                name: "changes",
+                kind: ParamKind::NetPropertyChanges,
+                required: true,
+                summary: "Appearance and class assignments to change. Omitted fields keep their values on each net.",
+            },
+        ],
+    },
+    Command {
         id: nets::INSPECT_APPEARANCE,
         title: "Inspect Net Appearance",
         summary: "Inspect a net's effective schematic drawing override without promoting identities or editing the project.",
@@ -3638,6 +3661,7 @@ impl Session {
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
             | nets::SET_APPEARANCE
+            | nets::SET_PROPERTIES
             | nets::INSPECT_APPEARANCE
             | part_groups::CREATE
             | part_groups::UPDATE
@@ -4173,6 +4197,7 @@ impl Session {
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
                 | nets::SET_APPEARANCE
+                | nets::SET_PROPERTIES
                 | nets::INSPECT_APPEARANCE
                 | part_groups::CREATE
                 | part_groups::UPDATE
@@ -4296,6 +4321,7 @@ impl Session {
                 self.inspect_net_class_target(params)?;
             }
             nets::SET_APPEARANCE => self.set_net_appearance(params)?,
+            nets::SET_PROPERTIES => self.set_net_properties(params)?,
             nets::INSPECT_APPEARANCE => {
                 self.inspect_net_appearance(params)?;
             }

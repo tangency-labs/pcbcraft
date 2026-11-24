@@ -1527,6 +1527,257 @@
         "type": "object"
       }
     },
+    "nets.set_properties": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "add_classes": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "appearance": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "not": {
+                          "allOf": [
+                            {
+                              "required": [
+                                "clear",
+                                "color"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "clear": {
+                                  "contains": {
+                                    "const": "color"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "not": {
+                          "allOf": [
+                            {
+                              "required": [
+                                "clear",
+                                "width_cp"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "clear": {
+                                  "contains": {
+                                    "const": "width_cp"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "clear": {
+                        "items": {
+                          "enum": [
+                            "color",
+                            "width_cp"
+                          ],
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "color": {
+                        "items": {
+                          "maximum": 255,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "type": "array"
+                      },
+                      "width_cp": {
+                        "maximum": 800,
+                        "minimum": 50,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "remove_classes": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "type": "object"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "targets": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "persistent"
+                    },
+                    "net": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "project": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "scope": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "schematic",
+                            "board"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "project",
+                    "scope",
+                    "net"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "label",
+                            "port",
+                            "terminal"
+                          ],
+                          "type": "string"
+                        },
+                        "object": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "occurrence": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "project": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "scope": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "board",
+                                "schematic"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "terminal": {
+                          "maxLength": 256,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "project",
+                        "scope",
+                        "occurrence",
+                        "object",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "derived"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "anchor"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "expected_revision",
+          "targets",
+          "changes"
+        ],
+        "type": "object"
+      }
+    },
     "parameter.list": {
       "params": {
         "additionalProperties": false,
