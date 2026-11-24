@@ -98,8 +98,8 @@ The project entry point and native library authoring use fixed current write
 formats for [symbols](../libraries/symbol-schema.md),
 [footprints](../libraries/footprint-schema.md) and [parts](../libraries/part-schema.md).
 Placing a version-5 symbol in an older project adopts the folder and occurrence
-metadata in the placement edit. Board setup profile writers still select
-formats by the records present.
+metadata in the placement edit. Portable board setup exports use
+[`pcbcraft-setup-profile/6`](../pcb/board-materials.md#silkscreen-and-portable-setup-profiles).
 
 ## Bundled library address migration
 
@@ -428,10 +428,9 @@ copper and the tolerance and basis of finished copper thickness, and the stackup
 declared finished board thickness, tolerance and minimum. It accepts a placement
 origin, assembly profile adoptions, board rules and every earlier physical field, and requires at least one of
 the new fields. Older headers, including 21, reject them. Format 42 supports
-these fields when present. Setup profiles use
-`pcbcraft-setup-profile/2` for stack extensions without material reports. With
-reports they use profile version 3, which can also carry the stack extensions. See
-[board-materials.md](../pcb/board-materials.md#copper-strata-and-board-thickness).
+these fields when present. The [current setup profile format](../pcb/board-materials.md#silkscreen-and-portable-setup-profiles)
+also supports them as optional records. Historical profile versions 2, 3 and 5
+retain their original validation rules.
 
 Board format `pcbcraft-board/24` adds optional scoped `net_assignment` objects to
 vias and requires at least one assignment. It accepts optional assembly profile
@@ -446,8 +445,8 @@ dielectric strength and CTI reports to embedded materials. It supports every ear
 field, including stack fields, assigned via intent, assembly profiles, a placement origin and board rules, and
 requires at least one such report. Older headers reject them. Formats 26, 34 and
 35 can retain reports. Reports are optional in format 42.
-Setup profiles with these reports use `pcbcraft-setup-profile/3`.
-See [board-materials.md](../pcb/board-materials.md#thermal-and-insulation-reports).
+Historical setup profile version 3 requires at least one report. Current
+setup profiles make them optional. See [thermal and insulation reports](../pcb/board-materials.md#thermal-and-insulation-reports).
 
 ### Zone outline records
 

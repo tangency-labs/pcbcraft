@@ -41,7 +41,7 @@ fn copper_role_and_thickness_basis_strings_round_trip_on_all_paths() {
                 SetupProfile::new("Copper strings".into(), s.project().unwrap().board_setup().unwrap().clone(), Settings::default()).unwrap();
             let encoded = profile.encode().unwrap();
             let profile_json: Value = serde_json::from_slice(&encoded).unwrap();
-            assert_eq!(profile_json["format"], "pcbcraft-setup-profile/2");
+            assert_eq!(profile_json["format"], crate::board::setup::profile::CURRENT_FORMAT);
             let reopened = SetupProfile::decode(&encoded).unwrap();
             assert_eq!(serde_json::to_value(reopened.setup).unwrap(), candidate);
             s.apply("edit.undo", &json!({})).unwrap();
