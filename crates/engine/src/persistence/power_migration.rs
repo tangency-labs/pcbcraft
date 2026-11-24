@@ -101,8 +101,17 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
         }
         encoded.insert(path.clone(), serde_json::to_vec_pretty(&sheet).map_err(|e| e.to_string())?);
     }
+    // This compatibility step can run while opening a legacy folder. Its existing board and
+    // instance paths stay authoritative until the save worker chooses a migration destination.
+    let mut entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).map_err(|e| e.to_string())?;
+    let migrated_entry: Value = serde_json::from_slice(&encoded[ENTRY_POINT]).map_err(|e| e.to_string())?;
+    entry["components"] = migrated_entry["components"].clone();
+    if entry.get("numeric_id_high_water").is_some() {
+        entry["numeric_id_high_water"] = migrated_entry["numeric_id_high_water"].clone();
+    }
+    documents.insert(ENTRY_POINT.into(), serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?);
     for (path, bytes) in encoded {
-        if path == ENTRY_POINT || changed_sheets.contains(&path) || !documents.contains_key(&path) {
+        if changed_sheets.contains(&path) || (path.starts_with("library/symbols/") && !documents.contains_key(&path)) {
             documents.insert(path, bytes);
         }
     }

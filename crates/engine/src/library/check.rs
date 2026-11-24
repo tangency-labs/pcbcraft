@@ -477,7 +477,7 @@ fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, Check
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: header.format });
     }
     let definition: FootprintDefinition = serde_json::from_str(text).map_err(malformed)?;
-    if definition.format != FootprintDefinition::format_for(!definition.non_plated_holes.is_empty(), &definition.pads) {
+    if definition.validate_format().is_err() {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: definition.format });
     }
     Ok(definition)

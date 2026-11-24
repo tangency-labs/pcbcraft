@@ -272,7 +272,8 @@ read-only sessions and through MCP with `inspect: false`.
 The check decodes footprint, symbol and part documents structurally, so a
 document that strict loading rejects for a semantic defect can still be
 explained. Every footprint format this build reads is accepted, including
-footprints with plated slots, and the format must match the authored holes.
+footprints with plated slots. The current format accepts any supported mix of
+holes; an older format must match the authored holes.
 Every authored pad is kept in its authored order, with no
 deduplication; slotted pads are pads, and non-plated holes are not. Exact symbol and footprint
 references resolve in the transported documents first and then in the loaded

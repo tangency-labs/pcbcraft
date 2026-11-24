@@ -110,8 +110,8 @@ fn registry_codec_refuses_invalid_authority_and_preserves_the_input_snapshot() {
     }
 }
 
-/// Project/16 cannot carry registry data, project/17 cannot omit it, and board instance headers
-/// must select instances/2. Explicit null never serves as an older-vocabulary omission.
+/// Older project headers still reject unsupported registry data. The current schematic-only
+/// entry point can omit the registry, and board instance headers must match its presence.
 #[test]
 fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
     for board in [false, true] {
@@ -139,7 +139,7 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
                 *registry(&mut value) = Value::Null;
             }
             missing.insert(path.clone(), serde_json::to_vec(&value).unwrap());
-            assert!(decode_documents(&missing).is_err());
+            assert_eq!(decode_documents(&missing).is_err(), board || !absent);
         }
         if board {
             let mut bad = docs.clone();

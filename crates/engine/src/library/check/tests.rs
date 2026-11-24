@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     Session,
     authoring::{Action, publishing},
-    board::definition::CircularNpth,
+    board::definition::{CURRENT_FORMAT, CircularNpth},
     library::sources::{LOAD, NativeSource, PREPARE_PUBLICATION},
     part_authoring::{self, ReferenceField},
     schematic::Point,
@@ -353,8 +353,8 @@ fn malformed_document_is_an_error_not_a_clean_report() {
 #[test]
 fn unsupported_or_mismatched_format_is_an_error() {
     let fixture = fixture();
-    for format in ["pcbcraft-footprint/99", FootprintDefinition::format_for(true, &[])] {
-        let documents = edited(&fixture, |text| text.replacen(FootprintDefinition::format_for(false, &[]), format, 1));
+    for format in ["pcbcraft-footprint/99", NPTH_FORMAT] {
+        let documents = edited(&fixture, |text| text.replacen(CURRENT_FORMAT, format, 1));
         let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
         assert_eq!(error, CheckError::UnsupportedFormat { file: fixture.footprint_path.clone(), format: format.into() });
     }
@@ -505,7 +505,7 @@ fn non_plated_holes_are_not_pad_occurrences() {
     let older = json!({"item":item.as_ref(),"documents":{"library.json":manifest}});
     assert!(fixture.session.execute(PREPARE_PUBLICATION, &older).is_err(), "an edit without its base still needs consent");
     let (_, path, text) = publish(&mut fixture.session, &item, &manifest, Some(fixture.footprint.revision));
-    assert!(text.contains(FootprintDefinition::format_for(true, &[])));
+    assert!(text.contains(CURRENT_FORMAT));
     let documents = Documents::from([("library.json".into(), manifest), (path, text)]);
     for capture in [Capture::from_documents(&documents, &Catalog::default()).unwrap(), Capture::from_item(&item).unwrap()] {
         let numbers: Vec<_> = capture.footprints()[0].pads.iter().map(|pad| pad.number.as_str()).collect();
@@ -773,6 +773,7 @@ fn check_place_stage_and_info_findings() {
     }
 }
 
+const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
 
 /// Turn the pad at `index` into a through-hole land with a plated slot and set `format`, the
@@ -814,9 +815,9 @@ fn plated_slot_footprints_are_checked() {
     assert_eq!(report.findings()[0].occurrences, [PadOccurrenceRef { index: 2, ordinal: 1 }, PadOccurrenceRef { index: 3, ordinal: 2 }]);
 
     // The slot format without a slot, and a slot under an older format, are mismatches.
-    let unslotted = edited(&fixture, |text| text.replacen(FootprintDefinition::format_for(false, &[]), SLOT_FORMAT, 1));
-    let older = edited(&fixture, |text| slotted(text, 2, FootprintDefinition::format_for(true, &[])));
-    for (documents, format) in [(unslotted, SLOT_FORMAT), (older, FootprintDefinition::format_for(true, &[]))] {
+    let unslotted = edited(&fixture, |text| text.replacen(CURRENT_FORMAT, SLOT_FORMAT, 1));
+    let older = edited(&fixture, |text| slotted(text, 2, NPTH_FORMAT));
+    for (documents, format) in [(unslotted, SLOT_FORMAT), (older, NPTH_FORMAT)] {
         let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
         assert_eq!(error, CheckError::UnsupportedFormat { file: fixture.footprint_path.clone(), format: format.into() });
     }

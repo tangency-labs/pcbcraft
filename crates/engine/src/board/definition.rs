@@ -13,8 +13,10 @@ pub(crate) const MAX_ARTWORK: usize = 256;
 const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
 const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
+/// Native format for all newly authored footprints, with any supported mix of holes.
+pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/6";
 /// Every native footprint format this build reads, oldest first.
-pub(crate) const FORMATS: [&str; 3] = [LEGACY_FORMAT, NPTH_FORMAT, SLOT_FORMAT];
+pub(crate) const FORMATS: [&str; 4] = [LEGACY_FORMAT, NPTH_FORMAT, SLOT_FORMAT, CURRENT_FORMAT];
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -320,29 +322,25 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
-    /// Select the narrowest native format that retains every authored hole.
-    pub(crate) fn format_for(has_npth: bool, pads: &[RectPad]) -> &'static str {
-        if pads.iter().any(|pad| pad.plated_slot.is_some()) {
-            SLOT_FORMAT
-        } else if has_npth {
-            NPTH_FORMAT
-        } else {
-            LEGACY_FORMAT
-        }
-    }
-
-    /// Report presence of an authored slot in a validated, versioned footprint.
+    /// Report actual slot geometry for fabrication and clipboard feature checks.
     pub(crate) fn has_plated_slots(&self) -> bool {
-        self.format == SLOT_FORMAT
+        self.pads.iter().any(|pad| pad.plated_slot.is_some())
     }
 
-    /// Refuse unknown versions and mismatched feature/version pairs before writing or accepting a definition.
-    fn validate_format(&self) -> Result<(), String> {
-        match self.format.as_str() {
-            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT if self.format == Self::format_for(!self.non_plated_holes.is_empty(), &self.pads) => Ok(()),
-            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT => Err("footprint format does not match its authored hole content".into()),
-            _ => Err(format!("unsupported footprint format {}", self.format)),
+    /// Keep the historical feature requirements while allowing any supported mix in format 6.
+    /// Pad and hole dimensions are validated separately.
+    pub(crate) fn validate_format(&self) -> Result<(), String> {
+        let matches_content = match self.format.as_str() {
+            CURRENT_FORMAT => true,
+            LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
+            NPTH_FORMAT => !self.non_plated_holes.is_empty() && !self.has_plated_slots(),
+            SLOT_FORMAT => self.has_plated_slots(),
+            _ => return Err(format!("unsupported footprint format {}", self.format)),
+        };
+        if !matches_content {
+            return Err("footprint format does not match its authored hole content".into());
         }
+        Ok(())
     }
 
     /// Validate the schema, provenance, bounded geometry and distinct electrical pad identifiers.

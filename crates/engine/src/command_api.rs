@@ -751,7 +751,8 @@ fn validate_snapshot(snapshot: &Value, label: &str) -> Result<u32, String> {
 /// separately so changes to different parameters can merge within the same command.
 pub fn snapshot_section(described: &[Value]) -> String {
     let entries: BTreeMap<&str, Value> = described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command))).collect();
-    serde_json::to_string_pretty(&entries).expect("command contracts are JSON values").replace('\n', "\n  ")
+    let snapshot = Value::Object(entries.into_iter().map(|(id, contract)| (id.to_owned(), contract)).collect());
+    format!("{snapshot:#}").replace('\n', "\n  ")
 }
 
 #[cfg(test)]

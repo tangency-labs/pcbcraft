@@ -37,7 +37,7 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
 
     definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }, diameter_nm: MAX_OFFSET_NM });
     assert_eq!(write_saved(&definition).unwrap_err(), "footprint format does not match its authored hole content");
-    definition.format = FootprintDefinition::format_for(true, &definition.pads).into();
+    definition.format = NPTH_FORMAT.into();
     let bytes = write_saved(&definition).unwrap();
     assert_eq!(*read_saved(&bytes).unwrap(), definition);
     let value: Value = serde_json::from_slice(&bytes).unwrap();
@@ -64,7 +64,7 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
         assert_eq!(read_saved(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), "footprint format does not match its authored hole content");
     }
     definition.non_plated_holes.clear();
-    definition.format = FootprintDefinition::format_for(false, &definition.pads).into();
+    definition.format = LEGACY_FORMAT.into();
     assert_eq!(write_saved(&definition).unwrap(), legacy);
 }
 
