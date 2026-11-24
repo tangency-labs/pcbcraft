@@ -281,6 +281,8 @@ enum Dialog {
     OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
+    ArchiveFolder,
+    #[cfg(not(target_arch = "wasm32"))]
     LocalMcp {
         error: Option<String>,
         copied: bool,
@@ -759,6 +761,14 @@ impl PcbApp {
             let save_as_shortcut = ui.ctx().format_shortcut(&SAVE_AS);
             if MenuItem::new("Save As…").icon(MenuIcon::Save).shortcut(&save_as_shortcut).enabled(can_save).show(ui) {
                 self.dialog = Dialog::SaveEncoding;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if MenuItem::new("Archive Project Folder…")
+                .icon(MenuIcon::Save)
+                .enabled(can_save && self.files.archive_source(&self.session).is_some())
+                .show(ui)
+            {
+                self.dialog = Dialog::ArchiveFolder;
             }
         }
 
@@ -2511,6 +2521,26 @@ impl PcbApp {
                     self.save_project_file(Some(encoding), ctx);
                 } else if !(closing || cancel) {
                     self.dialog = Dialog::SaveEncoding;
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::ArchiveFolder => {
+                if let Some(source) = self.files.archive_source(&self.session) {
+                    let mut archive = false;
+                    let mut cancel = false;
+                    let closing = shell::dialog(ctx, "archive_folder", "Archive Project Folder", |ui| {
+                        ui.label("Save a compressed .pc with the current edits, then move the original folder to system Trash.");
+                        ui.label(source.display().to_string());
+                        ui.horizontal(|ui| {
+                            cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
+                            archive = pcbcraft_chrome::controls::button(ui, "Choose archive location…").clicked();
+                        });
+                    });
+                    if archive {
+                        self.save_project_file(Some(SaveFormat::ArchiveFolder), ctx);
+                    } else if !(closing || cancel) {
+                        self.dialog = Dialog::ArchiveFolder;
+                    }
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]

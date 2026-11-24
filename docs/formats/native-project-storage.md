@@ -47,6 +47,12 @@ folder, its entry point or a `.pc` archive. Save keeps the opened form;
 Save As offers a project folder and a packed project. The folder destination is
 a new or empty project directory, while archive Save As requires an unused file.
 Unrelated root files such as `README.md` and `.git` remain untouched.
+**Archive Project Folder** on desktop publishes a compressed archive outside
+the open working folder and verifies it before requesting system Trash. The
+source is checked under its save lock against the last known documents and all
+directory entries. Git working trees, extra files, symlinks and external edits
+prevent the source move. If the archive is saved and the source move fails, the
+editor adopts the archive and reports the source outcome.
 Regular `.DS_Store`, `Thumbs.db` and `desktop.ini` files are also left alone inside
 project subdirectories; they are not project documents and are never published
 or removed by a save. Other unknown files under `sheets/`, `library/` and `assets/` are refused.
@@ -1277,10 +1283,11 @@ path, type, CRC and size checks. A present manifest disables these exceptions.
 All document schema and cross-document checks still apply. The open notice says
 that the next save or download will add a manifest. PCBcraft always writes one.
 
-Writers use Store, fixed timestamps, fixed `0644` permissions recorded as made on
-Unix, and a deterministic entry order (manifest first, then paths in lexical
-order), so every platform writes the same archive bytes. Readers accept Store and
-Deflate. Traversal, absolute/drive paths, duplicate or overlapping entries,
+Writers use fixed timestamps, fixed `0644` permissions recorded as made on Unix,
+and a deterministic entry order (manifest first, then paths in lexical order).
+Regular Save As and browser exports use Store. Desktop **Archive Project Folder**
+writes Deflate, and desktop saves preserve Deflate for archives whose entries are
+all compressed with it. Readers accept both methods. Traversal, absolute/drive paths, duplicate or overlapping entries,
 symlinks, special files, encryption, ZIP64 and split archives are refused. Reads
 are bounded by both declared and actual expanded size. An unchanged save of an already migrated,
 manifested archive preserves its original bytes, including compression and
