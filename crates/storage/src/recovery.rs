@@ -1352,11 +1352,6 @@ fn entry_times(dir: &Path, id: &str) -> Option<EntryTimes> {
     Some(EntryTimes { pc: times[0], journal: times[1], lock: times[2], newest: newest? })
 }
 
-#[cfg(test)]
-fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
-    entry_times(dir, id).map(|times| times.newest)
-}
-
 #[cfg_attr(not(test), allow(unused_variables))]
 fn open_candidate_lock(dir: &Path, path: &Path) -> std::io::Result<File> {
     #[cfg(test)]

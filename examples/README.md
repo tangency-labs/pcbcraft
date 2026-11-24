@@ -45,7 +45,7 @@ assignments and dimensions were checked against Microchip's
 (June 2024, p. 3, address table and DRL0006A package/land drawings 4223266/F,
 November 2024). Manufacturer drawings and PDFs are referenced, not bundled.
 The existing passive/LED/header package notices are described in the
-[footprint library](../docs/footprint-library.md).
+[footprint library](../docs/libraries/footprint-library.md).
 
 ## Regenerate and verify
 

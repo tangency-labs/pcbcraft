@@ -3,7 +3,7 @@
 //! A failure carries a snake_case code from [`ErrorCode::ALL`] (or, over MCP, a newer editor's
 //! code passed through) beside its message. The code is
 //! the contract a client branches on; the message is for people and may be reworded. The list
-//! is published in `docs/mcp.md` and locked in `docs/schemas/error-codes-v1.json`: codes are only
+//! is published in `docs/automation/command-api.md` and locked in `docs/schemas/error-codes-v1.json`: codes are only
 //! ever appended, never renamed, removed or reused. A code that stops being produced stays in the
 //! list.
 

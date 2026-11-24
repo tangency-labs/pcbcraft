@@ -28,7 +28,7 @@ use super::{
     view::{BoardView, CopperLayers, PadView},
 };
 use crate::{CommandError, Session, schematic::Point};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -38,6 +38,7 @@ use std::{
 };
 
 mod part_layers;
+pub mod review;
 
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
@@ -71,7 +72,7 @@ pub struct Fabrication {
 }
 
 /// Integrity of the exact bytes of one generated artifact, not a design-state identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Artifact {
     pub name: String,
     pub size_bytes: u64,
@@ -86,7 +87,7 @@ impl Artifact {
 }
 
 /// Integrity records for the generated files, not the ZIP itself or the design state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Manifest {
     pub generator_version: String,
     pub files: Vec<Artifact>,
@@ -622,9 +623,10 @@ impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
+    /// The Gerber profile includes the closed outline loops and omits open outline paths.
     /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
-    /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
+    /// Returns an error if a plated or non-plated drill diameter rounds to zero at the output resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     /// X2 attributes describe pad, track and via functions and intended copper membership.
     /// Ambiguous routed copper does not acquire an arbitrary net name.
@@ -648,16 +650,17 @@ impl BoardView<'_> {
             .filter_map(|stratum| if let Stratum::Copper { layer, .. } = stratum { Some(*layer) } else { None })
             .collect();
         let layers = self.layers();
-        let outline: Vec<_> = self
+        let closed_outline: Vec<_> = self
             .drawings()
             .into_iter()
-            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
+            .filter(|drawing| drawing.closed && layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
             .collect();
-        if !outline.iter().any(|drawing| drawing.closed) {
+        if closed_outline.is_empty() {
             return Err("Draw a closed Board Outline before generating fabrication outputs.".into());
         }
         let origin = self.placement_origin()?;
         let frame = origin.frame();
+        let plated = self.plated_drill_hits()?;
         let frame_id = same_coordinates_id(origin);
         let non_plated = self.non_plated_drill_hits()?;
         let base = file_part(&self.project().name);
@@ -758,24 +761,17 @@ impl BoardView<'_> {
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive", &frame_id) });
         }
 
+        // Gerber 2026.05 §§5.6.3 and 6.5 reserve the Profile file for the physical outline.
         let mut profile = Gerber::new(frame);
-        for drawing in &outline {
-            let mut points = drawing.points.clone();
-            if drawing.closed {
-                points.push(points[0]);
-            }
-            // Keep legacy artwork in the output, but do not identify an open drawing as
-            // the board's physical edge (§§5.6.10, 6.5).
-            let function = drawing.closed.then_some(ApertureFunction::Profile);
-            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), function);
+        for drawing in closed_outline {
+            let mut points = drawing.points;
+            points.push(points[0]);
+            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), Some(ApertureFunction::Profile));
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive", &frame_id) });
 
         let span = order.len();
-        files.push(Output {
-            name: format!("{base}-PTH.drl"),
-            contents: drill_file(frame, &frame_id, DrillPlating::Plated, span, self.plated_drill_hits()),
-        });
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::Plated, span, plated) });
         if !non_plated.is_empty() {
             files
                 .push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::NonPlated, span, non_plated) });
@@ -784,18 +780,22 @@ impl BoardView<'_> {
         Ok(Fabrication { origin, files })
     }
 
-    /// Group via and plated pad drill hits by diameter for the plated drill file.
-    fn plated_drill_hits(self) -> BTreeMap<i64, Vec<Point>> {
+    /// Group via and plated pad drill hits by diameter.
+    /// A plated pad drill below half the output unit returns an error because its tool size would round to zero.
+    fn plated_drill_hits(self) -> Result<BTreeMap<i64, Vec<Point>>, String> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
             holes.entry(via.drill_nm).or_default().push(via.at);
         }
         for pad in self.footprints().flat_map(|footprint| footprint.pads) {
             if let Some(drill) = pad.drill_nm {
+                if drill < DRILL_UNIT_NM / 2 {
+                    return Err(format!("Plated drill diameter {drill} nm rounds to zero at the 0.001 mm output resolution."));
+                }
                 holes.entry(drill).or_default().push(pad.center);
             }
         }
-        holes
+        Ok(holes)
     }
 
     /// Resolve mechanical openings from the pinned footprint with no copper or pad projection.

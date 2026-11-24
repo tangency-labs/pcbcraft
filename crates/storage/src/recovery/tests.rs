@@ -47,15 +47,18 @@ fn ten_edits(session: &mut Session) {
     session.apply(DRAW_WIRE, &json!({"from":at(-10, -10),"to":at(0, -20),"bends":[at(0, -10)],"expected_revision":revision(session)})).unwrap();
 }
 
-/// Every file under `root` with its bytes.
+/// Every file under `root` with its bytes. Use metadata for empty files so that
+/// Windows can include held lock files without reading their locked range.
 fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
-        if path.is_dir() {
+        let metadata = fs::metadata(&path).unwrap();
+        if metadata.is_dir() {
             files.extend(tree(&path));
         } else {
-            files.insert(path.clone(), fs::read(path).unwrap());
+            let bytes = if metadata.len() == 0 { Vec::new() } else { fs::read(&path).unwrap() };
+            files.insert(path, bytes);
         }
     }
     files
@@ -929,7 +932,7 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
         fs::remove_file(entry_file(dir.path(), "unreadable", "lock")).unwrap();
         File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
         std::os::unix::fs::symlink("unreadable.lock", entry_file(dir.path(), "unreadable", "lock")).unwrap();
-        assert_eq!(entry_modified(dir.path(), "unreadable"), None);
+        assert!(entry_times(dir.path(), "unreadable").is_none());
         assert_eq!(prune(dir.path(), retention), Ok(0));
         assert!(entry_file(dir.path(), "unreadable", "pc").exists());
     }

@@ -50,6 +50,7 @@ impl PcbApp {
             if let Some(view) = self.views.view_mut(source) {
                 view.definition = None;
                 view.library = None;
+                view.manufacturing = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {
@@ -315,13 +316,95 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
-        let planned =
-            [planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"), planned(ToolIcon::Tune, "Tune", "Tune track length (planned)")];
-        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
+        let menu = [
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Router Settings",
+                description: "Interactive Router Settings",
+                shortcut: "",
+                enabled,
+                active: self.views.active.board.router_settings_open,
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
+            },
+            planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
+            planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
+        ];
+        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &menu) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
+            Some(2) => {
+                let view = &mut self.views.active;
+                view.board.router_settings_open = !view.board.router_settings_open;
+                if !view.board.router_settings_open {
+                    view.panels[crate::workspace_panels::ROUTER].cancel_drag();
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Draw live, view-local controls in the same movable shell as Layers and Properties.
+    /// An in-progress edit keeps its captured policy and may continue outside the card.
+    pub(super) fn router_settings_panel(&mut self, ui: &Ui, area: egui::Rect, dock: egui::Rect) -> egui::Rect {
+        use pcbcraft_chrome::{controls, settings, workspace::panels::Position};
+        use pcbcraft_engine::board::route::Mode;
+
+        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        let view = &mut self.views.active;
+        if !view.board.router_settings_open {
+            return egui::Rect::NOTHING;
+        }
+        let id = egui::Id::unique(("router_settings", self.views.host, view.id()));
+        let state = &mut view.board;
+        let panel = &mut view.panels[crate::workspace_panels::ROUTER];
+        let width = workspace::panels::card_width(area, false);
+        if panel.position() == Position::Floating && panel.saved_state().at.is_none() {
+            panel.set_position(Position::Floating, Some([(area.width() - width) / 2.0, 20.0]));
+        }
+        let available = enabled && !state.editing_footprint() && state.tracks.can_change_policy();
+        let (original, original_merge) = state.tracks.policy();
+        let (mut mode, mut merge) = (original, original_merge);
+        let mut close = false;
+        let (rect, toggle) = panel.show(ui, id, "Router Settings", area, dock, state.router_settings_collapsed, width, |ui| {
+            ui.add_enabled_ui(available, |ui| {
+                let mut policy = if mode == Mode::ShoveVias { Mode::Shove } else { mode };
+                ui.label("Policy");
+                if settings::choice(
+                    ui,
+                    "Router policy",
+                    &mut policy,
+                    &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
+                ) {
+                    mode = policy;
+                }
+                if policy == Mode::Shove {
+                    let mut vias = mode == Mode::ShoveVias;
+                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
+                        mode = if vias { Mode::ShoveVias } else { Mode::Shove };
+                    }
+                    settings::checkbox(ui, "Merge same-net copper", "Merge same-net copper", &mut merge);
+                }
+            })
+            .response
+            .on_disabled_hover_text("Finish or cancel the current edit to change router policy.");
+            let dismiss = controls::button(ui, "Close");
+            dismiss.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close Router Settings"));
+            close = dismiss.clicked();
+        });
+        if available {
+            if mode != original {
+                state.tracks.select_mode(mode);
+            }
+            if merge != original_merge {
+                state.tracks.select_same_net_merge(merge);
+            }
+        }
+        state.router_settings_collapsed ^= toggle;
+        if close {
+            state.router_settings_open = false;
+            panel.cancel_drag();
+        }
+        rect
     }
 
     /// Draw graphic paths on the active layer; routing and editing remain in Layout.
@@ -461,8 +544,19 @@ impl PcbApp {
             active: self.fabrication_exports.busy(),
             menu_check: None,
         }];
-        if workspace::ribbon_group(ui, "Fabrication", &outputs).is_some() {
-            self.export_fabrication(ui.ctx());
+        let review = RibbonTool {
+            icon: ToolIcon::Factory,
+            label: "Manufacturing",
+            description: "Open the Manufacturing workspace",
+            shortcut: "",
+            enabled: true,
+            active: false,
+            menu_check: None,
+        };
+        match workspace::ribbon_group(ui, "Fabrication", &[outputs[0], review]) {
+            Some(0) => self.export_fabrication(ui.ctx()),
+            Some(1) => self.message = self.enter_workspace(ui.ctx(), "manufacturing", Placement::Here).err(),
+            _ => {}
         }
     }
 
@@ -523,7 +617,9 @@ impl PcbApp {
             .map_err(|error| error.to_string())
             .and_then(|archive| {
                 let name = pcbcraft_engine::board::fabrication::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, archive)
+                let source = crate::board_outputs::Source { board: target, opening: self.session.history_root_revision() };
+                let directory = self.files.project_directory(&self.session).map(std::path::Path::to_owned);
+                self.fabrication_exports.start(ctx, source, name, archive, directory)
             });
         self.message = result.err();
     }
@@ -662,7 +758,7 @@ impl PcbApp {
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some() || pick.vertex_menu_edit))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some((source, error)) = pick.error

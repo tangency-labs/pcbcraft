@@ -3,9 +3,10 @@
 Read [VISION.md](VISION.md) first. PRs are written by agents; keep them small, and say what the user sees.
 
 Use the [documentation map](docs/README.md) to select the guides and contracts
-for the affected area. Keep task guides and the capability inventory consistent,
-mark proposals and historical plans clearly, and link canonical contracts
-instead of duplicating their rules. Add new documentation to the map.
+for the affected area. Update the relevant topic page and keep related
+descriptions consistent. Mark proposals and historical plans clearly, and
+link canonical contracts instead of duplicating their rules. Add a link from
+the relevant guide or the map when a new document needs a reading path.
 
 ## Claiming issues
 
@@ -83,7 +84,7 @@ Keep broader reorganizations in bounded changes that preserve existing behavior.
 Before implementing or restyling an interface, inspect the existing
 `crates/chrome` adapters and the pinned `solidcraft-ui-kit`, `solidcraft-look`,
 `solidcraft-theme` and `solidcraft-ui-registry` APIs. Read
-[the shared UI migration notes](docs/shared-ui-migration.md) and search the
+[the shared UI migration notes](docs/design/shared-ui-migration.md) and search the
 pinned toolkit's documentation and components for the required behavior. A
 similar control in another Craft app is a reason to check for a shared component.
 
@@ -140,7 +141,7 @@ Legacy defaults must be explicit compatibility behavior; reject unknown IDs and
 require a target when future projects contain multiple boards. Discuss the
 persisted board-list migration before changing the native format.
 
-Read [the multiboard and sheet instance design](docs/multiboard-and-sheet-instances.md)
+Read [the multiboard and sheet instance design](docs/design/multiboard-and-sheet-instances.md)
 and its linked instance, storage, assembly/output and net-identity contracts
 before work in those areas. They distinguish intended behavior from current
 capabilities and define the migration and acceptance cases for each slice.
@@ -206,8 +207,8 @@ In the PR description, name the failure paths reviewed and distinguish the ones 
 Before changing routing, ERC/DRC, geometry queries, connectivity, snapshot
 preparation/publication, live MCP edits, or performance-sensitive editor input/rendering paths,
 apply [the verification stopping rule](#keep-verification-bounded) and read
-[the performance-testing guide](docs/performance-testing.md) and its
-[coverage record](docs/performance-coverage.md). Select the saved command-generated
+[the performance-testing guide](docs/testing/performance-testing.md) and its
+[coverage record](docs/testing/performance-coverage.md). Select the saved command-generated
 fixtures and runners affected by the change: CPU replay for engine costs,
 native/browser rendered replay for editor/renderer or live MCP behavior, and
 process-resource collection for memory/allocation claims. Record a baseline

@@ -51,7 +51,7 @@ the designer meant them to be when either changes.
   drawn geometry too.
 - **Board parameters.** Board Setup gains a Parameters table: `usb_y = 18 mm`,
   `edge_gap = 2 mm`, `led_pitch = 5 mm`, typed lengths and angles entered with the
-  [shared unit parser](../quantity-units.md), optionally as expressions over each
+  [shared unit parser](../formats/quantity-units.md), optionally as expressions over each
   other. Parameters the enclosure exposes (the bridge RFC's `params.json`, such as
   `wall = 3 mm`) appear read-only next to them.
 - **Parts held to the board.** A footprint can be held to an outline edge, a
@@ -161,18 +161,18 @@ All on main:
 
 | Area | Today | Relevance |
 |---|---|---|
-| Board outline | Board Outline drawings: open/closed point chains (`pcb.add_drawing`, `pcb.set_drawing`), one UUID per drawing, vertices without IDs ([identity inventory](../object-identity.md)) | An edge has no stable identity yet; this is the first gap |
-| Curves | Circular copper arc records stored ([#259](../circular-copper-records.md)); consumers refuse them until supported. Curved outlines are #260 | Arcs in a linked or drawn outline wait for this contract |
+| Board outline | Board Outline drawings: open/closed point chains (`pcb.add_drawing`, `pcb.set_drawing`), one UUID per drawing, vertices without IDs ([identity inventory](../formats/object-identity.md)) | An edge has no stable identity yet; this is the first gap |
+| Curves | Circular copper arc records stored ([#259](../pcb/circular-copper-records.md)); consumers refuse them until supported. Curved outlines are #260 | Arcs in a linked or drawn outline wait for this contract |
 | Footprints | Counter IDs (`footprint-N`), pads as owner tokens; X/Y in nm, **rotation in whole degrees (0–359)**, side | Holds must respect whole-degree rotation (question 6) |
-| Copper carry | Moves carry attached track ends and refuse new shorts in one undo step ([layout workflow, slice 1](../pcb-layout-workflow.md#1-footprint-moves-carry-their-copper)); locked copper refuses | The base of the board update |
-| Routing | Deterministic, bounded walkaround with `reached`/`blocked`/`incomplete`/`canceled`/`stale` outcomes ([route planning](../route-planning.md)); shove next (#247) | Re-routing inside an update needs these properties |
-| Checks | DRC with outline containment and edge clearance; [board rules](../board-rules.md) with sources | The update's guard uses the same predicates |
-| Zones | [Zone outlines](../copper-zone-outlines.md) stored; fill in progress (#232, draft PR #395) | A zone can later follow the outline |
+| Copper carry | Moves carry attached track ends and refuse new shorts in one undo step ([layout workflow, slice 1](../design/pcb-layout-gaps.md#1-footprint-moves-carry-their-copper)); locked copper refuses | The base of the board update |
+| Routing | Deterministic, bounded walkaround with `reached`/`blocked`/`incomplete`/`canceled`/`stale` outcomes ([route planning](../pcb/route-planning.md)); shove next (#247) | Re-routing inside an update needs these properties |
+| Checks | DRC with outline containment and edge clearance; [board rules](../pcb/board-rules.md) with sources | The update's guard uses the same predicates |
+| Zones | [Zone outlines](../pcb/copper-zone-outlines.md) stored; fill in progress (#232, draft PR #395) | A zone can later follow the outline |
 | Origin | `pcb.set_placement_origin` with an `outline_lower_left` anchor that follows the outline | A hold to the outline, in miniature |
 | Parameters | Text parameters (`@project.Name`) for sheets | Not numeric (question 5) |
-| Edits | Revision-checked commands, `dry_run` on some, one undo step, preview/apply with a plan token ([single-board update](../single-board-update.md#preview-and-apply)) | The update and the linked preview follow these patterns |
+| Edits | Revision-checked commands, `dry_run` on some, one undo step, preview/apply with a plan token ([single-board update](../pcb/single-board-update.md#preview-and-apply)) | The update and the linked preview follow these patterns |
 | 3D and STEP | `crates/geometry` reads and writes STEP; the board solid and the model record are claimed or proposed in #86; no `.craftx` writer | What slice 1 builds on |
-| Kernel | `crates/geometry` is the only crate linking SolidCore; the engine is kernel-free; the browser leaves the kernel off ([geometry kernel](../geometry-kernel.md#boundary)) | Why shape solving belongs in SolidCraft (section 6.1) |
+| Kernel | `crates/geometry` is the only crate linking SolidCore; the engine is kernel-free; the browser leaves the kernel off ([geometry kernel](../design/geometry-kernel.md#boundary)) | Why shape solving belongs in SolidCraft (section 6.1) |
 
 ## 5. Design constraints
 
@@ -268,8 +268,8 @@ SolidCraft RFC 0002's recorded fallbacks follow the same principle.
 
 **C11. No invented limits.** Every limit the update checks (edge clearance,
 copper clearance, widths, the tolerance for matching linked geometry) comes from
-the board's [effective rules](../board-rules.md) with sources, or a
-[fabrication profile](../pcb-representation.md#project-settings-and-fabrication-profiles)
+the board's [effective rules](../pcb/board-rules.md) with sources, or a
+[fabrication profile](../design/pcb-representation.md#project-settings-and-fabrication-profiles)
 once those exist. *Reason:* a hidden constant in the carry that differs from DRC
 gives updates that pass and then fail DRC.
 
@@ -281,7 +281,7 @@ the source side and the board's revision on PCBCraft's side, like
 updates are reviewed, never silent.
 
 **C13. Measured budgets, labelled as targets until measured** with the
-[#240 harness](../performance-testing.md) on original fixtures (section 8).
+[#240 harness](../testing/performance-testing.md) on original fixtures (section 8).
 
 **C14. Agents see what the change did.** The reply lists references resolved and
 their outcomes, parameters evaluated, parts moved (old and new pose), copper
@@ -458,7 +458,7 @@ later change only *why* a placement moved, not how the change travels.
 |---|---|
 | Board body | One solid: the closed outer outline extruded through the finished thickness, cutouts and holes as through-voids |
 | Holes | Footprint pad holes and non-plated footprint holes, at the size and shape the footprint defines, each with its own name |
-| Thickness | The declared finished board thickness from Board Setup ([board materials](../board-materials.md)). If none is declared, publishing is refused, naming the setting; no default stands in |
+| Thickness | The declared finished board thickness from Board Setup ([board materials](../pcb/board-materials.md)). If none is declared, publishing is refused, naming the setting; no default stands in |
 | Components | One entry per placed footprint: footprint ID, reference designator (display only), side, position, rotation, model reference and content hash, and the composed transform below. Its body is the model bound through #86's model record, written once per content hash |
 | Datums | The board origin, the placement origin, the top and bottom faces, each hole's axis and each component's origin frame |
 
@@ -512,7 +512,7 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
   file's own frame), and `S` is the identity on the top side and
   `T(0, 0, −t) · Ry(180°)` on the bottom. A bottom part is turned over, not
   mirrored. The half turn is about Y because PCBCraft's bottom placement mirrors
-  local X before the rotation ([footprint schema](../footprint-schema.md)); a
+  local X before the rotation ([footprint schema](../libraries/footprint-schema.md)); a
   turn about X would put an asymmetric part 180° round from its pads.
 - `board/1` carries each composed transform as a 4×4 matrix in millimetres, and
   the inputs it came from (position, rotation, side, alignment, t). Receivers
@@ -539,7 +539,7 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
   `source_id` and its own file, or **Replace**, for a project that was moved. A
   SolidCraft link never silently starts following a copy.
 - Publishing captures one immutable snapshot of the **saved** board (question 16)
-  and follows the [export snapshot rules](../multiboard-assembly-and-outputs.md).
+  and follows the [export snapshot rules](../design/multiboard-assembly-and-outputs.md).
   Publish with unsaved changes saves first. With auto-publish on, each save that
   changes the board publishes; a no-op save publishes nothing and changes no
   bytes.
@@ -687,7 +687,7 @@ recomputed again for display follows #232. Keepouts, once stored, get the same
 ## 7. Slices
 
 Each slice lands on its own with its own acceptance tests. Format changes follow
-[native storage](../native-project-storage.md): a new board format only when the
+[native storage](../formats/native-project-storage.md): a new board format only when the
 new record is present, older readers refuse it, no-op saves stay byte-identical.
 
 The outbound link comes first (slices 1 and 2): it is the interop #86 puts first,

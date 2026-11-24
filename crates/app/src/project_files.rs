@@ -11,7 +11,10 @@ use std::{
 use inspection::Finished;
 #[cfg(target_arch = "wasm32")]
 use pcbcraft_engine::persistence::Encoding;
-use pcbcraft_engine::{Project, Session};
+use pcbcraft_engine::{
+    Project, Session,
+    persistence::{CURRENT_PROJECT_FORMAT, Documents, ENTRY_POINT, project_board_path},
+};
 
 /// Desktop working folders and portable archives use the same split documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,6 +34,48 @@ mod native;
 mod stand_in;
 #[cfg(target_arch = "wasm32")]
 mod web;
+
+/// Check the stored header before reusing source bytes. Older entry points always migrate.
+fn has_current_entry_point(documents: &Documents) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        format: String,
+    }
+    documents
+        .get(ENTRY_POINT)
+        .and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok())
+        .is_some_and(|header| header.format == CURRENT_PROJECT_FORMAT)
+}
+
+/// Keep exact unaffected bytes, including board files moved by first-save layout adoption.
+/// Compare against the current encoding of the old snapshot and use its actual on-disk path
+/// to recover the original bytes. The migrated entry point always uses the current encoding.
+fn retain_unchanged_documents(
+    documents: &mut Documents,
+    canonical: &Documents,
+    original: &Documents,
+    old_board: Option<&str>,
+    new_board: Option<&str>,
+) -> Result<(), String> {
+    let current = has_current_entry_point(original);
+    let canonical_board = project_board_path(&canonical[ENTRY_POINT])?;
+    for (path, bytes) in documents {
+        if path == ENTRY_POINT && !current {
+            continue;
+        }
+        let (comparison, source) = if Some(path.as_str()) == new_board {
+            (canonical_board.as_deref().unwrap_or(path), old_board.unwrap_or(path))
+        } else {
+            (path.as_str(), path.as_str())
+        };
+        if canonical.get(comparison) == Some(bytes)
+            && let Some(retained) = original.get(source)
+        {
+            bytes.clone_from(retained);
+        }
+    }
+    Ok(())
+}
 
 /// Suggest a file name, without extension, for a project's first desktop save or a browser
 /// download. Characters that can't appear in a file name on common desktops become `-`; a name
@@ -107,6 +152,8 @@ struct Saved {
     encoding: Encoding,
     #[cfg(target_arch = "wasm32")]
     needs_manifest: bool,
+    #[cfg(target_arch = "wasm32")]
+    needs_project_upgrade: bool,
     #[cfg(target_arch = "wasm32")]
     documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
 }
@@ -188,6 +235,21 @@ impl ProjectFiles {
         {
             let _ = saved;
             Some("browser".into())
+        }
+    }
+
+    /// Folder containing this opening's project files, or the parent of its packed archive.
+    /// No directory lookup is needed on the editor thread.
+    pub(super) fn project_directory(&self, session: &Session) -> Option<&std::path::Path> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
+            saved.target.project_directory()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = session;
+            None
         }
     }
 
@@ -346,7 +408,9 @@ impl ProjectFiles {
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest)
+                .filter(|saved| {
+                    saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest && !saved.needs_project_upgrade
+                })
                 .map(|saved| Arc::clone(&saved.bytes));
             let original =
                 self.saved.as_ref().and_then(|saved| download::Original::for_project(saved.snapshot.clone(), saved.documents.clone()?, &snapshot));

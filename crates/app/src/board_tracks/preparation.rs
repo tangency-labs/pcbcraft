@@ -38,6 +38,7 @@ pub(super) struct Preparation {
     ready: Option<Ready>,
     generation: u64,
     notice: Option<String>,
+    pub(super) collisions: BTreeSet<String>,
     failed: bool,
     retryable_failure: bool,
     pub stale: u64,
@@ -72,6 +73,7 @@ impl Preparation {
         self.ready = self.ready.take().filter(|ready| ready.key == key);
         self.wanted = Some(Wanted { key, generation: self.generation, commit });
         self.notice = None;
+        self.collisions.clear();
         self.failed = false;
         self.retryable_failure = false;
         Ok(())
@@ -83,6 +85,7 @@ impl Preparation {
         self.ready = None;
         self.queue.cancel();
         self.notice = None;
+        self.collisions.clear();
         self.failed = false;
         self.retryable_failure = false;
     }
@@ -90,9 +93,20 @@ impl Preparation {
     pub(super) fn committing(&self) -> bool {
         self.wanted.as_ref().is_some_and(|w| w.commit)
     }
+    /// Only a prepared result for the current request may contribute drag geometry.
+    pub(super) fn drag_displacements(&self) -> (&[Replacement], &[ViaMove]) {
+        self.ready
+            .as_ref()
+            .filter(|ready| self.wanted.as_ref().is_some_and(|w| w.key == ready.key))
+            .map_or((&[], &[]), |ready| (ready.edit.drag_replacements(), ready.edit.drag_vias()))
+    }
     /// Whether the latest pointer's candidate has completed the ordinary command validation.
     pub(super) fn ready(&self) -> bool {
         self.ready.is_some() && self.wanted.is_some()
+    }
+    /// The current proposed geometry failed validation and cannot be placed.
+    pub(super) fn refusal(&self) -> Option<&str> {
+        self.notice.as_deref().filter(|_| self.failed)
     }
     /// Expose only the latest command's validation verdict, never a partial candidate.
     fn validation(&self) -> Option<Result<(), String>> {
@@ -137,7 +151,16 @@ impl Preparation {
                 self.cancel();
             } else {
                 let retryable = completion.retryable();
-                match completion.report.and_then(|edit| edit.transpose().map_err(|error| error.to_string())) {
+                let result = completion.report.and_then(|edit| {
+                    edit.transpose().map_err(|error| {
+                        let message = error.to_string();
+                        if let CommandError::CopperCollision { blockers } = error {
+                            self.collisions = blockers;
+                        }
+                        message
+                    })
+                });
+                match result {
                     Ok(Some(edit)) => self.ready = Some(Ready { key: wanted.key.clone(), edit }),
                     Ok(None) => {}
                     Err(error) => {
@@ -269,10 +292,11 @@ impl PcbApp {
             let validation = tracks.planning.validation_current().then(|| tracks.preparation.validation()).flatten();
             if let Some(result) = tracks.planning.poll(&self.session, source, layer.as_deref(), sizes, validation) {
                 match result {
-                    Ok(planning::Adoption { points, replacements, action }) => {
+                    Ok(planning::Adoption { points, replacements, via_moves, action }) => {
                         if let Some(mut draft) = tracks.draft.take().filter(|draft| Some(draft.source) == source) {
                             draft.points = points;
                             draft.replacements = replacements;
+                            draft.via_moves = via_moves;
                             draft.shove_prefix_dirty = false;
                             match action {
                                 planning::Action::Vertex { finish: true } => {
@@ -306,6 +330,9 @@ impl PcbApp {
                 self.message = Some("Track start is blocked; choose another point.".into());
                 ctx.request_repaint();
             }
+            let awaiting_preview = (tracks.segment.is_some() || tracks.planning.validation_current())
+                && !tracks.preparation.ready()
+                && tracks.preparation.refusal().is_none();
             let completion = tracks.preparation.poll(&self.session, source, target, layer.as_deref(), sizes);
             if let Some(completion) = completion {
                 let result = completion.and_then(|(input, edit)| {
@@ -332,7 +359,10 @@ impl PcbApp {
                 }
                 ctx.request_repaint();
             }
-            if tracks.preparation.busy() || tracks.planning.busy() {
+            if tracks.preparation.busy()
+                || tracks.planning.busy()
+                || awaiting_preview && (tracks.preparation.ready() || tracks.preparation.refusal().is_some())
+            {
                 ctx.request_repaint();
             }
         }
