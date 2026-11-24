@@ -402,6 +402,66 @@ pub fn write_step(part_name: &str, bodies: &[Body]) -> Result<Vec<u8>> {
     kernel::write(part_name, &named).map(String::into_bytes)
 }
 
+/// One part of a STEP assembly: its product name and its bodies, in the part's own frame.
+#[derive(Clone, Copy, Debug)]
+pub struct AssemblyPart<'a> {
+    /// The part's product name.
+    pub name: &'a str,
+    /// The part's bodies, written once however often the part is placed.
+    pub bodies: &'a [&'a Body],
+}
+
+/// One placement of a part in a STEP assembly.
+#[derive(Clone, Copy, Debug)]
+pub struct Occurrence<'a> {
+    /// The part placed (index into the parts given to [`write_step_assembly`]).
+    pub part: usize,
+    /// The occurrence's name.
+    pub name: &'a str,
+    /// Where the part goes in the assembly: a rotation and a translation only.
+    pub transform: Transform,
+}
+
+/// Writes an AP242 STEP assembly named `name`: one product per part, holding its bodies, and one
+/// next-assembly-usage occurrence per entry of `occurrences`, in the order given. A part placed
+/// twice is written once. Parts no occurrence places are not written. As with [`write_step`],
+/// the header carries no time stamp, so the same input always gives the same bytes, and
+/// [`read_step`] returns one placement per occurrence.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidParams`] when there is no occurrence, an occurrence names no part, a part
+/// has no body, a name has an ASCII control character, or a placement is not a rotation and a
+/// translation; [`ErrorCode::OperationFailed`] when the writer refuses a body;
+/// [`ErrorCode::KernelUnavailable`] without a kernel; [`ErrorCode::KernelInternal`] if a kernel
+/// panic unwinds.
+pub fn write_step_assembly(name: &str, parts: &[AssemblyPart<'_>], occurrences: &[Occurrence<'_>]) -> Result<Vec<u8>> {
+    if occurrences.is_empty() {
+        return Err(GeometryError::new(ErrorCode::InvalidParams, "there are no occurrences to write"));
+    }
+    check_name("assembly name", name)?;
+    for part in parts {
+        if part.bodies.is_empty() {
+            return Err(GeometryError::new(ErrorCode::InvalidParams, format!("part {:?} has no bodies", part.name)));
+        }
+        check_name("part name", part.name)?;
+        for body in part.bodies {
+            check_name("body name", &body.name)?;
+        }
+    }
+    let mut placed = Vec::with_capacity(occurrences.len());
+    for occurrence in occurrences {
+        if occurrence.part >= parts.len() {
+            return Err(GeometryError::new(ErrorCode::InvalidParams, format!("occurrence {:?} names no part", occurrence.name)));
+        }
+        check_name("occurrence name", occurrence.name)?;
+        placed.push((occurrence.part, occurrence.transform.matrix_mm()?, occurrence.name));
+    }
+    let named: Vec<(&str, Vec<(&str, &kernel::KernelBody)>)> =
+        parts.iter().map(|part| (part.name, part.bodies.iter().map(|b| (b.name.as_str(), &b.solid)).collect())).collect();
+    kernel::write_assembly(name, &named, &placed).map(String::into_bytes)
+}
+
 /// Exercises the kernel panic guard when panics unwind. This diagnostic changes no body.
 ///
 /// # Errors

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use solidcore_record::step::product::{ItemKind, MAX_ASSEMBLY_DEPTH, MAX_VISITS, ProductStructure};
-use solidcore_step::write::product::{ExportBody, ExportError, Header};
+use solidcore_step::write::product::{ExportBody, ExportError, ExportProduct, Header};
 
 use crate::guard::guard;
 use crate::substrate::{BoardMesh, BoardPoint, Region, RoundDrill};
@@ -119,6 +119,32 @@ pub(crate) fn write(part_name: &str, bodies: &[(&str, &KernelBody)]) -> Result<S
             let list =
                 records.iter().map(|(name, record)| ExportBody { name: (*name).to_string(), record, color: None, faces: Vec::new() }).collect();
             solidcore_step::write::product::bodies(list, &header).map_err(export_error)
+        },
+    )
+}
+
+/// STEP text of an AP242 assembly named `name`: a root product placing `parts` by `occurrences`
+/// (part index, rigid matrix in millimetres laid out as `Transform::matrix_mm`, name).
+pub(crate) fn write_assembly(name: &str, parts: &[(&str, Vec<(&str, &KernelBody)>)], occurrences: &[(usize, [[f64; 4]; 4], &str)]) -> Result<String> {
+    let header = Header { file_name: name.to_string(), originating_system: ORIGINATING_SYSTEM.to_string(), ..Header::default() };
+    let flat: Vec<(&str, &KernelBody)> = parts.iter().flat_map(|(_, bodies)| bodies.iter().copied()).collect();
+    write_with(
+        &flat,
+        |body| body.0.to_record().map(|(record, _)| record),
+        |records| {
+            // The root is product 0; part `i` is product `i + 1`.
+            let children = occurrences.iter().map(|(part, matrix, occurrence)| (part + 1, *matrix, (*occurrence).to_string())).collect();
+            let mut products = vec![ExportProduct { name: name.to_string(), bodies: Vec::new(), children }];
+            let mut rest = records.iter();
+            for (part, bodies) in parts {
+                let bodies = rest
+                    .by_ref()
+                    .take(bodies.len())
+                    .map(|(body, record)| ExportBody { name: (*body).to_string(), record, color: None, faces: Vec::new() })
+                    .collect();
+                products.push(ExportProduct { name: (*part).to_string(), bodies, children: Vec::new() });
+            }
+            solidcore_step::write::product::products(&products, 0, &header).map_err(export_error)
         },
     )
 }
@@ -517,7 +543,7 @@ fn ops_error(what: &str, e: solidcore_ops::Error) -> GeometryError {
 /// The STEP writer's refusal as ours.
 fn export_error(e: ExportError) -> GeometryError {
     let code = match e {
-        ExportError::Nothing => ErrorCode::InvalidParams,
+        ExportError::Nothing | ExportError::NotRigid => ErrorCode::InvalidParams,
         _ => ErrorCode::OperationFailed,
     };
     GeometryError::new(code, format!("STEP write: {e}"))
