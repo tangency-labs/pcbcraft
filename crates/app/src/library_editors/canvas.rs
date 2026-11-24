@@ -790,15 +790,13 @@ impl Document {
                 self.camera.snap(point, area)
             };
             if let Tool::EditPath { object, drag, .. } = &mut self.tool {
-                let contact = canvas.nearby_vertex(
-                    point,
-                    item.objects
-                        .iter()
-                        .filter(|(id, _)| **id != *object)
-                        .filter_map(|(_, primitive)| DefinitionPath::of(primitive))
-                        .flat_map(|path| path.outline().points.iter().copied()),
-                );
-                drag.update(canvas, point, contact, bypass);
+                let external = item
+                    .objects
+                    .iter()
+                    .filter(|(id, _)| **id != *object)
+                    .filter_map(|(_, primitive)| DefinitionPath::of(primitive))
+                    .flat_map(|path| path.outline().points.iter().copied());
+                drag.update(canvas, point, external, bypass);
                 path_alignment = drag.alignment;
             }
             preview = match &self.tool {

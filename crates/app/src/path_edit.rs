@@ -235,8 +235,16 @@ impl Drag {
         }
     }
 
-    /// Recompute from the captured path to avoid accumulating rounding as the pointer moves.
-    pub(crate) fn update(&mut self, canvas: Canvas<'_>, pointer: Pos2, contact: Option<Point>, bypass: bool) {
+    /// Recompute from the captured path. A vertex can snap to any stationary point of its own
+    /// path, while whole-path and edge drags only snap to external contacts.
+    pub(crate) fn update(&mut self, canvas: Canvas<'_>, pointer: Pos2, external: impl IntoIterator<Item = Point>, bypass: bool) {
+        let own_contacts = (match self.handle {
+            Some(Handle::Vertex(index)) => Some(index),
+            _ => None,
+        })
+        .into_iter()
+        .flat_map(|moving| self.original.iter().enumerate().filter_map(move |(index, point)| (index != moving).then_some(*point)));
+        let contact = canvas.nearby_vertex(pointer, external.into_iter().chain(own_contacts));
         let references = if let Some(Handle::Vertex(index)) = self.handle {
             let n = self.original.len();
             [

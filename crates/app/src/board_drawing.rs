@@ -476,11 +476,8 @@ pub(super) fn interact(
         out.consumed = true;
         if let Some(pointer) = pointer {
             let canvas = Canvas { camera, rect };
-            let contact = canvas.nearby_vertex(
-                pointer,
-                drawings.iter().filter(|drawing| drawing.id != edit.drawing.id).flat_map(|drawing| drawing.points.iter().copied()),
-            );
-            edit.drag.update(canvas, pointer, contact, modifiers.alt);
+            let external = drawings.iter().filter(|drawing| drawing.id != edit.drawing.id).flat_map(|drawing| drawing.points.iter().copied());
+            edit.drag.update(canvas, pointer, external, modifiers.alt);
         }
         let completed = if edit.held { response.drag_stopped_by(PointerButton::Primary) } else { response.clicked() && !move_requested };
         if completed {

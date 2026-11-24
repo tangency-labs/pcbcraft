@@ -26,6 +26,44 @@ fn at(h: &Harness<'_, PcbApp>, x: i64, y: i64) -> egui::Pos2 {
     h.state().views.active.camera.screen(Point { x_nm: x, y_nm: y }, h.get_by_label("PCB canvas").rect())
 }
 
+/// Dragging an endpoint onto its own off-grid start forms a closed outline in one edit.
+#[test]
+fn endpoint_drag_closes_an_outline_at_its_own_off_grid_vertex() {
+    let mut h = board();
+    assert!(h.state_mut().views.active.camera.set_snap_nm(100_000));
+    let original = [
+        Point { x_nm: -10_043_000, y_nm: -10_093_000 },
+        Point { x_nm: 10_160_000, y_nm: -10_160_000 },
+        Point { x_nm: 10_160_000, y_nm: 10_160_000 },
+        Point { x_nm: -5_080_000, y_nm: 10_160_000 },
+    ];
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(ADD_DRAWING, &json!({"layer":layer,"points":original,"closed":false,"expected_revision":revision}));
+    h.run();
+    let start = at(&h, original[0].x_nm, original[0].y_nm);
+    let end = at(&h, original[3].x_nm, original[3].y_nm);
+    let canvas = h.get_by_label("PCB canvas").rect();
+    assert_ne!(h.state().views.active.camera.snap(start, canvas), original[0]);
+    let revision = h.state().session.revision();
+    let before = drawings(&h);
+    h.hover_at(end);
+    h.run();
+    h.drag_at(end);
+    h.run();
+    h.hover_at(start);
+    h.run();
+    h.drop_at(start);
+    h.run();
+    let result = drawings(&h);
+    assert!(result[0].closed, "{:?}", result[0]);
+    assert_eq!(result[0].points, original[..3]);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(drawings(&h), before);
+}
+
 /// A selected outline resizes one side, aligns a corner to its neighbor, and moves as a
 /// unit from the interior. Each release creates its own undo step.
 #[test]
