@@ -758,8 +758,11 @@ project/23 accepts the same object optionally alongside generated net numbers;
 project/24 and project/39 accept it optionally alongside the part-group catalog;
 project/36 accepts it alongside the assembly profile catalog, and project/45
 alongside differential pairs. Project/47 accepts it alongside output recipes.
-Project/51 accepts it alongside designator locks, and project/57 alongside both,
-with differential pairs optional. In each of these project formats, the object appears directly before `sheets`:
+Project/48 accepts it alongside alternate pin functions, and project/51
+alongside designator locks. Project/56 combines alternate pin functions with
+designator locks, project/57 combines recipes with designator locks, and
+project/60 combines recipes with alternate pin functions and optional locks.
+In each of these project formats, the object appears directly before `sheets`:
 
 ```json
 "parameters": {
@@ -775,9 +778,8 @@ references. Editing ignores case, so a name that differs from another stored
 name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
-objects require sheet/9; project parameter objects require project/22, project/23,
-project/24, project/36, project/39, project/45, project/47, project/51 or project/57 and are rejected in
-other project versions. Project/22 is a superset
+objects require sheet/9. Project parameter objects are supported by project/22,
+/23, /24, /36, /39, /45, /47, /48, /51, /56, /57 and /60. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
 generated net numbers and permits those same optional fields, including project
@@ -797,7 +799,8 @@ content needs. The diagnostic single-file encoding refuses parameters.
 
 Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
-/45, /47, /51 and /57 also accept the group catalog, with either membership representation.
+/45, /47, /48, /51, /56, /57 and /60 also accept the catalog, with either
+membership representation.
 Board-owned pairs keep instances/8 regardless of membership representation.
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
