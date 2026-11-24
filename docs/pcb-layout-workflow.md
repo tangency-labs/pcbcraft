@@ -62,6 +62,23 @@ it. A `pcb.check_design` request can override the fixed defaults for that run. S
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
+## Preview the board in 3D
+
+On desktop, choose **3D render** from the workspace picker. Open it beside
+PCB Layout to watch outline and hole changes as you edit or undo. **Browse…**
+chooses another board in the open project without switching the layout pane.
+
+Drag to orbit, middle-drag to pan, and scroll to zoom. Use the compass to look
+along a board axis or return to the isometric view. **Fit** frames the board in
+the current orientation.
+
+The preview shows the substrate from a closed Board Outline, including cutouts
+and supported round through holes. It uses the declared finished stackup
+thickness or displays a nominal 1.6 mm when no thickness is specified.
+Exterior tracks and through-via rings are visible on the corresponding
+board faces. Pads, silkscreen, component models and STEP export are later parts of
+[#86](https://github.com/tangency-labs/pcbcraft/issues/86).
+
 ## PCB operations
 
 - <a name="unroute-one-connection"></a>[Unroute one connection](pcb/unroute.md)

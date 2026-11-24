@@ -42,6 +42,12 @@ uuid = { version = "=1.29.0", features = ["serde"] }
 sha2 = { version = "=0.10.9", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pcbcraft-board-solid = { path = "../board-solid" }
+pcbcraft-geometry = { path = "../geometry" }
+solidcraft-viewport = { workspace = true }
+solidcraft-viewport-egui = { workspace = true }
+solidcraft-viewport-gpu = { workspace = true }
+solidcore-record = { workspace = true }
 craft-agents = { path = "../craft-agents" }
 # Model endpoints in the Assistant, as SolidCraft's agent chat does: HTTPS with rustls and the
 # operating system's certificates, and API keys in the system keychain (Keychain on macOS,

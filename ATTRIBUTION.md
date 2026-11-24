@@ -1901,3 +1901,20 @@ The degree-two trace-chain graph, cooperative per-query topology preparation,
 soft bend hints, source-preserving path partitioning and independent chain/contact
 validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
 implementation, dependency or saved-format change was introduced.
+
+## Board substrate preview
+
+The desktop 3D render workspace uses the SolidCraft camera, shaded GPU
+viewport and egui background painter at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright
+2026 SolidCraft contributors). The view compass and board picker chrome use
+the existing licensed Craft UI toolkit in the same revision. PCBcraft owns
+the board-to-triangle conversion, the pane-local egui callback and board
+addressing. Separate callbacks are required because the shared egui
+callback holds one prepared picture per renderer. No component models or
+other external 3D assets are included.
+
+Spade 2.15.1 (MIT OR Apache-2.0), already used by the pinned SolidCore
+display tessellator, also triangulates the preview's bounded,
+non-intersecting board outlines and drill loops. The board's exact solid
+continues to use SolidCore.

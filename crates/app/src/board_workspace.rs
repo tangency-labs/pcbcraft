@@ -73,6 +73,7 @@ impl PcbApp {
                 view.definition = None;
                 view.library = None;
                 view.manufacturing = None;
+                view.render = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {

@@ -86,6 +86,11 @@ fn board_mesh_preserves_bounds_and_through_voids() {
     assert_eq!(vertical_hits(&mesh, [13_480_001, 6_000_003]), [false; 2]);
     assert_eq!(vertical_hits(&mesh, [13_520_001, 6_000_003]), [true; 2]);
     assert_eq!(vertical_hits(&mesh, [20_100_123, 21_000_456]), [true; 2]);
+    let (display, thickness) = display_board(view(&session), 10_000).unwrap();
+    assert_eq!(thickness, solid.thickness);
+    for xy in [[12_000_001, 6_000_003], [34_000_123, 11_000_456], [32_000_123, 11_000_456], [20_100_123, 21_000_456]] {
+        assert_eq!(vertical_hits(&display, xy), vertical_hits(&mesh, xy), "display at {xy:?}");
+    }
     assert_eq!(substrate::tessellate(&solid.body, 0).unwrap_err().code(), ErrorCode::InvalidParams);
     assert_eq!(session.revision(), revision);
     assert_eq!(pcbcraft_engine::persistence::encode_documents(session.snapshot().unwrap()).unwrap(), before);
@@ -267,4 +272,19 @@ fn refuses_chord_tolerance_below_the_kernel_floor() {
 fn keeps_supported_chord_tolerance_on_a_100_mm_board() {
     let Some(solid) = hundred_mm_board_solid() else { return };
     assert!(!substrate::tessellate(&solid.body, 1_000).unwrap().triangles.is_empty());
+}
+
+/// A drill that joins another opening and touches the board edge uses the exact solid fallback.
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-kernel"))]
+#[test]
+fn display_board_keeps_edge_and_overlapping_drill_cuts() {
+    let outline = OutlinePath { points: [[0, 0], [10_000_000, 0], [10_000_000, 10_000_000], [0, 10_000_000]].map(BoardPoint).to_vec(), closed: true };
+    let drills = [
+        RoundDrill { center: BoardPoint([400_000, 5_000_000]), diameter_nm: 1_200_000 },
+        RoundDrill { center: BoardPoint([1_000_000, 5_000_000]), diameter_nm: 1_200_000 },
+    ];
+    let mesh = substrate::display_board(&[outline], &drills, 1_600_000, 10_000).unwrap();
+    assert_eq!(frame_hits(&mesh, [200_000, 5_000_000]), [false; 2]);
+    assert_eq!(frame_hits(&mesh, [1_450_000, 5_000_000]), [false; 2]);
+    assert_eq!(frame_hits(&mesh, [1_800_000, 5_000_000]), [true; 2]);
 }

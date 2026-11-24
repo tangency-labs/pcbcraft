@@ -13486,6 +13486,28 @@
       },
       "scope": "window"
     },
+    "app.set_render_board": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "board",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.set_workspace": {
       "params": {
         "additionalProperties": false,
@@ -13509,7 +13531,8 @@
               "symbol_editor",
               "footprint_editor",
               "library",
-              "manufacturing"
+              "manufacturing",
+              "render"
             ],
             "type": "string"
           }

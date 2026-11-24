@@ -19,6 +19,7 @@ solidcore = { workspace = true }
 solidcore-convert = { workspace = true }
 solidcore-record = { workspace = true }
 solidcore-tess = { workspace = true }
+spade = "=2.15.1"
 
 [features]
 # Enable 3D and STEP on wasm32 for qualification. Browser fills use the planar adapter.

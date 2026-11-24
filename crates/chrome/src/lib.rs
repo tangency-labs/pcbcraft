@@ -32,6 +32,8 @@ pub mod pcb_update;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;
 pub mod properties;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod render_workspace;
 mod ribbon_icons;
 pub mod rule_form;
 pub mod selection;
@@ -52,6 +54,8 @@ pub mod board_setup;
 pub fn install(ctx: &egui::Context) {
     install_text();
     ribbon_icons::install();
+    #[cfg(not(target_arch = "wasm32"))]
+    solidcraft_look::glyphs::install();
     fonts::install(ctx);
 }
 

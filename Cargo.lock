@@ -2922,8 +2922,10 @@ dependencies = [
  "js-sys",
  "keyring",
  "log",
+ "pcbcraft-board-solid",
  "pcbcraft-chrome",
  "pcbcraft-engine",
+ "pcbcraft-geometry",
  "pcbcraft-mcp",
  "pcbcraft-storage",
  "rfd",
@@ -2932,6 +2934,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "solidcore-record",
+ "solidcraft-viewport",
+ "solidcraft-viewport-egui",
+ "solidcraft-viewport-gpu",
  "tempfile",
  "ureq",
  "uuid",
@@ -3005,6 +3011,7 @@ dependencies = [
  "solidcore-record",
  "solidcore-step",
  "solidcore-tess",
+ "spade",
 ]
 
 [[package]]
