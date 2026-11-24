@@ -143,11 +143,14 @@ Both the live editor and headless MCP use these same schemas and transactions.
 ## Storage and limits
 
 Each sheet supports 256 text labels, with names of 1–200 characters without
-surrounding whitespace or control characters. Named labels require at least sheet
-format 3. Symbol field layouts select format 4, including the defaults of a bundled
-GND symbol on the same sheet; an explicit label text layout selects format 5. A bus label is an optional
-`"style": "bus"` record in the same net-label array and never selects the format, so a sheet
-keeps its format when a bus label is added or removed. Builds without bus labels refuse it.
+surrounding whitespace or control characters. The native writer uses
+[sheet format 10](../formats/native-project-storage.md#current-sheet-records)
+with or without labels or appearance records. Among historical formats, named
+labels require sheet/3 or later, symbol field layouts require sheet/4 or later,
+and explicit label text layouts require sheet/5 or later. A bus label is an
+optional `"style": "bus"` record in the same net-label array. It does not change
+the written format or the normal migration from older sheets. Builds without
+bus-label support refuse the record.
 Power uses the normal component budget
 and project-pinned native definitions, including offline reopening and Home
 previews. The former `power`, `power_bar` and `ground` net-label styles and their

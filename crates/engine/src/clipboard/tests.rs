@@ -272,12 +272,12 @@ fn bus_labels_copy_and_paste_but_refuse_a_suffix() {
     let text = Fragment::capture(source.project().unwrap(), &all(&source)).unwrap().to_text().unwrap();
     let mut destination = Session::default();
     destination.apply("project.new", &json!({"name":"Clipboard destination"})).unwrap();
-    assert_eq!(sheet_formats(&destination), ["pcbcraft-sheet/9"]);
+    assert_eq!(sheet_formats(&destination), [persistence::CURRENT_SHEET_FORMAT]);
     destination.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":0,"expected_revision":destination.revision()})).unwrap();
     let project = destination.project().unwrap();
     let bus = project.net_labels().iter().find(|label| label.style == crate::net_labels::Style::Bus).unwrap();
     assert_eq!(bus.name, "D[0..7]");
-    assert_eq!(sheet_formats(&destination), ["pcbcraft-sheet/9"]);
+    assert_eq!(sheet_formats(&destination), [persistence::CURRENT_SHEET_FORMAT]);
 
     let before = destination.snapshot().unwrap();
     let params = json!({"text":text,"x_nm":0,"y_nm":30*GRID_NM,"net_name_suffix":"_B","expected_revision":destination.revision()});
