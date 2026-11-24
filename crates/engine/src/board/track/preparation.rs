@@ -64,6 +64,7 @@ impl CopperPreparation {
 /// An opaque engine-produced edit. Geometry and its successful validation cannot be supplied
 /// by a client boolean; publication consumes this value and rechecks current source authority.
 pub struct PreparedCopperEdit {
+    displacements: Option<replacements::Changes>,
     source: Source,
     candidate: Option<Arc<Project>>,
     command: &'static str,
@@ -73,6 +74,15 @@ pub struct PreparedCopperEdit {
     report: Option<Value>,
 }
 impl PreparedCopperEdit {
+    /// Return displaced neighbors for a fully validated D-drag preview.
+    pub fn drag_replacements(&self) -> &[replacements::Replacement] {
+        self.displacements.as_ref().map_or(&[], |c| c.tracks.as_slice())
+    }
+
+    /// Via centers belonging to this validated drag preview.
+    pub fn drag_vias(&self) -> &[replacements::ViaMove] {
+        self.displacements.as_ref().map_or(&[], |c| c.vias.as_slice())
+    }
     /// Captured policies explain changed-copper validation, with source identities and conflicts.
     /// Unchanged copper is not certified by this edit and may retain existing violations.
     pub fn class_rules(&self) -> Option<&crate::board::class_rules::Context> {
@@ -107,7 +117,11 @@ pub struct CopperEditJob {
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
+    drag: Option<crate::board::route::Search>,
+    displacements: Option<replacements::Changes>,
     check_route_vias: bool,
+    collect_collisions: bool,
+    deferred_short: Option<CommandError>,
     replacement_origins: Option<BTreeMap<Uuid, Uuid>>,
     replacement_geometry: Option<Arc<crate::board::clearance::BoardGeometry>>,
     replacement_validation: Option<replacements::Validation>,
@@ -152,6 +166,7 @@ impl Session {
     /// Direct authored commands retain their ordinary validation, including for DRC fixtures.
     pub fn prepare_interactive_route_with(&self, context: &CopperPreparation, params: &Value) -> Result<CopperEditJob, CommandError> {
         let mut job = self.prepare_copper_edit_with(context, ADD_TRACKS, params)?;
+        job.collect_collisions = params.get("replacements").is_some();
         job.check_route_vias = params.get("layer_changes").and_then(Value::as_array).is_some_and(|changes| !changes.is_empty())
             && context.source.snapshot.board.definitions.values().any(|definition| !definition.non_plated_holes.is_empty());
         Ok(job)
@@ -166,6 +181,11 @@ impl Session {
         }
         self.validate_project_command(command, params)?;
         self.check_revision(params)?;
+        if (command == RESHAPE_TRACKS && params.get("mode").is_some() || params["via_moves"].as_array().is_some_and(|moves| !moves.is_empty()))
+            && params.get("expected_revision").is_none()
+        {
+            return Err(CommandError::InvalidParams("A joint displacement requires expected_revision.".into()));
+        }
         let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         let command = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?.id;
         Ok((command, target))
@@ -190,7 +210,11 @@ impl Session {
             work: 0,
             result: None,
             class_islands: None,
+            drag: None,
+            displacements: None,
             check_route_vias: false,
+            collect_collisions: command == RESHAPE_TRACKS && params.get("mode").and_then(Value::as_str) == Some("highlight"),
+            deferred_short: None,
             replacement_origins: None,
             replacement_geometry: None,
             replacement_validation: None,
@@ -240,6 +264,7 @@ impl CopperEditJob {
         let (candidate, report) = prepared?;
         self.phase = 5;
         self.result = Some(Ok(PreparedCopperEdit {
+            displacements: None,
             source: source.clone(),
             candidate: candidate.map(Arc::new),
             command: self.command,
@@ -313,6 +338,7 @@ impl CopperEditJob {
     /// only after replacement validation, avoiding an extra browser batch for ordinary edits.
     fn finish_prepared(&mut self) {
         self.result = Some(Ok(PreparedCopperEdit {
+            displacements: if self.command == RESHAPE_TRACKS { self.displacements.take() } else { None },
             source: self.context.source.clone(),
             candidate: self.candidate.take(),
             command: self.command,
@@ -322,11 +348,46 @@ impl CopperEditJob {
         }));
         self.phase = 5;
     }
+    /// Advance one bounded stage of connected-drag planning before constructing the private edit.
+    /// Dropping the job discards the search, including any partial displacements.
+    fn advance_drag(&mut self, budget: usize) -> Result<bool, CommandError> {
+        if self.drag.is_none() {
+            let query = match self.context.replacement_source.try_lock() {
+                Ok(mut pending) => pending.step(budget)?,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+                Err(std::sync::TryLockError::Poisoned(_)) => return Err(CommandError::Unavailable("Drag obstacle preparation failed.".into())),
+            };
+            let Some(query) = query else { return Ok(false) };
+            self.drag = Some(crate::board::route::Search::drag(query, param(&self.params, "tracks")?, param(&self.params, "mode")?));
+        }
+        let Some(plan) = self.drag.as_mut().and_then(|s| s.step(budget.min(8))) else { return Ok(false) };
+        self.drag = None;
+        let plan = plan?;
+        if plan.outcome != crate::board::route::Outcome::Reached {
+            return Err(CommandError::InvalidParams(format!("Segment drag refused ({:?}).", plan.outcome)));
+        }
+        self.displacements = Some(replacements::Changes { tracks: plan.replacements, vias: plan.via_moves });
+        Ok(false)
+    }
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         if self.command == unroute::UNROUTE_CONNECTION {
             return self.advance_unroute(budget);
         }
+        if self.phase == 0 && self.command == RESHAPE_TRACKS && self.params.get("mode").is_some() && self.displacements.is_none() {
+            return self.advance_drag(budget);
+        }
+        // Let compound validation identify the stationary blockers of a short in diagnostic mode.
+        // Keep the original refusal for shorts that have no attributable pair.
+        let defer_short = self.collect_collisions && self.replacement_origins.is_some();
+        let mut reject_short = |error| {
+            if defer_short {
+                self.deferred_short.get_or_insert(error);
+                Ok(())
+            } else {
+                Err(error)
+            }
+        };
         match self.phase {
             0 if is_pitch_edit(self.command, &self.params) => {
                 if self.carry.is_none() {
@@ -354,13 +415,18 @@ impl CopperEditJob {
                 }
             }
             0 => {
-                let CandidateEdit { candidate, added, replacements } = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
+                if self.command == ADD_TRACKS {
+                    self.displacements = replacements::Changes::from_params(&self.params)?;
+                }
+                let CandidateEdit { candidate, added, replacements } =
+                    edit_candidate(&self.context.source.snapshot, self.command, &self.params, self.displacements.as_ref())?;
                 self.added = added;
                 self.replacement_origins = replacements;
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.is_none() || self.added.is_empty() {
                     self.phase = 5;
                     self.result = Some(Ok(PreparedCopperEdit {
+                        displacements: None,
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
                         command: self.command,
@@ -428,7 +494,7 @@ impl CopperEditJob {
                     if let Some((a, b)) =
                         short_from_members(candidate, lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
-                        return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
+                        reject_short(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")))?;
                     }
                     if self.check_route_vias
                         || self.replacement_origins.is_some()
@@ -473,7 +539,7 @@ impl CopperEditJob {
                         candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
                     if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
-                        return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
+                        reject_short(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")))?;
                     }
                     let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
                     let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
@@ -486,7 +552,7 @@ impl CopperEditJob {
                                 continue;
                             }
                             if item.intended_nets.len() > 1 {
-                                return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
+                                reject_short(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()))?;
                             }
                             if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
                                 if let Some(track) = view.tracks().iter().find(|track| track.id == id) {
@@ -532,19 +598,24 @@ impl CopperEditJob {
                 {
                     let geometry =
                         self.replacement_geometry.take().ok_or_else(|| CommandError::Unavailable("Missing final copper geometry.".into()))?;
-                    self.replacement_validation = Some(replacements::Validation::new(
+                    let validation = replacements::Validation::new(
                         self.context.source.clone(),
                         self.context.replacement_source.clone(),
                         geometry,
                         origins,
                         self.added.clone(),
                         &self.params,
-                    )?);
+                        self.displacements.as_ref().ok_or_else(|| CommandError::Unavailable("Missing compound displacements.".into()))?,
+                    )?;
+                    self.replacement_validation = Some(validation.collect_collisions(self.collect_collisions));
                 }
                 if let Some(validation) = &mut self.replacement_validation
                     && !validation.step(budget)?
                 {
                     return Ok(false);
+                }
+                if let Some(error) = self.deferred_short.take() {
+                    return Err(error);
                 }
                 self.finish_prepared();
                 return Ok(true);
@@ -559,6 +630,7 @@ impl CopperEditJob {
     /// Make a fully checked candidate (or a no-op) available to the history transaction.
     fn finish_pitch(&mut self) {
         self.result = Some(Ok(PreparedCopperEdit {
+            displacements: None,
             source: self.context.source.clone(),
             candidate: self.candidate.take(),
             command: self.command,
@@ -749,7 +821,7 @@ mod tests {
         let pads = view(&s).footprints().flat_map(|f| f.pads).collect::<Vec<_>>();
         for (a, b) in pads.iter().flat_map(|a| pads.iter().map(move |b| (a, b))).filter(|(a, b)| a.center != b.center) {
             let p = json!({"layer":copper_layers(&s)[0],"width_nm":250_000,"points":[a.center,b.center],"expected_revision":s.revision()});
-            let CandidateEdit { candidate, added, .. } = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p).unwrap();
+            let CandidateEdit { candidate, added, .. } = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p, None).unwrap();
             let expected_short = short(candidate.as_ref().unwrap(), &added).is_some();
             let mut job = s.prepare_copper_edit(ADD_TRACKS, &p).unwrap();
             while !job.step(7) {}

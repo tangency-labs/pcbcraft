@@ -623,6 +623,7 @@ impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
+    /// The Gerber profile includes the closed outline loops and omits open outline paths.
     /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
     /// Returns an error if a plated or non-plated drill diameter rounds to zero at the output resolution.
@@ -649,12 +650,12 @@ impl BoardView<'_> {
             .filter_map(|stratum| if let Stratum::Copper { layer, .. } = stratum { Some(*layer) } else { None })
             .collect();
         let layers = self.layers();
-        let outline: Vec<_> = self
+        let closed_outline: Vec<_> = self
             .drawings()
             .into_iter()
-            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
+            .filter(|drawing| drawing.closed && layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
             .collect();
-        if !outline.iter().any(|drawing| drawing.closed) {
+        if closed_outline.is_empty() {
             return Err("Draw a closed Board Outline before generating fabrication outputs.".into());
         }
         let origin = self.placement_origin()?;
@@ -760,16 +761,12 @@ impl BoardView<'_> {
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive", &frame_id) });
         }
 
+        // Gerber 2026.05 §§5.6.3 and 6.5 reserve the Profile file for the physical outline.
         let mut profile = Gerber::new(frame);
-        for drawing in &outline {
-            let mut points = drawing.points.clone();
-            if drawing.closed {
-                points.push(points[0]);
-            }
-            // Keep legacy artwork in the output, but do not identify an open drawing as
-            // the board's physical edge (§§5.6.10, 6.5).
-            let function = drawing.closed.then_some(ApertureFunction::Profile);
-            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), function);
+        for drawing in closed_outline {
+            let mut points = drawing.points;
+            points.push(points[0]);
+            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), Some(ApertureFunction::Profile));
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive", &frame_id) });
 

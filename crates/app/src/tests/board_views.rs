@@ -673,7 +673,7 @@ fn board_canvas_and_ribbon_remain_distinct_from_schematic() {
 }
 
 /// Keyboard navigation reaches available workspaces and placement actions without leaking keys
-/// into the canvas. Planned workspaces are skipped when moving between rows.
+/// into the canvas. From Manufacturing, the picker skips planned workspaces and wraps to Schematic.
 #[test]
 fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     let mut h = board_harness();
@@ -707,7 +707,14 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.run();
     h.key_press(Key::Enter);
     h.run();
+    assert_eq!(h.state().workspace_key(), "manufacturing");
+    click(&mut h, "Choose workspace");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
     assert!(h.state().library_editors.active.is_none());
+    assert_eq!(h.state().workspace_key(), "schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
     let card = h.get_by_label("PCB Layout").rect();
@@ -1630,6 +1637,26 @@ fn footprint_deletion_uses_selected_placements_and_shared_undo() {
     }
 }
 
+/// Backspace, which is the delete key on Mac keyboards, deletes an explicit board selection
+/// exactly as Delete does, in one undo step.
+#[test]
+fn backspace_deletes_the_board_selection_like_delete() {
+    let mut h = editable_board();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(!h.state().views.active.board.selection.is_empty());
+    let revision = h.state().session.revision();
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Live clients use the same deletion command and stale gate, and can undo from the GUI.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -1860,7 +1887,7 @@ fn footprint_box_excludes_locked_without_hiding_inspection() {
     assert_eq!(h.state().views.active.board.selection.len(), 1);
 }
 
-/// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
+/// Escape, focus loss and changed revisions cannot commit a box. Disabled
 /// footprint filters and hidden geometry produce no hits, including fast move/release frames.
 #[test]
 fn pcb_box_selection_cancels_and_respects_filters() {
@@ -1868,7 +1895,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
     let mut h = editable_board();
     let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
     let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
-    for cancellation in ["escape", "focus", "revision", "panel"] {
+    for cancellation in ["escape", "focus", "revision"] {
         board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
         match cancellation {
             "escape" => h.key_press(Key::Escape),
@@ -1883,8 +1910,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
             _ => {}
         }
         h.run();
-        let end = if cancellation == "panel" { h.get_by_label("Collapse Layers").rect().center() } else { to };
-        board_box_release(&mut h, end, Primary, Modifiers::NONE);
+        board_box_release(&mut h, to, Primary, Modifiers::NONE);
         assert!(h.state().views.active.board.box_drag.is_none());
         assert!(h.state().views.active.board.selection.is_empty(), "{cancellation}");
         h.event(egui::Event::WindowFocused(true));

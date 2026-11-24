@@ -241,6 +241,7 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
         replay::ENVELOPE_TRACE_ID => Some(("envelope", replay::Step::envelope())),
         replay::COMMIT_TRACE_ID => Some(("commit", replay::Step::commit())),
         replay::SHOVE_TRACE_ID => Some(("shove", replay::Step::shove())),
+        replay::HELD_DRAG_TRACE_ID => Some(("held drag", replay::Step::held_drag())),
         _ => None,
     };
     if let Some((kind, expected)) = expected

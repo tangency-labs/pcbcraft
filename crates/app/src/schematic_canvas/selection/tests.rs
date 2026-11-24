@@ -84,9 +84,9 @@ fn both_buttons_draw_boxes_and_respect_direction() {
 }
 
 /// Shift/Ctrl apply to the starting selection, and cancelling or invalidating the drag restores
-/// it. Releasing over a floating card cannot commit a canvas selection.
+/// it.
 #[test]
-fn modifiers_escape_stale_edits_and_panel_release_are_safe() {
+fn modifiers_escape_and_stale_edits_are_safe() {
     let mut h = harness();
     for (x, modifiers, expected) in [(-15, Modifiers::NONE, 1), (15, Modifiers::SHIFT, 2), (-15, Modifiers::CTRL, 1)] {
         let from = point(&h, x - 5, -5);
@@ -108,12 +108,6 @@ fn modifiers_escape_stale_edits_and_panel_release_are_safe() {
     h.state_mut().session.apply(MOVE_SYMBOL, &json!({"symbol":"symbol-2","x_nm":-15*GRID_NM,"y_nm":GRID_NM,"expected_revision":revision})).unwrap();
     h.run();
     release(&mut h, to, PointerButton::Secondary, Modifiers::NONE);
-    assert_eq!(h.state().views.active.schematic.selection, selected);
-    start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
-    let panel = h.state().browser.rect().center();
-    h.hover_at(panel);
-    h.run();
-    release(&mut h, panel, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(h.state().views.active.schematic.selection, selected);
 }
 

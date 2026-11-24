@@ -30,7 +30,7 @@ does not qualify compositor presentation or recording reliability. No physical
 input-to-photon, Wayland endurance, Windows or macOS claim is made. Input is
 limited to the original native window and split panes; detached windows expose
 lookup only, and specialized widgets may lack names. The user-facing contract is
-in [UI automation](../../../../docs/ui-automation.md).
+in [UI automation](../../../../docs/automation/ui-automation.md).
 
 PR #325 review fixes add viewport-scoped collection and a human-consent boundary
 for Assistant controls. The `review-*` records identify this follow-up by source
