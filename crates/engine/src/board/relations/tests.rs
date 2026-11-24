@@ -195,11 +195,14 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     assert!(matches!(catalog::measure(&resolver, Kind::Gap, &[right,left]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -gap));
 }
 
-/// F1 round-trips the original closed tags, adds no clipboard bytes, and downgrades only once
-/// the final row has gone. Known driving rows and mismatched/partial headers are refused intact.
+/// F1 round-trips the original closed tags, adds no clipboard bytes, keeps the board format its
+/// other content selects, and drops the record once the final row has gone. Known driving rows,
+/// unsupported headers and a null record are refused intact.
 #[test]
 fn a_format_p1_clipboard_and_driving_row_reader() {
     let mut s = fixture(false);
+    let plain = bytes(&s);
+    let plain_format = serde_json::from_slice::<Value>(&plain[&test_board_path(&plain)]).unwrap()["format"].clone();
     let fp = s.project().unwrap().board.footprints()[0].id;
     let items = json!({"footprints":[format!("footprint-{fp}")]});
     let copy_before = run(&mut s, board::clipboard::COPY, json!({"items":items})).unwrap()["clipboard"].clone();
@@ -209,9 +212,14 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     let docs = bytes(&s);
     let path = test_board_path(&docs);
     let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/58");
+    assert_eq!(board["format"], plain_format);
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
-    for (key, value) in [("format", json!("pcbcraft-board/35")), ("format", json!("pcbcraft-board/38")), ("relations", Value::Null)] {
+    for (key, value) in [
+        ("format", json!("pcbcraft-board/35")),
+        ("format", json!("pcbcraft-board/38")),
+        ("format", json!("pcbcraft-board/58")),
+        ("relations", Value::Null),
+    ] {
         let mut changed = board.clone();
         changed[key] = value;
         let mut doc = docs.clone();
@@ -249,21 +257,26 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     assert_eq!(rows[0]["refs"][1]["fp"], fp);
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
     let docs = bytes(&s);
-    assert_ne!(serde_json::from_slice::<Value>(&docs[&test_board_path(&docs)]).unwrap()["format"], "pcbcraft-board/58");
+    let board: Value = serde_json::from_slice(&docs[&test_board_path(&docs)]).unwrap();
+    assert_eq!(board["format"], plain_format);
+    assert!(board.get("relations").is_none());
 }
 
-/// A board with relations saves as board/58 and reopens with the same relation and bytes. The
-/// pre-release board/39 label is unsupported, and board/41 keeps main's rules, so neither carries relations.
+/// Relations are an optional board record, not a format: a board with relations keeps the header
+/// its other content selects and reopens with the same relation and bytes. The pre-release
+/// board/39 and board/58 labels are unsupported, and deleting the last relation restores the
+/// plain bytes.
 #[test]
-fn a_format_board_58_saves_and_reopens_relations() {
+fn a_format_relations_keep_the_board_format_and_reopen() {
     let mut s = fixture(false);
+    let plain = bytes(&s);
     let a = pick(&mut s, 0, "fp.origin", None);
     let id = add(&mut s, "horizontal", origin(), a);
     let listed = run(&mut s, LIST, json!({})).unwrap()["relations"].clone();
     let docs = bytes(&s);
     let path = test_board_path(&docs);
     let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/58");
+    assert_eq!(board["format"], serde_json::from_slice::<Value>(&plain[&path]).unwrap()["format"]);
     assert!(board["relations"].is_object());
 
     let mut reopened = Session::default();
@@ -272,17 +285,21 @@ fn a_format_board_58_saves_and_reopens_relations() {
     assert_eq!(listed[0]["id"], id);
     assert_eq!(bytes(&reopened), docs);
 
-    for format in ["pcbcraft-board/39", "pcbcraft-board/41"] {
+    for format in ["pcbcraft-board/39", "pcbcraft-board/58"] {
         let mut changed = board.clone();
         changed["format"] = json!(format);
         let mut doc = docs.clone();
         doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
-        assert_eq!(
-            decode_documents(&doc).unwrap_err(),
-            "board.json: board/58 requires a nonempty relations record, which is not supported by earlier formats",
-            "{format}"
-        );
+        assert!(decode_documents(&doc).is_err(), "{format}");
     }
+    let mut empty = board.clone();
+    empty["relations"]["relations"] = json!([]);
+    let mut doc = docs.clone();
+    doc.insert(path.clone(), serde_json::to_vec(&empty).unwrap());
+    assert!(decode_documents(&doc).unwrap_err().contains("board relations"));
+
+    run(&mut reopened, DELETE, json!({"ids":[id]})).unwrap();
+    assert_eq!(bytes(&reopened), plain);
 }
 
 /// Adding and deleting a reference-only horizontal dimension on a project opened from legacy
@@ -317,7 +334,11 @@ fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
     assert!(s.project().unwrap().numeric_id_high_water.is_none());
     let with_relation = bytes(&s);
     assert_eq!(with_relation[crate::persistence::ENTRY_POINT], before[crate::persistence::ENTRY_POINT]);
-    assert_eq!(serde_json::from_slice::<Value>(&with_relation[&test_board_path(&with_relation)]).unwrap()["format"], "pcbcraft-board/58");
+    let path = test_board_path(&with_relation);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&with_relation[&path]).unwrap()["format"],
+        serde_json::from_slice::<Value>(&before[&path]).unwrap()["format"]
+    );
     assert_eq!(encode_documents(decode_documents(&with_relation).unwrap()).unwrap(), with_relation);
 
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
@@ -572,8 +593,9 @@ fn sliced_track_ids(n: u128) -> Vec<Uuid> {
 }
 
 /// This exact bundle is the source witness for the separate #443 reader. Here we only
-/// qualify the current reader, without rewriting the board header or stripping any field.
-/// Saving adopts the current project format; the board keeps its own header.
+/// qualify the current reader on the lowest current board format (board/1 with an optional
+/// relations record). Saving adopts the current project format; the board keeps its board/1
+/// header and its relation, and re-encoding is byte-stable.
 #[test]
 fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
     const ROOT: &str = "sheets/00000000-0000-4000-8000-000000000003.json";
@@ -589,10 +611,11 @@ fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
         serde_json::from_slice::<Value>(&saved[crate::persistence::ENTRY_POINT]).unwrap()["format"],
         crate::persistence::CURRENT_PROJECT_FORMAT
     );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&saved[&test_board_path(&saved)]).unwrap()["format"],
-        serde_json::from_slice::<Value>(&docs["board.json"]).unwrap()["format"]
-    );
+    let saved_board: Value = serde_json::from_slice(&saved[&test_board_path(&saved)]).unwrap();
+    let fixture_board: Value = serde_json::from_slice(&docs["board.json"]).unwrap();
+    assert_eq!(fixture_board["format"], "pcbcraft-board/1");
+    assert_eq!(saved_board["format"], fixture_board["format"]);
+    assert_eq!(saved_board["relations"], fixture_board["relations"]);
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let list = run(&mut s, LIST, json!({})).unwrap();
     assert_eq!(list["relations"][0]["status"], "lost");

@@ -95,7 +95,6 @@ const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
-const RELATIONS_BOARD_FORMAT: &str = "pcbcraft-board/58";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
@@ -354,6 +353,8 @@ impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
+    /// Optional reference-only parametric relations. Any board format may carry them; they never
+    /// select the format. Builds without relation support refuse the record as an unknown field.
     #[serde(default, deserialize_with = "crate::board::reference::present")]
     relations: Option<crate::board::relations::Relations>,
     #[serde(default, deserialize_with = "present")]
@@ -996,32 +997,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
     let grouped = board.format == GROUP_BOARD_FORMAT;
-    // F1 is a strict superset of the already-supported native fields. Its
-    // additional feature is mandatory, but no earlier feature is mandatory in it.
-    let related = board.format == RELATIONS_BOARD_FORMAT;
-    if related != board.relations.is_some() {
-        return Err("board.json: board/58 requires a nonempty relations record, which is not supported by earlier formats".into());
-    }
+    // Relations are an optional record keyed on the field, not the header: validate them when present.
     if let Some(relations) = &board.relations {
         relations.validate().map_err(|error| format!("board.json: {error}"))?;
     }
-    // Format 37 requires teardrops; F1 (format 58) and format 41 may carry them like every other native field.
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
-    if (!related && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: teardrops require board format 37 (or 41 or 58) and a nonempty array".into());
+    if (!grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
     }
-    // Formats 37 and 58 both accept the existing straight-board fields without requiring them.
-    let native_superset = related || with_teardrops;
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if (!related && !grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
+    if (!grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if !grouped && !native_superset && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+    if !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
     }
-    let extended_board_format = grouped || curved || footprint_locks || native_superset;
+    let extended_board_format = grouped || curved || footprint_locks || with_teardrops;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
@@ -1102,7 +1095,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
-    let tracked = native_superset
+    let tracked = with_teardrops
         || matches!(
             board.format.as_str(),
             TRACK_BOARD_FORMAT
@@ -1129,7 +1122,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
         || (board.vias.is_some()
-            && !native_superset
+            && !with_teardrops
             && !matches!(
                 board.format.as_str(),
                 VIA_BOARD_FORMAT
@@ -1218,8 +1211,38 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
-    if !native_superset
-        && !matches!(
+    if !matches!(
+        board.format.as_str(),
+        ASSIGNED_BOARD_FORMAT
+            | OUTLINE_BOARD_FORMAT
+            | DRAWING_BOARD_FORMAT
+            | BASELINE_BOARD_FORMAT
+            | INTENT_BOARD_FORMAT
+            | TRACK_BOARD_FORMAT
+            | VIA_BOARD_FORMAT
+            | SIDE_BOARD_FORMAT
+            | REFERENCE_BOARD_FORMAT
+            | STROKED_BOARD_FORMAT
+            | MULTIPAD_BOARD_FORMAT
+            | LOCKED_COPPER_BOARD_FORMAT
+            | RULES_BOARD_FORMAT
+            | ASSIGNED_VIA_BOARD_FORMAT
+            | ORIGIN_BOARD_FORMAT
+            | PROFILE_BOARD_FORMAT
+            | STACK_BOARD_FORMAT
+            | REPORT_BOARD_FORMAT
+            | ZONE_BOARD_FORMAT
+            | ARC_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+            | GROUP_BOARD_FORMAT
+    ) && !with_teardrops
+        && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
+    {
+        return Err("board.json: explicit silkscreen settings require board format 6".into());
+    }
+    if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
+        || (!matches!(
             board.format.as_str(),
             ASSIGNED_BOARD_FORMAT
                 | OUTLINE_BOARD_FORMAT
@@ -1244,39 +1267,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | LOCKED_FOOTPRINT_BOARD_FORMAT
                 | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
                 | GROUP_BOARD_FORMAT
-        )
-        && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
-    {
-        return Err("board.json: explicit silkscreen settings require board format 6".into());
-    }
-    if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
-        || (!native_superset
-            && !matches!(
-                board.format.as_str(),
-                ASSIGNED_BOARD_FORMAT
-                    | OUTLINE_BOARD_FORMAT
-                    | DRAWING_BOARD_FORMAT
-                    | BASELINE_BOARD_FORMAT
-                    | INTENT_BOARD_FORMAT
-                    | TRACK_BOARD_FORMAT
-                    | VIA_BOARD_FORMAT
-                    | SIDE_BOARD_FORMAT
-                    | REFERENCE_BOARD_FORMAT
-                    | STROKED_BOARD_FORMAT
-                    | MULTIPAD_BOARD_FORMAT
-                    | LOCKED_COPPER_BOARD_FORMAT
-                    | RULES_BOARD_FORMAT
-                    | ASSIGNED_VIA_BOARD_FORMAT
-                    | ORIGIN_BOARD_FORMAT
-                    | PROFILE_BOARD_FORMAT
-                    | STACK_BOARD_FORMAT
-                    | REPORT_BOARD_FORMAT
-                    | ZONE_BOARD_FORMAT
-                    | ARC_BOARD_FORMAT
-                    | LOCKED_FOOTPRINT_BOARD_FORMAT
-                    | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
-                    | GROUP_BOARD_FORMAT
-            )
+        ) && !with_teardrops
             && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -1294,18 +1285,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
-    // F1 (format 58) carries named layer groups like every other native field, but never an empty list.
     if !grouped && let Some(raw) = &board.setup {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
-        if let Some(groups) = value["stackup"].get("layer_groups")
-            && !(related && groups.as_array().is_some_and(|groups| !groups.is_empty()))
-        {
-            return Err("board.json: the layer_groups field requires board format 41 (or 58).".into());
+        if value["stackup"].get("layer_groups").is_some() {
+            return Err("board.json: the layer_groups field requires board format 41.".into());
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (RELATIONS_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (RELATIONS_BOARD_FORMAT, None) => None,
         (GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (
             ARC_BOARD_FORMAT
@@ -1368,7 +1354,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
-    if grouped != has_groups && !(related && has_groups) {
+    if grouped != has_groups {
         return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
@@ -2398,8 +2384,8 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
     bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
 }
 
-/// Preserve canonical legacy encodings until authored content requires a newer format. Relations
-/// select 58, which carries every other native field; named layer groups otherwise select 41; straight-via teardrop intents select 37; arcs alone select 26, active
+/// Preserve canonical legacy encodings until authored content requires a newer format. Named
+/// layer groups select 41; straight-via teardrop intents select 37; arcs alone select 26, active
 /// footprint locks alone select 34, and both together select 35. These formats retain earlier
 /// physical fields. Material reports require at least 25; explicit via intent at least 24; copper
 /// roles, base copper, copper thickness qualifiers or finished board thickness at least 23;
@@ -2442,9 +2428,7 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     };
     let arc_or_lock_format = if board.teardrops.is_empty() { arc_or_lock_format } else { Some(TEARDROP_BOARD_FORMAT) };
     if let Some(setup) = setup {
-        let format = if board.relations.is_some() {
-            RELATIONS_BOARD_FORMAT
-        } else if setup.requires_group_format() {
+        let format = if setup.requires_group_format() {
             GROUP_BOARD_FORMAT
         } else if let Some(format) = arc_or_lock_format {
             format
@@ -2537,9 +2521,7 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
-        let format = if board.relations.is_some() {
-            RELATIONS_BOARD_FORMAT
-        } else if let Some(format) = arc_or_lock_format {
+        let format = if let Some(format) = arc_or_lock_format {
             format
         } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
@@ -2586,6 +2568,7 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
+    // Relations are optional data under the selected format and are omitted when none exist.
     if let Some(relations) = &board.relations {
         bytes.write_all(b"  \"relations\": {\n    \"relations\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;

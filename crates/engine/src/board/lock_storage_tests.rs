@@ -331,7 +331,8 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
 }
 
-/// F1 is a lazy addition to the retained native arc/lock ladder, not an edit permission.
+/// Relations are an optional record on the native arc/lock ladder: the board keeps the format its
+/// other content selects, and relations are not an edit permission.
 #[test]
 fn a_format_f1_composes_with_native_arc_lock_corpus() {
     use crate::board::relations::{
@@ -365,14 +366,15 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         let saved = bytes(&s);
         let path = test_board_path(&saved);
         let f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(f1["format"], "pcbcraft-board/58");
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        assert_eq!(f1["format"], native_board["format"]);
         assert_eq!(f1.get("arcs").is_some(), arcs);
         assert_eq!(f1["footprints"][0].get("locked").is_some(), lock);
-        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
-        let mut legacy = f1.clone();
-        legacy["format"] = native_board["format"].clone();
+        // The unreleased board/58 label is not a format.
+        let mut reserved = f1.clone();
+        reserved["format"] = json!("pcbcraft-board/58");
         let mut doctored = saved.clone();
-        doctored.insert(path, serde_json::to_vec(&legacy).unwrap());
+        doctored.insert(path, serde_json::to_vec(&reserved).unwrap());
         let before = doctored.clone();
         assert!(decode_documents(&doctored).is_err());
         assert_eq!(doctored, before);
@@ -390,7 +392,8 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
         let final_docs = bytes(&s);
         let final_board: Value = serde_json::from_slice(&final_docs[&test_board_path(&final_docs)]).unwrap();
-        assert_ne!(final_board["format"], "pcbcraft-board/58");
+        assert_eq!(final_board["format"], native_board["format"]);
+        assert!(final_board.get("relations").is_none());
         assert_eq!(final_board["footprints"][0].get("locked").is_some(), lock);
     }
 }
@@ -426,9 +429,8 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
         let id = add(&mut s, "horizontal", origin(), reference);
         let composed = bytes(&s);
         let mut b: Value = serde_json::from_slice(&composed[&path]).unwrap();
-        assert_eq!(b["format"], "pcbcraft-board/58");
+        assert_eq!(b["format"], native_board["format"]);
         assert_eq!(b.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
-        b["format"] = native_board["format"].clone();
         assert_eq!(b, native_board);
         for (file, data) in &native {
             if *file != path {
@@ -450,8 +452,9 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
     }
 }
 
-/// F1 carries named layer groups (format 41) and refuses an empty group list; deleting the last
-/// relation returns the exact native /41 bytes.
+/// Relations ride on board format 41 (named layer groups, the highest current board format) without
+/// changing it; an empty group list is still refused, and deleting the last relation returns the
+/// exact native /41 bytes.
 #[test]
 fn a_format_f1_composes_with_named_layer_groups() {
     use crate::board::relations::tests::{add, bytes, origin, pick, run};
@@ -469,12 +472,11 @@ fn a_format_f1_composes_with_named_layer_groups() {
     let id = add(&mut s, "horizontal", origin(), reference);
     let composed = bytes(&s);
     let board: Value = serde_json::from_slice(&composed[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/58");
+    assert_eq!(board["format"], "pcbcraft-board/41");
     assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
     assert_eq!(board["relations"]["relations"][0]["id"], id);
     let mut stripped = board.clone();
     stripped.as_object_mut().unwrap().remove("relations");
-    stripped["format"] = native_board["format"].clone();
     assert_eq!(stripped, native_board);
     for (file, data) in &native {
         if *file != path {
@@ -487,12 +489,12 @@ fn a_format_f1_composes_with_named_layer_groups() {
     assert_eq!(bytes(&s), composed);
     let mut empty = board.clone();
     empty["setup"]["stackup"]["layer_groups"] = json!([]);
-    assert_invalid_board_record(&composed, &empty, "board.json: the layer_groups field requires board format 41 (or 58).");
+    assert_invalid_board_record(&composed, &empty, "requires at least one group");
     run(&mut s, crate::board::relations::commands::DELETE, json!({"ids":[id]})).unwrap();
     assert_eq!(bytes(&s), native);
 }
 
-/// F1 stores teardrops beside relations. Relation edits on a teardrop board are refused like every
+/// Relations ride beside teardrops under board format 37. Relation edits on a teardrop board are refused like every
 /// other non-teardrop board edit, so the exact /37 control is reached by removing the teardrop.
 #[test]
 fn a_format_f1_composes_with_teardrops() {
@@ -545,17 +547,16 @@ fn a_format_f1_composes_with_teardrops() {
     assert_eq!(bytes(&s), control);
     teardrop(&mut s, &[], &[record.id]);
     assert_eq!(bytes(&s), native);
-    // F1: the relation first, then the teardrop.
+    // The relation first, then the teardrop, under the same /37 header.
     s.open_snapshot(untouched);
     let id = add(&mut s, "horizontal", origin(), reference);
     let related = bytes(&s);
     teardrop(&mut s, &[record], &[]);
     let saved = bytes(&s);
     let mut f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(f1["format"], "pcbcraft-board/58");
+    assert_eq!(f1["format"], "pcbcraft-board/37");
     assert_eq!(f1["teardrops"], control_board["teardrops"]);
     assert_eq!(f1.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
-    f1["format"] = control_board["format"].clone();
     assert_eq!(f1, control_board);
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let packed = encode_packed(s.snapshot().unwrap()).unwrap();
