@@ -618,7 +618,7 @@ fn adopted_profile_does_not_replace_package_orientation() {
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
     let entry: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
     let board_doc: Value = serde_json::from_slice(&docs[&test_board_path(&docs)]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/36");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(board_doc["format"], "pcbcraft-board/22");
     assert_eq!(board_doc["assembly_profiles"], json!([{"profile":profile,"revision":1}]));
     let reopened = decode_documents(&docs).unwrap();
