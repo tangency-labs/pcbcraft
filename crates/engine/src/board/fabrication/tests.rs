@@ -2236,6 +2236,7 @@ fn fabrication_emits_one_closed_profile_path_per_outline_loop() {
         let profile = file(&outputs, "-Outline.gbr");
         let read = try_read_gerber(profile, "Profile,NP", "Positive").unwrap();
         assert_eq!(read.strokes.len(), if has_cutout { 8 } else { 4 });
+        assert!(read.strokes.iter().all(|(_, _, aperture)| aperture.function == Some("Profile")), "every closed loop is the board profile");
         assert!(read.flashes.is_empty() && read.regions.is_empty());
         let records: Vec<_> = profile.lines().filter(|line| line.starts_with('X')).collect();
         let (paths, remainder) = records.as_chunks::<5>();
