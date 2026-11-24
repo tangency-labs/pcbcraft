@@ -37,6 +37,7 @@ FORMATS = {
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",
     "pcbcraft-part/4": "urn:pcbcraft:schema:part:4",
     "pcbcraft-part/5": "urn:pcbcraft:schema:part:5",
+    "pcbcraft-part/6": "urn:pcbcraft:schema:part:6",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
 }
 

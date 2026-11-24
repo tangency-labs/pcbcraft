@@ -96,11 +96,11 @@ Pinned library items retain their published format and revision. Changes to
 authored library items go through publication of a new revision.
 
 The project entry point and native library authoring use fixed current write
-formats for [symbols](../libraries/symbol-schema.md) and
-[footprints](../libraries/footprint-schema.md). Placing a version-5 symbol in an
-older project adopts the folder and occurrence metadata in the placement edit.
-Board, sheet, instance, board setup profile and part writers have separate
-schemas and still select formats by the records present.
+formats for [symbols](../libraries/symbol-schema.md),
+[footprints](../libraries/footprint-schema.md) and [parts](../libraries/part-schema.md).
+Placing a version-5 symbol in an older project adopts the folder and occurrence
+metadata in the placement edit. Board, sheet, instance and board setup profile
+writers have separate schemas and still select formats by the records present.
 
 ## Bundled library address migration
 
@@ -244,10 +244,9 @@ conflicting dependencies reject opening before adoption. Native part selections
 also travel with schematic clipboard fragments; diagnostic single-document
 export refuses to discard them.
 [Device supply ranges](../libraries/part-schema.md#device-supply-range) live in the same
-pinned generic part closure, using `pcbcraft-part/4` only for records with a
-nonempty terminal rating map. Folders and packed projects carry the same bytes.
-Older readers refuse that unknown pinned record rather than dropping its data;
-no project, sheet, symbol, board, or accepted-baseline format changes.
+pinned generic part closure. Historical ratings use `pcbcraft-part/4` or
+`pcbcraft-part/5`, and current part revisions use `pcbcraft-part/6`. Folders
+and packed projects carry the same bytes.
 
 Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
 with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input
