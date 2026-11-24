@@ -575,10 +575,12 @@ fn window_corners(h: &Harness<'_, PcbApp>, min: (i64, i64), max: (i64, i64)) -> 
     (egui::pos2(a.x.min(b.x), a.y.max(b.y)), egui::pos2(a.x.max(b.x), a.y.min(b.y)))
 }
 
-/// What happens between the last move of a held box and its release.
+/// Input events around the release of a held box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Interrupt {
     None,
+    /// The cursor moves again before the frame processing the release.
+    MoveAfterRelease,
     Escape,
     /// A dialog disables canvas input for one frame, then input is enabled again.
     Disabled,
@@ -595,7 +597,7 @@ fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, inter
     h.event(egui::Event::PointerMoved(to));
     h.run();
     match interrupt {
-        Interrupt::None => {}
+        Interrupt::None | Interrupt::MoveAfterRelease => {}
         Interrupt::Escape => {
             h.key_press(Key::Escape);
             h.run();
@@ -607,7 +609,13 @@ fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, inter
             h.run();
         }
     }
-    h.event(egui::Event::PointerButton { pos: to, button: Primary, pressed: false, modifiers: Modifiers::NONE });
+    let release = egui::Event::PointerButton { pos: to, button: Primary, pressed: false, modifiers: Modifiers::NONE };
+    if interrupt == Interrupt::MoveAfterRelease {
+        // Harness::event processes each event in a separate frame, so batch the raw input.
+        h.input_mut().events.extend([release, egui::Event::PointerMoved(from)]);
+    } else {
+        h.event(release);
+    }
     h.run();
 }
 
@@ -625,11 +633,11 @@ fn schematic_box_released_over_the_filter_card_selects_enclosed_items() {
     click_canvas_at(&mut h, from);
     assert!(h.state().views.active.schematic.selection.is_empty());
     float_filters_over(&mut h, to);
-    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::None] {
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::MoveAfterRelease, Interrupt::None] {
         box_onto(&mut h, from, to, interrupt);
         assert!(h.state().views.active.schematic.tool.is_none());
         let selection = &h.state().views.active.schematic.selection;
-        let expected = if interrupt == Interrupt::None { (1, 1) } else { (0, 0) };
+        let expected = if matches!(interrupt, Interrupt::None | Interrupt::MoveAfterRelease) { (1, 1) } else { (0, 0) };
         assert_eq!((selection.symbols.len(), selection.wires.len()), expected, "{interrupt:?}");
     }
     assert_eq!(document(&h), before);
@@ -658,10 +666,14 @@ fn board_box_released_over_the_filter_card_selects_enclosed_items() {
     click_canvas_at(&mut h, from);
     assert!(h.state().views.active.board.selection.is_empty());
     float_filters_over(&mut h, to);
-    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::None] {
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::MoveAfterRelease, Interrupt::None] {
         box_onto(&mut h, from, to, interrupt);
         assert!(h.state().views.active.board.box_drag.is_none());
-        assert_eq!(h.state().views.active.board.selection.len(), usize::from(interrupt == Interrupt::None), "{interrupt:?}");
+        assert_eq!(
+            h.state().views.active.board.selection.len(),
+            usize::from(matches!(interrupt, Interrupt::None | Interrupt::MoveAfterRelease)),
+            "{interrupt:?}"
+        );
     }
     assert_eq!(document(&h), before);
 }

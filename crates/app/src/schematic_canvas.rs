@@ -27,7 +27,7 @@ mod tests;
 pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
-use crate::preferences::Navigation;
+use crate::{canvas_camera::pointer_release, preferences::Navigation};
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
@@ -649,11 +649,13 @@ pub(crate) fn show(
             return Some(Click::SelectItems(drag.base.clone()));
         }
         // A box that started here clamps to the canvas and commits even when released over a floating panel.
-        let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos())).map(|pointer| rect.clamp(pointer));
+        let release = pointer_release(&response, drag.button);
+        let pointer = release.or_else(|| response.interact_pointer_pos()).or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
+            let pointer = rect.clamp(pointer);
             let hits = selection::boxed(ui, project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
-            if ui.input(|i| i.pointer.button_released(drag.button)) {
+            if release.is_some() {
                 return Some(Click::SelectItems(if input_enabled { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
             }
         }
