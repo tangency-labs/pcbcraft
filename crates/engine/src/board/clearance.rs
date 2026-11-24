@@ -386,7 +386,18 @@ impl ClearanceQuery {
         nets: &[usize],
         excluded: impl Fn(usize) -> bool,
     ) -> Result<Results, CommandError> {
-        let objects = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i)).map(|i| (i, &self.objects()[i]));
+        let candidates = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i));
+        self.probe_candidates(contour, nets, candidates)
+    }
+
+    /// Evaluate broad-phase candidates already collected for this contour and layer set.
+    pub(super) fn probe_candidates(
+        &self,
+        contour: &Contour,
+        nets: &[usize],
+        candidates: impl Iterator<Item = usize>,
+    ) -> Result<Results, CommandError> {
+        let objects = candidates.map(|i| (i, &self.objects()[i]));
         self.evaluate_probe(contour, nets, objects)
     }
 

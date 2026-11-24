@@ -1280,6 +1280,26 @@ fn diagonal_drag_moves_a_via_on_the_actual_segment() {
     assert!(!query(&s).exhaustive_pairs().decisions.iter().any(|d| d.clearance_violation || d.conflicting_nets));
 }
 
+/// A via outside the conservative search region cannot exhaust the track solver's last probe.
+#[test]
+fn a_distant_via_leaves_the_track_shove_probe_budget_intact() {
+    let mut s = board();
+    s.apply(crate::ADD_VIA, &json!({"at":p(400, 400),"expected_revision":s.revision()})).unwrap();
+    add(&mut s, vec![p(0, 0), p(100, 0)], 500_000);
+    let request = request(&s);
+    let snapshot = query(&s);
+    let budget = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap().probes;
+    let track_only = s.plan_route(&snapshot, &request, budget, &|| false).unwrap();
+    assert_eq!(track_only.outcome, Outcome::Reached);
+    assert!(!track_only.replacements.is_empty());
+    let plan = s.plan_route(&snapshot, &Request { mode: Mode::ShoveVias, ..request }, budget, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert_eq!(plan.points, track_only.points);
+    assert_eq!(plan.replacements, track_only.replacements);
+    assert_eq!(plan.probes, track_only.probes);
+    assert!(plan.via_moves.is_empty());
+}
+
 /// An unrelated lock can force walkaround even after a proposed via exit clears the preferred path.
 #[test]
 fn a_rejected_incoming_path_discards_its_via_move() {
@@ -1289,7 +1309,13 @@ fn a_rejected_incoming_path_discards_its_via_move() {
     let locked = add(&mut s, vec![p(58, -10), p(58, 10)], 250_000)[0];
     s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
     let request = Request { head: p(0, 3), target: p(90, 3), mode: Mode::ShoveVias, ..request(&s) };
-    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    let snapshot = query(&s);
+    let tentative = joints::Motion::preview_for_test(&snapshot, &request);
+    assert_eq!(tentative.len(), 1, "the rejected guide must propose a via move");
+    assert_eq!(tentative[0].via, view(&s).vias()[0].id);
+    assert_ne!(tentative[0].at, at);
+    let plan = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap();
+    assert_ne!(plan.points, vec![request.head, request.target]);
     assert!(plan.via_moves.is_empty(), "{plan:?}");
     commit(&mut s, &request, &plan);
     assert_eq!(view(&s).vias()[0].at, at);

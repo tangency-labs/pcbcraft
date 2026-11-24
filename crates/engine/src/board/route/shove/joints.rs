@@ -12,6 +12,29 @@ pub(super) struct Motion {
 }
 
 impl Motion {
+    /// Observe the tentative move before guide or cascade validation on the same snapshot.
+    #[cfg(test)]
+    pub(super) fn preview_for_test(query: &ClearanceQuery, request: &Request) -> Vec<ViaMove> {
+        use std::{
+            future::Future,
+            pin::pin,
+            task::{Context, Poll, Waker},
+        };
+        let mut job = pin!(async {
+            let chains = chains::capture(query).await.unwrap();
+            let guide = super::super::posture::elbow(request.head, request.target, request.posture, request.flipped);
+            let route = gesture_geometry(query, request, &guide).unwrap();
+            Self::vias(query, &route, &chains, &pickup(query, request).unwrap(), MAX_BUDGET, &AtomicUsize::new(0)).await.unwrap().vias
+        });
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..MAX_BUDGET {
+            if let Poll::Ready(vias) = job.as_mut().poll(&mut cx) {
+                return vias;
+            }
+        }
+        panic!("tentative via search exceeded the test work bound")
+    }
+
     /// Capture each via hit by the fixed prefix or preferred incoming elbow in source order.
     /// Unsupported contacts pin the via. The ordinary walkaround then sees it as fixed.
     async fn vias(
@@ -29,24 +52,37 @@ impl Motion {
         }
 
         for (shape, layers) in route {
+            super::super::search::yield_unit().await;
+            let candidates = query.candidates(shape, layers)?;
+            let eligible: BTreeMap<_, _> = candidates
+                .iter()
+                .filter_map(|&i| {
+                    let item = &query.objects()[i];
+                    if pickup.islands.contains(&item.island)
+                        || result.contours.contains_key(&i)
+                        || (!pickup.nets.is_empty() && pickup.nets == item.intended_nets)
+                    {
+                        return None;
+                    }
+                    let id = Uuid::parse_str(&item.name).ok()?;
+                    let via = view.vias().binary_search_by_key(&id, |v| v.id).ok()?;
+                    (!view.vias()[via].locked).then_some((i, id))
+                })
+                .collect();
+            if eligible.is_empty() {
+                continue;
+            }
             if !charge(progress, budget).await {
                 break;
             }
-            for hit in query.probe_membership_excluding(shape, layers, &pickup.nets, |_| false)?.decisions {
+            // Non-via contacts can affect the probe's net membership and pair clearances.
+            for hit in query.probe_candidates(shape, &pickup.nets, candidates.into_iter())?.decisions {
                 let i = hit.second;
+                let Some(&id) = eligible.get(&i) else { continue };
+                if !hit.touches && hit.gap_nm >= hit.clearance_nm as f64 {
+                    continue;
+                }
                 let item = &query.objects()[i];
-                if (!hit.touches && hit.gap_nm >= hit.clearance_nm as f64)
-                    || pickup.islands.contains(&item.island)
-                    || result.contours.contains_key(&i)
-                    || (!pickup.nets.is_empty() && pickup.nets == item.intended_nets)
-                {
-                    continue;
-                }
-                let Ok(id) = Uuid::parse_str(&item.name) else { continue };
-                let Ok(v) = view.vias().binary_search_by_key(&id, |v| v.id) else { continue };
-                if view.vias()[v].locked {
-                    continue;
-                }
                 let mut attached = Vec::new();
                 let mut pinned = false;
                 for j in query.candidates(&item.contour, &item.layers)? {

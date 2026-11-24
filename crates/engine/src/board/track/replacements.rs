@@ -1,7 +1,7 @@
 //! Atomic route replacements, preserving source identities, intent and physical connections.
 use super::*;
 use crate::board::{
-    clearance::{self, BoardGeometry, ClearanceQuery},
+    clearance::{self, BoardGeometry, ClearanceQuery, Object},
     work::Source,
 };
 use std::sync::{Arc, Mutex, TryLockError};
@@ -103,6 +103,7 @@ pub(super) struct Validation {
     query: Option<Arc<ClearanceQuery>>,
     final_query: Option<ClearanceQuery>,
     final_positions: BTreeMap<String, usize>,
+    split_fragments: BTreeMap<String, Vec<usize>>,
     final_origins: Vec<Option<usize>>,
     final_displaced: Vec<bool>,
     merge_same_net: bool,
@@ -171,6 +172,17 @@ impl Validation {
             None
         };
         let chain_checked = chain_paths.is_empty();
+        let final_positions: BTreeMap<_, _> = final_geometry.items.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect();
+        let mut split_fragments: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        if !joints.is_empty() {
+            for (fragment, original) in &origins {
+                if fragment != original
+                    && let Some(&index) = final_positions.get(&fragment.to_string())
+                {
+                    split_fragments.entry(original.to_string()).or_default().push(index);
+                }
+            }
+        }
         Ok(Self {
             chain_paths,
             chain_checked,
@@ -178,7 +190,8 @@ impl Validation {
             chains: None,
             preparation,
             source,
-            final_positions: final_geometry.items.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect(),
+            final_positions,
+            split_fragments,
             final_geometry,
             final_origins: Vec::new(),
             final_displaced: Vec::new(),
@@ -236,15 +249,13 @@ impl Validation {
                         if other.name == object.name || !object.contour.touches(&other.contour) {
                             continue;
                         }
-                        let kept = self.final_positions.get(&other.name).is_some_and(|j| {
-                            retained_joint(
-                                &object.contour,
-                                &other.contour,
-                                &self.final_geometry.items[position].contour,
-                                &self.final_geometry.items[*j].contour,
-                                0.,
-                            )
-                        });
+                        let items = &self.final_geometry.items;
+                        let kept = self
+                            .final_positions
+                            .get(&other.name)
+                            .into_iter()
+                            .chain(self.split_fragments.get(&other.name).into_iter().flatten())
+                            .any(|&j| self.retains_joint(object, other, &items[position], &items[j], 0.));
                         if !kept {
                             return Err(CommandError::InvalidParams("Moving this joint would lose a protected copper contact.".into()));
                         }
@@ -327,7 +338,13 @@ impl Validation {
         if !self.joints.is_empty()
             && [old_a, old_b].iter().any(|i| Uuid::parse_str(&source.objects()[*i].name).is_ok_and(|id| self.joints.contains(&id)))
         {
-            return retained_joint(&source.objects()[old_a].contour, &source.objects()[old_b].contour, shape_a, shape_b, clearance);
+            return self.retains_joint(
+                &source.objects()[old_a],
+                &source.objects()[old_b],
+                &final_query.objects()[a],
+                &final_query.objects()[b],
+                clearance,
+            );
         }
         let Some(chains) = &self.chains else { return false };
         if chains.same_run(old_a, old_b) {
@@ -343,6 +360,18 @@ impl Validation {
         (within_source(shape_a, original_a) && within_source(shape_b, original_b))
             || (within_contact(shape_a, shape_b, original_a, original_b, clearance)
                 && within_contact(shape_b, shape_a, original_b, original_a, clearance))
+    }
+
+    /// Check the same source contact during topology and final clearance validation. A split
+    /// support retains the chain's fixed contact, so a fragment has no whole-track station.
+    fn retains_joint(&self, old_a: &Object, old_b: &Object, a: &Object, b: &Object, clearance: f64) -> bool {
+        if self.split_fragments.contains_key(&old_b.name) {
+            return retained_split_joint(&old_a.contour, &old_b.contour, &a.contour, &b.contour, clearance);
+        }
+        if self.split_fragments.contains_key(&old_a.name) {
+            return retained_split_joint(&old_b.contour, &old_a.contour, &b.contour, &a.contour, clearance);
+        }
+        retained_joint(&old_a.contour, &old_b.contour, &a.contour, &b.contour, clearance)
     }
 
     /// A manually submitted replacement may meet the first route leg at its
@@ -481,6 +510,25 @@ pub(crate) fn retained_joint(a: &PadContour, b: &PadContour, new_a: &PadContour,
         (None, Some(_), None, Some(_)) => retained_joint(b, a, new_b, new_a, clearance),
         _ => false,
     }
+}
+
+/// A displaced chain can split around a protected contact. Verify the fixed source station
+/// on the actual final fragment, including its clearance departure from the moved joint.
+fn retained_split_joint(joint: &PadContour, track: &PadContour, moved: &PadContour, fragment: &PadContour, clearance: f64) -> bool {
+    let (Some(old), Some(support), Some(new), Some(piece)) =
+        (joint.track_centerline(), track.track_centerline(), moved.track_centerline(), fragment.track_centerline())
+    else {
+        return false;
+    };
+    let on_leg = |point, line: [Point; 2]| super::chains::on_leg(point, line[0], line[1]);
+    let at_source_end = (0..2).filter_map(|i| (old[i] == new[i] && on_leg(old[i], support)).then_some(old[i]));
+    at_source_end.chain(follows_station(support, old, support, new)).any(|point| {
+        if !on_leg(point, piece) || new.iter().any(|a| piece.iter().any(|b| super::chains::backtracks(*a, point, *b))) {
+            return false;
+        }
+        let contact = PadContour::capsule(point, point, 0.);
+        local_departure(moved, fragment, &contact, clearance) && local_departure(fragment, moved, &contact, clearance)
+    })
 }
 
 /// A branch end on another segment must follow the same longitudinal station.

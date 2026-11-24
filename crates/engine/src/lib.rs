@@ -2480,7 +2480,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::route::PLAN_ROUTE,
         title: "Plan Route",
-        summary: "Plan one route on a copper layer with effective width, clearance and board-edge rules, without editing. To commit a fresh reached plan, submit the full route including any fixed prefix and layer changes, replacements, merge_same_net and expected_revision to pcb.add_tracks.",
+        summary: "Plan one route on a copper layer with effective width, clearance and board-edge rules, without editing. To commit a fresh reached plan, submit the full route including any fixed prefix and layer changes, replacements, via_moves, merge_same_net and expected_revision to pcb.add_tracks.",
         params: &[
             BOARD,
             Param {
@@ -2500,7 +2500,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "walkaround (default) or shove unlocked tracks; pads, vias and locks stay fixed",
+                summary: "walkaround (default) detours around copper, shove moves unlocked tracks, and shove_vias also moves eligible through vias hit by the incoming path on boards without zones",
                 kind: ParamKind::RouteMode,
             },
             Param {
@@ -2526,7 +2526,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "budget",
                 required: false,
-                summary: "Maximum planning probes (4,096 by default for walkaround, 65,536 for shove)",
+                summary: "Maximum planning probes (4,096 by default for walkaround, 65,536 for shove and shove_vias)",
                 kind: ParamKind::RouteBudget,
             },
             Param {
