@@ -366,7 +366,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
 
 /// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
 }
 
@@ -539,6 +539,9 @@ impl Encoder {
         }
         if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
+        }
+        if !project.output_recipes().is_empty() {
+            return Err("legacy single-file encoding cannot represent output recipes; use split documents or a packed archive".into());
         }
         if !project.schematic_packages.assignments.is_empty()
             || !project.board.assignments.is_empty()
@@ -1095,6 +1098,7 @@ fn validate_with_hierarchy(
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: false,

@@ -522,6 +522,80 @@ fn pin_function_storage_with_designator_lock_keeps_the_current_header() {
     }
 }
 
+/// Output recipes with a pin function choice keep the current project header, with or without
+/// a designator lock. Both codecs reopen it byte-identically, the older pin-function headers
+/// refuse recipes, and removing the recipes or the choice keeps the current header.
+#[test]
+fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
+    let recipe = uuid::Uuid::from_u128(0x123);
+    let mut session = fixture(true);
+    let board = session.project().unwrap().boards().next().unwrap();
+    let content = json!({"name":"Prototype","board":board.target.board,"units":"mm","file_stem":"prototype",
+        "gerber_layers":[board.layers()[0].id],"drill":true});
+    let set_recipe = |session: &mut Session, content: &Value| {
+        session.apply(crate::SET_OUTPUT_RECIPE, &json!({"recipe":recipe,"expected_revision":session.revision(),"content":content})).unwrap();
+    };
+    let format = |documents: &crate::persistence::Documents| serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"].clone();
+    let with_format = |documents: &crate::persistence::Documents, format: &str| {
+        let mut modified = documents.clone();
+        let mut entry: Value = serde_json::from_slice(&modified[ENTRY_POINT]).unwrap();
+        entry["format"] = json!(format);
+        modified.insert(ENTRY_POINT.to_owned(), serde_json::to_vec(&entry).unwrap());
+        let path = crate::persistence::project_instances_path(&modified[ENTRY_POINT]).unwrap().unwrap();
+        let mut instances: Value = serde_json::from_slice(&modified[&path]).unwrap();
+        instances["format"] = json!("pcbcraft-instances/1");
+        modified.insert(path, serde_json::to_vec(&instances).unwrap());
+        modified
+    };
+    session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+    set_recipe(&mut session, &content);
+    for locked in [false, true] {
+        if locked {
+            let project = session.project().unwrap();
+            let placed = &project.symbols()[0];
+            let fields = json!({"symbol":placed.id(),"reference":project.reference(placed),"value":project.value(placed),
+                "designator_locked":true,"expected_revision":session.revision()});
+            session.apply(crate::SET_SYMBOL_FIELDS, &fields).unwrap();
+        }
+        let saved = session.snapshot().unwrap();
+        let docs = encode_documents(saved.clone()).unwrap();
+        let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+        assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
+        assert_eq!(stored["components"][0].get("designator_locked").is_some(), locked);
+        let reopened = decode_documents(&docs).unwrap();
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert_eq!(reopened.output_recipes(), saved.output_recipes());
+        assert_eq!(reopened.components().next().unwrap().designator_locked(), locked);
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        assert_eq!(encode_documents(decode_packed(&encode_packed(saved).unwrap()).unwrap().project).unwrap(), docs);
+        // The older pin-function headers refuse recipes.
+        for older in ["pcbcraft-project/48", "pcbcraft-project/56"] {
+            let error = decode_documents(&with_format(&docs, older)).err().unwrap();
+            assert!(error.contains("output_recipes requires project format 47, 57, 60 or 62"), "{error}");
+        }
+        // A file saved earlier as project/60 still opens, and the next save writes the current format.
+        let reopened = decode_documents(&with_format(&docs, "pcbcraft-project/60")).unwrap();
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert_eq!(reopened.components().next().unwrap().designator_locked(), locked);
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        // The older recipe envelopes without pin functions refuse the choice.
+        let older = if locked { "pcbcraft-project/57" } else { "pcbcraft-project/47" };
+        let error = decode_documents(&with_format(&docs, older)).err().unwrap();
+        assert!(error.contains("Alternate pin functions require"), "{error}");
+    }
+
+    // Removing the recipes keeps the current header with the locked choice.
+    set_recipe(&mut session, &Value::Null);
+    assert_eq!(format(&encode_documents(session.snapshot().unwrap()).unwrap()), crate::persistence::CURRENT_PROJECT_FORMAT);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    // Clearing the choice keeps the alternate-capable symbol and the current header.
+    session.apply(SET, &params(&session, Value::Null)).unwrap();
+    let cleared = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(format(&cleared), crate::persistence::CURRENT_PROJECT_FORMAT);
+    assert_eq!(encode_documents(decode_documents(&cleared).unwrap()).unwrap(), cleared);
+}
+
 /// Edits stay on the new draft and symbol formats after removing alternates. Invalid
 /// edits do not advance history; Undo still restores the original snapshot.
 #[test]

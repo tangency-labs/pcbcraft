@@ -44,7 +44,8 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 /// The sole project entry-point version emitted by the native writer.
-pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/61";
+pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/62";
+const PRE_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/61";
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
@@ -57,6 +58,10 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
+// Read-only recipe envelopes from earlier builds.
+const OUTPUT_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/47";
+const RECIPE_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/57";
+const RECIPE_PIN_FUNCTION_PROJECT_FORMAT: &str = "pcbcraft-project/60";
 const PIN_FUNCTION_PROJECT_FORMAT: &str = "pcbcraft-project/48";
 const PIN_FUNCTION_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/56";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
@@ -156,6 +161,8 @@ struct ProjectDocument {
     parameters: Option<crate::parameters::Parameters>,
     #[serde(default, deserialize_with = "present")]
     assembly_profiles: Option<crate::board::assembly_profile::Catalog>,
+    #[serde(default, deserialize_with = "crate::board::output_recipe::stored_recipes")]
+    output_recipes: Option<Vec<crate::board::output_recipe::Recipe>>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
 }
@@ -197,7 +204,10 @@ impl ProjectDocument {
     fn layout_format(&self) -> &str {
         match self.format.as_str() {
             COMPACT_PART_GROUP_PROJECT_FORMAT => PART_GROUP_PROJECT_FORMAT,
-            CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
+            PRE_RECIPE_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
+            OUTPUT_RECIPE_PROJECT_FORMAT => ASSEMBLY_PROFILE_PROJECT_FORMAT,
+            RECIPE_LOCK_PROJECT_FORMAT => DESIGNATOR_LOCK_PROJECT_FORMAT,
+            RECIPE_PIN_FUNCTION_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
             format => format,
         }
     }
@@ -438,6 +448,11 @@ pub fn is_document_path(path: &str) -> bool {
 /// board-owned pairs still use instances/8 with either group membership encoding.
 /// Project/61 uses the project/56 vocabulary with optional designator locks and accepts
 /// instances/9, where the registry, pairs and either membership encoding are optional.
+/// Project/62 adds optional output recipes for the registered board. When present, the
+/// list is nonempty.
+/// The older recipe envelopes stay readable and require recipes: project/47 follows project/36
+/// without requiring profiles, project/57 follows project/51, and project/60 follows project/56
+/// with optional designator locks.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -447,6 +462,20 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
+    let supports_current_instances = current_format || project.format == PRE_RECIPE_PROJECT_FORMAT;
+    let recipe_format =
+        matches!(project.format.as_str(), OUTPUT_RECIPE_PROJECT_FORMAT | RECIPE_LOCK_PROJECT_FORMAT | RECIPE_PIN_FUNCTION_PROJECT_FORMAT);
+    // Project/60 and the two newer envelopes make designator locks optional.
+    let optional_locks = supports_current_instances || project.format == RECIPE_PIN_FUNCTION_PROJECT_FORMAT;
+    // Output recipes are optional in the current envelope and required in the older recipe envelopes.
+    if (if recipe_format { project.output_recipes.is_none() } else { !current_format && project.output_recipes.is_some() })
+        || project.output_recipes.as_ref().is_some_and(Vec::is_empty)
+    {
+        return Err(
+            "project.json: output_recipes requires project format 47, 57, 60 or 62 and a nonempty array; formats 47, 57 and 60 require it.".into()
+        );
+    }
+    let mut output_recipes = project.output_recipes.take().unwrap_or_default();
     // The current envelope shares the project/56 vocabulary but makes locks optional.
     project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
@@ -455,14 +484,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
     let pin_function_format = matches!(project.format.as_str(), PIN_FUNCTION_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
-    if (!lock_format && !pair_format && !pin_function_format && profile_format != project.assembly_profiles.is_some())
+    if (!lock_format && !pair_format && !pin_function_format && !recipe_format && profile_format != project.assembly_profiles.is_some())
         || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
     {
         return Err("project.json: assembly profiles require project format 36, 45, 48, 51 or 56 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if (!current_format && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
+    if (!optional_locks && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
         || project.components.iter().any(|part| part.designator_locked == Some(false))
     {
         return Err("Designator locks require project format 51 or 56 and at least one true designator_locked flag; omit unlocked flags.".into());
@@ -572,6 +601,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
+    if !output_recipes.is_empty() {
+        let board = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
+        crate::board::output_recipe::validate_recipes(&output_recipes, board).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+        output_recipes.sort_by_key(|recipe| recipe.id);
+    }
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
     let registered = (part_format && project.boards.is_some())
         || matches!(
@@ -672,7 +706,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected = if current_format && instance.format == CURRENT_INSTANCES_FORMAT {
+                let expected = if supports_current_instances && instance.format == CURRENT_INSTANCES_FORMAT {
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
                     CURRENT_INSTANCES_FORMAT
                 } else {
@@ -680,7 +714,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                         && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                     let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
                     let pair_instances = pair_format
-                        || ((lock_format || pin_function_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                        || ((recipe_format || lock_format || pin_function_format)
+                            && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
                     if pair_instances {
                         // Instances/8 keeps its header for either membership encoding.
                         compact_part_groups = instance.compact_part_group_memberships.is_some();
@@ -741,7 +776,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if !lock_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    if !lock_format && !recipe_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
             "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
@@ -903,6 +938,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: compact_part_groups,
@@ -1596,6 +1632,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     project_data.parameters = Arc::new(project_parameters);
     project_data.assembly_profiles = Arc::new(profile_catalog);
+    project_data.output_recipes = Arc::new(output_recipes);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
@@ -1842,6 +1879,8 @@ impl DocumentsEncoder {
                     }
                     p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();
+                    let recipes = p.output_recipes();
+                    crate::board::output_recipe::validate_recipes(recipes, p.board_target().map(|target| target.board))?;
                     if p.pin_function_count() > crate::pin_functions::MAX_CHOICES {
                         return Err("Alternate pin function selection limit reached.".into());
                     }
@@ -1883,6 +1922,14 @@ impl DocumentsEncoder {
                     }
                     if has_profiles {
                         writeln!(self.bytes, "  \"assembly_profiles\": {},", json(p.assembly_profiles.as_ref())?).map_err(|e| e.to_string())?;
+                    }
+                    if !recipes.is_empty() {
+                        self.bytes.extend_from_slice(b"  \"output_recipes\": [\n");
+                        let mut first = true;
+                        for recipe in recipes {
+                            record(&mut self.bytes, &mut first, recipe)?;
+                        }
+                        self.bytes.extend_from_slice(b"\n  ],\n");
                     }
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
