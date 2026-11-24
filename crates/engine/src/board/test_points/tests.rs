@@ -385,3 +385,36 @@ fn marks_and_named_layer_groups_save_in_the_current_format_and_reopen() {
     session.apply(crate::SET_BOARD_SETUP, &json!({"setup":ungrouped_setup,"expected_revision":session.revision()})).unwrap();
     assert_eq!(save(&session), marked);
 }
+
+/// Main's writer saved every board as format 42, with or without a setup. Such a board opens,
+/// refuses test-point marks, and its next save writes the current header with identical records.
+#[test]
+fn format_42_boards_open_refuse_marks_and_resave_in_the_current_format() {
+    let mut bare = Session::default();
+    bare.apply("project.new", &json!({"create_board":true})).unwrap();
+    let (mut routed, pad, _) = fixture();
+    let unmarked = |documents: &Documents| {
+        let mut legacy = documents.clone();
+        let path = test_board_path(&legacy);
+        let text = String::from_utf8(legacy[&path].clone()).unwrap();
+        assert!(text.contains(persistence::CURRENT_BOARD_FORMAT), "{text}");
+        legacy.insert(path, text.replacen(persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/42", 1).into_bytes());
+        legacy
+    };
+    for (session, has_setup) in [(&bare, false), (&routed, true)] {
+        let current = save(session);
+        let board: Value = serde_json::from_slice(&current[&test_board_path(&current)]).unwrap();
+        assert_eq!(board.get("setup").is_some(), has_setup);
+        assert!(board.get("test_points").is_none());
+        let legacy = unmarked(&current);
+        assert_ne!(legacy, current);
+        let reopened = decode_documents(&legacy).unwrap();
+        assert!(!reopened.board.has_test_points());
+        assert_eq!(reopened.board_setup().is_some(), has_setup);
+        assert_eq!(encode_documents(reopened).unwrap(), current);
+    }
+    set(&mut routed, &pad, "assembly", json!("top")).unwrap();
+    let marked = save(&routed);
+    let error = decode_documents(&unmarked(&marked)).unwrap_err();
+    assert!(error.contains("require format 43"), "{error}");
+}

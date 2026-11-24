@@ -1309,8 +1309,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (CURRENT_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (CURRENT_BOARD_FORMAT, None) => None,
+        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
