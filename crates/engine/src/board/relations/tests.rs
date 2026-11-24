@@ -593,7 +593,7 @@ fn sliced_track_ids(n: u128) -> Vec<Uuid> {
 }
 
 /// This exact bundle is the source witness for the separate #443 reader. Here we only
-/// qualify the current reader on the lowest current board format (board/1 with an optional
+/// qualify the current reader on the lowest supported board format (board/1 with an optional
 /// relations record). Saving adopts the current project and board formats; the board keeps its
 /// relation, and re-encoding is byte-stable.
 #[test]
