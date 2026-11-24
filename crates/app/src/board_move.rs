@@ -1,9 +1,10 @@
 //! View-local mixed board pickup; geometry authority and publication belong to the engine.
 use crate::{
     Dialog, PcbApp, ViewId,
+    canvas_camera::pointer_release,
     editor_view::{BoardState, ViewInput},
 };
-use egui::{Context, Ui};
+use egui::{Context, PointerButton, Ui};
 use pcbcraft_engine::{
     Project,
     board::{
@@ -19,7 +20,14 @@ use std::{collections::BTreeSet, sync::Arc};
 pub(super) struct State {
     draft: Option<Draft>,
     cancelled: bool,
-    drag: bool,
+    pending_drag: Option<DragPickup>,
+}
+
+/// The board view and snapped press location that granted this drag its input.
+#[derive(Debug)]
+struct DragPickup {
+    source: ViewInput,
+    anchor: Point,
 }
 #[derive(Debug)]
 struct Draft {
@@ -39,16 +47,16 @@ struct Draft {
 impl State {
     /// Pending cancellation also owns the current release, preventing a new single-item gesture.
     pub(super) fn active(&self) -> bool {
-        self.draft.is_some() || self.cancelled || self.drag
+        self.draft.is_some() || self.cancelled || self.pending_drag.is_some()
     }
     /// Discard preview geometry while preserving selection and the source project.
     pub(super) fn cancel(&mut self) {
-        let requested = std::mem::take(&mut self.drag);
+        let requested = self.pending_drag.take().is_some();
         self.cancelled |= self.draft.take().is_some() || requested;
     }
-    /// A canvas drag pressed on a member of the selection picks up the whole group on the next pass.
-    pub(super) fn request_drag(&mut self) {
-        self.drag = true;
+    /// Keep the press anchor and authority until the group takes over on the next pass.
+    pub(super) fn request_drag(&mut self, source: ViewInput, anchor: Point) {
+        self.pending_drag = Some(DragPickup { source, anchor });
     }
     /// Escape leaves the complete selection intact for another pickup.
     pub(super) fn escape(&mut self) -> bool {
@@ -66,27 +74,38 @@ fn subset(a: &BoardSelection, b: &BoardSelection) -> bool {
         && a.vias.is_subset(&b.vias)
 }
 impl PcbApp {
-    /// Start M for any explicit group before category-specific handlers can consume it.
+    /// Start Move or a held drag for an explicit group before category-specific handlers can consume it.
     /// Existing gestures, modal/file input, changed authority, filters or layers cancel the whole group.
     pub(super) fn board_move_ready(&mut self, ctx: &Context, id: ViewId, enabled: bool) -> bool {
         let Some(project) = self.session.snapshot() else { return false };
         let Some(view) = self.views.view_mut(id) else { return false };
-        let drag = std::mem::take(&mut view.board.movement.drag);
-        if view.board.movement.active() {
-            let stale = view.board.movement.draft.as_ref().is_some_and(|draft| {
-                view.input(&self.session) != Some(draft.source)
-                    || draft.hidden != view.board.hidden_layers
-                    || draft.layer != view.board.active_layer
-                    || draft.filters != view.filters
-                    || draft.items != crate::board_clipboard::selection(&view.board, &project)
-            });
-            if !enabled || stale || self.files.busy() || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
-                view.board.movement.cancel();
-            }
-            view.board.move_requested = false;
-            return true;
+        if !view.board.movement.active() && !view.board.move_requested {
+            return false;
         }
-        if !enabled || !(view.board.move_requested || drag) || view.board.reference.selected.is_some() {
+        let input = view.input(&self.session);
+        let drag = view.board.movement.pending_drag.take();
+        let moving = view.board.movement.active();
+        if moving || drag.is_some() {
+            let stale = drag.as_ref().is_some_and(|drag| input != Some(drag.source))
+                || view.board.movement.draft.as_ref().is_some_and(|draft| {
+                    input != Some(draft.source)
+                        || draft.hidden != view.board.hidden_layers
+                        || draft.layer != view.board.active_layer
+                        || draft.filters != view.filters
+                        || draft.items != crate::board_clipboard::selection(&view.board, &project)
+                });
+            if !enabled || stale || self.files.busy() || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
+                view.board.movement.cancelled |= drag.is_some();
+                view.board.movement.cancel();
+                view.board.move_requested = false;
+                return true;
+            }
+            if moving {
+                view.board.move_requested = false;
+                return true;
+            }
+        }
+        if !enabled || view.board.reference.selected.is_some() {
             return false;
         }
         let items = crate::board_clipboard::selection(&view.board, &project);
@@ -101,7 +120,7 @@ impl PcbApp {
         if crate::board_clipboard::busy(&view.board) || !matches!(self.dialog, Dialog::None) || self.files.busy() {
             return false;
         }
-        let (Some(source), Some(target)) = (view.input(&self.session), view.board.target) else { return false };
+        let (Some(source), Some(target)) = (input, view.board.target) else { return false };
         let Some(board) = project.board_view(target) else { return false };
         let visible = crate::board_canvas::all_visible(board, &view.board, view.filters, &self.board_appearance);
         if !subset(&items, &visible) {
@@ -116,16 +135,15 @@ impl PcbApp {
             .or_else(|| board.tracks().iter().find(|t| items.tracks.contains(&t.id)).map(|t| t.start))
             .or_else(|| board.vias().iter().find(|v| items.vias.contains(&v.id)).map(|v| v.at))
             .unwrap_or(Point { x_nm: 0, y_nm: 0 });
-        // The exact canvas rectangle is supplied on the first preview pass, before any displacement.
         match MovePlan::new(project.clone(), target, items.clone()) {
             Ok(plan) => {
                 view.board.movement.draft = Some(Draft {
                     source,
-                    pickup: true,
-                    drag,
+                    pickup: drag.is_none(),
+                    drag: drag.is_some(),
                     plan,
                     items,
-                    anchor: fallback,
+                    anchor: drag.map_or(fallback, |drag| drag.anchor),
                     delta: Point { x_nm: 0, y_nm: 0 },
                     shown: project,
                     error: None,
@@ -141,23 +159,26 @@ impl PcbApp {
         }
         true
     }
-    /// Paint disposable geometry from the immutable captured source; only a valid placement click
-    /// dispatches one revision-checked command. Pointer motion reuses an unchanged-offset preview.
+    /// Paint disposable geometry from the captured source. A valid click or drag release
+    /// dispatches one revision-checked command. Equal offsets reuse the preview.
     pub(super) fn board_move_canvas(&mut self, ui: &mut Ui, id: ViewId, label: &str) {
         let Some(original) = self.session.snapshot() else { return };
         let Some(view) = self.views.view_mut(id) else { return };
         let rect = ui.available_rect_before_wrap();
         let mut draft = view.board.movement.draft.take();
-        let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+        let release = if draft.as_ref().is_some_and(|d| d.drag) && ui.input(|i| i.pointer.primary_released()) {
+            pointer_release(&ui.response(), PointerButton::Primary)
+        } else {
+            None
+        };
+        let pointer = release.or_else(|| ui.input(|i| i.pointer.hover_pos())).filter(|p| rect.contains(*p));
         if let Some(d) = &mut draft {
             if view.board.move_requested {
                 view.board.move_requested = false;
             }
-            // First pass: pickup stays under the current pointer without moving the source.
-            // A drag is anchored where its button went down, so the group keeps its grab offset.
+            // Keyboard pickup takes its anchor from the first paint. Drags already have a press anchor.
             if d.pickup {
-                let press = if d.drag { ui.input(|i| i.pointer.press_origin()) } else { None };
-                if let Some(p) = press.or(pointer) {
+                if let Some(p) = pointer {
                     d.anchor = view.camera.snap(p, rect);
                 }
                 d.pickup = false;
@@ -224,7 +245,7 @@ impl PcbApp {
             // A drag places on release over the canvas; a lost release, an off-canvas release or
             // an unchanged offset ends it without an edit.
             let place = if d.drag {
-                let released = ui.input(|i| i.pointer.primary_released());
+                let released = release.is_some();
                 if !released && !ui.input(|i| i.pointer.primary_down()) {
                     return;
                 }

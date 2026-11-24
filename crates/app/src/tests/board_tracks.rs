@@ -1518,6 +1518,90 @@ fn group_drag_follows_move_for_locked_items() {
     assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
 }
 
+const GROUP_DRAG_DELTA: Point = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+
+/// Advance just past the start of a mixed-selection drag, leaving its pickup for the next frame.
+fn pending_group_drag<'a>() -> (Harness<'a, PcbApp>, egui::Pos2) {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    h.state_mut().select_board_items(pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a, b]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    });
+    h.run();
+    let start = at(&h, a_at);
+    let end = at(&h, shifted(a_at, GROUP_DRAG_DELTA));
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    h.hover_at(end);
+    h.step();
+    assert!(h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    (h, end)
+}
+
+/// Releasing on the first pickup frame uses both the original press and the actual release.
+#[test]
+fn group_drag_commits_at_release_on_first_pickup_frame() {
+    let (mut h, end) = pending_group_drag();
+    let before = footprint_poses(&h);
+    let revision = h.state().session.revision();
+    let start = at(&h, before[0].1);
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        egui::Event::PointerMoved(start),
+    ]);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let after = footprint_poses(&h);
+    for (id, position) in before {
+        assert!(after.contains(&(id, shifted(position, GROUP_DRAG_DELTA))));
+    }
+}
+
+/// Pointer motion back inside the canvas in the release frame leaves an outside drop canceled.
+#[test]
+fn group_drag_cancels_at_off_canvas_release_before_same_frame_hover() {
+    let (mut h, end) = pending_group_drag();
+    h.run();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let canvas = h.get_by_label("PCB canvas").rect();
+    let outside = egui::pos2(canvas.right() + 10., end.y);
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        egui::Event::PointerMoved(end),
+    ]);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// The original press loses authority if the project changes before the group takes over.
+#[test]
+fn group_drag_cancels_if_revision_changes_before_pickup() {
+    let (mut h, end) = pending_group_drag();
+    let start_revision = h.state().session.revision();
+    h.state_mut().run("project.rename", &json!({"name":"Edit between drag frames"}));
+    assert_eq!(h.state().message, None);
+    let revision = h.state().session.revision();
+    assert_eq!(revision, start_revision + 1);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Properties shows a selected track's width in the display units (millimeters here); typing a
 /// new width and pressing Enter sets it through the shared command in one edit.
 #[test]
