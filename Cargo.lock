@@ -2932,6 +2932,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcbcraft-altium-ascii"
+version = "0.1.0"
+
+[[package]]
 name = "pcbcraft-app"
 version = "0.1.0"
 dependencies = [
