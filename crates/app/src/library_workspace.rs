@@ -36,6 +36,7 @@ pub(super) struct State {
     browser: chrome::Browser,
     preview_width: chrome::ColumnWidth,
     preview_key: Option<Key>,
+    where_used: Option<project::WhereUsedPreview>,
     symbol_camera: crate::library_preview::Camera,
     footprint_camera: crate::library_preview::Camera,
 }
@@ -48,11 +49,12 @@ impl State {
     pub(crate) fn source_id(&self) -> Option<&str> {
         self.source.as_deref()
     }
-    /// Selection changes reset both independent cameras exactly once, including when
-    /// a command selects an item and configures its camera in the same request.
+    /// Selection changes clear usage results and reset both independent cameras exactly once,
+    /// including when a command selects an item and configures its camera in the same request.
     fn sync_preview(&mut self) {
         if self.preview_key != self.selected {
             self.preview_key = self.selected.clone();
+            self.where_used = None;
             self.symbol_camera = Default::default();
             self.footprint_camera = Default::default();
         }
@@ -103,6 +105,7 @@ impl PcbApp {
         if let Some(view) = self.views.view_mut(view) {
             view.release_input();
             view.definition = None;
+            view.manufacturing = None;
             view.library.get_or_insert_with(State::default);
         }
         self.library_editors.focus(None)?;
@@ -836,7 +839,7 @@ impl PcbApp {
             state.sync_preview();
         }
         let mut latest: BTreeMap<(Kind, &str), &Item> = BTreeMap::new();
-        for item in all.iter().filter(|i| i.key.kind != Kind::Category) {
+        for item in all {
             let key = (item.key.kind, item.key.id.as_str());
             if latest.get(&key).is_none_or(|old| old.key.revision < item.key.revision) {
                 latest.insert(key, item);
@@ -849,10 +852,11 @@ impl PcbApp {
                 let kind = kind_index(item.key.kind);
                 (state.kind == 0 || state.kind == kind)
                     && format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
                         item.name,
                         item.key.id,
-                        item.manufacturer_part().map(|m| format!("{} {}", m.manufacturer, m.mpn)).unwrap_or_default()
+                        item.manufacturer_part().map(|m| format!("{} {}", m.manufacturer, m.mpn)).unwrap_or_default(),
+                        item.part().map_or_else(String::new, |part| part.search_text())
                     )
                     .to_lowercase()
                     .contains(&query)
@@ -953,7 +957,7 @@ impl PcbApp {
             chrome::ItemAction::Toggle(index) => toggle(&mut state.expanded, items[index].0.key.clone()),
         });
     }
-    /// Preview metadata and exact dependency references from the selected source revision.
+    /// Preview exact metadata and dependencies, with an opt-in use report for an open project.
     fn library_item_preview(&self, ui: &mut egui::Ui, state: &mut State) {
         state.sync_preview();
         let inventory = state.project.and_then(|_| self.project_library_inventory().ok());
@@ -982,6 +986,7 @@ impl PcbApp {
             } else if self.session.libraries().conflicting(&item.key) {
                 ui.label(egui::RichText::new("Quarantined: conflicting content at this revision").color(pcbcraft_chrome::Tokens::get().error));
             }
+            self.where_used_preview(ui, state, &item.key);
             if let Some(symbol) = item.symbol() {
                 crate::library_preview::workspace_symbol(ui, &symbol, &mut state.symbol_camera);
                 chrome::detail(ui, "Units", &symbol.units().len().to_string());
@@ -1047,8 +1052,9 @@ impl PcbApp {
             }
         });
     }
-    /// Resolve geometry without placements. Orderable records choose their exact package;
-    /// generic browsing uses the first package. Missing selections never fall back silently.
+    /// Show authored search metadata and HTTP(S) references alongside geometry. Orderable records
+    /// choose their exact package; generic browsing uses the first package. Missing selections
+    /// never fall back silently.
     fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, package: Option<&str>, references: &mut Vec<Reference>, state: &mut State) {
         references.extend(part.symbol.clone());
         if let Some(category) = &part.category {
@@ -1056,6 +1062,24 @@ impl PcbApp {
             chrome::detail(ui, "Category", &category.definition.id);
         }
         chrome::detail(ui, "Source", &part.source.reference);
+        if let Some(description) = &part.description {
+            chrome::detail(ui, "Description", description);
+        }
+        if !part.keywords.is_empty() {
+            chrome::detail(ui, "Keywords", &part.keywords.join(", "));
+        }
+        for link in &part.links {
+            // Native validation already restricts references to HTTP(S); recheck before
+            // turning one into a clickable action in case a pinned record was hand-edited.
+            if let Some(url) = pcbcraft_chrome::properties::web_link(&link.url) {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}:", link.label));
+                    ui.hyperlink_to(url, url);
+                });
+            } else {
+                chrome::detail(ui, &link.label, &link.url);
+            }
+        }
         match self.library_preview_part(state, &part.reference()) {
             Ok(resolved) => {
                 if let Some(symbol) = &resolved.symbol {

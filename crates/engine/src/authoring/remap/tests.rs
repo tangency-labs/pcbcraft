@@ -544,6 +544,7 @@ fn bounded_fixture() -> (crate::Session, Item, String) {
                         number: (index + 1).to_string(),
                         name: Some(format!("P{}", index + 1)),
                         electrical_type: crate::schematic::ElectricalType::Passive,
+                        alternates: Vec::new(),
                         at: crate::schematic::Point { x_nm: (index % 16 - 8) * 1_270_000, y_nm: (index / 16 - 4) * 1_270_000 },
                         appearance: None,
                     },

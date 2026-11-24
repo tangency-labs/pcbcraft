@@ -17,7 +17,7 @@ use pcbcraft_geometry::{
 
 /// The nominal fallback used when the stackup has no finished thickness declaration.
 /// This is PCBcraft's two-layer setup convention, not a fabrication guarantee.
-/// See `docs/board-materials.md`.
+/// See `docs/pcb/board-materials.md`.
 pub const NOMINAL_THICKNESS_NM: i64 = 1_600_000;
 
 /// The source of the Z dimension, which downstream consumers should report with the solid.
@@ -49,8 +49,9 @@ pub struct BoardSolid {
 
 impl BoardSolid {
     /// Make the substrate of the explicitly addressed immutable board. Use the resolved Board
-    /// Outline layer (including legacy rectangles), through via drills, resolved pad drills and
-    /// the finished openings of resolved footprint non-plated holes.
+    /// Outline layer (including legacy rectangles), through via drills, resolved circular pad
+    /// drills and the finished openings of resolved footprint non-plated holes. Plated slot
+    /// openings are not yet subtracted from the substrate solid.
     /// Use the stackup's finished thickness declaration, not the minimum or sum of stock plies.
     /// The solid is in the shared board/1 frame: the origin at board zero, +X along board X, +Y
     /// along board −Y, and Z = 0 at the finished top surface, so the body spans −thickness..0.
@@ -69,6 +70,7 @@ impl BoardSolid {
             .collect();
         let vias = board.vias().iter().map(|via| RoundDrill { center: board1_point(via.at), diameter_nm: via.drill_nm });
         let footprints = board.footprints().flat_map(|footprint| {
+            // Circular pad drills only; plated slot openings are not yet subtracted.
             let pads = footprint.pads.into_iter().filter_map(|pad| Some(RoundDrill { center: board1_point(pad.center), diameter_nm: pad.drill_nm? }));
             let holes =
                 footprint.non_plated_holes.into_iter().map(|hole| RoundDrill { center: board1_point(hole.center), diameter_nm: hole.diameter_nm });

@@ -4,7 +4,7 @@ use super::ErrorCode;
 use crate::{CommandError, Session, board::identity::CREATE_BOARD, catalog, net_labels};
 
 const LOCK: &str = include_str!("../../../../docs/schemas/error-codes-v1.json");
-const REFERENCE: &str = include_str!("../../../../docs/mcp.md");
+const REFERENCE: &str = include_str!("../../../../docs/automation/command-api.md");
 
 fn published() -> Vec<&'static str> {
     ErrorCode::ALL.iter().map(|code| code.as_str()).collect()
@@ -47,7 +47,7 @@ fn the_lock_keeps_every_published_code() {
 #[test]
 fn the_reference_lists_every_code() {
     for code in published() {
-        assert!(REFERENCE.contains(&format!("| `{code}` |")), "docs/mcp.md has no row for `{code}`");
+        assert!(REFERENCE.contains(&format!("| `{code}` |")), "docs/automation/command-api.md has no row for `{code}`");
     }
 }
 

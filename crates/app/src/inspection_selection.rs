@@ -68,27 +68,28 @@ pub(super) fn valid(view: &EditorView, session: &Session, source: Source) -> boo
     }
 }
 
-/// Pick copper with its actual contour; only legacy center markers use a screen-space radius.
-pub(super) fn pad_at(
+/// Iterate visible pad hits in paint order. Test the projected footprint bounds first, with
+/// enough margin for center-only markers on mixed footprints. Physical copper uses its contour.
+pub(super) fn pads_at(
     board: BoardView<'_>,
     footprints: &[pcbcraft_engine::board::view::FootprintView<'_>],
+    bounds: &[Rect],
     camera: &crate::canvas_camera::Camera,
     rect: Rect,
     pointer: egui::Pos2,
     hidden: &std::collections::BTreeSet<String>,
-) -> Option<Pad> {
+) -> impl Iterator<Item = Pad> {
     let point = camera.unsnapped(pointer, rect);
-    footprints.iter().rev().find_map(|footprint| {
-        footprint
-            .pads
-            .iter()
-            .rev()
-            .find(|pad| {
-                crate::board_canvas::pad_visible(pad, board, hidden)
-                    && (pad.contains_point(point) || (pad.copper.is_none() && camera.screen(pad.center, rect).distance(pointer) <= 6.))
-            })
-            .and_then(|pad| Pad::parse(&footprint.id, &pad.number))
-            .map(|pad| pad.on_board(board.target.board))
+    footprints.iter().zip(bounds).rev().filter(move |(_, bounds)| bounds.expand(2.).contains(pointer)).flat_map(move |(footprint, _)| {
+        footprint.pads.iter().rev().filter_map(move |pad| {
+            if (pad.contains_point(point) || (pad.copper.is_none() && camera.screen(pad.center, rect).distance(pointer) <= 6.))
+                && crate::board_canvas::pad_visible(pad, board, hidden)
+            {
+                Pad::parse(&footprint.id, &pad.number).map(|pad| pad.on_board(board.target.board))
+            } else {
+                None
+            }
+        })
     })
 }
 

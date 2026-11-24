@@ -118,19 +118,28 @@ fn an_unconnected_pad_route_cannot_join_a_named_terminal() {
             assert_eq!(h.state().message, None);
         }
         click_route(&mut h, named);
-        assert!(h.state().message.as_deref().is_some_and(|message| message.contains("blocked")));
-        assert_eq!(h.state().session.revision(), revision);
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision, "a clamped click fixes a vertex without auto-joining or auto-finishing");
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         h.key_press(Key::Enter);
-        h.run_steps(30);
-        // Enter may finish the already fixed, legal prefix, never the rejected connection.
-        let board = h.state().session.project().unwrap().boards().next().unwrap();
-        assert!(board.copper_nets().expect("arc-free test board has a copper net map").is_empty());
-        assert_eq!(h.state().session.revision(), revision + u64::from(vertex));
-        if vertex {
-            h.state_mut().run("edit.undo", &json!({}));
-            h.run();
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert!(
+            h.state().session.project().unwrap().boards().next().unwrap().copper_nets().expect("arc-free test board has a copper net map").is_empty()
+        );
+        assert_eq!(h.state().session.revision(), revision + 1);
+        let target = h.state().views.active.board.target.unwrap();
+        let query = h.state().session.clearance_query_with_rules(target, &json!({})).unwrap();
+        let named_pad = query.objects().iter().find(|o| o.at == named && !o.intended_nets.is_empty()).unwrap();
+        for track in tracks(&h) {
+            let id = track.id.to_string();
+            let object = query.objects().iter().find(|o| o.name == id).unwrap();
+            assert!(object.intended_nets.is_empty(), "unknown pad route adopted the named net");
+            assert!(object.contour.gap(&named_pad.contour) >= 200_000., "clamped endpoint broke foreign-pad clearance");
         }
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         h.key_press(Key::Escape);
         h.run();
@@ -146,6 +155,11 @@ pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
 
 /// Select a physical package with enough pad spacing for the fixture's authored class rules.
 fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
+    routable_spaced(definition, 10_160_000)
+}
+
+/// Resolve the same command-created board at a chosen footprint pitch for routing channels.
+fn routable_spaced<'a>(definition: &str, pitch_nm: i64) -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     h.state_mut().run("project.new", &json!({"create_board":true}));
@@ -156,7 +170,10 @@ fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
         let symbol = h.state().session.project().unwrap().symbols().last().unwrap().id();
         symbols.push(symbol.clone());
         let revision = h.state().session.revision();
-        h.state_mut().run(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":definition,"mapping":{"1":"2","2":"1"},"x_nm":index*10_160_000,"y_nm":0,"expected_revision":revision}));
+        h.state_mut().run(
+            PLACE_FOOTPRINT,
+            &json!({"symbol":symbol,"definition":definition,"mapping":{"1":"2","2":"1"},"x_nm":index*pitch_nm,"y_nm":0,"expected_revision":revision}),
+        );
     }
     let revision = h.state().session.revision();
     h.state_mut().run(
@@ -451,6 +468,17 @@ fn click_route(h: &mut Harness<'_, PcbApp>, point: Point) {
     let pos = at(h, point);
     click_canvas_at(h, pos);
     h.run_steps(20);
+}
+
+/// Send an exact route click and leave asynchronous settling to the caller.
+fn click_route_with_modifiers(h: &mut Harness<'_, PcbApp>, point: Point, modifiers: Modifiers) {
+    let pos = at(h, point);
+    h.hover_at(pos);
+    h.step();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers });
+        h.step();
+    }
 }
 
 /// Open the route menu using a complete right-click at the requested board point.
@@ -810,6 +838,57 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     assert_eq!(routed[0].width_nm, 500_000);
 }
 
+/// While a route, a copper line or a zone outline is being drawn, Backspace still removes its
+/// last vertex and leaves a board selection and everything else in place.
+#[test]
+fn backspace_keeps_removing_the_last_vertex_while_items_are_selected() {
+    for tool in ["route", "line", "zone"] {
+        let mut h = routable();
+        let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().id.clone();
+        let count = h.state().session.project().unwrap().boards().next().unwrap().footprints().count();
+        let mut points = vec![(2_540_000, 2_540_000), (5_080_000, 2_540_000), (7_620_000, 2_540_000)];
+        match tool {
+            "route" => {
+                click(&mut h, "Layout");
+                click(&mut h, "Route tracks on the active copper layer");
+            }
+            "line" => {
+                click(&mut h, "Draw");
+                click(&mut h, "Draw lines on active layer");
+            }
+            _ => {
+                click(&mut h, "Layout");
+                click(&mut h, "Draw zone outlines");
+                h.get_by_role_and_label(egui::accesskit::Role::Button, "Draw").click();
+                h.run();
+                points = vec![(2_540_000, 2_540_000), (7_620_000, 2_540_000), (7_620_000, 7_620_000), (2_540_000, 7_620_000)];
+            }
+        }
+        for (x_nm, y_nm) in points {
+            click_route(&mut h, Point { x_nm, y_nm });
+        }
+        h.state_mut().views.active.board.selection.insert(footprint.clone());
+        let revision = h.state().session.revision();
+        h.key_press(Key::Backspace);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision, "{tool}: Backspace edits nothing");
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "{tool}");
+        h.key_press(Key::Enter);
+        h.run();
+        assert_eq!(h.state().message, None, "{tool}");
+        if tool == "zone" {
+            let project = h.state().session.project().unwrap();
+            let zones = project.boards().next().unwrap().zones();
+            assert_eq!(zones.len(), 1, "{tool}");
+            assert_eq!(zones[0].points.len(), 3, "{tool}: Backspace removed the last vertex");
+        } else {
+            let routed = tracks(&h);
+            assert_eq!(routed.len(), 1, "{tool}: Backspace removed the last vertex: {routed:?}");
+        }
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "{tool}");
+    }
+}
+
 /// The routing popup keeps the draft through dismissal. Via placement uses its opening point,
 /// and Finish commits through the same track transaction as Enter.
 #[test]
@@ -824,7 +903,12 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     h.run();
     click_route(&mut h, start);
     right_click_route(&mut h, via);
-    let close = at(&h, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    // Dismiss on the open side of the canvas even as the route menu grows or flips.
+    let canvas = h.get_by_label("PCB canvas").rect().shrink(12.);
+    let menu = h.get_by_label("Cancel").rect();
+    let close = if menu.center().x < canvas.center().x { canvas.right_center() } else { canvas.left_center() };
+    assert!(!menu.expand(12.).contains(close));
+    let dismissal = h.state().views.active.camera.snap(close, h.get_by_label("PCB canvas").rect());
     click_canvas_at(&mut h, close);
     assert!(h.query_by_label("Place through via").is_none());
     assert!(h.state().views.active.board.tracks.routing());
@@ -839,7 +923,7 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
     let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
     assert!(ends.contains(&start) && ends.contains(&end));
-    assert!(!ends.contains(&Point { x_nm: 7_620_000, y_nm: -2_540_000 }));
+    assert!(!ends.contains(&dismissal));
 }
 
 /// Without a tool, clicking a track selects it and Delete removes it through the shared command.
@@ -868,6 +952,75 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
     click_canvas_at(&mut h, middle);
     click_canvas_at(&mut h, empty);
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "clicking empty space clears the track selection");
+}
+
+/// A click selects the active track, and cycling visits only visible tracks and wraps.
+#[test]
+fn overlap_cycle_selects_tracks_across_visible_layers() {
+    let mut h = routable();
+    let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    let path = [Point { x_nm: 0, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 }];
+    for layer in [&top, &bottom] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":path,"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+    }
+    let copper = tracks(&h);
+    let id = |layer: &str| copper.iter().find(|track| track.layer.to_string() == layer).unwrap().id;
+    let (front, back) = (id(&top), id(&bottom));
+    let revision = h.state().session.revision();
+    h.state_mut().views.active.board.set_layer(&bottom, true, None);
+    h.run();
+    let middle = at(&h, Point { x_nm: 3_810_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([back]));
+    h.hover_at(middle);
+    h.run();
+    for expected in [front, back] {
+        h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+        h.run();
+        assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([expected]));
+    }
+    h.state_mut().views.active.board.set_layer(&top, false, Some(false));
+    h.run();
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([back]));
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// A visible via in the gap between actual copper pads can be selected and cycled with its owner footprint.
+#[test]
+fn overlap_cycle_selects_via_inside_footprint_envelope() {
+    let mut h = routable_with("header-1x02-254");
+    let (footprint_id, gap) = {
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        let footprint = board.footprints().next().unwrap();
+        let [a, b] = footprint.pads.as_slice() else { panic!("expected two physical pads") };
+        let gap = Point { x_nm: (a.center.x_nm + b.center.x_nm) / 2, y_nm: (a.center.y_nm + b.center.y_nm) / 2 };
+        assert!(footprint.pads.iter().all(|pad| !pad.contains_point(gap)));
+        (footprint.id.clone(), gap)
+    };
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":gap,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let via = vias(&h)[0].id;
+    let point = at(&h, gap);
+    click_canvas_at(&mut h, point);
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([via]));
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.hover_at(point);
+    h.run();
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    assert_eq!(h.state().views.active.board.selection, BTreeSet::from([footprint_id]));
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([via]));
+    assert!(h.state().views.active.board.selection.is_empty());
+    assert_eq!(h.state().session.revision(), revision + 1);
 }
 
 /// An unsupported-copper frame discards a queued Delete instead of replaying it once arcs are removed.
@@ -1125,6 +1278,59 @@ fn box_selection_picks_tracks_and_vias() {
     assert!(h.state().views.active.board.selection.is_empty(), "footprints outside the box stay unselected");
 }
 
+/// Copper boxes keep unlocked objects and inspection still reports the locked track and via.
+#[test]
+fn copper_box_excludes_locked_without_hiding_inspection() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let unlocked = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 1_270_000 }, Point { x_nm: 7_620_000, y_nm: 1_270_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":5_080_000,"y_nm":-1_270_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let via = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let target = h.state().views.active.board.target.unwrap().board;
+    h.state_mut()
+        .run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let box_copper = |h: &mut Harness<'_, PcbApp>| {
+        let from = at(h, Point { x_nm: 1_524_000, y_nm: -2_540_000 });
+        let to = at(h, Point { x_nm: 8_636_000, y_nm: 3_810_000 });
+        h.hover_at(from);
+        h.run();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+    };
+    let inspection = h.state().session.inspect();
+    let board = &inspection["project"]["boards"][0];
+    assert!(board["tracks"].as_array().unwrap().iter().any(|item| item["id"] == json!(track) && item["locked"] == true));
+    assert!(board["vias"].as_array().unwrap().iter().any(|item| item["id"] == json!(via) && item["locked"] == true));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via, unlocked]));
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    let locked_at = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, locked_at);
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.state_mut().select_all_board();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    assert_eq!(h.state().session.inspect(), inspection);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "newly locked copper leaves the filtered view's selection");
+}
+
 /// U selects every track joined to the hovered one, and nothing else.
 #[test]
 fn u_selects_connected_copper() {
@@ -1186,6 +1392,305 @@ fn m_and_drag_move_selected_copper() {
     h.run();
     assert_eq!(h.state().session.revision(), revision + 2, "a drag is one more edit");
     assert_ne!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().start, after_m, "the drag moved the track");
+}
+
+/// Two footprints, a loose track, a second unselected track and a via on a 50 mil grid.
+/// Returns the selectable track, the other track and the via.
+fn group_drag_board<'a>() -> (Harness<'a, PcbApp>, Uuid, Uuid, Uuid) {
+    let mut h = routable();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let other = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: -2_540_000 }, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":0,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    let via = vias(&h)[0].id;
+    (h, track, other, via)
+}
+
+/// The fixture's two footprints with their positions.
+fn footprint_pair(h: &Harness<'_, PcbApp>) -> [(String, Point); 2] {
+    let poses = footprint_poses(h);
+    [poses[0].clone(), poses[1].clone()]
+}
+
+/// Every footprint id with its current board position.
+fn footprint_poses(h: &Harness<'_, PcbApp>) -> Vec<(String, Point)> {
+    h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|f| (f.id.clone(), f.position)).collect()
+}
+
+/// Press at `from`, move to `to` and keep the button down.
+fn hold_drag(h: &mut Harness<'_, PcbApp>, from: Point, to: Point) -> egui::Pos2 {
+    let (from, to) = (at(h, from), at(h, to));
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    to
+}
+
+/// `p` translated by `d`.
+fn shifted(p: Point, d: Point) -> Point {
+    Point { x_nm: p.x_nm + d.x_nm, y_nm: p.y_nm + d.y_nm }
+}
+
+/// Dragging one footprint of a mixed selection keeps the selection and moves every selected
+/// footprint, track and via by the same snapped offset in one undoable edit, like Move does.
+#[test]
+fn dragging_a_selected_footprint_moves_the_whole_mixed_selection() {
+    let (mut h, track, other, via) = group_drag_board();
+    let [(a, a_at), (b, b_at)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a.clone(), b.clone()]),
+        tracks: BTreeSet::from([track]),
+        vias: BTreeSet::from([via]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let old_tracks = tracks(&h);
+    let old_via = vias(&h)[0].at;
+    let delta = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, delta));
+    assert!(h.state().views.active.board.movement.active(), "the drag picked up the group");
+    assert!(h.state().views.active.board.draft.is_none(), "no single-footprint drag");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "a preview is not an edit");
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit for the whole group");
+    assert!(!h.state().views.active.board.movement.active());
+    let poses = footprint_poses(&h);
+    assert!(poses.contains(&(a, shifted(a_at, delta))));
+    assert!(poses.contains(&(b, shifted(b_at, delta))));
+    for old in old_tracks {
+        let new = tracks(&h).into_iter().find(|t| t.id == old.id).unwrap();
+        let expected = if old.id == other { (old.start, old.end) } else { (shifted(old.start, delta), shifted(old.end, delta)) };
+        assert_eq!((new.start, new.end), expected, "only selected copper moves");
+    }
+    assert_eq!(vias(&h)[0].at, shifted(old_via, delta));
+    assert_eq!(
+        crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()),
+        items,
+        "the selection is kept"
+    );
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "one undo step restores everything");
+}
+
+/// Dragging a footprint outside the current selection still selects it alone and moves only it.
+#[test]
+fn dragging_an_unselected_footprint_moves_only_that_footprint() {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, b_at)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([b.clone()]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items);
+    h.run();
+    let revision = h.state().session.revision();
+    let old_tracks = tracks(&h);
+    let delta = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, delta));
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_some());
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(h.state().views.active.board.selection, BTreeSet::from([a.clone()]));
+    let poses = footprint_poses(&h);
+    assert!(poses.contains(&(a, shifted(a_at, delta))));
+    assert!(poses.contains(&(b, b_at)));
+    assert_eq!(tracks(&h), old_tracks);
+}
+
+/// Esc during a group drag discards the preview, keeps the selection and swallows the release.
+#[test]
+fn escape_cancels_a_group_drag_without_an_edit() {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a, b]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, Point { x_nm: 2_540_000, y_nm: 1_270_000 }));
+    assert!(h.state().views.active.board.movement.active());
+    h.key_press(Key::Escape);
+    h.run();
+    h.drop_at(drop);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    assert_eq!(h.state().session.revision(), revision, "Esc cancels the drag");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
+/// A group drag that includes locked copper is refused with the same message as Move, and
+/// nothing moves, not even the footprint under the pointer.
+#[test]
+fn group_drag_follows_move_for_locked_items() {
+    let (mut h, _, _, via) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    let revision = h.state().session.revision();
+    let target = h.state().session.project().unwrap().board_target().unwrap().board;
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"vias":[via],"locked":true,"expected_revision":revision}));
+    h.run();
+    let items =
+        pcbcraft_engine::board::clipboard::BoardSelection { footprints: BTreeSet::from([a, b]), vias: BTreeSet::from([via]), ..Default::default() };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.hover_at(at(&h, a_at));
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    let refused = h.state_mut().message.take();
+    assert!(refused.as_ref().is_some_and(|m| m.contains("Unlock")), "{refused:?}");
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, Point { x_nm: 2_540_000, y_nm: 1_270_000 }));
+    assert!(h.state().views.active.board.draft.is_none(), "the pressed footprint does not move alone");
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, refused, "the drag gives the same refusal as Move");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
+const GROUP_DRAG_DELTA: Point = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+
+/// Advance just past the start of a mixed-selection drag, leaving its pickup for the next frame.
+fn pending_group_drag<'a>() -> (Harness<'a, PcbApp>, egui::Pos2) {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    h.state_mut().select_board_items(pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a, b]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    });
+    h.run();
+    let start = at(&h, a_at);
+    let end = at(&h, shifted(a_at, GROUP_DRAG_DELTA));
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    h.hover_at(end);
+    h.step();
+    assert!(h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    (h, end)
+}
+
+/// Releasing on the first pickup frame uses both the original press and the actual release.
+#[test]
+fn group_drag_commits_at_release_on_first_pickup_frame() {
+    let (mut h, end) = pending_group_drag();
+    let before = footprint_poses(&h);
+    let revision = h.state().session.revision();
+    let start = at(&h, before[0].1);
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        egui::Event::PointerMoved(start),
+    ]);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let after = footprint_poses(&h);
+    for (id, position) in before {
+        assert!(after.contains(&(id, shifted(position, GROUP_DRAG_DELTA))));
+    }
+}
+
+/// Pointer motion back inside the canvas in the release frame leaves an outside drop canceled.
+#[test]
+fn group_drag_cancels_at_off_canvas_release_before_same_frame_hover() {
+    let (mut h, end) = pending_group_drag();
+    h.run();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let canvas = h.get_by_label("PCB canvas").rect();
+    let outside = egui::pos2(canvas.right() + 10., end.y);
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        egui::Event::PointerMoved(end),
+    ]);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// The original press loses authority if the project changes before the group takes over.
+#[test]
+fn group_drag_cancels_if_revision_changes_before_pickup() {
+    let (mut h, end) = pending_group_drag();
+    let start_revision = h.state().session.revision();
+    h.state_mut().run("project.rename", &json!({"name":"Edit between drag frames"}));
+    assert_eq!(h.state().message, None);
+    let revision = h.state().session.revision();
+    assert_eq!(revision, start_revision + 1);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Swapping one selected copper item before pickup cancels the held drag.
+#[test]
+fn group_drag_cancels_if_selection_changes_before_pickup() {
+    let (mut h, end) = pending_group_drag();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let mut items = crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap());
+    items.tracks.clear();
+    items.vias.insert(vias(&h)[0].id);
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
+/// A held Secondary button cancels the group drag before the later Primary release can place it.
+#[test]
+fn secondary_press_cancels_group_drag_before_primary_release() {
+    let (mut h, end) = pending_group_drag();
+    h.run();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
 /// Properties shows a selected track's width in the display units (millimeters here); typing a
@@ -1418,7 +1923,7 @@ fn outputs_export_one_archive_of_fabrication_files() {
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
     assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
     assert!(h.state().fabrication_exports.busy());
-    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved(name.into()))).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     let writes_notice = "Saved fabrication ZIP";
@@ -2057,7 +2562,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
         let source = h.state().views.active.input(&h.state().session);
         let project = h.state().session.snapshot().unwrap();
         let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-        h.state_mut().views.active.board.copper_connectivity(board, source).unwrap()
+        h.state_mut().views.active.board.copper_connectivity(board, source, false).unwrap()
     }
     let mut h = routable();
     let line = airwires(&h)[0].clone();
@@ -2093,8 +2598,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
 
     let project = h.state().session.snapshot().unwrap();
     let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
-    let another = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
+    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None, false).unwrap();
+    let another = h.state_mut().views.active.board.copper_connectivity(board, None, false).unwrap();
     assert_eq!(uncached, first);
     assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
     let before_open = cached(&mut h);
@@ -2259,6 +2764,17 @@ fn vias_filter_separately_from_tracks() {
     h.run();
     click_canvas_at(&mut h, on_via);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via]));
+    h.hover_at(on_track);
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(
+        h.state().views.active.board.tracks.selected,
+        std::collections::BTreeSet::from([via]),
+        "connected selection keeps only the enabled kind"
+    );
+    click_canvas_at(&mut h, on_track);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "a track-only hit is ignored when tracks are disabled");
 }
 
 /// Saved filter settings from before the Vias row keep existing choices and enable vias.
@@ -2830,4 +3346,987 @@ fn review408_via_at_fixed_head_validates_adopted_geometry() {
             assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         }
     }
+}
+
+/// The real menu switches to shove, hides displaced originals and publishes incoming and
+/// displaced copper in one edit. Cancel restores the authored view without touching history.
+#[test]
+fn shove_menu_preview_cancel_and_atomic_publication() {
+    for cancel in [true, false] {
+        let mut h = routable();
+        let layer = h.state().views.active.board.active_layer.clone().unwrap();
+        let a = Point { x_nm: 0, y_nm: -7_620_000 };
+        let b = Point { x_nm: 10_160_000, y_nm: -7_620_000 };
+        let start = Point { x_nm: 2_540_000, y_nm: -5_080_000 };
+        let end = Point { x_nm: 7_620_000, y_nm: -7_620_000 };
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":[a,b],"expected_revision":revision}));
+        h.run();
+        let original = tracks(&h)[0].clone();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        click(&mut h, "Shove tracks");
+        if !cancel {
+            right_click_route(&mut h, start);
+            click(&mut h, "Merge same-net copper");
+        }
+        click_route(&mut h, start);
+        h.hover_at(at(&h, end));
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        let base = pcbcraft_chrome::Tokens::get().board_front;
+        assert!(!track_has_color(&h, [a, b], base), "the displaced original was still painted");
+        assert!(preview_ends_at(&h, base, at(&h, end)), "missing incoming shove preview");
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+            assert!(track_has_color(&h, [a, b], base));
+        } else {
+            click_route(&mut h, end);
+            h.key_press(Key::Enter);
+            h.run_steps(100);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert!(tracks(&h).len() > 2);
+            assert_ne!(tracks(&h).iter().find(|t| t.id == original.id), Some(&original));
+            let board = h.state().session.project().unwrap().boards().next().unwrap();
+            assert!(
+                !board
+                    .check_design(board.effective_rules().values)
+                    .violations
+                    .iter()
+                    .any(|v| matches!(v.kind, pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short))
+            );
+            let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+            h.state_mut().run("edit.redo", &json!({}));
+            h.run();
+            assert_eq!(after, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        }
+    }
+}
+
+/// The route menu enables through-via shove in either theme. Preview replaces the live
+/// ring at its source, with Escape and publication sharing the normal route lifecycle.
+#[test]
+fn shove_via_menu_previews_and_publishes_the_displayed_center() {
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let (start, end) = (p(2_540_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    for (theme, cancel) in [(ThemeChoice::Dark, true), (ThemeChoice::Light, false)] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let id = vias(&h)[0].id;
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        let tracks_row = h.get_by_label("Shove tracks").rect();
+        let vias_row = h.get_by_label("Shove tracks and vias").rect();
+        assert!((tracks_row.left() - vias_row.left()).abs() < 1. && vias_row.top() >= tracks_row.bottom() - 1.);
+        click(&mut h, "Shove tracks and vias");
+        click_route(&mut h, start);
+        h.hover_at(at(&h, end));
+        h.run_steps(200);
+        let moves = h.state().views.active.board.tracks.displacements().1;
+        assert_eq!(moves.len(), 1, "{theme:?} {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(moves[0].via, id);
+        let target = moves[0].at;
+        assert_ne!(target, original);
+        let ring_at = |h: &Harness<'_, PcbApp>, point, color| {
+            let center = at(h, point);
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == color && c.center.distance(center) < 0.05))
+        };
+        let tokens = pcbcraft_chrome::Tokens::get();
+        assert!(ring_at(&h, target, tokens.accent.gamma_multiply(0.6)));
+        assert!(!ring_at(&h, original, tokens.board_through));
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(ring_at(&h, original, tokens.board_through));
+            assert_eq!(h.state().session.revision(), revision);
+        } else {
+            click_route(&mut h, end);
+            h.key_press(Key::Enter);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, target));
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Finish track uses the popup's canvas target and commits the shown via move in the same edit.
+#[test]
+fn finish_track_menu_commits_the_open_leg_and_its_via_move() {
+    let mut h = routable();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (start, prefix, end) = (p(2_540_000, -7_620_000), p(3_810_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"expected_revision":revision}));
+    h.run();
+    let id = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks and vias");
+    click_route(&mut h, start);
+    click_route(&mut h, prefix);
+    h.hover_at(at(&h, end));
+    h.run_steps(200);
+    let state = &h.state().views.active.board.tracks;
+    assert_eq!(state.fixed_route_points().unwrap(), [start, prefix]);
+    let moves = state.displacements().1;
+    assert_eq!(moves.len(), 1);
+    let shown = moves[0].at;
+    assert_ne!(shown, original);
+    assert_eq!(h.state().session.revision(), revision);
+
+    right_click_route(&mut h, end);
+    click(&mut h, "Finish track");
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(tracks(&h).iter().any(|track| track.end == end));
+    assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, shown));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// D retains the selected shove policy, stretches the attached track, and moves an
+/// unrelated rail to its prepared preview geometry in the same undoable command.
+#[test]
+fn shove_drag_previews_connected_ends_and_publishes_the_neighbor() {
+    let mut h = routable();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let joint = p(2_540_000, -5_080_000);
+    let pinned = p(2_540_000, -2_540_000);
+    let segment = add_track(&mut h, joint, p(7_620_000, -5_080_000));
+    let attached = add_track(&mut h, pinned, joint);
+    let rail = add_track(&mut h, p(0, -7_720_000), p(10_160_000, -7_720_000));
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
+    let revision = h.state().session.revision();
+    let pickup = p(5_080_000, -5_080_000);
+    let target = p(5_080_000, -7_620_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, pickup);
+    click(&mut h, "Shove tracks");
+    h.key_press(Key::Escape);
+    h.run();
+    for cancel in [true, false] {
+        h.hover_at(at(&h, pickup));
+        h.run();
+        h.key_press(Key::D);
+        h.run();
+        h.hover_at(at(&h, target));
+        h.run_steps(200);
+        let paths = h.state().views.active.board.tracks.replacements().to_vec();
+        assert!(paths.iter().any(|path| path.track == rail), "missing dragged rail: {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(h.state().views.active.board.tracks.replacements().is_empty());
+        } else {
+            click_route(&mut h, target);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            let laid = tracks(&h);
+            let dragged = laid.iter().find(|t| t.id == segment).unwrap();
+            let follower = laid.iter().find(|t| t.id == attached).unwrap();
+            assert_eq!((dragged.start, dragged.end), (p(joint.x_nm, target.y_nm), p(7_620_000, target.y_nm)));
+            assert_eq!((follower.start, follower.end), (pinned, dragged.start));
+            assert_published_replacements(&originals, &laid, &paths);
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// A first click outside copper but inside a corner's clearance cannot become an inescapable
+/// draft. Keep X armed so the next clear click starts an ordinary route without Escape/relaunch.
+#[test]
+fn rejected_clearance_pickup_keeps_the_route_tool_usable() {
+    for shove in [false, true] {
+        let mut h = routable();
+        let layer = layer_named(&h, "Top");
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS,&json!({"layer":layer,"width_nm":500_000,
+            "points":[Point{x_nm:4_000_000,y_nm:-7_620_000},Point{x_nm:4_000_000,y_nm:-2_540_000},Point{x_nm:10_160_000,y_nm:-2_540_000}],"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.key_press(Key::X);
+        h.run();
+        let bad = Point { x_nm: 3_500_000, y_nm: -2_540_000 };
+        if shove {
+            right_click_route(&mut h, bad);
+            click(&mut h, "Shove tracks");
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, bad);
+        h.run_steps(100);
+        assert!(!h.state().views.active.board.tracks.routing(), "invalid start stayed active, shove={shove}");
+        assert!(h.state().views.active.board.tracks.tool);
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        click_route(&mut h, Point { x_nm: 1_270_000, y_nm: -5_080_000 });
+        click_route(&mut h, Point { x_nm: 2_540_000, y_nm: -5_080_000 });
+        h.key_press(Key::Enter);
+        h.run_steps(100);
+        assert_eq!(h.state().session.revision(), revision + 1, "a clear route could not be placed, shove={shove}; {:?}", h.state().message);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Shared-net parallel rails must retain spacing in the actual displayed displacement, even
+/// though they are already electrically joined by a branch and ordinary DRC exempts that net.
+#[test]
+fn shoved_connected_rails_keep_spacing_in_the_editor() {
+    use pcbcraft_engine::board::geometry::Contour;
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        let layer = layer_named(&h, "Top");
+        let mut rail_ids = Vec::new();
+        for (points, width) in [
+            (vec![Point { x_nm: 0, y_nm: 5_000_000 }, Point { x_nm: 20_000_000, y_nm: 5_000_000 }], 500_000),
+            (vec![Point { x_nm: 0, y_nm: 5_800_000 }, Point { x_nm: 20_000_000, y_nm: 5_800_000 }], 250_000),
+            (vec![Point { x_nm: 17_000_000, y_nm: 5_000_000 }, Point { x_nm: 17_000_000, y_nm: 8_000_000 }], 250_000),
+        ] {
+            let old: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+            let rev = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"points":points,"width_nm":width,"expected_revision":rev}));
+            rail_ids.push(tracks(&h).iter().find(|t| !old.contains(&t.id)).unwrap().id);
+        }
+        let pad =
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().flat_map(|f| f.pads).find(|p| p.net.is_some()).unwrap().center;
+        let rev = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS,&json!({"layer":layer,"points":[pad,Point {y_nm:5_000_000,..pad},Point{x_nm:0,y_nm:5_000_000}],"width_nm":250_000,"expected_revision":rev}));
+        h.run();
+        h.query_all_by_label("Fit board").next().unwrap().click();
+        h.run();
+        assert_eq!(h.state().message, None);
+        let original = tracks(&h);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let start = Point { x_nm: 6_858_000, y_nm: 7_366_000 };
+        let target = Point { x_nm: 14_224_000, y_nm: 4_572_000 };
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        click(&mut h, "Shove tracks");
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, start);
+        h.hover_at(at(&h, target));
+        h.run_steps(200);
+        let displayed = h.state().views.active.board.tracks.replacements().to_vec();
+        let paths = |id| {
+            let original = original.iter().find(|t| t.id == id).unwrap();
+            let points = displayed.iter().find(|r| r.track == id).map_or_else(|| vec![original.start, original.end], |r| r.points.clone());
+            points.windows(2).map(|p| Contour::segment(p[0], p[1], original.width_nm).unwrap()).collect::<Vec<_>>()
+        };
+        assert!(
+            displayed.iter().any(|r| {
+                let rail = original.iter().find(|t| t.id == r.track).unwrap();
+                rail_ids[..2].contains(&r.track) && r.points != [rail.start, rail.end] && r.points != [rail.end, rail.start]
+            }),
+            "neither rail moved: {displayed:?}"
+        );
+        let (a, b) = (paths(rail_ids[0]), paths(rail_ids[1]));
+        let gap = a.iter().flat_map(|a| b.iter().map(move |b| a.gap(b))).fold(f64::INFINITY, f64::min);
+        assert!(gap >= 200_000., "{theme:?} preview collapsed same-net rail clearance to {gap}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        click_route(&mut h, target);
+        h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+        h.run_steps(100);
+        assert!(h.state().session.revision() <= revision + 1);
+        if h.state().session.revision() == revision + 1 {
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap(), "a refused route left a partial shove behind");
+    }
+}
+
+/// Routing from an unconnected pad pushes a connected pair of rails ahead instead of
+/// sending the new route behind the footprint. Publication retains the pad's separate island.
+#[test]
+fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
+    let mut h = routable_with("resistor-0805");
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let footprint = h.state().session.project().unwrap().board_view(target).unwrap().footprints().min_by_key(|f| f.position.x_nm).unwrap();
+    let revision = h.state().session.revision();
+    let (id, position) = (footprint.id.clone(), footprint.position);
+    h.state_mut().run(
+        pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":180,"expected_revision":revision}),
+    );
+    h.run();
+    let footprint = h.state().session.project().unwrap().board_view(target).unwrap().footprints().min_by_key(|f| f.position.x_nm).unwrap();
+    let start = footprint.pads.iter().find(|p| p.net.is_none()).unwrap().center;
+    let named = footprint.pads.iter().find(|p| p.net.is_some()).unwrap().center;
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let p = |x, y| Point { x_nm: named.x_nm + x, y_nm: named.y_nm + y };
+    for (points, width) in [
+        (vec![named, p(0, 5_000_000)], 500_000),
+        (vec![p(0, 5_000_000), p(20_000_000, 5_000_000)], 500_000),
+        (vec![p(975_000, 5_800_000), p(20_975_000, 5_800_000)], 250_000),
+        (vec![p(17_975_000, 5_000_000), p(17_975_000, 8_000_000)], 250_000),
+    ] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"points":points,"width_nm":width,"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+    }
+    h.run();
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    let originals = tracks(&h);
+    let rails: Vec<_> = originals.iter().filter(|t| t.start.y_nm == t.end.y_nm).cloned().collect();
+    assert_eq!(rails.len(), 2);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let end = p(4_000_000, 6_500_000);
+    {
+        use pcbcraft_engine::board::route::{DEFAULT_BUDGET, Mode, Outcome, Posture, Request};
+        let request = Request {
+            mode: Mode::Shove,
+            merge_same_net: false,
+            fixed: Vec::new(),
+            head: start,
+            target: end,
+            origin: None,
+            layer: Uuid::parse_str(&layer).unwrap(),
+            width_nm: 250_000,
+            posture: Posture::Diagonal,
+            flipped: false,
+            previous: Vec::new(),
+        };
+        let query = h.state().session.clearance_query_with_rules(target, &json!({})).unwrap();
+        let plan = h.state().session.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome, Outcome::Reached, "direct plan: {plan:?}");
+        assert_eq!(plan.replacements.len(), 2, "direct plan: {plan:?}");
+    }
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route(&mut h, start);
+    h.hover_at(at(&h, end));
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(
+        h.state().views.active.board.tracks.displacement_preview(),
+        2,
+        "start {start:?} end {end:?}, startscreen {:?} endscreen {:?}; {:?}",
+        at(&h, start),
+        at(&h, end),
+        h.state().views.active.board.tracks
+    );
+    let replacements = h.state().views.active.board.tracks.replacements().to_vec();
+    for rail in &rails {
+        let path = &replacements.iter().find(|r| r.track == rail.id).unwrap().points;
+        assert!(path.iter().all(|p| p.y_nm >= rail.start.y_nm), "a preview leg moved behind the approach: {path:?}");
+    }
+    let placed = h.state().views.active.camera.snap(at(&h, end), h.get_by_label("PCB canvas").rect());
+    click_route(&mut h, end);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let laid = tracks(&h);
+    for rail in &rails {
+        assert_ne!(laid.iter().find(|track| track.id == rail.id).unwrap(), rail);
+    }
+    let displaced = assert_published_replacements(&originals, &laid, &replacements);
+    let mut frontier = vec![start];
+    let mut reached = BTreeSet::from([(start.x_nm, start.y_nm)]);
+    while let Some(point) = frontier.pop() {
+        for track in laid.iter().filter(|track| !displaced.contains(&track.id)) {
+            let next = if track.start == point {
+                Some(track.end)
+            } else if track.end == point {
+                Some(track.start)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && reached.insert((next.x_nm, next.y_nm))
+            {
+                frontier.push(next);
+            }
+        }
+    }
+    assert!(reached.contains(&(placed.x_nm, placed.y_nm)), "the incoming route did not connect its pickup and goal");
+    let board = h.state().session.project().unwrap().board_view(target).unwrap();
+    assert!(
+        !board
+            .check_design(board.effective_rules().values)
+            .violations
+            .iter()
+            .any(|v| matches!(v.kind, pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short))
+    );
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Compare every published leg with the placement path and the source track's dimensions.
+fn assert_published_replacements(
+    originals: &[Track],
+    laid: &[Track],
+    replacements: &[pcbcraft_engine::board::track::replacements::Replacement],
+) -> BTreeSet<Uuid> {
+    let mut matched = BTreeSet::new();
+    for replacement in replacements {
+        let rail = originals.iter().find(|track| track.id == replacement.track).expect("original source identity");
+        assert!(laid.iter().any(|track| track.id == rail.id), "missing published source identity {}", rail.id);
+        for pair in replacement.points.windows(2) {
+            let segment = laid
+                .iter()
+                .find(|track| {
+                    track.layer == rail.layer
+                        && track.width_nm == rail.width_nm
+                        && ([track.start, track.end] == pair || [track.end, track.start] == pair)
+                })
+                .unwrap_or_else(|| panic!("published shove is missing {pair:?} for {}", rail.id));
+            matched.insert(segment.id);
+        }
+    }
+    matched
+}
+
+/// A native-command rail scene with fixed pad contacts, a branch, locked rail and fixed via.
+fn parallel_rail_board<'a>() -> (Harness<'a, PcbApp>, Track) {
+    let mut h = routable_spaced("resistor-0805", 20_000_000);
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let poses: Vec<_> = h.state().session.project().unwrap().board_view(target).unwrap().footprints().map(|f| (f.id.clone(), f.position)).collect();
+    for (id, at) in poses {
+        let rev = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":180,"expected_revision":rev}),
+        );
+    }
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    for (points, width) in [
+        (vec![p(-975_000, 0), p(-975_000, 5_000_000), p(19_025_000, 5_000_000), p(19_025_000, 0)], 500_000),
+        (vec![p(0, 5_800_000), p(20_000_000, 5_800_000)], 250_000),
+        (vec![p(17_000_000, 5_000_000), p(17_000_000, 8_000_000)], 250_000),
+        (vec![p(4_000_000, -4_000_000), p(16_000_000, -4_000_000)], 500_000),
+    ] {
+        let rev = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::ADD_TRACKS, &json!({"board":target.board,"layer":layer,"points":points,"width_nm":width,"expected_revision":rev}));
+        assert_eq!(h.state().message, None);
+    }
+    let locked = tracks(&h).into_iter().find(|t| t.start.y_nm == -4_000_000).unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target.board,"tracks":[locked.id],"locked":true,"expected_revision":rev}));
+    let rev = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"board":target.board,"at":p(12_000_000,-4_000_000),"via_diameter_nm":1_000_000,"via_drill_nm":500_000,"expected_revision":rev}),
+    );
+    h.run();
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    (h, locked)
+}
+
+/// Moving past the upper rail retains both displaced paths and commits the same candidate;
+/// the nearby locked rail/via stay fixed and the original board returns with one Undo.
+#[test]
+fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
+    let (mut h, locked) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let original_vias = vias(&h);
+    assert_eq!(original_vias.len(), 1);
+    let rev = h.state().session.revision();
+    let start = p(8_128_000, 9_398_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route(&mut h, start);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    for y in [1_016_000, -1_524_000, -2_159_000] {
+        h.hover_at(at(&h, p(8_128_000, y)));
+        h.run_steps(300);
+        assert_eq!(
+            h.state().views.active.board.tracks.displacement_preview(),
+            2,
+            "y={y}: {:?}",
+            h.state().views.active.board.tracks.preparation_status()
+        );
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    let stopped = p(8_128_000, -2_159_000);
+    let beyond = p(8_128_000, -2_667_000);
+    h.hover_at(at(&h, beyond));
+    h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2, "retain the last valid shove instead of walking around");
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    let retained = if preview_ends_at(&h, ink, at(&h, beyond)) { beyond } else { stopped };
+    let forbidden = p(8_128_000, -3_683_000);
+    h.hover_at(at(&h, forbidden));
+    h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route blocked"));
+    assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2);
+    assert!(preview_ends_at(&h, ink, at(&h, retained)));
+    assert!(!preview_ends_at(&h, ink, at(&h, forbidden)));
+    let fixed = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
+    click_route_with_modifiers(&mut h, forbidden, Modifiers::CTRL);
+    h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.fixed_route_points(), Some(fixed.as_slice()), "the blocked click fixed a preview vertex");
+    assert_eq!(h.state().session.revision(), rev, "a blocked preview cannot commit");
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    h.hover_at(at(&h, stopped));
+    h.run_steps(300);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route_with_modifiers(&mut h, stopped, Modifiers::CTRL);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), rev + 1);
+    let kept = tracks(&h).into_iter().find(|t| t.id == locked.id).unwrap();
+    assert_eq!((kept.start, kept.end), (locked.start, locked.end));
+    assert!(kept.locked);
+    assert_eq!(vias(&h), original_vias);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// A rightward cursor sweep can retry the return approach without trapping the second rail.
+/// Preview and commit share the same two replacements and Undo restores the original board.
+#[test]
+fn lateral_shove_preview_preserves_the_branch_return_corridor() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
+    let revision = h.state().session.revision();
+    let start = p(2_159_000, 6_604_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, start);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for x in [11_176_000, 12_192_000, 13_208_000, 13_970_000] {
+        let target = p(x, -1_016_000);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2);
+        assert!(preview_ends_at(&h, ink, at(&h, target)), "cursor {target:?}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(13_970_000, -1_016_000));
+    h.run_steps(250);
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_published_replacements(&originals, &tracks(&h), &expected);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// The return bend stays short during a lateral sweep, and the exact displayed replacements
+/// prepare and publish together without changing the branch contacts or Undo boundary.
+#[test]
+fn shove_return_preview_does_not_form_a_long_hairpin() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let originals = tracks(&h);
+    let lower = originals.iter().find(|t| t.start == p(0, 5_800_000) && t.end == p(20_000_000, 5_800_000)).unwrap().id;
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(3_556_000, 7_366_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, start);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for x in [12_954_000, 13_208_000, 13_462_000] {
+        let target = p(x, 254_000);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, target)));
+        let replacements = h.state().views.active.board.tracks.replacements();
+        assert_eq!(replacements.len(), 2);
+        let path = &replacements.iter().find(|r| r.track == lower).unwrap().points;
+        let retreat: i64 = path.windows(2).map(|p| (p[0].x_nm - p[1].x_nm).max(0)).sum();
+        assert!(retreat <= 250_000, "preview backtracks {retreat} nm: {path:?}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(13_462_000, 254_000));
+    h.run_steps(250);
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_published_replacements(&originals, &tracks(&h), &expected);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// A clearance-limited preview fixes its visible legal endpoint even with the cursor inside
+/// clearance. Publication uses that adjusted endpoint and Undo restores the original board.
+#[test]
+fn walkaround_preview_and_placement_use_the_visible_boundary() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(3_048_000, 3_556_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let old_ids: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+    let revision = h.state().session.revision();
+    let head = p(6_096_000, 6_858_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, head);
+    click(&mut h, "Walk around obstacles");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, head);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [1_016_000, 2_032_000, 3_048_000, 4_064_000] {
+        let target = p(-1_524_000, y);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, p(-1_550_002, y))), "boundary at y={y}");
+        assert!(!preview_ends_at(&h, ink, at(&h, target)));
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    let pressed = at(&h, p(-1_524_000, 4_064_000));
+    let released = at(&h, p(-1_524_000, 3_810_000));
+    h.event(egui::Event::PointerButton { pos: pressed, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.hover_at(released);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: released, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    let outside = h.get_by_label("PCB canvas").rect().right_top() + egui::vec2(20., 20.);
+    h.event(egui::Event::PointerMoved(outside));
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    h.key_press(Key::Enter);
+    for step in 0..200 {
+        h.hover_at(outside + egui::vec2(step as f32 * 0.1, 0.));
+        h.step();
+    }
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let added: Vec<_> = tracks(&h).into_iter().filter(|t| !old_ids.contains(&t.id)).collect();
+    assert!(added.iter().any(|t| t.end == p(-1_550_002, 3_810_000)), "placed endpoint must match visible clearance boundary: {added:?}");
+    assert!(!added.iter().any(|t| t.end == p(-1_524_000, 3_810_000)), "blocked raw cursor cannot become copper");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Walkaround follows both pointer axes for legal pad-gap targets and keeps a blocked target
+/// separate from the visible fallback, without placing it or changing copper membership.
+#[test]
+fn walkaround_preview_follows_both_axes_in_the_pad_gap() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(4_000_000, 2_500_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(2_286_000, 6_350_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Walk around obstacles");
+    click_route(&mut h, start);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    let base = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [-508_000, -254_000, 254_000] {
+        for x in [-127_000, 0, 127_000] {
+            let target = p(x, y);
+            h.hover_at(at(&h, target));
+            h.run_steps(300);
+            assert!(preview_ends_at(&h, base, at(&h, target)), "cursor {target:?}: {:?}", h.state().views.active.board.tracks.preparation_status());
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        }
+    }
+    let blocked = p(254_000, -254_000);
+    h.hover_at(at(&h, blocked));
+    h.run_steps(300);
+    assert!(!preview_ends_at(&h, base, at(&h, blocked)));
+    assert_eq!(h.state().session.revision(), revision);
+    let end = p(0, -254_000);
+    h.hover_at(at(&h, end));
+    h.run_steps(300);
+    assert!(preview_ends_at(&h, base, at(&h, end)));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, end);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Routing treats a press/move/release as placement even when it exceeds the ordinary click
+/// tolerance. Subsequent pointer motion cannot replace that released target before validation.
+#[test]
+fn route_placement_does_not_require_a_stationary_click() {
+    let mut h = routable();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(0, -5_080_000);
+    let pressed = p(2_540_000, -5_080_000);
+    let released = p(5_080_000, -5_080_000);
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, start);
+    let from = at(&h, pressed);
+    let to = at(&h, released);
+    h.hover_at(from);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    let outside = h.get_by_label("PCB canvas").rect().right_top() + egui::vec2(20., 20.);
+    h.event(egui::Event::PointerMoved(outside));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    h.key_press(Key::Enter);
+    for step in 0..100 {
+        h.hover_at(outside + egui::vec2(step as f32 * 0.2, 0.));
+        h.step();
+    }
+    h.run_steps(100);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let copper = tracks(&h);
+    assert_eq!(copper.len(), 1, "exactly the released vertex should be fixed");
+    assert_eq!((copper[0].start, copper[0].end), (start, released));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Moving around a pad and continuing from a fixed top bend both retain a placeable
+/// clearance guide. A corner click publishes that guide through the ordinary transaction.
+#[test]
+fn walkaround_pad_bend_and_inside_corner_remain_placeable() {
+    for fixed in [false, true] {
+        let (mut h, _) = parallel_rail_board();
+        let p = |x, y| Point { x_nm: x, y_nm: y };
+        h.state_mut().views.active.camera.center_on(p(0, 2_540_000));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let old_ids: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+        let revision = h.state().session.revision();
+        let origin = p(-1_016_000, 6_096_000);
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, origin);
+        click(&mut h, "Walk around obstacles");
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, origin);
+        let ink = pcbcraft_chrome::Tokens::get().board_front;
+        let above = p(-660_000, -900_000);
+        h.hover_at(at(&h, above));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, p(-660_000, -1_050_002))));
+        if fixed {
+            click_route_with_modifiers(&mut h, above, Modifiers::CTRL);
+            h.run_steps(300);
+            assert_eq!(h.state().views.active.board.tracks.fixed_route_points().and_then(|points| points.last()), Some(&p(-660_000, -1_050_002)));
+        }
+        for target in [p(-254_000, 1_016_000), p(-300_000, 1_100_000), p(-200_000, 1_270_000)] {
+            h.hover_at(at(&h, target));
+            h.run_steps(300);
+            assert!(
+                preview_ends_at(&h, ink, at(&h, target)),
+                "fixed{fixed}, target{target:?}: {:?}",
+                h.state().views.active.board.tracks.preparation_status()
+            );
+            assert_eq!(h.state().session.revision(), revision);
+        }
+        let raw_corner = p(-508_000, 5_334_000);
+        let expected = p(-399_998, 4_424_998);
+        h.hover_at(at(&h, raw_corner));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, expected)), "fixed{fixed}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        click_route(&mut h, raw_corner);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.key_press(Key::Enter);
+        h.run_steps(300);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision + 1, "fixed{fixed}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        let added: Vec<_> = tracks(&h).into_iter().filter(|t| !old_ids.contains(&t.id)).collect();
+        assert!(added.iter().any(|t| t.end == expected), "fixed{fixed}: {added:?}");
+        assert!(!added.iter().any(|t| t.end == raw_corner));
+        let target = h.state().session.project().unwrap().board_target().unwrap();
+        let board = h.state().session.project().unwrap().board_view(target).unwrap();
+        assert!(!board.check_design(board.effective_rules().values).violations.iter().any(|v| matches!(
+            v.kind,
+            pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short
+        )
+            && v.items.iter().any(|id| added.iter().any(|t| t.id.to_string() == *id))));
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Explicit Shove selection and a clicked U-shaped prefix must still displace the rails
+/// as the cursor advances from below them into the gap near the upper rail.
+#[test]
+fn shove_from_a_bent_prefix_advances_through_both_rails() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    for i in 0..12 {
+        let x = -12_000_000 + i * 500_000;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"layer":layer,"width_nm":250_000,
+            "points":[p(x,9_000_000),p(x,14_000_000)],"expected_revision":revision}),
+        );
+        assert_eq!(h.state().message, None);
+    }
+    h.state_mut().views.active.camera.center_on(p(3_048_000, 4_826_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let prefix = [p(-3_556_000, 3_810_000), p(-3_556_000, 6_096_000), p(254_000, 9_906_000), p(4_318_000, 9_906_000)];
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, prefix[0]);
+    click(&mut h, "Shove tracks");
+    for point in prefix {
+        click_route(&mut h, point);
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [6_858_000, 6_604_000, 6_350_000, 6_096_000, 5_842_000, 5_588_000, 5_334_000, 5_080_000] {
+        let target = p(7_874_000, y);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, target)), "y{y}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        if y <= 5_334_000 {
+            assert_eq!(
+                h.state().views.active.board.tracks.displacement_preview(),
+                2,
+                "y{y}: {:?}",
+                h.state().views.active.board.tracks.preparation_status()
+            );
+        }
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(7_874_000, 5_080_000));
+    h.key_press(Key::Enter);
+    h.run_steps(300);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Backspace and Enter can share a frame. Finishing at the shortened prefix
+/// still needs the displacement for that prefix, including its existing rails.
+#[test]
+fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
+    let revision = h.state().session.revision();
+    let start = p(2_159_000, 6_604_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route_with_modifiers(&mut h, start, Modifiers::CTRL);
+    h.run_steps(40);
+    let retained = p(13_970_000, -1_016_000);
+    click_route_with_modifiers(&mut h, retained, Modifiers::NONE);
+    h.run_steps(300);
+    let prefix = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2, "the retained prefix must displace both rails");
+    let next = p(13_970_000, -1_778_000);
+    click_route_with_modifiers(&mut h, next, Modifiers::NONE);
+    h.run_steps(300);
+    let points = h.state().views.active.board.tracks.fixed_route_points().unwrap();
+    assert_eq!(&points[..points.len() - 1], &prefix);
+    assert_eq!(points.last(), Some(&next));
+    h.key_press(Key::Backspace);
+    h.key_press(Key::Enter);
+    h.run_steps(300);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let laid = tracks(&h);
+    assert!(laid.iter().any(|track| track.end == retained));
+    assert!(!laid.iter().any(|track| track.end == next));
+    assert_published_replacements(&originals, &laid, &expected);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
 }

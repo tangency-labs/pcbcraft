@@ -118,6 +118,7 @@ mod tests {
                 let end = if i % 7 == 0 { Point { x_nm: x + 80_000_000, y_nm: y - 80_000_000 } } else { start };
                 Object {
                     name: format!("test-{i}"),
+                    kind: super::super::ObjectKind::Other,
                     contour: Contour::segment(start, end, 60_001).unwrap(),
                     layers: if i >= 12_288 { layers.clone() } else { vec![layers[i % 64]] },
                     intended_nets: vec![i % 4000],

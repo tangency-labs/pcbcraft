@@ -1,0 +1,96 @@
+use super::{CoordinateFrame, Layer, LayerRole, Mark, Tool, add, decimal, xy};
+use std::collections::BTreeMap;
+
+/// Read the writer's absolute metric Excellon drill hits and tool declarations.
+/// Require one TYPE declaration and agreement with any XNC file function.
+/// Legacy files lack XNC attributes. Motion modes for routing or slots are unsupported.
+pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateFrame), String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("M48") {
+        return Err("Expected an Excellon header".into());
+    }
+    let (mut role, mut format, mut metric) = (None, false, false);
+    let mut frame = None;
+    let mut function = None;
+    let mut tools = BTreeMap::<u32, Tool>::new();
+    loop {
+        let record = lines.next().ok_or("Incomplete Excellon header")?;
+        if let Some(value) = record.strip_prefix("; #@! TF.SameCoordinates,") {
+            if frame.replace(CoordinateFrame::parse(value)?).is_some() {
+                return Err("Duplicate drill coordinate frame declaration".into());
+            }
+            continue;
+        }
+        if let Some(value) = record.strip_prefix("; #@! TF.FileFunction,") {
+            if function.replace(file_function(value)?).is_some() {
+                return Err("Duplicate XNC drill file function".into());
+            }
+            continue;
+        }
+        match record {
+            "%" => break,
+            "FMAT,2" => format = true,
+            "METRIC" => metric = true,
+            "; TYPE=PLATED" if role.is_none() => role = Some(LayerRole::PlatedDrill),
+            "; TYPE=NON_PLATED" if role.is_none() => role = Some(LayerRole::NonPlatedDrill),
+            c if c.starts_with("; TYPE=") => return Err("Invalid or duplicate drill plating declaration".into()),
+            c if c.starts_with(';') || c.is_empty() => {}
+            c => {
+                let (number, diameter) = c.strip_prefix('T').and_then(|s| s.split_once('C')).ok_or("Unsupported Excellon header record")?;
+                let number = number.parse::<u32>().map_err(|_| "Invalid drill tool number")?;
+                let diameter_nm = decimal(diameter)?;
+                if number == 0 || diameter_nm <= 0 || tools.len() >= 65_536 || tools.insert(number, Tool { number, diameter_nm, hits: 0 }).is_some() {
+                    return Err("Invalid or duplicate drill tool".into());
+                }
+            }
+        }
+    }
+    let role = role.ok_or("Drill plating is unspecified")?;
+    if function.is_some_and(|function| function != role) {
+        return Err("XNC drill file function disagrees with the TYPE plating declaration".into());
+    }
+    if !format || !metric || lines.next() != Some("G90") || lines.next() != Some("G05") {
+        return Err("Expected absolute metric coordinates in drill mode".into());
+    }
+    let mut active = None;
+    let mut marks = Vec::new();
+    loop {
+        let record = lines.next().ok_or("Missing Excellon end record")?;
+        if record == "M30" {
+            break;
+        }
+        if let Some(t) = record.strip_prefix('T') {
+            let number = t.parse::<u32>().map_err(|_| "Invalid drill tool selection")?;
+            if !tools.contains_key(&number) {
+                return Err("Undefined drill tool".into());
+            }
+            active = Some(number);
+        } else {
+            let center = xy(record, decimal)?;
+            let tool = active.and_then(|id| tools.get_mut(&id)).ok_or("No active drill tool")?;
+            add(&mut marks, Mark::Stroke { ends: [center; 2], diameter_nm: tool.diameter_nm }, budget)?;
+            tool.hits += 1;
+        }
+    }
+    if lines.any(|line| !line.trim().is_empty()) {
+        return Err("Unexpected records after Excellon end".into());
+    }
+    let layer = Layer { name: String::new(), role, marks, tools: tools.into_values().collect() };
+    Ok((layer, frame.unwrap_or(CoordinateFrame::Legacy)))
+}
+
+/// Recognize the writer's round through-hole file functions, including the copper layer span.
+fn file_function(value: &str) -> Result<LayerRole, String> {
+    let fields: Vec<_> = value.splitn(5, ',').collect();
+    let [plating, "1", last, kind] = fields.as_slice() else {
+        return Err("Unsupported XNC drill file function".into());
+    };
+    if !last.parse::<u8>().is_ok_and(|layer| (1..=64).contains(&layer)) {
+        return Err("Invalid XNC drill file function layer span".into());
+    }
+    match (*plating, *kind) {
+        ("Plated", "PTH") => Ok(LayerRole::PlatedDrill),
+        ("NonPlated", "NPTH") => Ok(LayerRole::NonPlatedDrill),
+        _ => Err("Unsupported XNC drill file function".into()),
+    }
+}

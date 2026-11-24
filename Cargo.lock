@@ -2927,6 +2927,7 @@ dependencies = [
  "pcbcraft-mcp",
  "pcbcraft-storage",
  "rfd",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
@@ -2962,6 +2963,7 @@ dependencies = [
  "solidcraft-ui-kit",
  "solidcraft-ui-registry",
  "solidcraft-ui-text",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -2979,6 +2981,7 @@ version = "0.1.0"
 dependencies = [
  "geo-index",
  "getrandom 0.3.4",
+ "pcbcraft-geometry",
  "pcbcraft-units",
  "rstar",
  "serde",
@@ -2994,7 +2997,10 @@ version = "0.1.0"
 dependencies = [
  "log",
  "pcbcraft-units",
+ "serde",
  "serde_json",
+ "solidcore",
+ "solidcore-convert",
  "solidcore-ops",
  "solidcore-record",
  "solidcore-step",
@@ -3036,8 +3042,10 @@ name = "pcbcraft-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "js-sys",
  "log",
  "pcbcraft-app",
+ "pcbcraft-engine",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

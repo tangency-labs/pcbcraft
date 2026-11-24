@@ -805,7 +805,7 @@ fn membership_edits_share_untouched_sets_with_history() {
     let held: BTreeSet<*const Uuid> = s
         .undo
         .iter()
-        .flatten()
+        .filter_map(crate::HistoryEntry::project)
         .chain([&after])
         .flat_map(|project| keys.iter().filter_map(|key| project.part_group_memberships.shared_set(*key)).map(|set| set.as_ptr()))
         .collect();

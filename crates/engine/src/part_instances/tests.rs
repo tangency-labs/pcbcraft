@@ -9,7 +9,9 @@ use crate::{
 use serde_json::json;
 
 mod capacity;
+mod metadata;
 mod retained;
+mod supply_range;
 mod voltage_rating;
 
 /// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.
@@ -170,6 +172,56 @@ fn manufacturer_specifications_are_distinct_from_instance_requirements() {
     params["expected_revision"] = json!(session.revision());
     assert!(session.apply(PLACE_PART, &params).is_err());
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// One Gerber side includes compatible orderable data, omits incompatible and unselected data,
+/// and preserves known footprint/package facts across attribute dictionary resets.
+#[test]
+fn gerber_x3_only_writes_orderable_metadata_for_compatible_parts() {
+    let mut session = fixture(true);
+    apply(&mut session, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    let mut ids = Vec::new();
+    for (index, selected) in [true, true, false].into_iter().enumerate() {
+        let x = index as i64 * 10_000_000;
+        let mut params = placement(&session, selected);
+        params["x_nm"] = json!(x);
+        params["package"] = json!("0603");
+        apply(&mut session, PLACE_PART, params);
+        let part = session.project().unwrap().components().last().unwrap().id();
+        apply(&mut session, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"component":part,"x_nm":x,"y_nm":0}));
+        ids.push(part);
+    }
+    apply(
+        &mut session,
+        SET_PART,
+        json!({"component":ids[1],"requirements":{"pcbcraft:tolerance":{"operator":"at_most","value":{"type":"quantity","value":"0.005","unit":"1"}}}}),
+    );
+    let project = session.project().unwrap();
+    let statuses =
+        project.components().map(|part| part.part.as_ref().unwrap().compatibility()["status"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    assert_eq!(statuses, ["meets_requirements", "does_not_meet_requirements", "unselected"]);
+    let files = project.board_view(project.board_target().unwrap()).unwrap().gerber_part_layers().unwrap().files;
+    let [top] = files.as_slice() else { panic!("Expected only a top layer") };
+    let body = top.contents.split_once("\nD10*\n").unwrap().1;
+    // Main flashes carry .C and end with D03. Pins instead carry .P, and outlines end with D01.
+    let objects: Vec<_> = body
+        .split("%TD*%\n")
+        .filter_map(|object| {
+            let start = object.find("%TO.C,")?;
+            object.ends_with("D03*\n").then_some(&object[start..])
+        })
+        .collect();
+    assert_eq!(objects.len(), 3);
+    assert!(objects[0].contains("%TO.CMfr,Illustrative Manufacturer*%\n%TO.CMPN,TEST-R100M-0603*%"));
+    for object in &objects[1..] {
+        assert!(!object.contains("%TO.CMfr,"));
+        assert!(!object.contains("%TO.CMPN,"));
+    }
+    for (index, object) in objects.iter().enumerate() {
+        assert!(object.starts_with(&format!("%TO.C,R{}*%\n", index + 1)));
+        assert!(object.contains("%TO.CFtp,Resistor 0603 (1608 metric)*%\n%TO.CPgN,0603*%"));
+        assert!(object.ends_with("D03*\n"));
+    }
 }
 
 /// Canonical equivalent unit edits preserve part identity and fixed requirements; conflicting edits are atomic.

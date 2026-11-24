@@ -39,8 +39,9 @@ save the schematic and board together with shared undo/redo.
   track width, via annular rings, unrouted connections, board edges and courtyard
   overlap, using saved board rules and supported dimensional net-class rules.
 - **Outputs:** export supported board geometry as Gerber X2 copper, mask, paste,
-  silkscreen and outline layers with aperture functions, and circular plated holes
-  in an Excellon drill file, together in one archive.
+  silkscreen and outline layers with aperture functions, plus net and pin attributes
+  on copper. Circular plated holes are included as an Excellon drill file, and
+  circular non-plated footprint holes go in a separate drill file, in the same archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
 - **Libraries:** browse built-in, project-pinned and registered native libraries
@@ -54,11 +55,11 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots, separate non-plated
-drill output and independent footprint mask/paste controls are not yet supported.
+and 3D/STEP workflows remain in development. Footprint slots and independent
+footprint mask/paste controls are not yet supported.
 The current checks and exporters do not establish manufacturing readiness.
 
-The [capability table](docs/capabilities.md) separates available features from
+The [capability inventory](docs/capabilities.md) separates available features from
 remaining work. The [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1)
 tracks the first collaboration-ready preview; [VISION.md](VISION.md) explains
 the longer-term direction, including familiar KiCad controls and links with SolidCraft.
@@ -110,7 +111,7 @@ local connection** and copy the configuration. For a separate headless session:
 cargo run --locked -p pcbcraft-cli -- mcp
 ```
 
-Native live MCP also supports [UI automation](docs/ui-automation.md): locate named
+Native live MCP also supports [UI automation](docs/automation/ui-automation.md): locate named
 controls and send clicks, drags, keys, text and scrolling through ordinary editor
 input. Input currently targets the original native window and its split panes;
 headless sessions operate separately from the open editor.
@@ -129,7 +130,7 @@ contributors and agents.
 | [Quickstart](docs/quickstart.md) · [Example project](examples/README.md) | First editing session |
 | [Editor guide](docs/editor-guide.md) | Tools, shortcuts, wiring, views and project files |
 | [Capabilities](docs/capabilities.md) | Current support, limits and planned work |
-| [AI assistants and MCP](docs/mcp.md) · [UI automation](docs/ui-automation.md) | Agent connections, shared commands and native UI input |
+| [AI assistants and MCP](docs/mcp.md) · [UI automation](docs/automation/ui-automation.md) | Agent connections, shared commands and native UI input |
 | [Contributing](CONTRIBUTING.md) · [Agent instructions](AGENTS.md) | Repository workflow, architecture and checks |
 | [Reference and formats](docs/README.md#reference-and-formats) | Project storage, library schemas, nets, rules and shared geometry |
 

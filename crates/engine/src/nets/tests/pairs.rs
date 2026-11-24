@@ -420,11 +420,7 @@ fn refuse_candidate_atomically(session: &mut Session, candidate: crate::Project,
     for (actual, saved) in [(&session.undo, &undo), (&session.redo, &redo)] {
         assert_eq!(actual.len(), saved.len());
         for (a, b) in actual.iter().zip(saved) {
-            assert!(match (a, b) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            });
+            assert!(a.same_entry(b));
         }
     }
 }

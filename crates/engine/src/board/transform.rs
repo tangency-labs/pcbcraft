@@ -1,10 +1,16 @@
 //! Atomic board placement edits shared by the GUI and MCP.
-use crate::{CommandError, Session, schematic::Point};
+use super::{Board, Footprint};
+use crate::{
+    CommandError, Project, Session,
+    schematic::{MAX_CENTER_NM, Point},
+};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Align or evenly distribute the addressed footprints by their bounds, in one undo step.
+/// Align or distribute the addressed footprints by their bounds or at a set pitch, in one undo step.
 pub const ALIGN_FOOTPRINTS: &str = "pcb.align_footprints";
+/// Largest distance between two valid placement origins along one axis.
+pub(crate) const MAX_FOOTPRINT_PITCH_NM: i64 = 2 * MAX_CENTER_NM;
 /// The alignment modes, as MCP clients name them.
 pub const ALIGN_MODES: [&str; 8] = {
     let mut names = [""; 8];
@@ -61,6 +67,36 @@ impl AlignMode {
     /// The fewest footprints the mode applies to: three to distribute, two to align.
     pub const fn minimum(self) -> usize {
         if self.distributes() { 3 } else { 2 }
+    }
+}
+
+/// Refuse an unknown or locked placement before preparing a direct edit or removing the supplied
+/// placements. Report every selected lock using its stable ID and, when available, its live or
+/// last accepted reference.
+pub(crate) fn require_unlocked_placements<'a>(
+    project: &Project,
+    placements: impl IntoIterator<Item = Option<&'a Footprint>>,
+) -> Result<(), CommandError> {
+    let mut locked = Vec::new();
+    for placement in placements {
+        let footprint = placement.ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+        if footprint.locked {
+            let id = footprint.id;
+            let reference = project
+                .components
+                .get(&footprint.component)
+                .map(|part| part.reference())
+                .or_else(|| project.board.baseline.as_ref()?.components.get(&footprint.component).map(|part| part.reference.as_str()));
+            locked.push(match reference {
+                Some(reference) => format!("{reference} (footprint-{id})"),
+                None => format!("footprint-{id}"),
+            });
+        }
+    }
+    if locked.is_empty() {
+        Ok(())
+    } else {
+        Err(CommandError::InvalidParams(format!("Locked footprints: {}. Unlock them before editing or deleting them.", locked.join(", "))))
     }
 }
 
@@ -146,6 +182,33 @@ fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Result<Vec<(i64, i64)>, Com
     })
 }
 
+/// Plan origin-to-origin distribution on one axis, keeping the smallest coordinate fixed.
+/// Request order breaks ties. Results are returned in request order for the shared move path.
+/// Stop before proposing a destination outside the valid placement range.
+fn pitch_distribution(board: &Board, ids: &[u64], mode: AlignMode, pitch_nm: i64) -> Result<Vec<(i64, i64)>, CommandError> {
+    let horizontal = mode == AlignMode::DistributeX;
+    let mut origins = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let footprint = board.placement(*id).ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+            Ok((if horizontal { footprint.x_nm } else { footprint.y_nm }, i))
+        })
+        .collect::<Result<Vec<_>, CommandError>>()?;
+    origins.sort_unstable();
+    let mut target = origins.first().map_or(0, |&(origin, _)| origin);
+    let mut deltas = vec![(0, 0); ids.len()];
+    for (origin, i) in origins {
+        if target > MAX_CENTER_NM {
+            return Err(CommandError::InvalidParams("the pitch would move a footprint outside the coordinate range".into()));
+        }
+        let delta = target - origin;
+        deltas[i] = if horizontal { (delta, 0) } else { (0, delta) };
+        target += pitch_nm;
+    }
+    Ok(deltas)
+}
+
 impl Session {
     /// Move only a placed footprint's reference. A zero offset restores the library default.
     pub(crate) fn set_footprint_reference_offset(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -174,8 +237,8 @@ impl Session {
         Ok(())
     }
 
-    /// Validate every selected placement and the source revision before deleting any. Physical
-    /// placements retain their pinned package assignment for re-placement; schematic geometry,
+    /// Validate the source revision and refuse the whole selection if any placement is locked
+    /// or unknown. Physical placements retain their pinned package assignment; schematic geometry,
     /// components, drawings and setup remain unchanged. Undo restores exact placement identities.
     pub(crate) fn delete_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -186,9 +249,10 @@ impl Session {
             .filter_map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
             .collect();
         let project = self.open_project()?;
-        if ids.is_empty() || ids.iter().any(|id| project.board.footprints.binary_search_by_key(id, |f| f.id).is_err()) {
+        if ids.is_empty() {
             return Err(CommandError::NotFound("unknown footprint ID".into()));
         }
+        require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
         let mut next = project.clone();
         let board = Arc::make_mut(&mut next.board);
         for footprint in board.footprints.iter().filter(|f| ids.contains(&f.id)) {
@@ -209,64 +273,82 @@ impl Session {
         Ok(())
     }
 
-    /// Align (two or more) or distribute (three or more) the addressed footprints by their
-    /// resolved bounds, carrying track ends on pads that move. Invalid input, a result outside
-    /// the coordinate range or a new short leaves the board unchanged. Distribution also
-    /// preserves its outer anchors and span. An alignment that moves nothing creates no edit.
+    /// Align by bounds, distribute by bounds with fixed outer anchors, or distribute origins
+    /// along one axis at a positive `pitch_nm` (two or more footprints). Track ends on moved
+    /// pads follow them. A selected locked placement, invalid input, an out-of-range result or
+    /// a new short leaves the board unchanged. An accepted request that moves nothing creates no edit.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
-        let ids: Vec<u64> = params["footprints"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
-            .collect::<Option<_>>()
-            .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
-        let needed = mode.minimum();
-        if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
-            return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
+        if let Some((mut next, moved)) = alignment_candidate(project, params)? {
+            super::track::carry_copper(project, &mut next, &moved)?;
+            self.change(next)?;
         }
-        let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+        Ok(())
+    }
+}
+
+/// Plan and apply only the requested footprint translations to a private candidate.
+/// The caller must validate carried copper and contacts before adopting it.
+pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<Option<(Project, std::collections::BTreeSet<String>)>, CommandError> {
+    let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
+    let ids: Vec<u64> = params["footprints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
+        .collect::<Option<_>>()
+        .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
+    let pitch_nm = params["pitch_nm"].as_i64();
+    if pitch_nm.is_some() && !mode.distributes() {
+        return Err(CommandError::InvalidParams("pitch_nm requires distribute_x or distribute_y".into()));
+    }
+    let needed = if pitch_nm.is_some() { 2 } else { mode.minimum() };
+    if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
+        return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
+    }
+    let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
+    let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+    require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
+    let deltas = if let Some(pitch_nm) = pitch_nm {
+        pitch_distribution(&project.board, &ids, mode, pitch_nm)?
+    } else {
         let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-        let mut found: std::collections::BTreeMap<String, [i64; 4]> =
-            view.footprints().filter(|f| wanted.contains(&f.id)).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
         let boxes = ids
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
-        let deltas = alignment(mode, &boxes)?;
-        if deltas.iter().all(|delta| *delta == (0, 0)) {
-            return Ok(());
-        }
-        let mut next = project.clone();
-        let board = Arc::make_mut(&mut next.board);
-        let mut moved_ids = std::collections::BTreeSet::new();
-        for (id, (dx, dy)) in ids.iter().zip(deltas) {
-            if (dx, dy) == (0, 0) {
-                continue;
-            }
-            moved_ids.insert(format!("footprint-{id}"));
-            let index = board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
-            let footprint = &mut board.footprints[index];
-            let moved = Point { x_nm: footprint.x_nm.saturating_add(dx), y_nm: footprint.y_nm.saturating_add(dy) };
-            (footprint.x_nm, footprint.y_nm) = (moved.x_nm, moved.y_nm);
-            if !footprint.valid() {
-                return Err(CommandError::InvalidParams("the alignment would move a footprint outside the coordinate range".into()));
-            }
-        }
-        super::track::carry_copper(project, &mut next, &moved_ids)?;
-        self.change(next)?;
-        Ok(())
+        alignment(mode, &boxes)?
+    };
+    if deltas.iter().all(|delta| *delta == (0, 0)) {
+        return Ok(None);
     }
+    let mut next = project.clone();
+    let board = Arc::make_mut(&mut next.board);
+    let mut moved_ids = std::collections::BTreeSet::new();
+    for (id, (dx, dy)) in ids.iter().zip(deltas) {
+        if (dx, dy) == (0, 0) {
+            continue;
+        }
+        moved_ids.insert(format!("footprint-{id}"));
+        let index = board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
+        let footprint = &mut board.footprints[index];
+        let moved = Point { x_nm: footprint.x_nm.saturating_add(dx), y_nm: footprint.y_nm.saturating_add(dy) };
+        (footprint.x_nm, footprint.y_nm) = (moved.x_nm, moved.y_nm);
+        if !footprint.valid() {
+            return Err(CommandError::InvalidParams("the alignment would move a footprint outside the coordinate range".into()));
+        }
+    }
+    Ok(Some((next, moved_ids)))
+}
 
+impl Session {
     /// Validate revision, identity and transform before replacing a board snapshot. An optional
     /// `side` (front or back) places the footprint on that side; omitted keeps its side. Track
-    /// ends on its pads follow them (see `track::carry_copper`), and the edit is refused if the
-    /// moved pads or tracks would join two nets. Mapping, component identity and schematic
+    /// ends on its pads follow them (see `track::carry_copper`). Refuse a changed transform if
+    /// the placement is locked or moved pads or tracks would join two nets. Mapping, component identity and schematic
     /// geometry are retained; unchanged input creates no history.
     pub(crate) fn set_footprint_transform(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -294,6 +376,7 @@ impl Session {
         if (current.x_nm, current.y_nm, current.rotation, current.bottom) == (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) {
             return Ok(());
         }
+        require_unlocked_placements(project, [Some(current)])?;
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
         super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
