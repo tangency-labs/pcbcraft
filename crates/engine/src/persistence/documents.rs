@@ -2864,6 +2864,8 @@ struct BoardFacts {
     stroked: bool,
     #[cfg(test)]
     pending_checks: usize,
+    #[cfg(test)]
+    extended_checks: usize,
 }
 
 impl BoardFacts {
@@ -2951,10 +2953,16 @@ impl BoardFacts {
                 if let Some(footprint) = board.footprints().get(self.index) {
                     self.rotated |= footprint.rotation != 0;
                     self.references |= footprint.reference_offset.is_some() || footprint.reference_text.is_some();
-                    self.extended |= footprint
-                        .mapping
-                        .as_ref()
-                        .is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads));
+                    if !self.extended {
+                        #[cfg(test)]
+                        {
+                            self.extended_checks += 1;
+                        }
+                        self.extended = footprint
+                            .mapping
+                            .as_ref()
+                            .is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads));
+                    }
                     self.footprint_lock |= footprint.locked;
                     self.bottom |= footprint.bottom;
                     self.index += 1;
@@ -2964,7 +2972,13 @@ impl BoardFacts {
             }
             8 => {
                 if let Some((&id, assignment)) = board.assignments.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next() {
-                    self.extended |= crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
+                    if !self.extended {
+                        #[cfg(test)]
+                        {
+                            self.extended_checks += 1;
+                        }
+                        self.extended = crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
+                    }
                     if !self.pending && board.tracks.is_empty() && board.vias.is_empty() {
                         #[cfg(test)]
                         {
@@ -2983,7 +2997,13 @@ impl BoardFacts {
                     .as_ref()
                     .and_then(|baseline| baseline.components.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next());
                 if let Some((&id, component)) = next {
-                    self.extended |= component.package.as_ref().is_some_and(|package| package.extended());
+                    if !self.extended {
+                        #[cfg(test)]
+                        {
+                            self.extended_checks += 1;
+                        }
+                        self.extended = component.package.as_ref().is_some_and(|package| package.extended());
+                    }
                     self.key = id;
                 } else {
                     self.advance();
@@ -3289,5 +3309,45 @@ mod board_facts_tests {
         assert!(!via_facts.pending);
         assert!(via_facts.extended);
         assert_eq!(via_facts.pending_checks, 0);
+    }
+
+    /// Once one footprint, assignment or accepted package needs the multipad format, the scan
+    /// stops checking the remaining rows for it; the selected facts are unchanged.
+    #[test]
+    fn board_facts_stops_extended_mapping_checks_after_first_extended_row() {
+        let (session, first_id, second_id) = two_pending_assignments();
+        let plain = (*session.snapshot().unwrap()).clone();
+        let with_unconnected = |ids: &[u64]| {
+            let mut project = plain.clone();
+            let board = std::sync::Arc::make_mut(&mut project.board);
+            for id in ids {
+                board.assignments.get_mut(id).unwrap().unconnected_pads.push("NC".to_owned());
+            }
+            project
+        };
+        let footprints = plain.board.footprints().len();
+        let accepted = plain.board.baseline.as_ref().map_or(0, |baseline| baseline.components.len());
+        assert!(first_id < second_id);
+
+        // Nothing extended: every footprint, assignment and accepted package is checked.
+        let none = scan(&plain);
+        assert!(!none.extended);
+        assert_eq!(none.extended_checks, footprints + 2 + accepted);
+
+        // The first assignment is extended: the second assignment and accepted packages are not checked.
+        let first = scan(&with_unconnected(&[first_id]));
+        assert!(first.extended);
+        assert_eq!(first.extended_checks, footprints + 1);
+
+        // Both extended: still one assignment check, with the same facts.
+        let both = scan(&with_unconnected(&[first_id, second_id]));
+        assert!(both.extended);
+        assert_eq!(both.extended_checks, footprints + 1);
+        assert_eq!((both.pending, both.pending_checks), (first.pending, first.pending_checks));
+
+        // Only the second is extended: both assignments are checked, and accepted packages are not.
+        let second = scan(&with_unconnected(&[second_id]));
+        assert!(second.extended);
+        assert_eq!(second.extended_checks, footprints + 2);
     }
 }

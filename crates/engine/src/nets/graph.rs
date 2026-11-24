@@ -15,10 +15,12 @@ pub(super) struct Network {
 
 impl Network {
     /// Bare terminals and one-pin unnamed stubs are not competing split/merge branches.
+    /// Any name or a second anchor decides it without a scan; only a single anchor is inspected.
     pub fn meaningful(&self) -> bool {
-        !self.names.is_empty()
-            || self.anchors.iter().any(|a| a.kind != AnchorKind::Terminal)
-            || self.anchors.iter().filter(|a| a.kind == AnchorKind::Terminal).count() >= 2
+        if !self.names.is_empty() || self.anchors.len() >= 2 {
+            return true;
+        }
+        self.anchors.first().is_some_and(|a| a.kind != AnchorKind::Terminal)
     }
 
     /// Create one bounded identity using an explicit primary or canonical kind/key priority.
@@ -90,13 +92,17 @@ impl Project {
 /// `project.borrowed_electrical_connectivity()` without cloning it (building the snapshot's
 /// `OnceLock` connectivity once if not yet cached) and indexes label/port endpoints to their
 /// connectivity group; phase 3 sorts the derived networks vector in one step; all other phases
-/// advance one sheet item or one network anchor entry per step.
+/// advance one sheet item or one network anchor entry per step. A new connected group starts
+/// without names; the following steps copy its connectivity names one per step before any
+/// other work.
 #[derive(Default)]
 pub(super) struct GraphBuilder {
     phase: u8,
     substep: u8,
     endpoint_groups: BTreeMap<WireEndpoint, usize>,
     groups: BTreeMap<Group, Network>,
+    /// Connected groups whose connectivity names are still being copied: (net index, next name).
+    pending_names: std::collections::VecDeque<(usize, usize)>,
     endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
     sheet_index: usize,
     current_occurrence: Option<uuid::Uuid>,
@@ -122,10 +128,17 @@ impl GraphBuilder {
             _ => graph.net_index_for_endpoint(endpoint),
         };
         let group = index.map_or_else(|| Group::Isolated(anchor.clone()), Group::Connected);
-        let network = self.groups.entry(group).or_insert_with(|| {
-            let names = index.map_or_else(BTreeSet::new, |idx| graph.net_names(idx).iter().cloned().collect());
-            Network { anchors: BTreeSet::new(), names }
-        });
+        let network = match self.groups.entry(group) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                if let Some(index) = index
+                    && !graph.net_names(index).is_empty()
+                {
+                    self.pending_names.push_back((index, 0));
+                }
+                entry.insert(Network { anchors: BTreeSet::new(), names: BTreeSet::new() })
+            }
+        };
         network.anchors.insert(anchor.clone());
         if let Some(name) = name {
             network.names.insert(name.to_owned());
@@ -136,6 +149,18 @@ impl GraphBuilder {
 
     /// Advance one graph-construction step, returning `Some(graph)` when complete.
     pub(super) fn step(&mut self, project: &Project) -> Result<Option<Graph>, String> {
+        if let Some(&(index, next)) = self.pending_names.front() {
+            let names = project.borrowed_electrical_connectivity().net_names(index);
+            if let (Some(name), Some(network)) = (names.get(next), self.groups.get_mut(&Group::Connected(index))) {
+                network.names.insert(name.clone());
+            }
+            if next + 1 < names.len() {
+                self.pending_names[0].1 = next + 1;
+            } else {
+                self.pending_names.pop_front();
+            }
+            return Ok(None);
+        }
         match self.phase {
             0 => {
                 let graph = project.borrowed_electrical_connectivity();
@@ -361,7 +386,7 @@ mod tests {
         session.apply(command, &params).unwrap();
     }
 
-    /// `GraphBuilder` indexes label/port groups once, populates connected group names on creation,
+    /// `GraphBuilder` indexes label/port groups once, copies connected group names after creation,
     /// preserves isolated labels, and yields once per anchor during phase 4 indexing.
     #[test]
     fn graph_builder_yields_per_anchor_and_preserves_connected_and_isolated_names() {
@@ -432,6 +457,78 @@ mod tests {
         assert_eq!(graph.networks, built.networks);
         assert_eq!(graph.by_anchor, built.by_anchor);
         assert_eq!(graph.endpoints, built.endpoints);
+    }
+
+    /// A new connected group copies its connectivity names one per step: no step adds more
+    /// than one name, and the built graph keeps every name.
+    #[test]
+    fn graph_builder_copies_connected_names_one_per_step() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board": false})).unwrap();
+        let mut pins = Vec::new();
+        for index in 0..3 {
+            apply(&mut session, PLACE_RESISTOR, json!({"x_nm": index as i64 * 25_400_000, "y_nm": 0}));
+            pins.push(json!({"symbol": session.project().unwrap().symbols().last().unwrap().id(), "terminal": "1"}));
+        }
+        apply(&mut session, CONNECT_PINS, json!({"from": pins[0], "to": pins[1]}));
+        apply(&mut session, CONNECT_PINS, json!({"from": pins[1], "to": pins[2]}));
+        for (index, name) in ["SIG_A", "SIG_B", "SIG_C"].into_iter().enumerate() {
+            let project = session.project().unwrap();
+            let at = project.terminal_position(project.symbols()[index].terminals()[0]).unwrap();
+            apply(&mut session, crate::net_labels::ADD, json!({"name": name, "style": "local", "x_nm": at.x_nm, "y_nm": at.y_nm + 25_400_000}));
+            let label = session.project().unwrap().net_labels().last().unwrap().id;
+            apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{label}")}, "to": pins[index], "bends": []}));
+        }
+
+        let project = session.project().unwrap();
+        let names = |builder: &GraphBuilder| builder.groups.values().map(|network| network.names.len()).sum::<usize>();
+        let mut builder = GraphBuilder::default();
+        let mut copy_steps = 0usize;
+        let graph = loop {
+            let before = names(&builder);
+            let copying = !builder.pending_names.is_empty();
+            let done = builder.step(project).unwrap();
+            if let Some(graph) = done {
+                break graph;
+            }
+            assert!(names(&builder) <= before + 1, "one builder step added more than one net name");
+            copy_steps += usize::from(copying);
+        };
+        assert!(copy_steps >= 3);
+
+        let root = project.sheets().next().unwrap().target;
+        let label = project.net_labels()[0].id;
+        let index = graph.network(graph.endpoint_anchor(root, WireEndpoint::NetLabel(label)).unwrap()).unwrap();
+        let expected: BTreeSet<String> = ["SIG_A", "SIG_B", "SIG_C"].into_iter().map(String::from).collect();
+        assert_eq!(graph.networks[index].names, expected);
+        assert_eq!(graph.networks, Graph::build(project).unwrap().networks);
+    }
+
+    /// Names or a second anchor make a network meaningful; a lone terminal does not.
+    #[test]
+    fn meaningful_network_returns_early_and_keeps_single_anchor_rule() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board": false})).unwrap();
+        let project = session.project().unwrap();
+        let anchor = |kind: AnchorKind, object: u64| Anchor {
+            kind,
+            project: project.id,
+            scope: project.net_scope(),
+            occurrence: uuid::Uuid::nil(),
+            object,
+            terminal: if kind == AnchorKind::Terminal { "1".into() } else { String::new() },
+        };
+        let network = |anchors: Vec<Anchor>, names: &[&str]| Network {
+            anchors: anchors.into_iter().collect(),
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        assert!(!network(vec![], &[]).meaningful());
+        assert!(!network(vec![anchor(AnchorKind::Terminal, 1)], &[]).meaningful());
+        assert!(network(vec![anchor(AnchorKind::Label, 1)], &[]).meaningful());
+        assert!(network(vec![anchor(AnchorKind::Port, 1)], &[]).meaningful());
+        assert!(network(vec![anchor(AnchorKind::Terminal, 1)], &["VCC"]).meaningful());
+        assert!(network(vec![anchor(AnchorKind::Terminal, 1), anchor(AnchorKind::Terminal, 2)], &[]).meaningful());
+        assert!(network(vec![anchor(AnchorKind::Terminal, 1), anchor(AnchorKind::Label, 2)], &[]).meaningful());
     }
 
     /// Phase 2 resolves parent sheet pins directly via `block.child` and retains the missing-anchor error.
