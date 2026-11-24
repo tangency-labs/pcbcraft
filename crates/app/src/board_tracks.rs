@@ -867,8 +867,7 @@ fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool, mode: Mode, merge_s
         ui.close();
         return Some(RouteAction::Cancel);
     }
-    if MenuItem::new("Finish track").tool_icon(ToolIcon::Track).shortcut("Enter").enabled(draft.is_some_and(|draft| draft.points.len() >= 2)).show(ui)
-    {
+    if MenuItem::new("Finish track").tool_icon(ToolIcon::Track).enabled(draft.is_some()).show(ui) {
         return Some(RouteAction::Finish);
     }
     if MenuItem::new("Remove last vertex").icon(MenuIcon::Undo).shortcut("Backspace").enabled(draft.is_some()).show(ui) {
@@ -1081,7 +1080,7 @@ pub(super) fn interact(
                 })
             })
             .flatten();
-        let pointer = if action == Some(RouteAction::Via) {
+        let pointer = if matches!(action, Some(RouteAction::Via | RouteAction::Finish)) {
             anchor
         } else if place {
             released.map(|(pos, _)| pos).or_else(|| response.interact_pointer_pos())
@@ -1147,6 +1146,30 @@ pub(super) fn interact(
                 Some(planning::Action::Via(next)),
             );
             return out;
+        }
+
+        if action == Some(RouteAction::Finish)
+            && let Some(pointer) = pointer
+            && state.draft.is_some()
+        {
+            // The menu was opened on the canvas preview. Use the same target and
+            // validation as a finishing click before adopting any displacements.
+            let candidate = route_target(pointer, camera, rect, view, layer, snap_to_grid, false);
+            let (at, _) = state.snap_target(candidate, pointer, camera, rect, layer);
+            if let Some(draft) = &state.draft
+                && draft.points.last() != Some(&at)
+            {
+                state.planning.request(
+                    draft,
+                    view.target,
+                    at,
+                    state.diagonal_first,
+                    (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                    Some(planning::Action::Vertex { finish: true }),
+                );
+                state.planning.finish_pending_vertex();
+                return out;
+            }
         }
 
         if finish || action == Some(RouteAction::Finish) {

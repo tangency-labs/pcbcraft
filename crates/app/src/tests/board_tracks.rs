@@ -3122,6 +3122,48 @@ fn shove_via_menu_previews_and_publishes_the_displayed_center() {
     }
 }
 
+/// Finish track uses the popup's canvas target and commits the shown via move in the same edit.
+#[test]
+fn finish_track_menu_commits_the_open_leg_and_its_via_move() {
+    let mut h = routable();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (start, prefix, end) = (p(2_540_000, -7_620_000), p(3_810_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"expected_revision":revision}));
+    h.run();
+    let id = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks and vias");
+    click_route(&mut h, start);
+    click_route(&mut h, prefix);
+    h.hover_at(at(&h, end));
+    h.run_steps(200);
+    let state = &h.state().views.active.board.tracks;
+    assert_eq!(state.fixed_route_points().unwrap(), [start, prefix]);
+    let moves = state.displacements().1;
+    assert_eq!(moves.len(), 1);
+    let shown = moves[0].at;
+    assert_ne!(shown, original);
+    assert_eq!(h.state().session.revision(), revision);
+
+    right_click_route(&mut h, end);
+    click(&mut h, "Finish track");
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(tracks(&h).iter().any(|track| track.end == end));
+    assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, shown));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// D retains the selected shove policy, stretches the attached track, and moves an
 /// unrelated rail to its prepared preview geometry in the same undoable command.
 #[test]
