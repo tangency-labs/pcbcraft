@@ -292,11 +292,19 @@ python3 -B scripts/check-performance-regression.py /tmp/budgets-before.json /tmp
 ```
 
 The script validates every raw sample and recomputes each action's quantiles and
-verdict from `metrics`, refuses confounded environment, artifact, project,
-iteration or geometry mismatches, and refuses unmeasured actions. It exits `0`
-when every action stays at or below the threshold, `1` when any action regresses
-(naming each regressed action in the report and in `--json` output), and `2` on
-invalid or incomparable reports. Shared-runner CI still collects no performance
+verdict from `metrics`, and refuses confounded environment, artifact, project,
+iteration or geometry mismatches. A metric may hold more samples than there are
+iterations: routing input pools every reversing route pointer move of an
+iteration into one aggregate metric. An action unmeasured in both reports (for
+example routing input on a trace that never reverses a route) is not compared and
+is listed as such in the report and in `--json` output (`not_compared`). An
+action measured in only one report, or with different sample counts, makes the
+reports incomparable, and so does a pair with no action measured in both. A
+change of exactly the threshold passes; the comparison ignores floating-point
+excess below 1e-9 percentage points. It exits `0` when every compared action
+stays at or below the threshold, `1` when any action regresses (naming each
+regressed action in the report and in `--json` output), and `2` on invalid or
+incomparable reports. Shared-runner CI still collects no performance
 samples and enforces no wall-clock threshold; running this gate in three-platform
 CI (Linux, Windows and macOS) on dedicated hardware is a maintainer decision
 tracked under #237.

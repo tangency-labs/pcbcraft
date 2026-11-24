@@ -152,7 +152,7 @@ window input budget nor visible preview. Open, save, DRC and connectivity report
 quantiles with no target yet. The [local regression gate](performance-testing.md#local-regression-gate)
 (`scripts/check-performance-regression.py`) compares two matched budget reports
 on Linux, Windows or macOS and fails regressions above 20 % while rejecting
-confounded or unmeasured evidence; shared-runner CI still enforces no wall-clock
+confounded reports and actions measured in only one of them; shared-runner CI still enforces no wall-clock
 threshold, and dedicated three-platform performance CI remains a maintainer
 decision under #237. No envelope-size measurements are recorded here yet;
 the suite's rows stay **unmeasured** until a run on named hardware is added.
