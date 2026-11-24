@@ -377,6 +377,17 @@ impl CopperEditJob {
         if self.phase == 0 && self.command == RESHAPE_TRACKS && self.params.get("mode").is_some() && self.displacements.is_none() {
             return self.advance_drag(budget);
         }
+        // Let compound validation identify the stationary blockers of a short in diagnostic mode.
+        // Keep the original refusal for shorts that have no attributable pair.
+        let defer_short = self.collect_collisions && self.replacement_origins.is_some();
+        let mut reject_short = |error| {
+            if defer_short {
+                self.deferred_short.get_or_insert(error);
+                Ok(())
+            } else {
+                Err(error)
+            }
+        };
         match self.phase {
             0 if is_pitch_edit(self.command, &self.params) => {
                 if self.carry.is_none() {
@@ -483,7 +494,7 @@ impl CopperEditJob {
                     if let Some((a, b)) =
                         short_from_members(candidate, lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
-                        return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
+                        reject_short(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")))?;
                     }
                     if self.check_route_vias
                         || self.replacement_origins.is_some()
@@ -527,16 +538,6 @@ impl CopperEditJob {
                     let view =
                         candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
-                    // In diagnostic mode the compound pass can identify the fixed copper in a
-                    // short. Keep the original refusal in case there is no attributable pair.
-                    let mut reject_short = |error| {
-                        if self.collect_collisions && self.replacement_origins.is_some() {
-                            self.deferred_short.get_or_insert(error);
-                            Ok(())
-                        } else {
-                            Err(error)
-                        }
-                    };
                     if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
                         reject_short(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")))?;
                     }

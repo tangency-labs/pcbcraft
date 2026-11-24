@@ -1418,3 +1418,20 @@ fn a_rejected_incoming_path_discards_its_via_move() {
     commit(&mut s, &request, &plan);
     assert_eq!(view(&s).vias()[0].at, at);
 }
+
+/// Highlight keeps a crossing preview visible and marks its fixed-stroke collision as blocked.
+#[test]
+fn highlight_refuses_crossing_fixed_track() {
+    let session = board();
+    let mut route = Request { head: p(100, 100), target: p(50, -50), mode: Mode::Highlight, posture: Posture::Orthogonal, ..request(&session) };
+    route.fixed = [p(0, 0), p(100, 0), route.head]
+        .windows(2)
+        .map(|pair| FixedCopper::Segment { start: pair[0], end: pair[1], layer: route.layer, width_nm: route.width_nm })
+        .collect();
+    let query = query(&session);
+    let clear = session.plan_route(&query, &Request { target: p(50, 50), ..route.clone() }, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(clear.outcome, Outcome::Reached);
+    let crossing = session.plan_route(&query, &route, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(crossing.points, [p(100, 100), p(50, 100), p(50, -50)]);
+    assert_eq!(crossing.outcome, Outcome::Blocked { last_legal: route.head });
+}

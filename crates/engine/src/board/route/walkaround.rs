@@ -213,7 +213,12 @@ impl<'a> Walker<'a> {
             legal &= leg.legal;
             blockers.extend(leg.blockers);
         }
-        let outcome = if legal { Outcome::Reached } else { Outcome::Blocked { last_legal: self.head } };
+        let clearance_nm = self.query.membership_clearance(&self.route_nets, &self.route_nets);
+        let outcome = if legal && super::legal_incoming(request, &points, clearance_nm).await {
+            Outcome::Reached
+        } else {
+            Outcome::Blocked { last_legal: self.head }
+        };
         let mut plan = self.plan(points, outcome, blockers.first().map(|b| b.0));
         plan.start_blocked = !head.legal;
         plan.collisions = blockers.into_iter().map(|(index, _)| self.query[index].name.clone()).collect();

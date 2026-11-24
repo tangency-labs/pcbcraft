@@ -49,7 +49,7 @@ pub struct Request {
     /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
     /// False preserves spacing between source objects that were not directly touching.
     pub merge_same_net: bool,
-    /// Already fixed gesture copper, checked together with each new shove plan.
+    /// Already fixed gesture copper, checked together with Highlight and shove continuations.
     pub fixed: Vec<FixedCopper>,
     pub head: Point,
     pub target: Point,
@@ -110,6 +110,27 @@ pub struct Plan {
     pub collisions: std::collections::BTreeSet<String>,
     /// Exact probes charged, never more than the budget.
     pub probes: usize,
+}
+
+/// Check a continuation against the contiguous fixed stroke on its layer and width.
+async fn legal_incoming(request: &Request, points: &[Point], clearance_nm: i64) -> bool {
+    if points.len() < 2 {
+        return true;
+    }
+    let mut prefix = Vec::new();
+    let mut head = points[0];
+    for piece in request.fixed.iter().rev() {
+        let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
+        if *end != head || *layer != request.layer || *width_nm != request.width_nm {
+            break;
+        }
+        prefix.push(*start);
+        head = *start;
+    }
+    prefix.reverse();
+    prefix.extend_from_slice(points);
+    let spacing = request.width_nm as f64 + clearance_nm as f64;
+    super::track::chains::legal_stroke(&prefix, spacing).await
 }
 
 /// Plan a route over a captured board. Validates the request first: bounded endpoints and previous hints, a supported

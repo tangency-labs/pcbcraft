@@ -4511,3 +4511,34 @@ fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
 }
+
+/// Restore Router Settings with its saved presentation, including layouts from before the card.
+#[test]
+fn router_settings_visibility_survives_layout_restore() {
+    use crate::workspace_panels::ROUTER;
+    use pcbcraft_chrome::workspace::panels::Position;
+
+    let mut h = routable();
+    click(&mut h, "Route menu");
+    click(&mut h, "Router Settings");
+    click(&mut h, "Router Settings position");
+    click(&mut h, "Dock left");
+    let app = h.state_mut();
+    app.views.active.board.router_settings_collapsed = true;
+    let state = app.views.active.saved_state(&app.session).unwrap();
+    let mut encoded = serde_json::to_value(&state).unwrap();
+    let decoded = serde_json::from_value(encoded.clone()).unwrap();
+    let restored = crate::editor_view::EditorView::from_state(crate::ViewId(900), &decoded, &app.session);
+    assert!(restored.board.router_settings_open);
+    assert!(restored.board.router_settings_collapsed);
+    assert_eq!(restored.panels[ROUTER].position(), Position::Left);
+
+    let fields = encoded.as_object_mut().unwrap();
+    fields.remove("router_settings_open");
+    fields.remove("router_settings_collapsed");
+    let legacy = serde_json::from_value(encoded).unwrap();
+    let restored = crate::editor_view::EditorView::from_state(crate::ViewId(901), &legacy, &app.session);
+    assert!(!restored.board.router_settings_open);
+    assert!(!restored.board.router_settings_collapsed);
+    assert_eq!(restored.panels[ROUTER].position(), Position::Left);
+}

@@ -123,6 +123,10 @@ pub(super) struct ViewState {
     filters_collapsed: bool,
     #[serde(default = "filters_open_default")]
     filters_open: bool,
+    #[serde(default)]
+    router_settings_open: bool,
+    #[serde(default)]
+    router_settings_collapsed: bool,
     #[serde(default = "crate::workspace_panels::saved_defaults")]
     panels: crate::workspace_panels::SavedPanels,
 }
@@ -537,6 +541,8 @@ impl EditorView {
             filters: self.filters,
             filters_collapsed: self.filters_collapsed,
             filters_open: self.filters_open,
+            router_settings_open: self.board.router_settings_open,
+            router_settings_collapsed: self.board.router_settings_collapsed,
             panels: crate::workspace_panels::SavedPanels::capture(&self.panels),
         }
     }
@@ -569,6 +575,8 @@ impl EditorView {
         view.filters = state.filters;
         view.filters_collapsed = state.filters_collapsed;
         view.filters_open = state.filters_open;
+        view.board.router_settings_open = state.router_settings_open;
+        view.board.router_settings_collapsed = state.router_settings_collapsed;
         view.panels = state.panels.restore();
         view
     }
@@ -640,6 +648,8 @@ impl EditorView {
                 layers_collapsed: self.board.layers_collapsed,
                 browser_collapsed: self.board.browser_collapsed,
                 properties_collapsed: self.board.properties_collapsed,
+                router_settings_open: self.board.router_settings_open,
+                router_settings_collapsed: self.board.router_settings_collapsed,
                 hidden_layers: self.board.hidden_layers.clone(),
                 layer_defaults_applied: self.board.layer_defaults_applied,
                 active_layer: self.board.active_layer.clone(),
