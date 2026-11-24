@@ -107,6 +107,8 @@ pub(super) struct Interaction {
     pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) zone_edit: Option<crate::board_drawing::Command>,
+    /// A validated outline command from the canvas's own open context menu.
+    pub(super) vertex_menu_edit: bool,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) inspection: Option<(pcbcraft_engine::board::Pad, egui::Modifiers)>,
@@ -681,7 +683,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
-    let (mut openings, mut slots) = (Vec::new(), Vec::new());
+    let (mut openings, mut slots, mut collision_pads) = (Vec::new(), Vec::new(), Vec::new());
     let marquee = state.box_drag.as_ref().and_then(|drag| {
         let release = pointer_release(&response, drag.button);
         let pointer = rect.clamp(release.or_else(|| ui.input(|i| i.pointer.interact_pos()))?);
@@ -744,6 +746,15 @@ pub(super) fn show(
                 } else if let Some(focus) = focus {
                     let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
                     pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                }
+            }
+        }
+        if let Some(collisions) = state.tracks.routing_collisions() {
+            for pad in &mut pads {
+                if pad.copper.is_some() && collisions.contains(&format!("{}:{}", footprint.id, pad.number)) {
+                    let color = pcbcraft_chrome::Tokens::get().route_collision;
+                    pad.color = Some(color);
+                    collision_pads.push(egui::Shape::closed_line(board::pad_contour(pad), egui::Stroke::new(1.5, color)));
                 }
             }
         }
@@ -816,6 +827,10 @@ pub(super) fn show(
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }
+    crate::board_tracks::paint_collisions(&p, rect, camera, project, &state.tracks, &state.hidden_layers);
+    if !collision_pads.is_empty() {
+        p.extend(collision_pads);
+    }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if footprints.is_empty()
         && project.zones().is_empty()
@@ -831,10 +846,30 @@ pub(super) fn show(
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
-    if source.is_some() && idle && state.context_menu_allowed && !crate::board_clipboard::busy(state) {
-        response.context_menu(|ui| {
+    if let Some(source) = source.filter(|_| idle && state.context_menu_allowed && !crate::board_clipboard::busy(state)) {
+        if response.secondary_clicked() {
+            state.vertex_menu = response.interact_pointer_pos().and_then(|pointer| {
+                [(&state.zones, filters.zones), (&state.drawing, filters.graphics)]
+                    .into_iter()
+                    .filter(|(_, selectable)| *selectable)
+                    .find_map(|(outline, _)| crate::board_drawing::vertex_menu(outline, project, &state.hidden_layers, pointer, camera, rect, source))
+            });
+        }
+        pcbcraft_chrome::menu::context(&response, |ui| {
             use crate::board_clipboard::Action;
             use pcbcraft_chrome::menu::MenuItem;
+            if let Some(menu) = &state.vertex_menu {
+                let (outline, selectable, edit) = if menu.zone() {
+                    (&state.zones, filters.zones, &mut out.zone_edit)
+                } else {
+                    (&state.drawing, filters.graphics, &mut out.drawing_edit)
+                };
+                if let Some(command) = menu.show(ui, source, outline, &state.hidden_layers, selectable) {
+                    *edit = Some(command);
+                    out.vertex_menu_edit = true;
+                    return;
+                }
+            }
             let zones = !state.zones.selection().is_empty();
             let portable = !zones && (!state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty());
             out.clipboard = [

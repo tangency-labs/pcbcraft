@@ -2167,27 +2167,93 @@ fn outputs_require_setup_and_a_closed_outline() {
     assert!(error.contains("closed Board Outline"), "{error}");
 }
 
-/// Ucamco Gerber 2026.05 §§5.6.10 and 6.5: a disconnected line is not the physical profile.
-/// Preserve the existing line and loop coordinates but separate the same-width apertures.
+/// Open outline artwork stays in the board document while export uses the closed profile.
 #[test]
-fn only_the_closed_outline_drawing_gets_the_profile_function() {
+fn fabrication_omits_open_outline_artwork_from_the_profile_file() {
+    use crate::persistence::encode_documents;
+
     let mut s = routed_fixture();
     outline(&mut s);
-    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let original = view(&s).fabrication_outputs().unwrap();
     let stray = [Point { x_nm: 30_000_000, y_nm: 0 }, Point { x_nm: 35_000_000, y_nm: 0 }];
-    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    add_fabrication_drawing(&mut s, LayerPurpose::Outline, &stray, false);
+    assert!(view(&s).drawings().iter().any(|drawing| !drawing.closed && drawing.points == stray));
+    let revision = s.revision();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let outputs = view(&s).fabrication_outputs().unwrap();
-    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
-    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
-    let loop_points =
-        [(-5_000_000, 5_000_000), (25_000_000, 5_000_000), (25_000_000, -35_000_000), (-5_000_000, -35_000_000), (-5_000_000, 5_000_000)]
-            .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
-    let expected: Vec<_> = loop_points.windows(2).map(|pair| (pair[0], pair[1], profile)).collect();
-    let (tagged, untagged): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
-    assert_eq!(read.apertures.len(), 2);
-    assert!(read.flashes.is_empty() && read.regions.is_empty());
-    assert_eq!(tagged, expected);
-    assert_eq!(untagged, [(stray[0], stray[1], ReadAperture { function: None, ..profile })]);
+    assert_eq!(file(&outputs, "-Outline.gbr"), file(&original, "-Outline.gbr"));
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Add an open or closed path through the shared drawing command, not by mutating a test board.
+fn add_fabrication_drawing(s: &mut Session, purpose: LayerPurpose, points: &[Point], closed: bool) {
+    let layer = view(s).layers().into_iter().find(|layer| layer.purpose == purpose).unwrap().id;
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":closed,"stroke_nm":100_000,"expected_revision":s.revision()}))
+        .unwrap();
+}
+
+/// Refuse export on a board with only an almost closed path and preserve its undo history.
+#[test]
+fn fabrication_requires_a_closed_outline_loop() {
+    use crate::persistence::encode_documents;
+
+    let mut s = routed_fixture();
+    let open = [
+        Point { x_nm: -1_250_001, y_nm: 2_000_003 },
+        Point { x_nm: -2_000_000, y_nm: 3_000_000 },
+        Point { x_nm: -1_000_000, y_nm: 3_000_000 },
+        Point { x_nm: -1_250_000, y_nm: 2_000_003 },
+    ];
+    let drawings = view(&s).drawings().len();
+    add_fabrication_drawing(&mut s, LayerPurpose::Outline, &open, false);
+    let revision = s.revision();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let error = s.execute(EXPORT_FABRICATION, &json!({})).unwrap_err();
+    assert!(
+        matches!(&error, CommandError::Unavailable(message) if message == "Draw a closed Board Outline before generating fabrication outputs."),
+        "{error}"
+    );
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(view(&s).drawings().len(), drawings);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Read the profile's exact move and draw sequence at its existing nanometre resolution.
+/// See Ucamco Gerber Layer Format Specification 2026.05 sections 4.7–4.8 for plotting modes and operations.
+#[test]
+fn fabrication_emits_one_closed_profile_path_per_outline_loop() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let outer = ["X-5000000Y5000000D02*", "X25000000Y5000000D01*", "X25000000Y-35000000D01*", "X-5000000Y-35000000D01*", "X-5000000Y5000000D01*"];
+    let inner = ["X1000001Y-2000003D02*", "X2000005Y-2000003D01*", "X2000005Y-3000007D01*", "X1000001Y-3000007D01*", "X1000001Y-2000003D01*"];
+    let cutout = [
+        Point { x_nm: 1_000_001, y_nm: 2_000_003 },
+        Point { x_nm: 2_000_005, y_nm: 2_000_003 },
+        Point { x_nm: 2_000_005, y_nm: 3_000_007 },
+        Point { x_nm: 1_000_001, y_nm: 3_000_007 },
+    ];
+    add_fabrication_drawing(&mut s, LayerPurpose::Silkscreen, &cutout[..2], false);
+    for has_cutout in [false, true] {
+        if has_cutout {
+            add_fabrication_drawing(&mut s, LayerPurpose::Outline, &cutout, true);
+        }
+        let outputs = view(&s).fabrication_outputs().unwrap();
+        let profile = file(&outputs, "-Outline.gbr");
+        let read = try_read_gerber(profile, "Profile,NP", "Positive").unwrap();
+        assert_eq!(read.strokes.len(), if has_cutout { 8 } else { 4 });
+        assert!(read.strokes.iter().all(|(_, _, aperture)| aperture.function == Some("Profile")), "every closed loop is the board profile");
+        assert!(read.flashes.is_empty() && read.regions.is_empty());
+        let records: Vec<_> = profile.lines().filter(|line| line.starts_with('X')).collect();
+        let (paths, remainder) = records.as_chunks::<5>();
+        assert!(remainder.is_empty());
+        assert_eq!(paths.len(), if has_cutout { 2 } else { 1 });
+        assert!(paths.contains(&outer));
+        assert_eq!(paths.contains(&inner), has_cutout);
+    }
 }
 
 /// A local reference move affects only that footprint's silk and round-trips through native storage.

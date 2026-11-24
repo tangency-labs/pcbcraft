@@ -77,9 +77,15 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>,
         }));
     }
     if selected {
-        for point in points {
-            p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);
-        }
+        drawing_vertices(p, points);
+    }
+}
+
+/// Draw the shared handles for an editable canvas path.
+pub fn drawing_vertices(p: &Painter, points: impl IntoIterator<Item = Pos2>) {
+    let accent = Tokens::get().accent;
+    for point in points {
+        p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, accent);
     }
 }
 
@@ -128,10 +134,20 @@ pub fn non_plated_hole(p: &Painter, center: Pos2, radius: f32, selected: bool) {
 /// over selection, matching pads; the placement preview retains its separate ghost color.
 pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool, emphasized: Option<bool>) {
     let t = Tokens::get();
-    let radius = radius.max(2.);
     let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized.or_else(|| selected.then_some(true))) };
+    via_land(p, center, radius, drill_radius, fill);
+}
+
+/// Mark a blocking via's copper while preserving its physical drill opening.
+pub fn collision_via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32) {
+    via_land(p, center, radius, drill_radius, Tokens::get().route_collision);
+}
+
+/// Draw a filled annulus around the actual via drill.
+fn via_land(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, fill: Color32) {
+    let radius = radius.max(2.);
     p.circle_filled(center, radius, fill);
-    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
+    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), Tokens::get().board_canvas);
 }
 
 /// Draw a measuring ruler: a dashed accent line with end ticks and a label near its middle.
@@ -168,6 +184,14 @@ pub fn drc_marker(p: &Painter, at: Pos2, focused: bool) {
 /// Distinguish the snapped drawing target from authored vertices without changing its position.
 pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));
+}
+
+/// Indicate the reference for a snapped outline axis using the canvas selection accent.
+pub fn drawing_alignment(p: &Painter, points: [Pos2; 2]) {
+    let extension = (points[1] - points[0]).normalized() * 16.;
+    let stroke = Stroke::new(1., Tokens::get().accent.gamma_multiply(0.7));
+    p.extend(egui::Shape::dashed_line(&[points[0] - extension, points[1] + extension], stroke, 4., 3.));
+    drawing_target(p, points[0]);
 }
 
 /// Return the shared palette's copper colors; `None` denotes an internal layer.

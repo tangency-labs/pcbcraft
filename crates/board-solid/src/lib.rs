@@ -17,7 +17,7 @@ use pcbcraft_geometry::{
 
 /// The nominal fallback used when the stackup has no finished thickness declaration.
 /// This is PCBcraft's two-layer setup convention, not a fabrication guarantee.
-/// See `docs/board-materials.md`.
+/// See `docs/pcb/board-materials.md`.
 pub const NOMINAL_THICKNESS_NM: i64 = 1_600_000;
 
 /// The source of the Z dimension, which downstream consumers should report with the solid.

@@ -1,0 +1,116 @@
+# Snapshot copper queries
+
+The engine's `board::geometry::Contour` represents current supported copper as
+an integer convex core expanded by a floating radius. Rectangular and rounded
+rectangular pads retain their resolved cores; circles, ovals, round-ended tracks
+and through vias use point or segment cores. Connectivity, DRC copper separation,
+disposable query probes and DRC board-edge distances share this representation.
+[Exact circular copper records](circular-copper-records.md) can be saved, but
+query preparation explicitly refuses a board containing them. Circular contours,
+connectivity and query integration remain follow-up work in
+[#259](https://github.com/tangency-labs/pcbcraft/issues/259); arcs are never queried
+as straight endpoint chords.
+
+`Session::clearance_query(BoardTarget, clearance_nm)` captures an immutable
+project snapshot, explicit board, session identity, opening, revision and effective
+clearance. It validates the target and existing coordinate-range rule bounds
+without editing project state. `Results::authority.is_current(session)` rejects
+results after an edit, Undo/Redo, reopen or snapshot replacement, including a
+second session opened on the same `Arc<Project>`. A changed request-local rule
+requires a new query; its conservative broad-phase clearance is available on the
+authority, while each decision reports its actual pair threshold.
+Callers must check that authority before adopting a result into a current preview
+or proposed edit. The ordinary command's revision and short validation still
+apply at commit. No new worker, persisted membership graph or saved format is introduced by this
+engine API. [Assigned net classes](../formats/net-class-consumers.md) supply per-object
+requirements and inspectable provenance to pairs, probes, overlays and DRC.
+
+`objects()` supplies source copper in pad/track/via order with resolved copper
+layers, contours, item references and intended membership. A mapped pad retains
+its own intended membership; routed copper inherits the sorted membership set of
+its connectivity island. Membership comes from the accepted board baseline when
+present, otherwise from snapshot electrical connectivity. Empty membership stays
+unknown, equal display names never establish identity, and a conflicting island
+retains multiple net indices. These indices and object indices are meaningful
+only within their captured query and must never become saved bindings.
+
+On different physical islands, empty or unresolved intended membership does not
+establish a same-net exemption, even if the display labels match. Such copper
+remains a clearance obstacle and produces a finding when its represented gap is
+below the rule. Only one equal, resolved intended net proves that exemption;
+the existing same-physical-island clearance exemption remains separate.
+
+`pairs()` evaluates a conservative bounds sweep. `exhaustive_pairs()` bypasses
+that spatial pruning and provides a small-fixture reference for later indexes.
+Both evaluate actual contours on common copper layers. `candidates()` separately
+returns a conservative obstacle set for a disposable contour on explicit
+board copper layers. Single-layer copper uses layer-local packed Hilbert R-trees
+from `geo-index` 0.4.0; spanning copper has one shared group, so a through via
+is not duplicated 64 times. Groups below 128 objects retain a contiguous scan.
+That crossover is a tuning choice, not a universal optimum. Results return in
+source order after exact layer filtering. Extra candidates are permitted; the final gap/contact
+predicate decides the result. DRC streams its candidates and skips its existing
+same-island and known same-net clearance exemptions before evaluating distances,
+so it does not allocate an intermediate all-pairs decision table.
+
+`probe()` replaces one source object when `intended_from` is given, or starts
+with unknown membership otherwise. It combines the intended memberships of all
+contacted obstacles before evaluating the result, so an initially unnamed probe
+bridging two nets still reports conflicting contact at zero required clearance.
+A probe retests contacts without assuming its old physical island remains joined.
+`overlay()` adds disposable replacements, removals and UUID-addressed additions
+over the same index. Replacements suppress their originals, retain source intent
+and keep their source identity; added objects can inherit one source's intent.
+Overlay probes use the same exact predicates and combine contacted memberships.
+Dropping the overlay cancels it without editing the model. `OverlayResults::is_current`
+checks source authority, overlay identity and its edit generation, so a changed
+or replacement gesture cannot adopt old results. The overlay accepts at most
+8,192 changed/added objects and never authorizes a model transaction by itself.
+
+A session retains at most one prepared board geometry/index, keyed by the exact
+snapshot and board target. Repeated queries across views reuse it; a changed
+snapshot misses the cache and reopening clears it. The cache holds a weak project
+reference rather than keeping undo snapshots alive. Contended cache readers
+prepare independently instead of waiting, and cold index construction is charged
+to query preparation rather than the first lookup. Current rules remain separate
+captured inputs, and the existing revision-checked command path owns publication.
+
+The [index comparison](../../tools/performance/baselines/issue244/README.md) records
+the selection evidence and its limits. Curve bounds in that simulation are
+synthetic; native curved copper and curve routing are not introduced here.
+
+Copper contact includes exact tangency (`gap <= 0`), independently of a strict
+clearance violation (`gap < clearance`). Equality with required clearance passes.
+Containment may return zero rather than penetration depth. Degenerate query
+segments represent round points; authored zero-length tracks remain rejected.
+Rotated pad cores retain their existing nearest-nanometer projection, while odd
+track widths and circle/via diameters retain half-nanometer radii. The existing
+floating distance and integer orientation predicates are retained without a new
+epsilon, exact-integer rewrite or coordinate restriction. DRC continues to report
+conflicting intended nets per physical island independently of clearance, and
+its board-edge check distinguishes tangency from interior penetration.
+
+The query regressions compare sweep/probe candidates and decisions with
+exhaustive shared-layer pairs on original command-built fixtures. They cover all
+supported pad shapes, rotations/reflections, fractional radii, equality and nearby
+values, through vias, differing layers, equal-name distinct nets, connected copper,
+conflicting islands, unset membership, long diagonals, coordinate limits and stale
+source authority. Existing DRC contour and scoped short-rejection regressions
+remain part of the same board suite. The tests run natively and as WebAssembly
+under WASI; the browser target is checked separately. This does not establish
+browser interaction performance or native-window endurance.
+
+To repeat WebAssembly execution from the repository root with Node 22 or later:
+
+```sh
+rustup target add wasm32-wasip1
+node --test scripts/test-wasi-test-runner.cjs
+CARGO_TARGET_WASM32_WASIP1_RUNNER="node --no-warnings $PWD/scripts/wasi-test-runner.cjs" \
+  cargo test --locked -p pcbcraft-engine --target wasm32-wasip1 --lib board:: -- --test-threads=1
+```
+
+CI runs this board suite in addition to the ordinary native suite and packaged
+browser build. WASI exercises the engine predicates and query behavior; it does
+not substitute for the browser host or WebGL/WebGPU verification.
+The runner regression compiles original programs that exit with zero and nonzero
+statuses and requires Node to preserve both statuses for Cargo.
