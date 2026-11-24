@@ -1253,16 +1253,38 @@ fn a_drag_cannot_pull_off_its_locked_neighbor() {
     let mut s = board();
     let moved = add(&mut s, vec![p(0, 0), p(40, 0)], 250000)[0];
     let locked = add(&mut s, vec![p(40, 0), p(80, 0)], 250000)[0];
+    add(&mut s, vec![p(0, 0), p(0, -20), p(80, -20), p(80, 0)], 250000);
     s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
-    let params = json!({"tracks":[{"track":moved,"start":p(0,10),"end":p(40,10)}],"mode":"shove","expected_revision":revision});
+    let params = json!({"tracks":[{"track":moved,"start":p(0,0),"end":p(40,10)}],"mode":"shove","expected_revision":revision});
     let mut abandoned = s.prepare_copper_edit(crate::RESHAPE_TRACKS, &params).unwrap();
     assert!(!abandoned.step(1));
     drop(abandoned);
-    assert!(s.apply(crate::RESHAPE_TRACKS, &params).is_err());
+    let error = s.apply(crate::RESHAPE_TRACKS, &params).unwrap_err().to_string();
+    assert!(error.contains("lose a protected copper contact"), "{error}");
     assert_eq!(s.revision(), revision);
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A via follower may pivot while its unchanged endpoint stays inside an oval land, off the pad axis.
+#[test]
+fn via_shove_keeps_an_off_axis_oval_pad_contact() {
+    use crate::board::{definition::PadShape, drc::contour_tests::fixture};
+
+    let mut s = fixture(PadShape::Oval, 2_000_000, 1_000_000, p(100, 0), 200_000);
+    let at = p(0, -50);
+    let pad_end = Point { x_nm: 0, y_nm: -250_000 };
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let track = add(&mut s, vec![pad_end, at], 250_000)[0];
+    let request = Request { head: p(-30, -47), target: p(30, -47), mode: Mode::ShoveVias, ..request(&s) };
+    let snapshot = query(&s);
+    let oval = snapshot.objects().iter().find(|item| item.at == p(0, 0)).unwrap();
+    assert!(oval.contour.track_centerline().is_some(), "the oval must have a capsule core");
+    let plan = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.via_moves.len(), 1, "{plan:?}");
+    assert_eq!(plan.replacements, vec![Replacement { track, points: vec![pad_end, plan.via_moves[0].at] }]);
+    commit(&mut s, &request, &plan);
 }
 
 /// A straight D-drag keeps its original angle even when neither routing elbow would hit the via.

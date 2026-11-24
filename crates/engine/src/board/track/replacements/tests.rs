@@ -249,6 +249,31 @@ fn same_net_merge_option_still_refuses_a_short_atomically() {
     assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
 }
 
+/// Even explicitly assigned same-net vias cannot acquire a new contact through displacement.
+#[test]
+fn same_net_merge_does_not_allow_coincident_displaced_vias() {
+    let mut s = routed_fixture();
+    let net = s.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let target = json!({"kind":"derived","anchor":net});
+    let (start, occupied) = (p(-30, -30), p(-27, -30));
+    for at in [start, occupied] {
+        s.apply(ADD_VIA, &json!({"at":at,"target":target,"expected_revision":s.revision()})).unwrap();
+    }
+    let moved = view(&s).vias().iter().find(|via| via.at == start).unwrap().id;
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let mut command = params(&s, json!([]));
+    command["merge_same_net"] = json!(true);
+    command["via_moves"] = json!([{"via":moved,"at":occupied}]);
+    assert!(s.apply(ADD_TRACKS, &command).is_err());
+    assert_eq!(s.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+
+    command["via_moves"] = json!([{"via":moved,"at":p(-29,-30)}]);
+    s.apply(ADD_TRACKS, &command).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+}
+
 /// Uniform degree-two joins may move together; branching, vias, locks and width
 /// transitions still define protected source contacts, even for direct command clients.
 #[test]
@@ -480,6 +505,6 @@ fn a_retained_joint_cannot_fold_onto_the_support() {
     let branch = trace(p(0, 0), p(0, 10));
     let pivoted = trace(p(0, 0), p(10, 10));
     let folded = trace(p(0, 0), p(10, 1));
-    assert!(retained_joint(&support, &branch, &support, &pivoted, 150_000.));
-    assert!(!retained_joint(&support, &branch, &support, &folded, 150_000.));
+    assert!(retained_track_joint(&support, &branch, &support, &pivoted, 150_000.));
+    assert!(!retained_track_joint(&support, &branch, &support, &folded, 150_000.));
 }

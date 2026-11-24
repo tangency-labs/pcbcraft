@@ -89,12 +89,22 @@ impl Authority {
     }
 }
 
+/// Source feature type survives projection even when different features have identical contours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ObjectKind {
+    Pad,
+    Track,
+    Via,
+    Other,
+}
+
 /// An addressed copper or mechanical obstacle in the query's source snapshot. Membership indices are sorted,
 /// snapshot-local intended nets, never display names. Empty membership stays unknown; a set
 /// with several entries preserves a conflicting-net island rather than choosing its first net.
 #[derive(Clone, Debug)]
 pub struct Object {
     pub name: String,
+    pub(crate) kind: ObjectKind,
     pub contour: Contour,
     pub layers: Vec<Uuid>,
     pub intended_nets: Vec<usize>,
@@ -509,6 +519,7 @@ impl BoardGeometry {
             let at = Point { x_nm: land.corners.iter().map(|p| p.x_nm).sum::<i64>() / 4, y_nm: land.corners.iter().map(|p| p.y_nm).sum::<i64>() / 4 };
             items.push(Object {
                 name: format!("{}:{}", land.key.0, land.key.1),
+                kind: ObjectKind::Pad,
                 contour: land.contour(),
                 layers: land.layers.clone(),
                 island,
@@ -522,6 +533,7 @@ impl BoardGeometry {
             let island = copper.tracks[&track.id];
             items.push(Object {
                 name: track.id.to_string(),
+                kind: ObjectKind::Track,
                 contour: Contour::capsule(track.start, track.end, track.width_nm as f64 / 2.),
                 layers: vec![track.layer],
                 island,
@@ -536,6 +548,7 @@ impl BoardGeometry {
             let island = copper.vias[&via.id];
             items.push(Object {
                 name: via.id.to_string(),
+                kind: ObjectKind::Via,
                 contour: Contour::capsule(via.at, via.at, via.diameter_nm as f64 / 2.),
                 layers: layers.clone(),
                 island,
@@ -553,6 +566,7 @@ impl BoardGeometry {
                 for (index, hole) in footprint.non_plated_holes(definition).enumerate() {
                     items.push(Object {
                         name: format!("footprint-{}:npth:{}", footprint.id, index + 1),
+                        kind: ObjectKind::Other,
                         contour: Contour::capsule(hole.center, hole.center, hole.diameter_nm as f64 / 2.),
                         layers: layers.clone(),
                         island: usize::MAX,

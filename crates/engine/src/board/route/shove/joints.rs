@@ -1,6 +1,9 @@
 //! Through-via moves and connected drag inputs for the ordinary track cascade.
 use super::*;
-use crate::board::track::{Ends, replacements::retained_joint};
+use crate::board::{
+    clearance::ObjectKind,
+    track::{Ends, replacements::retained_joint},
+};
 
 /// A sparse set of source contours translated before the track cascade.
 /// Every follower remains a single segment with the original identity.
@@ -58,7 +61,8 @@ impl Motion {
                 .iter()
                 .filter_map(|&i| {
                     let item = &query.objects()[i];
-                    if pickup.islands.contains(&item.island)
+                    if item.kind != ObjectKind::Via
+                        || pickup.islands.contains(&item.island)
                         || result.contours.contains_key(&i)
                         || (!pickup.nets.is_empty() && pickup.nets == item.intended_nets)
                     {
@@ -171,7 +175,7 @@ impl Motion {
                 let other = &query.objects()[j];
                 if i != j
                     && old.contour.touches(&other.contour)
-                    && !retained_joint(&old.contour, &other.contour, shape, moved.get(&j).or(self.contours.get(&j)).unwrap_or(&other.contour), 0.)
+                    && !retained_joint(old, other, shape, moved.get(&j).or(self.contours.get(&j)).unwrap_or(&other.contour), 0.)
                 {
                     return Ok(false);
                 }
@@ -180,7 +184,7 @@ impl Motion {
                 let other = &query.objects()[hit.second];
                 if hit.conflicting_nets
                     || (hit.gap_nm < hit.clearance_nm as f64 || hit.touches)
-                        && (other.mechanical || !retained_joint(&old.contour, &other.contour, shape, &other.contour, hit.clearance_nm as f64))
+                        && (other.mechanical || !retained_joint(old, other, shape, &other.contour, hit.clearance_nm as f64))
                 {
                     return Ok(false);
                 }
@@ -192,7 +196,7 @@ impl Motion {
                 if i != j
                     && old.layers.iter().any(|l| other.layers.contains(l))
                     && (shape.touches(other_shape) || shape.gap(other_shape) < clearance)
-                    && !retained_joint(&old.contour, &other.contour, shape, other_shape, clearance)
+                    && !retained_joint(old, other, shape, other_shape, clearance)
                 {
                     return Ok(false);
                 }

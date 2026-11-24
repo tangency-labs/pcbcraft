@@ -938,11 +938,16 @@ impl Command {
             params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
+        let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == RESHAPE_TRACKS {
+            schema["if"] = json!({"required":["mode"]});
+            schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});
+        }
         json!({
             "id": self.id,
             "title": self.title,
             "summary": self.summary,
-            "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},
+            "params": schema,
         })
     }
 }
@@ -2328,7 +2333,12 @@ const CATALOG: &[Command] = &[
         params: &[
             BOARD,
             EXPECTED_REVISION,
-            Param { name: "mode", required: false, summary: "Shove tracks or tracks and vias around the connected drag", kind: ParamKind::DragMode },
+            Param {
+                name: "mode",
+                required: false,
+                summary: "Shove tracks or tracks and vias around a connected drag of up to 256 segments on a board without authored zones",
+                kind: ParamKind::DragMode,
+            },
             Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
         ],
     },

@@ -652,7 +652,9 @@ For track-only shove use `mode: "shove"`. Use `"shove_vias"` to move through
 vias and their attached track ends. Submit the reached plan's `replacements`
 and `via_moves` together with the route and its captured revision. For a
 connected drag, `pcb.reshape_tracks` accepts the same shove modes and computes
-the displacements during preparation. See the
+the displacements during preparation. A shove drag accepts up to 256 directly
+dragged segments. If the board has an authored zone, `pcb.plan_route` keeps vias
+fixed in `shove_vias` mode and `pcb.reshape_tracks` rejects both shove modes. See the
 [route planning and drag contract](route-planning.md#through-vias-and-connected-segment-drags).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those

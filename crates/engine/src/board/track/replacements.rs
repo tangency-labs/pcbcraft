@@ -1,7 +1,7 @@
 //! Atomic route replacements, preserving source identities, intent and physical connections.
 use super::*;
 use crate::board::{
-    clearance::{self, BoardGeometry, ClearanceQuery, Object},
+    clearance::{self, BoardGeometry, ClearanceQuery, Object, ObjectKind},
     work::Source,
 };
 use std::sync::{Arc, Mutex, TryLockError};
@@ -295,7 +295,10 @@ impl Validation {
                             .is_some_and(|original| Uuid::parse_str(&source.objects()[original].name).is_ok_and(|id| self.joints.contains(&id)))
                     });
                 let needs_clearance = decision.gap_nm < decision.clearance_nm as f64 || joint_contact;
-                let exempt = if !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]) {
+                let moved_via = (object.kind == ObjectKind::Via && self.final_displaced[index])
+                    || (other.kind == ObjectKind::Via && self.final_displaced[decision.second]);
+                let retained_only = moved_via || !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]);
+                let exempt = if retained_only {
                     needs_clearance && self.preserves_local_contact(&source, query, index, decision.second, decision.clearance_nm as f64)
                 } else {
                     same_net || same_island
@@ -371,7 +374,7 @@ impl Validation {
         if self.split_fragments.contains_key(&old_a.name) {
             return retained_split_joint(&old_b.contour, &old_a.contour, &b.contour, &a.contour, clearance);
         }
-        retained_joint(&old_a.contour, &old_b.contour, &a.contour, &b.contour, clearance)
+        retained_joint(old_a, old_b, &a.contour, &b.contour, clearance)
     }
 
     /// A manually submitted replacement may meet the first route leg at its
@@ -489,27 +492,46 @@ pub(crate) fn via_moves_schema() -> Value {
     json!({"type":"array","maxItems":MAX_VIAS,"items":{"type":"object","properties":{"via":{"type":"string","format":"uuid"},"at":crate::point_schema()},"required":["via","at"],"additionalProperties":false}})
 }
 
-/// A directly translated joint may keep its old contact only at corresponding ends.
-/// A stationary pad may retain a track end inside its land. A via needs a centered track end.
-pub(crate) fn retained_joint(a: &PadContour, b: &PadContour, new_a: &PadContour, new_b: &PadContour, clearance: f64) -> bool {
-    if !a.touches(b) || !new_a.touches(new_b) {
+/// Use source feature types to distinguish an oval land from a trace. Pad contacts
+/// keep their fixed ends, and tracks following a moved via must follow its center.
+pub(crate) fn retained_joint(a: &Object, b: &Object, new_a: &PadContour, new_b: &PadContour, clearance: f64) -> bool {
+    if !a.contour.touches(&b.contour) || !new_a.touches(new_b) {
         return false;
     }
-    match (a.track_centerline(), b.track_centerline(), new_a.track_centerline(), new_b.track_centerline()) {
-        (Some(first), Some(second), Some(moved), Some(other)) => {
-            let station = follows_station(first, second, moved, other).or_else(|| follows_station(second, first, other, moved));
-            station.is_some_and(|point| {
-                let joint = PadContour::capsule(point, point, 0.);
-                local_departure(new_a, new_b, &joint, clearance) && local_departure(new_b, new_a, &joint, clearance)
-            })
-        }
-        (Some(line), None, Some(moved), None) => (0..2).any(|i| {
-            (line[i] == b.core[0] && moved[i] == new_b.core[0] && b.core.iter().all(|p| *p == b.core[0]))
-                || (line[i] == moved[i] && b.core == new_b.core && PadContour::capsule(line[i], line[i], a.radius).touches(b))
-        }),
-        (None, Some(_), None, Some(_)) => retained_joint(b, a, new_b, new_a, clearance),
+    match (a.kind, b.kind) {
+        (ObjectKind::Track, ObjectKind::Track) => retained_track_joint(&a.contour, &b.contour, new_a, new_b, clearance),
+        (ObjectKind::Pad | ObjectKind::Via, ObjectKind::Track) => retained_land_contact(b, a, new_b, new_a),
+        (ObjectKind::Track, ObjectKind::Pad | ObjectKind::Via) => retained_land_contact(a, b, new_a, new_b),
         _ => false,
     }
+}
+
+/// An unchanged track end may stay inside a stationary land, including off the pad axis.
+/// A displaced via can keep contact only by moving its original centered endpoint with it.
+fn retained_land_contact(track: &Object, land: &Object, new_track: &PadContour, new_land: &PadContour) -> bool {
+    let (Some(old), Some(moved)) = (track.contour.track_centerline(), new_track.track_centerline()) else { return false };
+    let stationary = land.contour.core == new_land.core && land.contour.radius == new_land.radius;
+    (0..2).any(|i| {
+        if stationary {
+            old[i] == moved[i] && PadContour::capsule(old[i], old[i], track.contour.radius).touches(&land.contour)
+        } else {
+            land.kind == ObjectKind::Via && old[i] == land.contour.core[0] && moved[i] == new_land.core[0]
+        }
+    })
+}
+
+/// Preserve a trace-to-trace station and its clearance departure in both directions.
+fn retained_track_joint(a: &PadContour, b: &PadContour, new_a: &PadContour, new_b: &PadContour, clearance: f64) -> bool {
+    let (Some(first), Some(second), Some(moved), Some(other)) =
+        (a.track_centerline(), b.track_centerline(), new_a.track_centerline(), new_b.track_centerline())
+    else {
+        return false;
+    };
+    let station = follows_station(first, second, moved, other).or_else(|| follows_station(second, first, other, moved));
+    station.is_some_and(|point| {
+        let joint = PadContour::capsule(point, point, 0.);
+        local_departure(new_a, new_b, &joint, clearance) && local_departure(new_b, new_a, &joint, clearance)
+    })
 }
 
 /// A displaced chain can split around a protected contact. Verify the fixed source station
