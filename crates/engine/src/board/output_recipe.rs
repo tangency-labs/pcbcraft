@@ -21,6 +21,9 @@ const RECIPE_NAME_PATTERN: &str =
     "^[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?(?![\\s\\S])";
 /// Lowercase ASCII file stem with interior hyphens only.
 const FILE_STEM_PATTERN: &str = "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])";
+/// Lowercase hyphenated layer UUID, the spelling the engine writes. One spelling per layer lets
+/// the published `uniqueItems` refuse the same duplicates as the decoded runtime check.
+const LAYER_ID_PATTERN: &str = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])";
 
 /// The desired output units, not the units of authored board coordinates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +163,8 @@ pub(crate) fn validate_recipes(recipes: &[Recipe], board: Option<Uuid>) -> Resul
 /// Describe a complete recipe replacement, or null to remove it.
 pub(crate) fn schema() -> Value {
     let id = crate::non_nil_uuid_schema();
+    let mut layer_id = id.clone();
+    layer_id["pattern"] = json!(LAYER_ID_PATTERN);
     let origin = super::origin::schema();
     json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,
         "required":["name","board","units","file_stem","gerber_layers","drill"],
@@ -168,7 +173,7 @@ pub(crate) fn schema() -> Value {
             "board":id,
             "units":{"type":"string","enum":["mm","in"]},
             "file_stem":{"type":"string","minLength":1,"maxLength":MAX_FILE_STEM,"pattern":FILE_STEM_PATTERN,"not":{"enum":RESERVED_PORTABLE_SEGMENTS}},
-            "gerber_layers":{"type":"array","maxItems":MAX_RECIPE_LAYERS,"uniqueItems":true,"items":id},
+            "gerber_layers":{"type":"array","maxItems":MAX_RECIPE_LAYERS,"uniqueItems":true,"items":layer_id},
             "drill":{"type":"boolean"},
             "origin":{"oneOf":origin["oneOf"].as_array().into_iter().flatten().filter(|item| item["type"] != "null").collect::<Vec<_>>()},
             "assembly_profile":{"type":"object","additionalProperties":false,"required":["profile","revision"],
@@ -179,11 +184,22 @@ pub(crate) fn schema() -> Value {
 
 /// Decode the same content type used in native documents and apply its intrinsic bounds.
 fn parse(value: &Value) -> Result<Option<Content>, String> {
+    if !canonical_layer_ids(value) {
+        return Err("Gerber layer UUIDs must use the lowercase hyphenated spelling.".into());
+    }
     let content = serde_json::from_value::<Option<Keyed<Content>>>(value.clone()).map_err(|error| error.to_string())?.map(|Keyed(content)| content);
     if let Some(content) = &content {
         content.validate()?;
     }
     Ok(content)
+}
+
+/// Whether every string Gerber layer ID is a UUID in its lowercase hyphenated spelling, as the
+/// published pattern requires. Other values are left to decoding, which reports their type.
+fn canonical_layer_ids(value: &Value) -> bool {
+    value.get("gerber_layers").and_then(Value::as_array).is_none_or(|layers| {
+        layers.iter().filter_map(Value::as_str).all(|text| Uuid::parse_str(text).is_ok_and(|id| id.hyphenated().to_string() == text))
+    })
 }
 
 /// Validate the command content without a project; the edit will check board ownership.

@@ -1,4 +1,4 @@
-"""Regressions for published output-recipe name and file-stem schema validation."""
+"""Regressions for published output-recipe name, file-stem and layer ID schema validation."""
 
 import json
 import shutil
@@ -38,6 +38,10 @@ REJECTED_NAMES_ECMA_ONLY = ["\ufeffPrototype", "Prototype\ufeff"]
 ACCEPTED_STEMS = ["prototype", "a", "con-1", "lpt10"]
 REJECTED_STEMS = ["", "-proto", "proto-", "Proto", "prototype\n", "../package"]
 
+LAYER = "01234567-89ab-4cde-8fab-0123456789ab"
+UPPER_LAYER = LAYER.upper()
+REJECTED_LAYERS = [UPPER_LAYER, LAYER.replace("-", ""), "{" + LAYER + "}", LAYER + "\n"]
+
 
 class OutputRecipeSchemaTests(unittest.TestCase):
     """Evaluate published `pcb.set_output_recipe` name and stem schemas directly."""
@@ -50,8 +54,10 @@ class OutputRecipeSchemaTests(unittest.TestCase):
         properties = content["oneOf"][1]["properties"]
         cls.name_schema = properties["name"]
         cls.stem_schema = properties["file_stem"]
+        cls.layers_schema = properties["gerber_layers"]
         cls.name_validator = Draft202012Validator(cls.name_schema)
         cls.stem_validator = Draft202012Validator(cls.stem_schema)
+        cls.layers_validator = Draft202012Validator(cls.layers_schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
 
     def test_published_name_schema_matches_runtime_cases(self):
         """Published name pattern and length limits accept valid names and reject invalid ones."""
@@ -74,11 +80,22 @@ class OutputRecipeSchemaTests(unittest.TestCase):
             with self.subTest(rejected=stem):
                 self.assertFalse(self.stem_validator.is_valid(stem))
 
+    def test_published_layer_schema_refuses_case_only_duplicates(self):
+        """One spelling per layer UUID lets `uniqueItems` refuse what runtime decoding merges."""
+        self.assertTrue(self.layers_schema["uniqueItems"])
+        self.assertTrue(self.layers_validator.is_valid([LAYER]))
+        self.assertFalse(self.layers_validator.is_valid([LAYER, LAYER]))
+        self.assertFalse(self.layers_validator.is_valid([LAYER, UPPER_LAYER]))
+        for layer in REJECTED_LAYERS:
+            with self.subTest(rejected=layer):
+                self.assertFalse(self.layers_validator.is_valid([layer]))
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the JavaScript pattern check")
     def test_published_patterns_match_ecmascript_regex(self):
         """Evaluate the published ECMA-262 patterns directly, including U+FEFF edge whitespace."""
         name_pattern = self.name_schema["pattern"]
         stem_pattern = self.stem_schema["pattern"]
+        layer_pattern = self.layers_schema["items"]["pattern"]
         cases = (
             [{"pattern": name_pattern, "text": text, "expected": True} for text in ACCEPTED_NAMES]
             + [
@@ -87,6 +104,8 @@ class OutputRecipeSchemaTests(unittest.TestCase):
             ]
             + [{"pattern": stem_pattern, "text": text, "expected": True} for text in [*ACCEPTED_STEMS, *RESERVED_PORTABLE_SEGMENTS]]
             + [{"pattern": stem_pattern, "text": text, "expected": False} for text in REJECTED_STEMS]
+            + [{"pattern": layer_pattern, "text": LAYER, "expected": True}]
+            + [{"pattern": layer_pattern, "text": text, "expected": False} for text in REJECTED_LAYERS]
         )
         program = """
 const fs = require('fs');

@@ -401,13 +401,15 @@ fn recipe_command_schema_and_runtime_reject_nil_uuids() {
     assert_eq!(expected["format"], "uuid");
     assert_eq!(expected["not"]["const"], Uuid::nil().to_string());
 
-    for (field, field_schema) in [
-        ("recipe", &recipe_schema),
-        ("board", &properties["board"]),
-        ("gerber_layers.items", &properties["gerber_layers"]["items"]),
-        ("assembly_profile.profile", &properties["assembly_profile"]["properties"]["profile"]),
+    let mut layer = expected.clone();
+    layer["pattern"] = json!(LAYER_ID_PATTERN);
+    for (field, field_schema, expected) in [
+        ("recipe", &recipe_schema, &expected),
+        ("board", &properties["board"], &expected),
+        ("gerber_layers.items", &properties["gerber_layers"]["items"], &layer),
+        ("assembly_profile.profile", &properties["assembly_profile"]["properties"]["profile"], &expected),
     ] {
-        assert_eq!(field_schema, &expected, "{field} schema should require a non-nil UUID");
+        assert_eq!(field_schema, expected, "{field} schema should require a non-nil UUID");
         let schema_accepts = |id: Uuid| {
             let text = id.to_string();
             Uuid::parse_str(&text).is_ok() && field_schema["not"]["const"].as_str() != Some(text.as_str())
@@ -450,6 +452,35 @@ fn recipe_command_schema_and_runtime_reject_nil_uuids() {
     set(&mut session, ID, &content).unwrap();
     assert_eq!(session.project().unwrap().output_recipes().len(), 1);
     assert_eq!(session.project().unwrap().output_recipes()[0].id, ID);
+}
+
+/// Differently cased spellings of one layer UUID would pass the published `uniqueItems` and then
+/// decode to one layer, so the schema and the command both require the lowercase hyphenated form.
+#[test]
+fn recipe_layer_ids_have_one_spelling_in_schema_and_runtime() {
+    let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();
+    let layers = &described["params"]["properties"]["content"]["oneOf"][1]["properties"]["gerber_layers"];
+    assert_eq!(layers["uniqueItems"], true);
+    // `scripts/test_output_recipe_schema.py` evaluates this published pattern, with UUID format
+    // checking, against the same spellings; this test keeps the runtime side.
+    assert_eq!(layers["items"]["pattern"], LAYER_ID_PATTERN);
+
+    let (mut session, content) = fixture();
+    let layer = content["gerber_layers"][0].as_str().unwrap().to_owned();
+    assert_eq!(layer, layer.to_lowercase());
+    let upper = layer.to_uppercase();
+    let revision = session.revision();
+    for spelled in [json!([layer, upper]), json!([upper]), json!([layer.replace('-', "")]), json!([format!("{{{layer}}}")])] {
+        let mut invalid = content.clone();
+        invalid["gerber_layers"] = spelled.clone();
+        assert!(
+            matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(message)) if message.contains("lowercase hyphenated")),
+            "command should reject {spelled}"
+        );
+    }
+    assert_eq!(session.revision(), revision);
+    set(&mut session, ID, &content).unwrap();
+    assert_eq!(session.project().unwrap().output_recipes()[0].content.gerber_layers[0].to_string(), layer);
 }
 
 /// Verify set, replace and remove each succeed and round-trip through native persistence while a
