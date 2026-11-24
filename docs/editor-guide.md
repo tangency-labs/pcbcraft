@@ -799,7 +799,7 @@ Click to start a route or fix the current target. The preview uses clearance-awa
 Clicked targets wait for full-path validation; blocked or incomplete searches fix no
 new vertex. Use **/**
 to flip whether the diagonal comes first. Click a copper connection, double-click
-or press **Enter** to finish.
+or press **Enter** to finish at the last clicked vertex.
 
 The route preview uses a lighter shade of each segment's copper layer color. A
 halo shows the default copper clearance (0.2 mm) around the draft tracks and vias.
@@ -810,7 +810,8 @@ copper, adding a via only when the layer changes. Hold **Ctrl** with either page
 key to place the via off-grid in free space. The **Via pad / drill** field beside the
 width field sets the pad diameter and drill (0.6 mm and 0.3 mm by default).
 **Backspace** removes the last via, returning to the previous layer, or else the
-last vertex. Right-click opens the route menu with Finish track, Remove last
+last vertex. Right-click a point on the board and choose **Finish track** to
+validate and finish the route at that target. The menu also offers Remove last
 vertex, Place through via, Flip track posture, and Cancel. **Esc** or **Cancel**
 drops the unfinished route, and a second **Esc** exits the tool. The whole route
 is one Undo step. When copper
@@ -871,6 +872,25 @@ exporter build produces the same archive; project names affect filenames and exp
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
+
+Choose **Manufacturing** from the workspace picker, or from **Manufacture →
+Fabrication** in PCB Layout. In Manufacturing, **Open ZIP** opens a PCBcraft
+fabrication archive and verifies each member against the sizes and SHA-256
+hashes in its manifest. On desktop, both **Outputs** and **Open ZIP** start in
+the saved project’s folder, or beside its `.pc` archive. **Last export** reopens
+the ZIP most recently saved by **Outputs** during this project opening.
+Toggle layers to compare the plotted copper, mask openings, paste, silkscreen,
+outline and drill hits. Drill layers list tool
+diameters and hit counts. The preflight checks for required copper, outline and
+plated drill files, and reports empty outlines and open ends. Select the open
+outline finding to center on an endpoint.
+
+The review uses the exported coordinates and checks that frame identifiers agree
+when present. The workspace is read-only. The manifest records
+the generator version and file hashes. It cannot identify the source board
+revision or tell whether it matches a board currently open in the editor. The
+viewer supports PCBcraft’s bare-board exports, including round drill hits, with
+a 64 MiB ZIP limit. Use PCB Layout’s DRC to check design rules.
 
 Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes,
 through-hole pad flashes, via pads and tracks, even when their apertures have the

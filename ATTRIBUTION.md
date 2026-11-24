@@ -1884,6 +1884,13 @@ menu rows, choices and toggle, with existing copper/clearance rendering. No new
 generic control, external artwork, library data, dependency or saved format was
 added.
 
+The via displacement and connected-drag regression cases for #248 build on
+[PCBcraft #446](https://github.com/tangency-labs/pcbcraft/pull/446) at
+`72d505db` (MIT OR Apache-2.0). That contribution credits the
+[Sparksmith routing notes](https://github.com/DAmesberger/sparksmith/blob/c70dfd5e/docs/push-and-shove.md)
+for the eight-direction via displacement approach. The port uses PCBcraft's
+existing hulls, track cascade and copper transactions.
+
 The bounded target-side retry, hull-corner visibility fallback and clearance-boundary
 projections/intersections for concave walkaround pockets are original PCBcraft work
 under MIT OR Apache-2.0. They preserve captured pickup intent and use the existing

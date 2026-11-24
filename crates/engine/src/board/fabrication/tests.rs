@@ -889,6 +889,10 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
         false,
     );
     let outputs = view(&s).fabrication_outputs().unwrap();
+    let archive = Archive::new(&outputs).unwrap();
+    let plotted = review::Package::read(archive.bytes()).unwrap();
+    let top = plotted.layers.iter().find(|layer| layer.role == review::LayerRole::TopCopper).unwrap();
+    assert_eq!(top.marks.len(), 13);
     let read = read_gerber(&outputs, TOP_COPPER);
     assert!(read.strokes.is_empty() && read.regions.is_empty());
     assert_eq!(read.apertures.len(), 4);
@@ -1596,6 +1600,7 @@ fn tiny_and_composed_rotations_do_not_flash_rectangular_or_obround_apertures() {
             assert_eq!(axis_aligned_size(&corners), None);
         }
         let outputs = view(&s).fabrication_outputs().unwrap();
+        review::Package::read(Archive::new(&outputs).unwrap().bytes()).expect("Manufacturing opens the exported rotated and collapsed lands");
         for output in surface_files(bottom) {
             let read = read_gerber(&outputs, output);
             assert!(read.apertures.values().all(|a| a.kind == 'C' && a.width > 0 && a.height > 0));
@@ -2633,6 +2638,29 @@ fn non_plated_drill_rejects_a_diameter_that_rounds_to_zero() {
     let too_small = drill_fixture(&[CircularNpth { center: at, diameter_nm: 499 }]);
     assert!(matches!(too_small.export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
         if message.contains("499 nm") && message.contains("rounds to zero")));
+}
+
+/// Keep the smallest representable plated tool, and reject the next smaller input on export.
+#[test]
+fn plated_drill_rejects_a_diameter_that_rounds_to_zero() {
+    let fixture = |size| {
+        aperture_fixture_at(
+            &[(PadShape::Circle, size, size, 0); 2],
+            0,
+            false,
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 30_000_000, y_nm: -25_000_000 },
+            Some(0),
+            None,
+        )
+    };
+    let params = json!({});
+    let archive = fixture(1000).export_fabrication_archive(&params).unwrap();
+    let review = review::Package::read(archive.bytes()).unwrap();
+    let plated = review.layers.iter().find(|layer| layer.role == review::LayerRole::PlatedDrill).unwrap();
+    assert_eq!(plated.tools[0].diameter_nm, 1_000);
+    assert!(matches!(fixture(998).export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
+        if message.contains("Plated drill diameter 499 nm") && message.contains("rounds to zero")));
 }
 
 /// Read the JSON actually stored in a captured ZIP.

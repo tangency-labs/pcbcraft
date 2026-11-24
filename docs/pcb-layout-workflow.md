@@ -277,6 +277,8 @@ license review before it is added.
 
 ### 5. Push-and-shove
 
+The current [route and connected-drag guide](route-planning.md#through-vias-and-connected-segment-drags) describes the delivered stages and their limits. The stages below record the original plan.
+
 The interactive-routing part of #56, after #95's basic editing. It comes after clearance-aware routing because it
 needs the same clearance query and spatial index.
 

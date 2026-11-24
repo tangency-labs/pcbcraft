@@ -1,5 +1,5 @@
-//! Deterministic track displacement over disposable copper. Pads, vias and locks stay fixed;
-//! every returned replacement is still checked by the shared compound transaction.
+//! Deterministic track displacement over disposable copper, with optional through-via motion.
+//! The shared compound transaction checks every proposed change before publication.
 use super::*;
 use crate::board::{
     clearance::Object,
@@ -20,7 +20,9 @@ use std::{
 };
 
 mod corridor;
+mod joints;
 use crate::board::clearance::{RouteFragments, RouteObstacles};
+pub(super) use joints::drag;
 
 /// A coordinated retry reopens the directly hit runs with shared spacing.
 #[derive(Clone, Copy)]
@@ -36,6 +38,8 @@ pub enum Mode {
     #[default]
     Walkaround,
     Shove,
+    /// Allow an incoming route to displace through vias and their attached endpoints.
+    ShoveVias,
 }
 
 impl Mode {
@@ -44,7 +48,7 @@ impl Mode {
     pub fn default_probe_budget(self) -> usize {
         match self {
             Self::Walkaround => DEFAULT_BUDGET,
-            Self::Shove => MAX_BUDGET,
+            Self::Shove | Self::ShoveVias => MAX_BUDGET,
         }
     }
 }
@@ -145,6 +149,7 @@ async fn charge(progress: &AtomicUsize, budget: usize) -> bool {
 }
 
 /// Source-qualified membership and physical contacts at the immutable gesture pickup.
+#[derive(Clone)]
 struct Pickup {
     source: Option<usize>,
     nets: Vec<usize>,
@@ -355,8 +360,8 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
         mode: Mode::Walkaround,
         ..request.clone()
     };
-    let mut pickup = super::walkaround::Walker::new(query, &start, budget, progress.clone())?;
-    let rejected = match pickup.displacement_anchor(point).await {
+    let mut picker = super::walkaround::Walker::new(query, &start, budget, progress.clone())?;
+    let rejected = match picker.displacement_anchor(point).await {
         Ok(true) => None,
         Ok(false) => Some((Outcome::Blocked { last_legal: request.head }, true)),
         Err(super::walkaround::Stop::Exhausted) => Some((Outcome::Incomplete, false)),
@@ -366,6 +371,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
         return Ok(Plan {
             adjusted_target: None,
             start_blocked,
+            via_moves: Vec::new(),
             replacements: Vec::new(),
             shove: Some(ShoveStats::default()),
             points: vec![request.head],
@@ -380,6 +386,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: Some(ShoveStats::default()),
                 points: vec![request.head],
@@ -390,7 +397,13 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
         }
         Err(error) => return Err(error),
     };
-    Search::prepare(query, &chains, request, budget, progress).await?.solve(request).await
+    let pickup = pickup(query, request)?;
+    if request.mode == Mode::ShoveVias
+        && let Some(plan) = joints::Motion::route(query, &chains, request, &pickup, budget, progress.clone()).await?
+    {
+        return Ok(plan);
+    }
+    Search::prepare(query, &chains, request, budget, progress, pickup, &BTreeSet::new()).await?.solve(request).await
 }
 
 /// A previously certified guide is one candidate for the new cursor. The whole
@@ -399,6 +412,8 @@ enum Approach {
     Walk(bool),
     BoardEdge,
     Continue(Vec<Point>),
+    /// D-drag supplies exact existing segment endpoints, including non-posture angles.
+    Drag,
 }
 
 /// Preserve earlier turns when possible, trying both ways to connect the last corner
@@ -432,6 +447,7 @@ struct Search<'a> {
     geometry: ClearanceQuery,
     incoming: RouteFragments,
     pickup: Pickup,
+    drag_direction: Option<(Point, Point)>,
     fixed: Vec<(Contour, Vec<Uuid>)>,
     movable: BTreeSet<usize>,
     stats: ShoveStats,
@@ -447,8 +463,9 @@ impl<'a> Search<'a> {
         request: &Request,
         budget: usize,
         progress: Arc<AtomicUsize>,
+        pickup: Pickup,
+        frozen: &BTreeSet<usize>,
     ) -> Result<Self, CommandError> {
-        let pickup = pickup(query, request)?;
         let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
         let relevant_layers: BTreeSet<_> =
             std::iter::once(request.layer).chain(fixed.iter().flat_map(|(_, layers)| layers.iter().copied())).collect();
@@ -457,6 +474,7 @@ impl<'a> Search<'a> {
             .iter()
             .filter(|(i, t)| {
                 !t.locked
+                    && !frozen.contains(&chains.owner[**i])
                     && relevant_layers.contains(&t.layer)
                     && !pickup.islands.contains(&query.objects()[**i].island)
                     && chains.units.contains_key(&chains.owner[**i])
@@ -489,7 +507,7 @@ impl<'a> Search<'a> {
         let mut incoming = RouteFragments::default();
         add_path(&mut incoming, &geometry, &fixed, pickup.source, &mut ShoveStats::default()).await?;
         incoming.finish_gesture();
-        Ok(Self { query, chains, geometry, incoming, pickup, fixed, movable, stats, budget, progress })
+        Ok(Self { query, chains, geometry, incoming, pickup, drag_direction: None, fixed, movable, stats, budget, progress })
     }
 
     /// Certify the incoming open stroke, including the contiguous fixed prefix on
@@ -522,6 +540,11 @@ impl<'a> Search<'a> {
             .into_iter()
             .chain([Approach::BoardEdge, Approach::BoardEdge])
             .chain(std::iter::once_with(|| continuations(request)).flatten());
+        self.solve_guides(request, guides).await
+    }
+
+    /// Certify each guide and propagate its collisions under the same gesture budget.
+    async fn solve_guides(&self, request: &Request, guides: impl Iterator<Item = Approach>) -> Result<Plan, CommandError> {
         let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
         let incoming = RouteObstacles::new(&self.geometry, &self.incoming);
         let fixed_segments = request.fixed.iter().filter(|piece| matches!(piece, FixedCopper::Segment { .. })).count();
@@ -561,6 +584,17 @@ impl<'a> Search<'a> {
                     route.flipped = flipped;
                     plan
                 }
+                Approach::Drag => Plan {
+                    points: vec![request.head, request.target],
+                    outcome: Outcome::Reached,
+                    adjusted_target: None,
+                    start_blocked: false,
+                    replacements: Vec::new(),
+                    via_moves: Vec::new(),
+                    shove: None,
+                    blocker: None,
+                    probes: self.progress.load(Ordering::Relaxed),
+                },
                 Approach::Continue(points) => {
                     if tested.contains(&points) {
                         continue;
@@ -599,12 +633,15 @@ impl<'a> Search<'a> {
                 continue;
             }
             tested.push(proposed.points.clone());
-            if fixed_segments + proposed.points.len() > crate::board::track::MAX_PATH_POINTS {
-                incomplete = true;
-                continue;
-            }
-            if !self.legal_incoming(&route, &proposed.points).await {
-                continue;
+            // Dragged pieces can branch. Only an incoming route is one contiguous stroke.
+            if self.drag_direction.is_none() {
+                if fixed_segments + proposed.points.len() > crate::board::track::MAX_PATH_POINTS {
+                    incomplete = true;
+                    continue;
+                }
+                if !self.legal_incoming(&route, &proposed.points).await {
+                    continue;
+                }
             }
             let orders = [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)];
             let walk = orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: route.posture, keep_bends: true });
@@ -651,6 +688,7 @@ impl<'a> Search<'a> {
         Ok(Plan {
             adjusted_target: None,
             start_blocked: false,
+            via_moves: Vec::new(),
             replacements: Vec::new(),
             shove: Some(stats),
             points: vec![request.head],
@@ -690,6 +728,7 @@ impl<'a> Search<'a> {
                     return Ok(Plan {
                         adjusted_target: None,
                         start_blocked: false,
+                        via_moves: Vec::new(),
                         replacements: Vec::new(),
                         shove: None,
                         points: vec![request.head],
@@ -709,6 +748,7 @@ impl<'a> Search<'a> {
             Err(super::walkaround::Stop::Exhausted) => Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: vec![request.head],
@@ -763,6 +803,12 @@ impl<'a> Search<'a> {
             }
             .enqueue(query, &route, nets, islands)
             .await?;
+        if let Some((from, toward)) = self.drag_direction {
+            for push in pushes.values_mut() {
+                push.from = from;
+                push.toward = toward;
+            }
+        }
         incomplete |= segment_count > MAX_TRACKS;
         let (mut corridor, reverse_displacements, displacement_flipped, displacement_posture, keep_bends) = match strategy {
             Cascade::Walk { reverse, flipped, posture, keep_bends } => (None, reverse, flipped, posture, keep_bends),
