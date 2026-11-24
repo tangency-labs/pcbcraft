@@ -350,12 +350,13 @@ comments. Tool and hole attributes, slots and rout paths are not written yet.
 
 Placed footprints retain an optional `locked` flag in native board format 34,
 35 when the board also contains arcs, 37 when it contains straight-via
-teardrops, or 40 when it contains test-point marks. Inspection and typed board
+teardrops, 40 when it contains test-point marks, or 41 when it has named layer
+groups. Inspection and typed board
 views report a boolean, defaulting to false for older files. Fresh canonical
 encoding omits false and preserves true; Native Save can reuse an unchanged
 board document verbatim, including explicit false. Without active locks the
 encoder chooses the format required by the remaining board data. Reports are
-optional in all four formats.
+optional in all five formats.
 
 A locked footprint remains selectable and inspectable. The shared move, rotate,
 flip, align/distribute and delete commands protect existing locks. A selection

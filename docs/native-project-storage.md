@@ -329,7 +329,7 @@ Repeated `locked` members, null and nonboolean `locked` values are refused.
 Format 34 works with or without setup when the other records allow it. For example,
 material reports, via assignments, stack fields, assembly profile adoptions,
 origin, rules, zones, silkscreen and copper retain their existing validation.
-Formats 34, 35, 37 and 40 accept active locks; other headers refuse `true` but accept an
+Formats 34, 35, 37, 40 and 41 accept active locks; other headers refuse `true` but accept an
 explicit `false` on an otherwise valid placement. Fresh canonical encoding omits
 false. Native Save can retain an unchanged board document verbatim, including
 explicit false, which older readers may reject. Formats 27–33 remain unsupported.
