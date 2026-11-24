@@ -3367,7 +3367,9 @@ impl Session {
         self.undo.clear();
         self.redo.clear();
         self.local_history_step = None;
-        self.report_opened();
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.replaced(project.clone());
+        }
     }
 
     pub fn revision(&self) -> u64 {

@@ -49,6 +49,12 @@ struct Payload {
 /// Recover and read under the writer lock. If opening the lock file is denied by filesystem
 /// permissions, allow a read without recovery only while no committed journal exists.
 pub fn load(root: &Path) -> Result<Documents, String> {
+    load_with_upgrade(root).map(|(documents, _)| documents)
+}
+
+/// Read, recover if needed, and validate a split project folder, also reporting whether reading
+/// normalized a legacy entry point (`project.pc`) or power-marker representation in memory.
+pub fn load_with_upgrade(root: &Path) -> Result<(Documents, bool), String> {
     regular_directory(root)?;
     let lock = lock(root, true)?;
     if lock.can_recover {
@@ -56,12 +62,14 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     } else {
         require_no_journal(root)?;
     }
-    let documents = readable_documents(read_documents(root, false)?)?;
+    let raw = read_documents(root, false)?;
+    let documents = readable_documents(raw.clone())?;
+    let upgraded = documents != raw;
     if !lock.can_recover {
         require_no_journal(root)?;
     }
     decode_documents(&documents)?;
-    Ok(documents)
+    Ok((documents, upgraded))
 }
 
 /// Read a disposable preview without recovering data or holding a lock during I/O.

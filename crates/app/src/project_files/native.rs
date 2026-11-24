@@ -22,6 +22,7 @@ pub(super) struct Target {
     encoding: Encoding,
     documents: Option<Arc<Documents>>,
     needs_manifest: bool,
+    needs_upgrade: bool,
     added_manifest: bool,
 }
 
@@ -58,6 +59,17 @@ impl Target {
     pub(super) fn added_manifest(&self) -> bool {
         self.added_manifest
     }
+
+    /// Whether the next Save to this location would perform a first-time container, entry-point,
+    /// layout or document-format upgrade.
+    pub(super) fn needs_upgrade(&self) -> bool {
+        self.needs_upgrade
+    }
+}
+
+/// Whether first Save would add missing storage layout or sheet-occurrence metadata.
+fn snapshot_needs_layout_upgrade(snapshot: &Project) -> bool {
+    snapshot.layout_root().is_none() || !snapshot.has_sheet_occurrences()
 }
 
 /// Pick and fully validate a project before making it available to the editor.
@@ -106,19 +118,21 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     }
     let packed = decode_packed(&bytes)?;
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
+    let needs_upgrade = needs_manifest || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
         upgrades: Upgrades::default(),
-        target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false },
+        target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, needs_upgrade, added_manifest: false },
     }
     .prepare_open()
 }
 
 /// Read and cross-validate all folder documents before returning an adoptable snapshot.
 fn load_folder(root: &Path) -> Result<Saved, String> {
-    let documents = folder::load(root)?;
+    let (documents, migrated_documents) = folder::load_with_upgrade(root)?;
     let snapshot = decode_documents(&documents)?;
+    let needs_upgrade = migrated_documents || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
@@ -129,6 +143,7 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
             encoding: Encoding::Json,
             documents: Some(Arc::new(documents)),
             needs_manifest: false,
+            needs_upgrade,
             added_manifest: false,
         },
     }
@@ -182,6 +197,7 @@ pub(super) fn save_new(
         encoding: if format == SaveFormat::Archive { Encoding::Zip } else { Encoding::Json },
         documents: None,
         needs_manifest: false,
+        needs_upgrade: false,
         added_manifest: false,
     };
     let snapshot = folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), None)?;
@@ -271,10 +287,12 @@ fn save_target(
         publish(&target.path, previous.map(|_| target.bytes.as_ref()), &bytes, || checkpoint("staged"))?;
         target.added_manifest = target.needs_manifest;
         target.needs_manifest = false;
+        target.needs_upgrade = false;
         target.bytes = bytes;
     } else {
         let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
+        target.needs_upgrade = false;
         target.documents = Some(Arc::new(documents));
     }
     Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))

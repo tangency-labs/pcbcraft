@@ -16,6 +16,22 @@ const MAX_FILES: usize = 80;
 const MAX_MARKS: usize = 1_000_000;
 const MAX_COORDINATE: i64 = 9_999_999_999;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CoordinateFrame {
+    Legacy,
+    Identified(uuid::Uuid),
+}
+
+impl CoordinateFrame {
+    /// Older exports use the literal Gerber frame marker; newer ones carry a shared GUID.
+    fn parse(value: &str) -> Result<Self, String> {
+        if value == "Original" {
+            return Ok(Self::Legacy);
+        }
+        uuid::Uuid::parse_str(value).map(Self::Identified).map_err(|_| "Invalid fabrication coordinate frame identifier".into())
+    }
+}
+
 /// Layer roles come from the plotted file headers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -128,7 +144,7 @@ pub struct Package {
 
 impl Package {
     /// Read and validate the fabrication ZIP, then parse every plot and drill member.
-    /// Unsupported records and integrity mismatches invalidate the package.
+    /// Unsupported records, integrity mismatches and conflicting coordinate frames invalidate the package.
     pub fn read(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() > MAX_ZIP_BYTES {
             return Err("Fabrication ZIP exceeds 64 MiB.".into());
@@ -171,6 +187,7 @@ impl Package {
         }
         let mut expected: BTreeMap<_, _> = manifest.files.iter().map(|file| (file.name.as_str(), file)).collect();
         let mut layers = Vec::with_capacity(members.len());
+        let mut frame = None;
         let mut budget = MAX_MARKS;
         for (name, bytes) in members {
             let record = expected.remove(name.as_str()).ok_or_else(|| format!("{name}: missing manifest record"))?;
@@ -178,12 +195,15 @@ impl Package {
                 return Err(format!("{name}: size or SHA-256 differs from the fabrication manifest"));
             }
             let text = std::str::from_utf8(&bytes).map_err(|_| format!("{name}: expected UTF-8 fabrication data"))?;
-            let layer = match name.rsplit_once('.').map(|(_, extension)| extension) {
+            let (layer, layer_frame) = match name.rsplit_once('.').map(|(_, extension)| extension) {
                 Some("gbr") => gerber::read(text, &mut budget),
                 Some("drl") => drill::read(text, &mut budget),
                 _ => Err("Unsupported fabrication member type".into()),
             }
             .map_err(|error| format!("{name}: {error}"))?;
+            if *frame.get_or_insert(layer_frame) != layer_frame {
+                return Err(format!("{name}: fabrication layer coordinate frames differ"));
+            }
             layers.push(Layer { name, ..layer });
         }
         let bounds = layers.iter().flat_map(|layer| layer.marks.iter().map(Mark::bounds)).reduce(merge_bounds);

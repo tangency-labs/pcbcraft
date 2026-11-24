@@ -1,4 +1,4 @@
-use super::{Layer, LayerRole, Mark, add, coordinate, decimal, point, xy};
+use super::{CoordinateFrame, Layer, LayerRole, Mark, add, coordinate, decimal, point, xy};
 use crate::schematic::Point;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -18,7 +18,7 @@ struct Plot {
     metric: bool,
     dark: bool,
     linear: bool,
-    original_frame: bool,
+    frame: Option<CoordinateFrame>,
     apertures: BTreeMap<u32, Aperture>,
     macros: BTreeMap<String, Arc<[Mark]>>,
     selected: Option<u32>,
@@ -29,7 +29,7 @@ struct Plot {
 
 /// Parse the PCBcraft writer's line-delimited X2 subset, including rounded-pad macros.
 /// Fail a layer on unsupported geometry rather than showing a partial manufacturing plot.
-pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
+pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateFrame), String> {
     const MAX_DEFINITIONS: usize = 65_536;
     let mut plot = Plot::default();
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
@@ -68,17 +68,18 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
         }
     }
     let role = plot.role.ok_or("Gerber file function is missing")?;
+    let frame = plot.frame.ok_or("Gerber coordinate frame is missing")?;
     let is_mask = matches!(role, LayerRole::TopMask | LayerRole::BottomMask);
     if lines.next().is_some() || plot.region.is_some() || !plot.ready() || plot.polarity != Some(!is_mask) {
         return Err("Incomplete or unsupported PCBcraft Gerber plot".into());
     }
-    Ok(Layer { name: String::new(), role, marks: plot.marks, tools: Vec::new() })
+    Ok((Layer { name: String::new(), role, marks: plot.marks, tools: Vec::new() }, frame))
 }
 
 impl Plot {
     /// Geometry and overlays require the writer's common frame, metric units and dark primitives.
     fn ready(&self) -> bool {
-        self.format && self.metric && self.dark && self.linear && self.original_frame
+        self.format && self.metric && self.dark && self.linear && self.frame.is_some()
     }
 
     /// Handle format and drawing records; attribute dictionaries carry no additional geometry.
@@ -88,7 +89,10 @@ impl Plot {
             "%MOMM*%" => self.metric = true,
             "%LPD*%" => self.dark = true,
             "G01*" => self.linear = true,
-            "%TF.SameCoordinates,Original*%" => self.original_frame = true,
+            r if r.starts_with("%TF.SameCoordinates,") && self.frame.is_none() => {
+                let value = r.strip_prefix("%TF.SameCoordinates,").and_then(|s| s.strip_suffix("*%")).ok_or("Invalid Gerber coordinate frame")?;
+                self.frame = Some(CoordinateFrame::parse(value)?);
+            }
             "%TF.FilePolarity,Positive*%" => self.polarity = Some(true),
             "%TF.FilePolarity,Negative*%" => self.polarity = Some(false),
             "G36*" if self.region.is_none() && self.ready() => self.region = Some(Vec::new()),

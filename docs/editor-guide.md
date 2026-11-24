@@ -884,7 +884,8 @@ diameters and hit counts. The preflight checks for required copper, outline and
 plated drill files, and reports empty outlines and open ends. Select the open
 outline finding to center on an endpoint.
 
-The review uses the exported coordinates and is read-only. The manifest records
+The review uses the exported coordinates and checks that frame identifiers agree
+when present. The workspace is read-only. The manifest records
 the generator version and file hashes. It cannot identify the source board
 revision or tell whether it matches a board currently open in the editor. The
 viewer supports PCBcraft’s bare-board exports, including round drill hits, with

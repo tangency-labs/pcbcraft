@@ -1,17 +1,25 @@
-use super::{Layer, LayerRole, Mark, Tool, add, decimal, xy};
+use super::{CoordinateFrame, Layer, LayerRole, Mark, Tool, add, decimal, xy};
 use std::collections::BTreeMap;
 
 /// Read the writer's absolute metric Excellon drill hits and tool declarations.
 /// Require one plating declaration and reject motion modes that could imply routing or slots.
-pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
+/// A legacy drill file has no coordinate frame identifier.
+pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateFrame), String> {
     let mut lines = text.lines();
     if lines.next() != Some("M48") {
         return Err("Expected an Excellon header".into());
     }
     let (mut role, mut format, mut metric) = (None, false, false);
+    let mut frame = None;
     let mut tools = BTreeMap::<u32, Tool>::new();
     loop {
         let record = lines.next().ok_or("Incomplete Excellon header")?;
+        if let Some(value) = record.strip_prefix("; #@! TF.SameCoordinates,") {
+            if frame.replace(CoordinateFrame::parse(value)?).is_some() {
+                return Err("Duplicate drill coordinate frame declaration".into());
+            }
+            continue;
+        }
         match record {
             "%" => break,
             "FMAT,2" => format = true,
@@ -56,5 +64,6 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
     if lines.any(|line| !line.trim().is_empty()) {
         return Err("Unexpected records after Excellon end".into());
     }
-    Ok(Layer { name: String::new(), role: role.ok_or("Drill plating is unspecified")?, marks, tools: tools.into_values().collect() })
+    let layer = Layer { name: String::new(), role: role.ok_or("Drill plating is unspecified")?, marks, tools: tools.into_values().collect() };
+    Ok((layer, frame.unwrap_or(CoordinateFrame::Legacy)))
 }

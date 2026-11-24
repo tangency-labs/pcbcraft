@@ -27,6 +27,19 @@ fn fabrication_review_reads_round_hits_and_finds_open_profile() {
     assert!(review.findings.contains(&Finding::OpenOutline { endpoints: 2, first: point(0, 0) }));
 }
 
+/// New exports correlate plot and drill frames even when the ZIP manifest validates each file.
+#[test]
+fn fabrication_review_requires_a_shared_export_frame() {
+    let frame = "e39a1667-32ab-87fd-b5db-a97c013e3c58";
+    let other = "f39a1667-32ab-87fd-b5db-a97c013e3c58";
+    let outline = gerber("Profile,NP", "").replace("SameCoordinates,Original", &format!("SameCoordinates,{frame}"));
+    let drill = |identity: &str| format!("M48\n; TYPE=PLATED\n; #@! TF.SameCoordinates,{identity}\nFMAT,2\nMETRIC\n%\nG90\nG05\nM30\n");
+    let matching = package(&[("outline.gbr", &outline), ("plated.drl", &drill(frame))]);
+    assert_eq!(Package::read(matching.bytes()).unwrap().layers.len(), 2);
+    let mismatched = package(&[("outline.gbr", &outline), ("plated.drl", &drill(other))]);
+    assert!(Package::read(mismatched.bytes()).unwrap_err().contains("fabrication layer coordinate frames differ"));
+}
+
 #[test]
 fn fabrication_review_rejects_unverified_or_unsupported_geometry() {
     let outline = gerber("Profile,NP", "%LPC*%\n");
