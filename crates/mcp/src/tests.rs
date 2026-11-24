@@ -2445,6 +2445,60 @@ fn native_part_selection_and_compatibility_are_available_through_mcp() {
     assert_eq!(stale["isError"], true);
 }
 
+/// MCP answers a track merge with its full diff, previews it without an edit on a dry run,
+/// and applies it as one undo step.
+#[test]
+fn merging_tracks_over_mcp_returns_the_diff() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap();
+    let layer = setup
+        .project()
+        .unwrap()
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+        .unwrap()
+        .id;
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":0,"y_nm":0},{"x_nm":2_000_000,"y_nm":0},{"x_nm":5_000_000,"y_nm":0}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let tracks: Vec<_> = setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|track| track.id).collect();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let params = json!({"board":board.board,"tracks":tracks,"dry_run":true,"expected_revision":before["revision"]});
+    let preview = call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params}));
+    assert_ne!(preview["isError"], true, "{preview}");
+    let preview = body(&preview);
+    assert_eq!(preview["revision"], before["revision"]);
+    assert_eq!(preview["merge_tracks"]["removed"], json!([tracks[1]]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let mut params = params;
+    params["dry_run"] = json!(false);
+    let merged = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params})));
+    assert_eq!(merged["merge_tracks"]["after"][0]["end"], json!({"x_nm":5_000_000,"y_nm":0}));
+    let after = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(after["revision"], merged["revision"]);
+    assert_eq!(after["project"]["boards"][0]["tracks"].as_array().unwrap().len(), 1);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"][0]["tracks"], before["project"]["boards"][0]["tracks"]);
+}
+
+/// The largest merge report the engine accepts still fits the live editor's reply frame with
+/// its wrapper, so a merge is never published and then refused by the transport.
+#[test]
+fn the_merge_report_budget_fits_the_live_reply_limit() {
+    let wrapper = serde_json::to_vec(&json!({"result":{"revision":u64::MAX,"merge_tracks":null}})).unwrap().len() - "null".len();
+    assert!(pcbcraft_engine::board::track::MERGE_REPORT_MAX_BYTES + wrapper <= crate::live::MAX_REPLY_BYTES);
+}
+
 /// MCP exposes explicit board lock intent and the same atomic protection as the editor.
 #[test]
 fn copper_lock_commands_and_protected_edits_share_mcp_inspection() {

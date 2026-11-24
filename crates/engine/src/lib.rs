@@ -50,7 +50,8 @@ pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::test_points::SET_TEST_POINT;
 pub use board::track::{
-    ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE, UNROUTE_CONNECTION,
+    ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MERGE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE,
+    UNROUTE_CONNECTION,
 };
 pub use board::via_nets::SET_VIA_NET;
 pub use session_scope::SessionScope;
@@ -2356,6 +2357,17 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: MERGE_TRACKS,
+        title: "Merge Tracks",
+        summary: "Merge addressed collinear segments that share a free end, and stacked duplicates, on the same layer and width, in one undo step. The lowest UUID survives with the merged ends. Locked segments and ends at a junction, via or pad stay unchanged. Returns the full diff; dry_run changes nothing.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "dry_run", required: false, summary: "Report the full diff without changing revision or history", kind: ParamKind::Flag },
+        ],
+    },
+    Command {
         id: SET_TRACK_WIDTH,
         title: "Set Track Width",
         summary: "Give addressed track segments one width, in one undo step. Refused if wider copper would join two different nets.",
@@ -3641,6 +3653,7 @@ impl Session {
             | ADD_VIA
             | MOVE_TRACKS
             | RESHAPE_TRACKS
+            | MERGE_TRACKS
             | SET_TRACK_WIDTH
             | SET_VIA_NET
             | SET_VIA_SIZE
@@ -3766,7 +3779,7 @@ impl Session {
     }
 
     /// Run a shared command. Document edits normally answer [`Self::inspect`]; circular
-    /// record replacement returns its full authored diff. Library
+    /// record replacement and track merging return their full authored diff. Library
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
@@ -3780,7 +3793,10 @@ impl Session {
         self.refuse_stale(id, params)?;
         if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS) {
             let before = self.revision;
-            let result = if id == board::arc::SET_ARCS { self.set_arc_tracks(params)? } else { self.edit_teardrops(params)? };
+            let result = match id {
+                board::arc::SET_ARCS => self.set_arc_tracks(params)?,
+                _ => self.edit_teardrops(params)?,
+            };
             if self.revision != before {
                 self.report_committed(id, params);
             }
@@ -3887,6 +3903,9 @@ impl Session {
                 self.report_committed(id, params);
             }
             return Ok(json!({"revision":self.revision,"pin_function_change":report}));
+        }
+        if id == MERGE_TRACKS {
+            return self.merge_tracks(params);
         }
         if id == UNROUTE_CONNECTION {
             return self.unroute_connection(params);
@@ -4053,6 +4072,7 @@ impl Session {
                 | ADD_VIA
                 | MOVE_TRACKS
                 | RESHAPE_TRACKS
+                | MERGE_TRACKS
                 | SET_TRACK_WIDTH
                 | SET_VIA_NET
                 | SET_VIA_SIZE
@@ -4388,6 +4408,9 @@ impl Session {
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
             SET_TEST_POINT => self.set_test_point(params)?,
+            MERGE_TRACKS => {
+                self.merge_tracks(params)?;
+            }
             UNROUTE_CONNECTION => {
                 self.unroute_connection(params)?;
             }

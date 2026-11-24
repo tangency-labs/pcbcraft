@@ -62,6 +62,8 @@
   Highlight collisions to new routes, D and held drags on a single track with its neighbors
   attached (`pcb.reshape_tracks`). Properties edits track width and via size. Footprint moves,
   rotations, flips and alignments carry attached track ends and refuse new shorts.
+- Modify › Merge Tracks and `pcb.merge_tracks` merge collinear and stacked duplicate segments with
+  free shared ends in one undo step.
 - Inspect › DRC and `pcb.check_design` check shorts (including direct pad and via-mediated contact),
   clearance to resolved pad contours, width, annular ring, unrouted connections, board edges and
   courtyard overlap. Findings appear in the results card, canvas and status.
