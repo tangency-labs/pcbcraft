@@ -311,6 +311,7 @@ fn add_pad_columns(s: &mut Session, count: i64) {
             copper: CopperBinding::ComponentSide,
             corner_radius_nm: 0,
             drill_nm: None,
+            plated_slot: None,
         })
         .collect();
     d.validate().unwrap();

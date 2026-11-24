@@ -676,7 +676,7 @@ impl PcbApp {
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some() || pick.vertex_menu_edit))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some((source, error)) = pick.error

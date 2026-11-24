@@ -573,12 +573,14 @@ the finding by bounds, its message says the comparison is conservative.
 
 `pcb.export_fabrication` generates the addressed board's fabrication files without
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
-and `fabrication.origin`, the placement origin every coordinate is measured from:
-Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
-plus one Excellon plated drill file. Boards with placed circular non-plated holes also get
-a separate non-plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin. Boards with copper zones or non-plated holes whose
-diameters round to zero in the drill file are refused before any output is returned.
+and `fabrication.origin`, the placement origin used for coordinates in the generated
+files: Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the
+outline, plus one Excellon plated drill file. Boards with placed circular non-plated
+holes also get a separate non-plated drill file. Export requires a board setup, a
+resolvable placement origin, and at least one closed Board Outline loop. The Gerber
+profile includes the closed loops and omits open outline paths. Boards with copper
+zones or non-plated holes whose diameters round to zero in the drill file are refused
+before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
