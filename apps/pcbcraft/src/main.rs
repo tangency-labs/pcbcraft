@@ -46,7 +46,7 @@ fn native_options(integrated_titlebar: bool) -> eframe::NativeOptions {
             .with_title(pcbcraft_app::APP_TITLE)
             .with_decorations(!integrated_titlebar)
             .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([640.0, 400.0]),
+            .with_min_inner_size(pcbcraft_app::MAIN_WINDOW_MIN_SIZE),
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration::default().with_surface_config(surface_config(cfg!(target_os = "macos"))),
         ..Default::default()
     }

@@ -1156,3 +1156,31 @@ fn library_preferences_search_finds_category_and_parameter_controls() {
     assert_eq!(parameter.field, "pcbcraft:resistance");
     assert!(matches!(parameter.requirement, Some(library::parts::Requirement::AtLeast { .. })));
 }
+
+/// Catalog search uses the engine's canonical metadata text: descriptions and keywords match,
+/// while labeled reference links stay out of the cached search string.
+#[test]
+fn catalog_search_uses_engine_part_search_text() {
+    use pcbcraft_engine::library::parts::{METADATA_PART_FORMAT, PartDefinition, PartLink};
+    let mut docs = native_documents();
+    let mut part: PartDefinition = serde_json::from_str(&docs["parts/resistor.json"]).unwrap();
+    part.format = METADATA_PART_FORMAT.into();
+    part.description = Some("Precision low ESR resistor".into());
+    part.keywords = vec!["low-esr".into(), "precision".into()];
+    part.links = vec![PartLink { label: "Datasheet".into(), url: "https://example.com/ds.pdf".into() }];
+    docs.insert("parts/resistor.json".into(), part.encode().unwrap());
+    let mut catalog = library::sources::Catalog::default();
+    catalog.install("fixture", Arc::new(library::sources::NativeSource::load(&docs).unwrap())).unwrap();
+    let mut browser = PartsBrowser::default();
+    let rows = browser.catalog_results(&catalog);
+    let expected = "precision low esr resistor low-esr precision";
+    for query in ["low esr resistor", "low-esr", "precision"] {
+        let matches = browser.query_results(&rows, query);
+        assert_eq!(matches.len(), 1, "query={query:?}");
+        let entry = &matches[0];
+        assert_eq!(entry.1.as_ref().unwrap().definition.search_text(), expected);
+    }
+    for query in ["datasheet", "example.com"] {
+        assert!(browser.query_results(&rows, query).is_empty(), "query={query:?}");
+    }
+}

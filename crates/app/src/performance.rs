@@ -5,6 +5,7 @@
 mod bga;
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
+pub mod budget;
 pub mod checker;
 mod envelope;
 mod fixture;
@@ -441,8 +442,18 @@ mod tests {
         assert_eq!(report.geometry["tracks"], 60);
         assert_eq!(report.geometry["vias"], 0);
         assert_eq!(report.artifact_sha256, digest(artifact.as_bytes()));
-        assert!(report.metrics.iter().all(|m| m.samples_ms.len() == 2));
-        for id in ["replay.start.up.ui", "replay.layer.down.ui", "replay.cancel.up.ui", "replay.shared-edit.command", "command.move_tracks"] {
+        assert!(report.metrics.iter().all(|m| {
+            let expected = if m.id == replay::ROUTE_REVERSAL_METRIC { 12 } else { 2 };
+            m.samples_ms.len() == expected
+        }));
+        for id in [
+            "replay.start.up.ui",
+            "replay.layer.down.ui",
+            "replay.cancel.up.ui",
+            "replay.shared-edit.command",
+            replay::ROUTE_REVERSAL_METRIC,
+            "command.move_tracks",
+        ] {
             assert!(report.metrics.iter().any(|m| m.id == id), "missing boundary {id}");
         }
         assert!(!report.unmeasured.is_empty());
@@ -688,6 +699,199 @@ mod tests {
         let reencoded_documents = encode_documents(reopened_documents).unwrap();
         let actual_digests: BTreeMap<_, _> = reencoded_documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
         assert_eq!(actual_digests, expected_digests);
+    }
+
+    /// The suite reports p50/p95 for every budgeted action on a command-generated fixture,
+    /// times the save boundary, and gives each action the verdict its own budget implies:
+    /// only open targets report no budget, and both budgeted rows say they are CPU proxies.
+    #[test]
+    fn budget_suite_reports_each_action_against_its_budget() {
+        use budget::BUDGETS;
+        let artifact = generate("reference-v1", "test").unwrap();
+        let report = budget::suite(&artifact, environment(), 2).unwrap();
+        assert_eq!(report["schema"], budget::SCHEMA);
+        assert_eq!(report["artifact_sha256"], digest(artifact.as_bytes()));
+        let actions = report["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), BUDGETS.len());
+        for (row, budget) in actions.iter().zip(BUDGETS) {
+            assert_eq!(row["action"], budget.action);
+            let p50 = row["p50_ms"].as_f64().unwrap();
+            let p95 = row["p95_ms"].as_f64().unwrap();
+            assert!(p50 <= p95, "{}: p50 {p50} above p95 {p95}", budget.action);
+            assert!(row["samples"].as_u64().unwrap() >= 2, "{}", budget.action);
+            assert_eq!(row["budget_p95_ms"].as_f64(), budget.p95_ms);
+            assert_eq!(row["budget_basis"], budget.basis);
+        }
+        let row = |action: &str| actions.iter().find(|row| row["action"] == action).unwrap();
+        for action in ["open", "save", "drc", "connectivity"] {
+            assert_eq!(row(action)["verdict"], "no_budget", "{action}");
+            assert_eq!(row(action)["budget_p95_ms"], serde_json::Value::Null, "{action}");
+        }
+        for (action, limit) in [("move_commit", 100.0), ("routing_input", 4.0)] {
+            let p95 = row(action)["p95_ms"].as_f64().unwrap();
+            let expected = if p95 < limit { "measured_pass" } else { "measured_miss" };
+            assert_eq!(row(action)["verdict"], expected, "{action}: p95 {p95}");
+            assert!(row(action)["budget_basis"].as_str().unwrap().contains("proxy"), "{action}");
+        }
+        assert_eq!(row("routing_input")["samples"], 12, "six route pointer moves per iteration");
+        let unmeasured: Vec<_> = report["unmeasured"].as_array().unwrap().iter().map(|item| item.as_str().unwrap()).collect();
+        for prefix in ["memory", "window routing input", "valid visible preview"] {
+            assert!(unmeasured.iter().any(|item| item.starts_with(prefix)), "{prefix} missing from {unmeasured:?}");
+        }
+    }
+
+    /// A budget decides by nearest-rank p95 and is strict: p95 equal to the budget is a miss.
+    /// An absent boundary stays unmeasured even with a budget, and an action without a target
+    /// reports quantiles but no pass or miss.
+    #[test]
+    fn budget_assessment_uses_p95_and_never_passes_missing_boundaries() {
+        use budget::{Boundary, Budget, Verdict, assess};
+        let samples: Vec<f64> = (1..=20).map(f64::from).collect();
+        let metrics = vec![
+            Metric::new("one", samples.clone()),
+            Metric::new("replay.reverse.0.ui", vec![1.0, 2.0]),
+            Metric::new("replay.reverse.1.ui", vec![3.0, 40.0]),
+            Metric::new("replay.reverse.1.tessellate", vec![500.0, 500.0]),
+        ];
+        let budgets = [
+            Budget { action: "below", boundary: Boundary::Metric("one"), p95_ms: Some(19.1), basis: "test" },
+            Budget { action: "equal", boundary: Boundary::Metric("one"), p95_ms: Some(19.0), basis: "test" },
+            Budget { action: "above", boundary: Boundary::Metric("one"), p95_ms: Some(18.9), basis: "test" },
+            Budget { action: "absent", boundary: Boundary::Metric("missing"), p95_ms: Some(1e9), basis: "test" },
+            Budget { action: "open", boundary: Boundary::Metric("one"), p95_ms: None, basis: "no target yet" },
+            Budget { action: "pooled", boundary: Boundary::Pooled { prefix: "replay.reverse.", suffix: ".ui" }, p95_ms: Some(16.7), basis: "test" },
+        ];
+        let rows = assess(&budgets, &metrics);
+        let verdicts: Vec<_> = rows.iter().map(|row| row.verdict).collect();
+        assert_eq!(
+            verdicts,
+            [Verdict::MeasuredPass, Verdict::MeasuredMiss, Verdict::MeasuredMiss, Verdict::Unmeasured, Verdict::NoBudget, Verdict::MeasuredMiss]
+        );
+        assert_eq!((rows[1].p50_ms, rows[1].p95_ms), (Some(10.0), Some(19.0)));
+        assert_eq!((rows[3].samples, rows[3].p95_ms), (0, None));
+        assert_eq!((rows[4].budget_basis, rows[4].p95_ms), ("no target yet", Some(19.0)));
+        assert_eq!((rows[5].samples, rows[5].p50_ms, rows[5].p95_ms), (4, Some(2.0), Some(40.0)));
+    }
+
+    /// Idle pointer input has no active route reversal, so `routing_input` must stay
+    /// `unmeasured` regardless of what step ID the trace assigns to it (including `reverse.0`
+    /// and `route_reversal`).
+    #[test]
+    fn budget_routing_input_stays_unmeasured_for_idle_steps_even_with_reverse_id() {
+        let base = generate("reference-v1", "test").unwrap();
+        for step_id in ["idle", "reverse.0", "route_reversal"] {
+            let mut artifact: serde_json::Value = serde_json::from_str(&base).unwrap();
+            artifact["trace_id"] = json!("custom-idle-v1");
+            artifact["trace"] = json!([{
+                "id": step_id,
+                "action": {"kind": "pointer", "at": {"x_nm": 0, "y_nm": -5_080_000}, "pressed": null},
+                "routing_after": false,
+            }]);
+            let report = budget::suite(&artifact.to_string(), environment(), 1).unwrap();
+            let row = report["actions"].as_array().unwrap().iter().find(|row| row["action"] == "routing_input").unwrap();
+            assert_eq!(row["verdict"], "unmeasured", "step id {step_id}: {row}");
+            assert_eq!(row["samples"], 0, "step id {step_id}: {row}");
+            assert_eq!(row["p50_ms"], serde_json::Value::Null, "step id {step_id}: {row}");
+            assert_eq!(row["p95_ms"], serde_json::Value::Null, "step id {step_id}: {row}");
+        }
+    }
+
+    /// Build a minimal stored-mode ZIP archive with deterministic headers for repacking tests.
+    fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        let mut out = Vec::new();
+        let mut directory = Vec::new();
+        for &(name, payload) in entries {
+            let offset = u32::try_from(out.len()).unwrap();
+            let crc = crc32(payload);
+            let size = u32::try_from(payload.len()).unwrap();
+            let name_bytes = name.as_bytes();
+            let name_len = u16::try_from(name_bytes.len()).unwrap();
+            out.extend_from_slice(b"PK\x03\x04");
+            out.extend_from_slice(&20u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0x0021u16.to_le_bytes());
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&name_len.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(name_bytes);
+            out.extend_from_slice(payload);
+
+            directory.extend_from_slice(b"PK\x01\x02");
+            directory.extend_from_slice(&20u16.to_le_bytes());
+            directory.extend_from_slice(&20u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0x0021u16.to_le_bytes());
+            directory.extend_from_slice(&crc.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&name_len.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u32.to_le_bytes());
+            directory.extend_from_slice(&offset.to_le_bytes());
+            directory.extend_from_slice(name_bytes);
+        }
+        let cd_offset = u32::try_from(out.len()).unwrap();
+        let cd_size = u32::try_from(directory.len()).unwrap();
+        let count = u16::try_from(entries.len()).unwrap();
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    /// Repacking a valid fixture in stored ZIP mode changes container bytes without changing
+    /// project contents: `budget::suite` must still produce a report and retain the original
+    /// input archive hash.
+    #[test]
+    fn budget_suite_accepts_repacked_stored_archive_and_retains_input_hash() {
+        let base_json = generate("reference-v1", "test").unwrap();
+        let original = load_artifact(&base_json).unwrap();
+        let decoded = decode_packed(&original.project).unwrap();
+        let parts: Vec<_> =
+            decoded.documents.iter().map(|(path, bytes)| json!({"path": path, "size_bytes": bytes.len(), "sha256": digest(bytes)})).collect();
+        let manifest = serde_json::to_vec(&json!({"format": "pcbcraft-container/3", "parts": parts, "assets": []})).unwrap();
+        let mut entries: Vec<(&str, &[u8])> = decoded.documents.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
+        entries.push(("manifest.json", manifest.as_slice()));
+        let repacked = stored_zip(&entries);
+        assert_ne!(repacked, original.project, "stored-mode archive bytes must differ from deflated output");
+        let repacked_sha = digest(&repacked);
+        assert_ne!(repacked_sha, original.project_sha256);
+
+        let mut artifact: serde_json::Value = serde_json::from_str(&base_json).unwrap();
+        artifact["project"] = json!(repacked);
+        artifact["project_sha256"] = json!(repacked_sha);
+        let report = budget::suite(&artifact.to_string(), environment(), 1).unwrap();
+        assert_eq!(report["project_sha256"], repacked_sha);
+        let actions = report["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), budget::BUDGETS.len());
+        let save = actions.iter().find(|row| row["action"] == "save").unwrap();
+        assert_eq!(save["samples"], 1);
+        assert_eq!(save["verdict"], "no_budget");
     }
 
     /// Tampering with the envelope trace under its versioned ID must be rejected by `load_artifact`.
