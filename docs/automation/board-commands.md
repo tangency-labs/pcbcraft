@@ -108,7 +108,7 @@ finding keys. Two runs on one
 revision return identical bytes.
 
 `schematic.erc_report` reads the kept report without running anything. Before
-any run it returns `status: "not_run"`. After any project edit, Undo or Redo the report
+any run it returns `status: "not_run"`. After a project edit, or an Undo or Redo of one, the report
 is `status: "stale"`: the reply gives `report_revision` and no findings, and
 `rerun` names the command to run again. Opening another project discards it.
 The schematic ERC dialog shows this same report and asks you to run it again
