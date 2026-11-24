@@ -1507,15 +1507,14 @@ pub(super) fn paint(
         let selected = state.selected.contains(&track.id);
         let reshaped_track = reshaped.clone().find(|(id, _, _)| *id == track.id);
         let (start, end) = reshaped_track.map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (start, end));
-        let color = if state.segment.is_some() && reshaped_track.is_some() && state.preparation.refusal().is_some() {
-            pcbcraft_chrome::Tokens::get().error
-        } else {
-            color
-        };
         let ends = [camera.screen(start, rect), camera.screen(end, rect)];
         let width = width_px(camera, rect, track.width_nm);
         labels.cover_track(ends, width);
-        segment(color, start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
+        if state.segment.is_some() && reshaped_track.is_some() && state.preparation.refusal().is_some() {
+            pcbcraft_chrome::board::blocked_routing_track(&painter, ends, width);
+        } else {
+            segment(color, start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
+        }
         if let Some(name) = names.and_then(|names| names.get(&track.id)) {
             labels.track(ends, width, name, color);
         }
@@ -1685,7 +1684,9 @@ pub(super) fn paint_draft(
         (at, contact.is_some())
     });
     if let Some(draft) = &state.draft {
-        let path = state.planning.preview(draft, state.width_nm);
+        let (path, plan_blocked) = state.planning.preview(draft, state.width_nm);
+        let blocked =
+            draft.mode == Mode::Highlight && (plan_blocked || (state.planning.validation_current() && state.preparation.refusal().is_some()));
         let mut changes = draft.changes.clone();
         if let Some(next) = state.planning.via_layer()
             && path.len() > 1
@@ -1706,13 +1707,13 @@ pub(super) fn paint_draft(
         for (index, _) in &changes {
             pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
         }
-        for (pair, layer) in path.windows(2).zip(layers) {
-            let color = if draft.mode == Mode::Highlight && state.planning.preview_blocked() {
-                pcbcraft_chrome::Tokens::get().error
+        for (index, (pair, layer)) in path.windows(2).zip(layers).enumerate() {
+            let ends = [pair[0], pair[1]];
+            if blocked && index >= draft.points.len().saturating_sub(1) {
+                pcbcraft_chrome::board::blocked_routing_track(painter, ends, width);
             } else {
-                layer_color(view, appearance, layer)
-            };
-            pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, color, false, true);
+                pcbcraft_chrome::board::track(painter, ends, width, layer_color(view, appearance, layer), false, true);
+            }
         }
         for (index, _) in &changes {
             pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);

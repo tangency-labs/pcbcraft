@@ -240,10 +240,6 @@ impl Planning {
         self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| &ready.plan)
     }
 
-    /// A blocked display path has no placement authority.
-    pub(super) fn preview_blocked(&self) -> bool {
-        self.visible.as_ref().is_some_and(|ready| matches!(ready.plan.outcome, Outcome::Blocked { .. }))
-    }
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(error) = &self.error {
@@ -261,19 +257,12 @@ impl Planning {
             .into(),
         )
     }
-    /// Retain the previous legal geometry during longer solves only under its original prefix.
-    pub(super) fn preview(&self, draft: &Draft, width: i64) -> Vec<Point> {
+    /// Match the displayed path and its blocked appearance to the same source and prefix.
+    pub(super) fn preview(&self, draft: &Draft, width: i64) -> (Vec<Point>, bool) {
         let mut path = draft.points.clone();
-        if let Some(ready) = &self.visible
-            && ready.key.source == draft.source
-            && ready.key.prefix == path
-            && ready.key.changes == draft.changes
-            && ready.key.request.width_nm == width
-            && ready.key.request.layer.to_string() == draft.layer
-        {
-            path.extend(ready.plan.points.iter().copied().skip(1));
-        }
-        path
+        let Some(plan) = self.displayed(draft, width) else { return (path, false) };
+        path.extend(plan.points.iter().copied().skip(1));
+        (path, matches!(plan.outcome, Outcome::Blocked { .. }))
     }
     /// Return displacement geometry only for the displayed route's source, prefix and sizes.
     /// Retained geometry cannot authorize placement without current full-path validation.
@@ -326,7 +315,9 @@ impl Planning {
         match result {
             Ok(Some(plan)) => {
                 let ready = Ready { key, plan };
-                if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
+                let draws_leg = ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. });
+                let clear_highlight = ready.key.request.mode == Mode::Highlight && ready.plan.outcome == Outcome::Reached;
+                if draws_leg || clear_highlight {
                     self.visible = Some(ready.clone());
                 }
                 self.ready = Some(ready);
@@ -508,13 +499,13 @@ mod tests {
         assert!(p.current_ready());
         p.mark_preparation_requested();
         assert!(p.validation_current());
-        assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
+        assert_eq!(p.preview(&draft, sizes.0).0.last(), Some(&a));
         // Exercise the deferred branch even when this clear target could finish inline.
         p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), b, false, sizes, Some(Action::Vertex { finish: true }));
         assert!(!p.current_ready());
         assert!(!p.validation_current());
-        assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
+        assert_eq!(p.preview(&draft, sizes.0).0.last(), Some(&a));
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 9_000_000, y_nm: 0 }, false, sizes, None);
         let mut result = None;
         for _ in 0..100 {
@@ -618,7 +609,7 @@ mod tests {
         }
         assert!(p.current_ready());
         let visible = p.preview(&draft, sizes.0);
-        assert_eq!(visible.last(), Some(&good));
+        assert_eq!(visible.0.last(), Some(&good));
         // Retain the old display while the deliberately exhausted replacement is deferred.
         p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, None);
@@ -641,7 +632,7 @@ mod tests {
         assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().is_err());
         assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
         p.cancel();
-        assert_eq!(p.preview(&draft, sizes.0), draft.points);
+        assert_eq!(p.preview(&draft, sizes.0), (draft.points, false));
     }
 
     /// Returning to the fixed head retains the old ghost but validates and adopts only

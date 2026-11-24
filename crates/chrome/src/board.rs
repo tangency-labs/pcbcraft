@@ -94,6 +94,13 @@ pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected:
     }
 }
 
+/// Distinguish refused copper from a normal solid preview, even on an error-colored layer.
+pub fn blocked_routing_track(p: &Painter, ends: [Pos2; 2], width: f32) {
+    let t = Tokens::get();
+    track(p, ends, width + 2.0, t.error, false, false);
+    p.line_segment(ends, Stroke::new(1.5, t.board_canvas));
+}
+
 /// Shade the clearance around a round-ended segment or via, leaving nearby copper visible.
 /// The caller supplies the drawn copper width and clearance in logical screen points.
 pub fn routing_clearance(p: &Painter, [a, b]: [Pos2; 2], width: f32, clearance: f32) {

@@ -370,7 +370,8 @@ impl PcbApp {
                 }
             };
             ui.separator();
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let actions = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(actions, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 apply = controls::button(ui, "Apply").clicked();
                 cancel = controls::button(ui, "Cancel").clicked();
             });

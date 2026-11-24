@@ -390,6 +390,49 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
     })
 }
 
+/// The contrasting centerline identifies a blocked segment regardless of copper color.
+fn blocked_preview_ends_at(h: &Harness<'_, PcbApp>, end: egui::Pos2) -> bool {
+    let color = pcbcraft_chrome::Tokens::get().board_canvas;
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+        if stroke.color == color && points[1].distance(end) < 0.001)
+    })
+}
+
+/// Highlight mode marks the obstructed proposal, protects the fixed prefix, and clears when the pointer backs away.
+#[test]
+fn highlight_collisions_distinguishes_blocked_route_preview() {
+    let mut h = routable();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    add_track(&mut h, p(5_080_000, -7_620_000), p(5_080_000, -2_540_000));
+    let head = p(1_270_000, -5_080_000);
+    let bend = p(2_540_000, -5_080_000);
+    let blocked = p(7_620_000, -5_080_000);
+    let clear = p(3_810_000, -5_080_000);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, head);
+    click(&mut h, "Highlight collisions");
+    click_route(&mut h, head);
+    click_route(&mut h, bend);
+    h.hover_at(at(&h, blocked));
+    h.run_steps(100);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    assert!(blocked_preview_ends_at(&h, at(&h, blocked)));
+    assert!(preview_ends_at(&h, ink, at(&h, bend)));
+    click_route(&mut h, blocked);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+
+    h.hover_at(at(&h, bend));
+    h.run_steps(100);
+    assert!(!blocked_preview_ends_at(&h, at(&h, blocked)));
+    h.hover_at(at(&h, clear));
+    h.run_steps(100);
+    assert!(preview_ends_at(&h, ink, at(&h, clear)));
+    assert!(!blocked_preview_ends_at(&h, at(&h, clear)));
+}
+
 /// Warm, clear pointer targets must paint in their input frame while authored copper stays fixed.
 #[test]
 fn warm_walkaround_preview_follows_continuous_pointer_input() {
@@ -3544,6 +3587,9 @@ fn router_settings_govern_held_track_drags() {
             click(&mut h, "Router policy");
             click(&mut h, policy);
         }
+        let dialog = h.ctx.memory(|mem| mem.area_rect(egui::Id::unique("router_settings"))).unwrap();
+        let apply = h.get_by_label("Apply").rect();
+        assert!(dialog.height() < 240. && dialog.contains_rect(apply), "oversized or clipped router settings: {dialog:?}, Apply: {apply:?}");
         click(&mut h, "Apply");
         assert_eq!(h.state().views.active.board.tracks.policy().0, mode);
         assert_eq!(h.state().session.revision(), revision);
@@ -3562,6 +3608,7 @@ fn router_settings_govern_held_track_drags() {
             let status = h.state().views.active.board.tracks.preparation_status().unwrap();
             assert!(status.contains("clearance"), "{status}");
             assert!(paths.is_empty());
+            assert!(blocked_preview_ends_at(&h, at(&h, p(far.x_nm, -7_620_000))));
         } else {
             let replaced = if mode == Mode::Walkaround { segment } else { obstacle };
             assert!(paths.iter().any(|path| path.track == replaced), "{policy}: {:?}", h.state().views.active.board.tracks.preparation_status());
