@@ -891,7 +891,7 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
         fs::remove_file(entry_file(dir.path(), "unreadable", "lock")).unwrap();
         File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
         std::os::unix::fs::symlink("unreadable.lock", entry_file(dir.path(), "unreadable", "lock")).unwrap();
-        assert_eq!(entry_modified(dir.path(), "unreadable"), None);
+        assert!(entry_times(dir.path(), "unreadable").is_none());
         assert_eq!(prune(dir.path(), retention), Ok(0));
         assert!(entry_file(dir.path(), "unreadable", "pc").exists());
     }
