@@ -26,7 +26,13 @@ REPORT_MATCH_KEYS = (
 
 
 def _is_nonneg_finite_number(value):
-    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # An integer too large for a float (for example 10**400) raises OverflowError here.
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
 
 
 def _nearest_rank(ordered, percent):
@@ -206,7 +212,14 @@ def gate(baseline, candidate, max_regression_pct=DEFAULT_MAX_REGRESSION_PCT):
                 regressed = True
         else:
             change_pct = ((cand_p95 - base_p95) / base_p95) * 100.0
-            regressed = change_pct > max_regression_pct + THRESHOLD_TOLERANCE_PCT
+            if math.isfinite(change_pct):
+                regressed = change_pct > max_regression_pct + THRESHOLD_TOLERANCE_PCT
+            else:
+                # A tiny nonzero baseline can overflow the percentage (1e-308 ms -> 1 ms). JSON has
+                # no infinity, so report it as None, as for a zero baseline; the slowdown exceeds
+                # every finite threshold, so it regresses.
+                change_pct = None
+                regressed = True
         if regressed:
             regressed_actions.append(action)
         rows.append(
@@ -259,8 +272,10 @@ def format_report(result):
         "| --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in result["actions"]:
-        if row["change_pct"] is None:
+        if row["change_pct"] is None and row["baseline_p95_ms"] == 0.0:
             change = "n/a (zero baseline)"
+        elif row["change_pct"] is None:
+            change = "n/a (overflow)"
         else:
             change = f"{row['change_pct']:+.1f}%"
         budget_text = f"< {row['budget_p95_ms']} ms ({row['candidate_verdict']})" if row["budget_p95_ms"] is not None else row["candidate_verdict"]

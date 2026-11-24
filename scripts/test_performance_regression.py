@@ -289,6 +289,46 @@ class RegressionGateTests(unittest.TestCase):
         self.assertEqual(failed["regressed_actions"], ["save"])
         save_row = next(row for row in failed["actions"] if row["action"] == "save")
         self.assertIsNone(save_row["change_pct"])
+        self.assertIn("n/a (zero baseline)", gate_mod.format_report(failed))
+
+    def test_overflowing_percentage_regresses_and_stays_json_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "base.json"
+            cand_path = Path(tmp) / "cand.json"
+            base_path.write_text(json.dumps(_budget_report(revision="base", samples={"encode.packed": [1e-308, 1e-308]})), encoding="utf-8")
+            cand_path.write_text(json.dumps(_budget_report(revision="cand", samples={"encode.packed": [1.0, 1.0]})), encoding="utf-8")
+            result = _run_cli("--json", base_path, cand_path)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn("Infinity", result.stdout)
+            self.assertNotIn("NaN", result.stdout)
+            payload = json.loads(result.stdout, parse_constant=lambda name: self.fail(f"non-standard JSON constant {name}"))
+            self.assertEqual(payload["regressed_actions"], ["save"])
+            save_row = next(row for row in payload["actions"] if row["action"] == "save")
+            self.assertIsNone(save_row["change_pct"])
+            self.assertTrue(save_row["regressed"])
+
+            markdown = _run_cli(base_path, cand_path)
+            self.assertEqual(markdown.returncode, 1, markdown.stderr)
+            self.assertIn("n/a (overflow)", markdown.stdout)
+            self.assertNotIn("zero baseline", markdown.stdout)
+
+    def test_cli_refuses_a_sample_too_large_for_a_float_with_exit_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "base.json"
+            huge_path = Path(tmp) / "huge.json"
+            base_path.write_text(json.dumps(_budget_report(revision="base")), encoding="utf-8")
+            huge = _budget_report(revision="huge")
+            encode = next(metric for metric in huge["metrics"] if metric["id"] == "encode.packed")
+            encode["samples_ms"][-1] = 10**400
+            huge_path.write_text(json.dumps(huge), encoding="utf-8")
+            self.assertIn("1" + "0" * 400, huge_path.read_text(encoding="utf-8"))
+            self.assertFalse(gate_mod._is_nonneg_finite_number(10**400))
+            self.assertTrue(gate_mod._is_nonneg_finite_number(10**300))
+            self.assertTrue(gate_mod._is_nonneg_finite_number(1.5))
+            result = _run_cli(base_path, huge_path)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("invalid elapsed time: encode.packed", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
 
     def test_rejects_confounded_or_tampered_reports(self):
         baseline = _budget_report(revision="base")
