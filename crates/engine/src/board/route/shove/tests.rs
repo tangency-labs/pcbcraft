@@ -1435,3 +1435,52 @@ fn highlight_refuses_crossing_fixed_track() {
     assert_eq!(crossing.points, [p(100, 100), p(50, 100), p(50, -50)]);
     assert_eq!(crossing.outcome, Outcome::Blocked { last_legal: route.head });
 }
+
+/// A width change at the head must retain earlier draft copper in the crossing check.
+#[test]
+fn highlight_refuses_crossing_fixed_track_at_a_different_width() {
+    let session = board();
+    let mut route = Request {
+        head: p(100, 100),
+        target: p(50, -50),
+        width_nm: 500_000,
+        mode: Mode::Highlight,
+        posture: Posture::Orthogonal,
+        ..request(&session)
+    };
+    route.fixed = [p(0, 0), p(100, 0), route.head]
+        .windows(2)
+        .map(|pair| FixedCopper::Segment { start: pair[0], end: pair[1], layer: route.layer, width_nm: 250_000 })
+        .collect();
+    let query = query(&session);
+    let clear = session.plan_route(&query, &Request { target: p(50, 50), ..route.clone() }, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(clear.outcome, Outcome::Reached);
+    let crossing = session.plan_route(&query, &route, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(crossing.points, [p(100, 100), p(50, 100), p(50, -50)]);
+    assert_eq!(crossing.outcome, Outcome::Blocked { last_legal: route.head });
+}
+
+/// A parallel return must keep the sum of the two leg radii and their clearance.
+#[test]
+fn highlight_mixed_width_return_uses_both_radii() {
+    let session = board();
+    let query = query(&session);
+    let spacing = 375_000 + query.authority().clearance_nm();
+    for (gap, reaches_target) in [(spacing - 1, false), (spacing, true)] {
+        let mut route = Request {
+            head: Point { x_nm: 10_000_000, y_nm: gap },
+            target: Point { x_nm: 5_000_000, y_nm: gap },
+            width_nm: 500_000,
+            mode: Mode::Highlight,
+            posture: Posture::Orthogonal,
+            ..request(&session)
+        };
+        route.fixed = [p(0, 0), p(100, 0), route.head]
+            .windows(2)
+            .map(|pair| FixedCopper::Segment { start: pair[0], end: pair[1], layer: route.layer, width_nm: 250_000 })
+            .collect();
+        let plan = session.plan_route(&query, &route, DEFAULT_BUDGET, &|| false).unwrap();
+        let expected = if reaches_target { Outcome::Reached } else { Outcome::Blocked { last_legal: route.head } };
+        assert_eq!(plan.outcome, expected, "gap {gap}");
+    }
+}

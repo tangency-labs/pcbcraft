@@ -112,25 +112,28 @@ pub struct Plan {
     pub probes: usize,
 }
 
-/// Check a continuation against the contiguous fixed stroke on its layer and width.
+/// Check a continuation against the contiguous fixed stroke on its layer, using each leg's width.
 async fn legal_incoming(request: &Request, points: &[Point], clearance_nm: i64) -> bool {
     if points.len() < 2 {
         return true;
     }
     let mut prefix = Vec::new();
+    let mut widths = Vec::new();
     let mut head = points[0];
     for piece in request.fixed.iter().rev() {
         let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
-        if *end != head || *layer != request.layer || *width_nm != request.width_nm {
+        if *end != head || *layer != request.layer {
             break;
         }
         prefix.push(*start);
+        widths.push(*width_nm);
         head = *start;
     }
     prefix.reverse();
+    widths.reverse();
     prefix.extend_from_slice(points);
-    let spacing = request.width_nm as f64 + clearance_nm as f64;
-    super::track::chains::legal_stroke(&prefix, spacing).await
+    widths.resize(prefix.len() - 1, request.width_nm);
+    super::track::chains::legal_stroke_with_spacing(&prefix, |a, b| (widths[a] + widths[b]) as f64 / 2. + clearance_nm as f64).await
 }
 
 /// Plan a route over a captured board. Validates the request first: bounded endpoints and previous hints, a supported
