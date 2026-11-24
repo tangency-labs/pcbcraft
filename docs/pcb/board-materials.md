@@ -306,10 +306,11 @@ The Physical stackup page stages the selected copper's role and named group
 memberships with every other setup field; `pcb.set_board_setup` remains the only
 stack mutation command, and the Board setup UI sends an explicit `[]` when the user
 removes the last group. The next format-43 save omits the group array.
-Historical format 41 requires at least one named group. Authored
-profile groups use `pcbcraft-setup-profile/5` and are rebased onto the destination
-copper layer IDs on import. Importing a profile without groups clears the draft’s
-named groups. Older board and profile headers reject the field even when empty.
+Historical board format 41 and setup profile format 5 require at least one
+named group. The [current profile format](#silkscreen-and-portable-setup-profiles)
+makes groups optional. Import rebases their members onto the destination copper
+layer IDs. Importing a profile without groups clears the draft’s named groups.
+Earlier board and profile headers reject the field even when empty.
 Layer UUIDs and revision-checked candidates are the boundary for future external
 parametric/simulation adapters, not a live SolidCraft or FieldCraft connection.
 No rule-scope selector consumes these groups yet.
@@ -327,17 +328,19 @@ KiCad distinguishes layer defaults from object properties, and Altium distinguis
 clearance checks and preparation actions. PCBcraft currently clips against copper-pad
 bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 
-Profiles imports/exports a named `.pcsetup.json` file with format
-`pcbcraft-setup-profile/1`, `/2` when the setup uses the copper and board
-thickness fields above, or `/3` when a material carries a thermal conductivity,
-thermal expansion, dielectric strength or CTI report, or `/5` with user layer groups.
+The Profiles page exports named `.pcsetup.json` snapshots as
+`pcbcraft-setup-profile/6`. Stack extensions, thermal and insulation reports,
+and named layer groups are optional. Clearing those records keeps the same
+format. The reader still accepts historical profiles /1, /2, /3 and /5 under
+their original rules.
+
 Each profile has an independent UUID and positive revision, a complete
-validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
-material definitions, reports and references are embedded. The bounded, strict decoder
-rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
-These setup snapshots carry no required electrical/fabrication constraints or project
-paths and do not establish a live link to their source file. Every export creates a
-new snapshot identity. Broader fabrication/process profiles remain planned.
+validated `setup`, and physical `silkscreen` settings. Lengths are integer
+nanometers. Material definitions, reports and revision references are embedded.
+The reader rejects unknown fields, unsupported versions, invalid pins and
+files over 1 MiB. Exporting the current draft creates a new snapshot identity.
+Encoding an existing profile advances its format while preserving its UUID,
+revision and contents. Profiles are self-contained snapshots with no live link.
 
 Import stages a draft for review. The profile's group list replaces the target
 list in the draft; a profile without groups clears it. The Profiles page notes
