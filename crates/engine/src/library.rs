@@ -1,5 +1,5 @@
 //! Schematic symbol libraries. A library is a folder with a `library.json` manifest and one
-//! versioned JSON file per symbol in `symbols/`; see `docs/symbol-library.md` for the format.
+//! versioned JSON file per symbol in `symbols/`; see `docs/libraries/symbol-library.md` for the format.
 //! Symbols describe only what the schematic draws and connects. Layout footprints are separate
 //! definitions in their own libraries, linked to a symbol by assignment, so nothing here names
 //! a footprint or a pad.
@@ -61,7 +61,7 @@ pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
 
 /// Native symbols with independently placeable units sharing one logical terminal table.
 pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
-/// Native symbols with alternate functions on logical terminals.
+/// Current native symbol write format, with optional alternate functions on logical terminals.
 pub const SYMBOL_FORMAT_V5: &str = "pcbcraft-symbol/5";
 
 /// Electrical roles survive copying and never follow from an item or library name.

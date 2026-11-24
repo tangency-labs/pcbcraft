@@ -17,7 +17,7 @@ impl Original {
     }
     /// Raw documents can bypass encoding only for the actual unmodified source snapshot.
     pub(super) fn unchanged(&self, snapshot: &Arc<Project>) -> Option<Arc<Documents>> {
-        Arc::ptr_eq(&self.snapshot, snapshot).then(|| self.documents.clone())
+        (Arc::ptr_eq(&self.snapshot, snapshot) && super::has_current_entry_point(&self.documents)).then(|| self.documents.clone())
     }
 }
 
@@ -66,14 +66,7 @@ impl Encoder {
         }
         let Some(mut documents) = self.current.step(records)? else { return Ok(None) };
         if let (Some(canonical), Some(original)) = (&self.canonical, &self.original) {
-            for (path, bytes) in &mut documents {
-                let source = if Some(path.as_str()) == self.new_board.as_deref() { self.old_board.as_deref().unwrap_or(path) } else { path };
-                if canonical.get(source) == Some(bytes)
-                    && let Some(retained) = original.get(source)
-                {
-                    bytes.clone_from(retained);
-                }
-            }
+            super::retain_unchanged_documents(&mut documents, canonical, original, self.old_board.as_deref(), self.new_board.as_deref())?;
         }
         Ok(Some(documents))
     }

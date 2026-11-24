@@ -1,4 +1,4 @@
-//! Clearance-aware walkaround and optional track-shove planning over captured copper.
+//! Clearance-aware walkaround and shove planning over captured copper.
 //!
 //! [`walkaround`] plans one single-layer route from a head point toward a target over a captured
 //! [`ClearanceQuery`]: horizontal, vertical and 45° legs (or horizontal and vertical only) that
@@ -7,8 +7,9 @@
 //! `pcb.add_tracks` command or copper preparation job, which revalidate and publish them in one
 //! undo step. Every kept leg is confirmed by the same exact probe and outline predicates that
 //! DRC uses. The search is deterministic and bounded by a probe budget and a cancellation flag.
-//! Shove mode returns disposable track replacements for one atomic add/replace command.
-//! Pads, vias and locked copper remain fixed; arcs, zones and multilayer search are not planned.
+//! Both shove modes return track replacements for atomic placement. The via-enabled mode can
+//! also move a through via and its attached track endpoints when the incoming copper hits it.
+//! Pads and locked copper stay fixed. Each through-via move is checked on every copper layer.
 use super::clearance::ClearanceQuery;
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
@@ -19,7 +20,9 @@ mod hull;
 mod posture;
 mod preparation;
 mod search;
+pub(in crate::board) use search::Search;
 mod shove;
+pub use super::track::replacements::ViaMove;
 pub use shove::{FixedCopper, Mode, ShoveStats};
 pub(crate) use shove::{fixed_schema, valid_fixed};
 #[cfg(test)]
@@ -41,12 +44,12 @@ pub const MAX_BUDGET: usize = 65_536;
 /// prefers going round on the same side, so nearly equivalent routes do not alternate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
-    /// Walk around fixed copper or displace unlocked tracks on a disposable overlay.
+    /// Walk around existing copper, shove unlocked tracks, or also move through vias and their attached ends.
     pub mode: Mode,
     /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
     /// False preserves spacing between source objects that were not directly touching.
     pub merge_same_net: bool,
-    /// Already fixed gesture copper, checked together with each new shove plan.
+    /// Already fixed gesture copper, checked together with Highlight and shove continuations.
     pub fixed: Vec<FixedCopper>,
     pub head: Point,
     pub target: Point,
@@ -92,6 +95,9 @@ pub struct Plan {
     /// Source track paths to replace atomically with this route; empty for walkaround.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub replacements: Vec<super::track::replacements::Replacement>,
+    /// Through vias translated together with their endpoint tracks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub via_moves: Vec<ViaMove>,
     /// Bounded shove work, absent for walkaround.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shove: Option<ShoveStats>,
@@ -99,8 +105,35 @@ pub struct Plan {
     pub outcome: Outcome,
     /// Query address of the copper that stopped a blocked route, absent for the board edge.
     pub blocker: Option<String>,
+    /// Source addresses of the existing obstacles touched by a Highlight proposal.
+    #[serde(skip)]
+    pub collisions: std::collections::BTreeSet<String>,
     /// Exact probes charged, never more than the budget.
     pub probes: usize,
+}
+
+/// Check a continuation against the contiguous fixed stroke on its layer, using each leg's width.
+async fn legal_incoming(request: &Request, points: &[Point], clearance_nm: i64) -> bool {
+    if points.len() < 2 {
+        return true;
+    }
+    let mut prefix = Vec::new();
+    let mut widths = Vec::new();
+    let mut head = points[0];
+    for piece in request.fixed.iter().rev() {
+        let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
+        if *end != head || *layer != request.layer {
+            break;
+        }
+        prefix.push(*start);
+        widths.push(*width_nm);
+        head = *start;
+    }
+    prefix.reverse();
+    widths.reverse();
+    prefix.extend_from_slice(points);
+    widths.resize(prefix.len() - 1, request.width_nm);
+    super::track::chains::legal_stroke_with_spacing(&prefix, |a, b| (widths[a] + widths[b]) as f64 / 2. + clearance_nm as f64).await
 }
 
 /// Plan a route over a captured board. Validates the request first: bounded endpoints and previous hints, a supported
@@ -147,11 +180,13 @@ impl Session {
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             });
         }
@@ -189,11 +224,13 @@ impl Session {
             Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             }
         } else {
@@ -203,7 +240,7 @@ impl Session {
         let mut result = json!({"revision":self.revision(),"route_plan":{
             "board":target.board,"layer":layer,"mode":mode,"merge_same_net":merge_same_net,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
             "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes,
-            "replacements":plan.replacements,"shove":plan.shove,"start_blocked":plan.start_blocked
+            "replacements":plan.replacements,"via_moves":plan.via_moves,"shove":plan.shove,"start_blocked":plan.start_blocked
         }});
         if let Some(point) = plan.adjusted_target {
             result["route_plan"]["adjusted_target"] = json!(point);
