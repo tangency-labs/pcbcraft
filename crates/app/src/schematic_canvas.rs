@@ -27,7 +27,7 @@ mod tests;
 pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
-use crate::preferences::Navigation;
+use crate::{canvas_camera::pointer_release, preferences::Navigation};
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
@@ -51,6 +51,8 @@ pub(crate) enum Tool {
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
+        /// Follow a snapped pin until a new label's rotation is chosen explicitly.
+        orient_to_pin: bool,
         /// Pointer-to-anchor offset for a held drag; keyboard pickup finishes on a click.
         drag: Option<Vec2>,
     },
@@ -144,7 +146,7 @@ pub(crate) enum Click {
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
-    NetLabelRotate,
+    NetLabelRotate(u16),
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -281,7 +283,8 @@ pub(crate) enum SymbolAction {
 /// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
 /// opts out of handles and reshaping for explicit whole-route movement. G over a wire starts
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
-/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
+/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. A box commits on
+/// release even over a floating panel; Escape, focus loss or disabled input cancel it. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
 /// primary click; Escape, right-click or focus loss cancels that preview.
@@ -414,23 +417,32 @@ pub(crate) fn show(
     } else {
         None
     };
-    let label_position = if let Some(Tool::NetLabel { label, revision, drag }) = &tool {
-        ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)).map(|pointer| {
-            wires::label_position(
-                project,
-                camera,
-                rect,
-                pointer + drag.unwrap_or(Vec2::ZERO),
-                draft,
-                *revision,
-                (label.id != 0).then_some(pcbcraft_engine::schematic::WireEndpoint::NetLabel(label.id)),
-            )
-        })
+    let label_placement_at = |pointer| {
+        use pcbcraft_engine::schematic::WireEndpoint;
+        let Some(Tool::NetLabel { label, revision, drag, orient_to_pin }) = &tool else {
+            return None;
+        };
+        let pointer = pointer + drag.unwrap_or(Vec2::ZERO);
+        let ignore = (label.id != 0).then_some(WireEndpoint::NetLabel(label.id));
+        let anchor = wires::label_anchor(project, camera, rect, pointer, draft, *revision, ignore);
+        let at = anchor.position(project).unwrap_or_else(|| camera.snap(pointer, rect));
+        let rotation = match anchor {
+            Anchor::Existing(WireEndpoint::Terminal(pin)) if *orient_to_pin => {
+                project.terminal_symbol(pin).and_then(|symbol| symbol.pin_outward_rotation(pin.number())).unwrap_or(label.rotation)
+            }
+            _ => label.rotation,
+        };
+        Some(crate::net_labels::Placement { at, rotation })
+    };
+    let label_placement = if matches!(&tool, Some(Tool::NetLabel { .. })) {
+        ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)).and_then(label_placement_at)
     } else {
         None
     };
-    let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(at)) = (&tool, label_position) {
-        project.dragged_net_label(label.id, at, label.rotation, revision, auto_heal).ok()
+    let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(pose)) = (&tool, label_placement)
+        && label.id != 0
+    {
+        project.dragged_net_label(label.id, pose.at, pose.rotation, revision, auto_heal).ok()
     } else {
         None
     };
@@ -504,7 +516,7 @@ pub(crate) fn show(
     crate::inspection_selection::paint_pins(&painter, camera, rect, project, inspection);
     overlap_index.paint(ui, response.id, project, camera, rect);
     crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_placement, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -528,9 +540,18 @@ pub(crate) fn show(
 
     if tool_menu::supports(tool.as_ref())
         && (input_enabled || response.context_menu_opened())
-        && let Some(popup) = menu::context(&response, |ui| tool_menu::active(ui, tool.as_ref(), repeat))
+        && let Some(popup) = menu::context(&response, |ui| {
+            let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+            (anchor, tool_menu::active(ui, tool.as_ref(), repeat))
+        })
     {
-        let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+        let (anchor, action) = popup.inner;
+        if matches!(action, Some(ToolAction::Rotate))
+            && let Some(Tool::NetLabel { label, .. }) = &tool
+        {
+            let rotation = anchor.and_then(label_placement_at).map_or(label.rotation, |pose| pose.rotation);
+            return Some(Click::NetLabelRotate(rotation));
+        }
         if let (Some(Tool::PlaceSymbol { definition, unit, value, turns, .. }), Some(at)) = (&tool, anchor)
             && let Some(drawing) = definition.unit(unit)
         {
@@ -545,11 +566,11 @@ pub(crate) fn show(
         }
         if let Some(Tool::Wire { start, .. }) = tool {
             wires::preview(&painter, rect, project, camera, start, draft, anchor, auto_heal, revision);
-            if matches!(popup.inner, Some(ToolAction::Cancel)) {
+            if matches!(action, Some(ToolAction::Cancel)) {
                 return Some(Click::CancelWire);
             }
         }
-        return popup.inner.map(|action| Click::ToolAction(action, ui.ctx().clone()));
+        return action.map(|action| Click::ToolAction(action, ui.ctx().clone()));
     }
 
     // A part dragged from the browser previews under the pointer and places where it's released.
@@ -594,7 +615,7 @@ pub(crate) fn show(
     }
 
     if let Some(click) =
-        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected, label_position, filters)
+        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected, label_placement, filters)
     {
         return click;
     }
@@ -627,13 +648,15 @@ pub(crate) fn show(
         if lost_focus {
             return Some(Click::SelectItems(drag.base.clone()));
         }
-        let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        // A box that started here clamps to the canvas and commits even when released over a floating panel.
+        let release = pointer_release(&response, drag.button);
+        let pointer = release.or_else(|| response.interact_pointer_pos()).or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
+            let pointer = rect.clamp(pointer);
             let hits = selection::boxed(ui, project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
-            if ui.input(|i| i.pointer.button_released(drag.button)) {
-                let valid = input_enabled && response.contains_pointer();
-                return Some(Click::SelectItems(if valid { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
+            if release.is_some() {
+                return Some(Click::SelectItems(if input_enabled { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
             }
         }
         return None;

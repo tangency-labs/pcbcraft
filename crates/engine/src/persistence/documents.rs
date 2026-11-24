@@ -43,6 +43,8 @@ pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
+/// The sole project entry-point version emitted by the native writer.
+pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/61";
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
@@ -90,6 +92,7 @@ const ARC_BOARD_FORMAT: &str = "pcbcraft-board/26";
 const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
 const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
+const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -183,10 +186,14 @@ struct FolderReference {
 }
 
 impl ProjectDocument {
-    /// Both part-group envelopes have the same layout and project records; version 39 changes
-    /// only membership compression, validated separately against its explicit header.
+    /// Resolve the layout and shared record vocabulary. Envelope-specific restrictions are
+    /// validated separately against the original format.
     fn layout_format(&self) -> &str {
-        if self.format == COMPACT_PART_GROUP_PROJECT_FORMAT { PART_GROUP_PROJECT_FORMAT } else { &self.format }
+        match self.format.as_str() {
+            COMPACT_PART_GROUP_PROJECT_FORMAT => PART_GROUP_PROJECT_FORMAT,
+            CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
+            format => format,
+        }
     }
 
     /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
@@ -209,9 +216,7 @@ impl ProjectDocument {
                 | PIN_FUNCTION_LOCK_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!(
-                "{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56"
-            ));
+            return Err(format!("{ENTRY_POINT}: layout_root requires a supported board-folder project format"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -425,6 +430,7 @@ pub fn is_document_path(path: &str) -> bool {
 /// either group membership encoding remain optional under those headers.
 /// Project/51 requires an active designator lock. Differential pairs are optional;
 /// board-owned pairs still use instances/8 with either group membership encoding.
+/// Project/61 uses the project/56 vocabulary with optional designator locks.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -433,7 +439,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
-    // The compact envelope shares every non-membership rule with project/24.
+    let current_format = project.format == CURRENT_PROJECT_FORMAT;
+    // The current envelope shares the project/56 vocabulary but makes locks optional.
     project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
@@ -448,7 +455,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if lock_format != project.components.iter().any(|part| part.designator_locked.is_some())
+    if (!current_format && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
         || project.components.iter().any(|part| part.designator_locked == Some(false))
     {
         return Err("Designator locks require project format 51 or 56 and at least one true designator_locked flag; omit unlocked flags.".into());
@@ -867,6 +874,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         board: Arc::default(),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from: None,
         layout: None,
         circuit_use: None,
@@ -983,30 +991,31 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let grouped = board.format == GROUP_BOARD_FORMAT;
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
-    if with_teardrops != board.teardrops.is_some() || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: teardrops require board format 37 and a nonempty array".into());
+    if (!grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
     }
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if curved != board.arcs.is_some() || board.arcs.as_ref().is_some_and(Vec::is_empty) {
+    if (!grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+    if !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
     }
-    let arc_or_footprint_locks = curved || footprint_locks || with_teardrops;
+    let extended_board_format = grouped || curved || footprint_locks || with_teardrops;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
-    if (assigned_vias && !has_assigned_vias) || (!arc_or_footprint_locks && !reported && !assigned_vias && has_assigned_vias) {
+    if (assigned_vias && !has_assigned_vias) || (!extended_board_format && !reported && !assigned_vias && has_assigned_vias) {
         return Err("board.json: explicit via assignments require format 24, 25, 26, 34 or 35; format 24 requires an assignment.".into());
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
     if (profiled && board.assembly_profiles.is_none())
-        || (!arc_or_footprint_locks && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
+        || (!extended_board_format && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
         return Err(
             "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34 or 35. Format 22 requires at least one profile.".into()
@@ -1018,7 +1027,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
     if (originated && board.placement_origin.is_none())
-        || (!arc_or_footprint_locks && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
+        || (!extended_board_format && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
         return Err(
             "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34 or 35, and format 21 requires a placement origin.".into()
@@ -1029,14 +1038,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!arc_or_footprint_locks && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
+        || (!extended_board_format && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
         return Err("board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34 or 35 and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
-        || (!arc_or_footprint_locks
+        || (!extended_board_format
             && !reported
             && !assigned_vias
             && !ruled
@@ -1054,11 +1063,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !arc_or_footprint_locks && !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks
-    {
+    if !extended_board_format && !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || reported || arc_or_footprint_locks;
+    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || reported || extended_board_format;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -1098,6 +1106,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | ARC_BOARD_FORMAT
                 | LOCKED_FOOTPRINT_BOARD_FORMAT
                 | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+                | GROUP_BOARD_FORMAT
         );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
@@ -1123,6 +1132,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | ARC_BOARD_FORMAT
                     | LOCKED_FOOTPRINT_BOARD_FORMAT
                     | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+                    | GROUP_BOARD_FORMAT
             ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
@@ -1216,6 +1226,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
             | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+            | GROUP_BOARD_FORMAT
     ) && !with_teardrops
         && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
@@ -1246,6 +1257,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | ARC_BOARD_FORMAT
                 | LOCKED_FOOTPRINT_BOARD_FORMAT
                 | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+                | GROUP_BOARD_FORMAT
         ) && !with_teardrops
             && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
@@ -1264,7 +1276,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
+    if !grouped && let Some(raw) = &board.setup {
+        let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
+        if value["stackup"].get("layer_groups").is_some() {
+            return Err("board.json: the layer_groups field requires board format 41.".into());
+        }
+    }
     let setup = match (board.format.as_str(), board.setup) {
+        (GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1325,12 +1344,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
+    let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
+    if grouped != has_groups {
+        return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
+    }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
-    if (reported && !material_reports) || (!arc_or_footprint_locks && !reported && material_reports) {
+    if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
         return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34 or 35; format 25 requires at least one of them.".into());
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
-    if (stacked && !stack_fields) || (!arc_or_footprint_locks && !reported && !assigned_vias && !stacked && stack_fields) {
+    if (stacked && !stack_fields) || (!extended_board_format && !reported && !assigned_vias && !stacked && stack_fields) {
         return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34 or 35; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
@@ -1643,6 +1666,39 @@ pub fn encode_documents(project: Arc<Project>) -> Result<Documents, String> {
     }
 }
 
+/// Build historical test input from a current encoding and the requested legacy header.
+/// Only fields that the source snapshot has not adopted are removed. Tests that supply
+/// a mismatched feature/header combination still exercise the real reader's refusals.
+#[cfg(test)]
+pub(crate) fn historical_documents(project: Arc<Project>, format: &str) -> Documents {
+    let mut documents = encode_documents(project.clone()).unwrap();
+    let mut entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+    entry["format"] = serde_json::json!(format);
+    if !project.has_sheet_occurrences() {
+        if let Some(instances) = project_instances_path(&documents[ENTRY_POINT]).unwrap() {
+            documents.remove(&instances).unwrap();
+        }
+        entry.as_object_mut().unwrap().remove("schematic_instances");
+    }
+    if project.numeric_id_high_water.is_none() {
+        entry.as_object_mut().unwrap().remove("numeric_id_high_water");
+    }
+    if project.layout.is_none() {
+        if let Some(path) = project_board_path(&documents[ENTRY_POINT]).unwrap() {
+            let board = documents.remove(&path).unwrap();
+            documents.insert("board.json".into(), board);
+        }
+        entry.as_object_mut().unwrap().remove("layout_root");
+        if let Some(registrations) = project.board.ownership.records() {
+            entry["boards"] = serde_json::json!(registrations);
+        } else {
+            entry.as_object_mut().unwrap().remove("boards");
+        }
+    }
+    documents.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
+    documents
+}
+
 /// The last list written into an instance home, which decides its closing bytes.
 #[derive(Clone, Copy)]
 enum InstanceTail {
@@ -1656,11 +1712,6 @@ enum InstanceTail {
 #[derive(Default)]
 struct ProjectHeaderFacts {
     part_validation: crate::part_instances::storage::PartValidation,
-    has_metadata: bool,
-    has_pin_function_symbols: bool,
-    has_parts: bool,
-    has_locks: bool,
-    extended_choices: bool,
     has_bindings: bool,
     has_numbers: bool,
     missing_numbers: bool,
@@ -1761,7 +1812,7 @@ impl DocumentsEncoder {
     /// between their members rather than counting their entire collection as a single unit.
     /// A legacy membership home that exceeds a byte limit restarts once in the compact
     /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
-    /// introduced. Valid legacy documents retain their encoding while it fits the limits.
+    /// introduced. Legacy layout metadata is adopted on the save snapshot before writing.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         match self.step_records(records) {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
@@ -1785,13 +1836,6 @@ impl DocumentsEncoder {
     #[cfg(test)]
     pub(crate) fn generated_leg_scan_progress(&self) -> Option<(u8, usize, usize, usize)> {
         matches!(self.phase, 23..=25).then_some((self.phase, self.cursor as usize, self.sheet_wire_index.len(), self.live_generated_legs.len()))
-    }
-
-    /// Designator-lock fact accumulated by the component scan (phase 26), exposed only while
-    /// the remaining header scans (27, 28, 29, 36, 39) run and before phase 0 consumes it.
-    #[cfg(test)]
-    pub(crate) fn scanned_designator_locks(&mut self) -> Option<&mut bool> {
-        matches!(self.phase, 27 | 28 | 29 | 36 | 39).then_some(&mut self.header.has_locks)
     }
 
     /// Current net-registry validation stage while phase 39 validates records and meters bytes.
@@ -1822,10 +1866,6 @@ impl DocumentsEncoder {
                     let p = &self.project;
                     if let Some((&id, part)) = p.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next() {
                         self.header.part_validation.row(p, part)?;
-                        self.header.has_metadata |= !part.metadata.is_empty();
-                        self.header.has_pin_function_symbols |= part.definition.format() == crate::library::SYMBOL_FORMAT_V5;
-                        self.header.has_parts |= part.part.is_some();
-                        self.header.has_locks |= part.designator_locked;
                         if !crate::no_connect::valid_terminal_markers(part) {
                             return Err("No-connect intent exceeds its terminal or project limits.".into());
                         }
@@ -1835,18 +1875,9 @@ impl DocumentsEncoder {
                         }
                         self.cursor = id;
                     } else {
+                        // Package choices add no header fact; continue with the registry scan.
                         self.next();
-                    }
-                }
-                27 => {
-                    let p = &self.project;
-                    if let Some((&id, choice)) =
-                        p.schematic_packages.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
-                    {
-                        self.header.extended_choices |= crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads);
-                        self.cursor = id;
-                    } else {
-                        self.next();
+                        self.phase = 28;
                     }
                 }
                 28 => {
@@ -1896,150 +1927,61 @@ impl DocumentsEncoder {
                     }
                 }
                 0 => {
+                    if self.project.layout.is_none() || self.project.numeric_id_high_water.is_none() {
+                        let root = self.project.layout_root().unwrap_or(".");
+                        self.project = Arc::new(self.project.with_board_folders(root)?);
+                    }
+                    if !self.project.has_sheet_occurrences() {
+                        self.project = Arc::new(self.project.with_sheet_occurrences()?);
+                    }
                     let p = &self.project;
-                    if p.has_sheet_occurrences() {
-                        if self.instance_records.is_none() {
-                            let records = p.occurrence_instances();
-                            Project::clone(p).install_sheet_instances(records.clone())?;
-                            self.instance_records = Some(records);
-                        }
-                        if p.layout.is_none() {
-                            return Err("Occurrence records require the current project folder layout.".into());
+                    if self.instance_records.is_none() {
+                        let records = p.occurrence_instances();
+                        Project::clone(p).install_sheet_instances(records.clone())?;
+                        self.instance_records = Some(records);
+                        if !p.net_registry.records.is_empty() {
+                            // Validate a registry adopted by this save in metered steps; phase 39 returns here.
+                            self.phase = 39;
+                            continue;
                         }
                     }
-                    let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
-                    let registrations = p.board.ownership.records();
-                    let has_metadata = self.header.has_metadata;
-                    let has_pin_function_symbols = self.header.has_pin_function_symbols;
-                    let has_packages = !p.schematic_packages.assignments.is_empty();
-                    if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
-                        return Err("schematic package choices require no board and an allocation watermark".into());
+                    if !p.schematic_packages.assignments.is_empty() && p.board_target().is_some() {
+                        return Err("Schematic package choices require a project without a board.".into());
                     }
-                    let has_parts = self.header.has_parts;
-                    let extended_choices = self.header.extended_choices;
                     p.net_classes.validate()?;
                     let has_classes = !p.net_classes.definitions.is_empty();
-                    if has_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Net classes require adopted storage/occurrence metadata.".into());
-                    }
-                    let has_no_connects = self.header.marker_count != 0;
-                    if has_no_connects && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("No-connect intent requires adopted storage/occurrence metadata.".into());
-                    }
-                    let has_bindings = self.header.has_bindings;
-                    if has_bindings && !has_classes {
+                    if self.header.has_bindings && !has_classes {
                         return Err("Net class assignments require their class catalog.".into());
-                    }
-                    let registry_validated = p.has_sheet_occurrences() && !p.net_registry.records.is_empty();
-                    if has_bindings && !registry_validated {
-                        self.validate_registry()?;
-                    }
-                    let has_parameters = !p.parameters.is_empty();
-                    if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Project parameters require adopted storage/occurrence metadata.".into());
-                    }
-                    let has_locks = self.header.has_locks;
-                    if has_locks && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Designator locks require adopted storage/occurrence metadata.".into());
                     }
                     p.part_groups.validate()?;
                     let has_part_groups = !p.part_groups.groups.is_empty();
-                    if has_part_groups && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Part groups require adopted storage/occurrence metadata.".into());
-                    }
                     if !p.part_group_memberships.is_empty() && !has_part_groups {
                         return Err("Part-group memberships require their group catalog.".into());
                     }
-                    let has_numbers = self.header.has_numbers;
-                    let has_pairs = p.net_registry.has_pairs();
-                    if has_numbers && self.header.missing_numbers {
+                    if self.header.has_numbers && self.header.missing_numbers {
                         return Err("Numbered net registries require a number on every record.".into());
                     }
-                    if has_pairs && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Differential pairs require adopted storage/occurrence metadata.".into());
-                    }
-                    if (has_numbers || has_pairs) && !has_bindings && !registry_validated {
-                        self.validate_registry()?;
-                    }
-                    let format = if has_pairs {
-                        PAIR_PROJECT_FORMAT
-                    } else if has_part_groups {
-                        if self.use_compact_memberships { COMPACT_PART_GROUP_PROJECT_FORMAT } else { PART_GROUP_PROJECT_FORMAT }
-                    } else if has_numbers {
-                        GENERATED_NET_PROJECT_FORMAT
-                    } else if has_parameters {
-                        PARAMETER_PROJECT_FORMAT
-                    } else if has_bindings {
-                        BINDING_PROJECT_FORMAT
-                    } else if has_classes {
-                        CLASS_PROJECT_FORMAT
-                    } else if has_no_connects {
-                        NO_CONNECT_PROJECT_FORMAT
-                    } else if !p.net_registry.records.is_empty() {
-                        NET_PROJECT_FORMAT
-                    } else if p.has_sheet_occurrences() {
-                        OCCURRENCE_PROJECT_FORMAT
-                    } else if has_parts || extended_choices {
-                        PART_PROJECT_FORMAT
-                    } else if p.layout.is_some() {
-                        FOLDER_PROJECT_FORMAT
-                    } else if has_packages {
-                        SCHEMATIC_PACKAGES_PROJECT_FORMAT
-                    } else {
-                        match (registrations.is_some(), has_metadata) {
-                            (true, true) => OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT,
-                            (true, false) => OPTIONAL_BOARD_PROJECT_FORMAT,
-                            (false, true) => FIELDS_PROJECT_FORMAT,
-                            (false, false) => format,
-                        }
-                    };
                     let has_profiles = !p.assembly_profiles.is_empty();
-                    if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
-                    }
-                    let pin_function_count = p.pin_function_count();
-                    if pin_function_count > crate::pin_functions::MAX_CHOICES {
+                    if p.pin_function_count() > crate::pin_functions::MAX_CHOICES {
                         return Err("Alternate pin function selection limit reached.".into());
                     }
-                    let pin_function_format = has_pin_function_symbols || pin_function_count != 0;
-                    if pin_function_format && !p.supports_pin_function_storage() {
-                        return Err("Alternate pin functions require current project storage.".into());
-                    }
-                    let format = if has_locks && pin_function_format {
-                        PIN_FUNCTION_LOCK_PROJECT_FORMAT
-                    } else if pin_function_format {
-                        PIN_FUNCTION_PROJECT_FORMAT
-                    } else if has_locks {
-                        DESIGNATOR_LOCK_PROJECT_FORMAT
-                    } else if has_profiles && !has_pairs {
-                        ASSEMBLY_PROFILE_PROJECT_FORMAT
-                    } else {
-                        format
-                    };
-                    if has_metadata && p.numeric_id_high_water.is_none() {
-                        return Err("component metadata requires an adopted numeric ID watermark".into());
-                    }
-                    write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?)
-                        .map_err(|e| e.to_string())?;
-                    if let Some(high_water) = p.numeric_id_high_water {
-                        writeln!(self.bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|e| e.to_string())?;
-                    }
-                    if let Some(layout) = &p.layout {
-                        let records = p
-                            .boards()
-                            .map(|board| {
-                                Ok(FolderReference {
-                                    id: board.target.board,
-                                    name: board.name().into(),
-                                    folder: layout.folder.clone().ok_or("missing board folder")?,
-                                })
+                    let layout = p.layout.as_ref().ok_or("missing project layout")?;
+                    let records = p
+                        .boards()
+                        .map(|board| {
+                            Ok(FolderReference {
+                                id: board.target.board,
+                                name: board.name().into(),
+                                folder: layout.folder.clone().ok_or("missing board folder")?,
                             })
-                            .collect::<Result<Vec<_>, String>>()?;
-                        writeln!(self.bytes, "  \"layout_root\": {},", json(&layout.root)?).map_err(|e| e.to_string())?;
-                        writeln!(self.bytes, "  \"boards\": {},", json(&records)?).map_err(|e| e.to_string())?;
-                    } else if let Some(registrations) = registrations {
-                        writeln!(self.bytes, "  \"boards\": {},", json(&registrations)?).map_err(|e| e.to_string())?;
-                    }
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    write!(self.bytes, "{{\n  \"format\": \"{CURRENT_PROJECT_FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?)
+                        .map_err(|e| e.to_string())?;
+                    let high_water = p.numeric_id_high_water.ok_or("missing numeric ID watermark")?;
+                    writeln!(self.bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|e| e.to_string())?;
+                    writeln!(self.bytes, "  \"layout_root\": {},", json(&layout.root)?).map_err(|e| e.to_string())?;
+                    writeln!(self.bytes, "  \"boards\": {},", json(&records)?).map_err(|e| e.to_string())?;
                     if has_classes {
                         // At most 256 bounded definitions, each on its own line for Git diffs.
                         self.bytes.extend_from_slice(b"  \"net_classes\": {\n    \"format\": \"pcbcraft-net-classes/1\",\n    \"definitions\": [\n");
@@ -2527,12 +2469,6 @@ impl DocumentsEncoder {
         Ok(None)
     }
 
-    /// Validate the net registry before writing an instance home.
-    fn validate_registry(&self) -> Result<(), String> {
-        let project = &self.project;
-        project.net_registry.validate(project)
-    }
-
     /// Finish components/package choices, writing adopted instances in their single storage home
     /// before starting sheets. Instance records consume the ordinary incremental record budget.
     /// A board-owned home takes the header required by the registry and membership vocabulary.
@@ -2755,21 +2691,21 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
     bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
 }
 
-/// Preserve canonical legacy encodings until authored content requires a newer format. Arcs
-/// alone select 26, active footprint locks alone select 34, and both together select 35.
-/// Teardrop intents select 37, which retains active footprint locks.
-/// These formats retain earlier physical fields. Material reports require at least 25;
-/// explicit via intent at least 24; copper roles, base copper, copper thickness qualifiers
-/// or finished board thickness at least 23; assembly profile adoptions at least 22;
-/// a placement origin at least 21;
-/// zone outlines at least 20; validated board rules at least 19; and authored copper locks
-/// at least 18. Earlier extensions remain subject to their own prerequisites. Independent
-/// assignments use version 7, earlier local rectangles version 8, layer graphics
-/// version 9, explicitly enabled accepted baselines version 10, pending
-/// desired package choices version 11, copper tracks version 12, vias version 13,
-/// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
-/// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
-/// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
+/// Preserve canonical legacy encodings until authored content requires a newer format. Named
+/// layer groups select 41; straight-via teardrop intents select 37, which retains active
+/// footprint locks; arcs alone select 26, active footprint locks alone select 34, and both
+/// together select 35. These formats retain earlier physical fields. Material reports require at
+/// least 25; explicit via intent at least 24; copper roles, base copper, copper thickness
+/// qualifiers or finished board thickness at least 23; assembly profile adoptions at least 22; a
+/// placement origin at least 21; zone outlines at least 20; validated board rules at least 19; and
+/// authored copper locks at least 18. Earlier extensions remain subject to their own
+/// prerequisites. Independent assignments use version 7, earlier local rectangles version 8, layer
+/// graphics version 9, explicitly enabled accepted baselines version 10, pending desired package
+/// choices version 11, copper tracks version 12, vias version 13, bottom-side footprints version
+/// 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each
+/// may carry any earlier field, so routing or flipping never drops baseline or intent data.
+/// Version 12 stays tracks-only and 13 has no bottom-side parts, so their released readers keep
+/// working.
 fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &BoardFacts) -> Result<(), String> {
     let board = &project.board;
     let setup = board.setup.as_ref();
@@ -2783,7 +2719,9 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
         (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
         (false, false) => None,
     };
-    let format = if !board.teardrops.is_empty() {
+    let format = if setup.is_some_and(|setup| setup.requires_group_format()) {
+        GROUP_BOARD_FORMAT
+    } else if !board.teardrops.is_empty() {
         TEARDROP_BOARD_FORMAT
     } else if let Some(format) = arc_or_lock_format {
         format
@@ -2858,6 +2796,14 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
         }
         bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
         let stackup = setup.stackup();
+        if !stackup.layer_groups.is_empty() {
+            bytes.write_all(b",\n      \"layer_groups\": [\n").map_err(|error| error.to_string())?;
+            let mut first = true;
+            for group in &stackup.layer_groups {
+                record(bytes, &mut first, group)?;
+            }
+            bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
+        }
         for (field, value) in [
             ("finished_thickness_nm", stackup.finished_thickness_nm),
             ("finished_thickness_tolerance_nm", stackup.finished_thickness_tolerance_nm),

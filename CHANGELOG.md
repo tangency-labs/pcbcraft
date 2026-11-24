@@ -8,6 +8,7 @@ its old slot. Splitting a pane itself opens another view. Separate Split window
 up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
+- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -20,11 +21,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+[command API version](docs/automation/command-api.md#command-api-version). MCP `execute` now
 accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
-See [stating a version](docs/mcp.md#stating-a-version).
+See [stating a version](docs/automation/command-api.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -42,7 +43,7 @@ rejected before changing layers.
 Failed MCP calls and live editor replies now carry a stable error code, such
 as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
 details, so an agent can act on a failure without parsing its message. The
-codes are published in [error codes](docs/mcp.md#error-codes) and are never
+codes are published in [error codes](docs/automation/command-api.md#error-codes) and are never
 renamed or reused. Messages are unchanged, except that `ui.` commands now
 refuse unknown keys, missing required keys and non-null scalar or array
 parameter lists with the same wording as window commands. Omitted or null
@@ -243,3 +244,12 @@ in the status bar, keeps Home usable and writes the same line once to stderr
 when available. Windows GUI release builds need stderr redirection to capture
 diagnostics. The launcher takes no options and at most one path, so a
 usage error prints one line and exits before any window opens.
+
+Equivalent loose units of a multi-unit part can now be fitted into open slots of
+one package with `schematic.complete_packages` through headless or live MCP. It
+changes nothing unless `scope` is `sheet` or `project`, and `dry_run` reports the
+same transfers without editing. Connectivity, saved net and sheet identities and
+authored wire routes are kept. Parts with a locked designator, no-connect intent
+or a footprint that board review cannot yet retire are skipped. Applying is one
+undo step. Read-only sessions refuse the command. Placement does not complete
+packages, and automatic annotation remains in #45.

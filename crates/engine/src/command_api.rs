@@ -207,7 +207,9 @@ const LOWER_BOUNDS: &[&str] = &["minimum", "exclusiveMinimum", "minLength", "min
 const UPPER_BOUNDS: &[&str] = &["maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"];
 /// Keywords compared only as a whole: any change under one is breaking, because whether it accepts
 /// more or less depends on the schema around it (`not` inverts, `dependentRequired` and the other
-/// dependency maps tie parameters together, `$ref` points elsewhere).
+/// dependency maps tie parameters together, `$ref` points elsewhere). The sole exception is an
+/// added `if`/`then` pair (no `else`) whose guard excludes all old inputs (see
+/// `is_new_variant_if_then` and [`compare`]).
 const WHOLE: &[&str] = &["not", "allOf", "$ref", "if", "then", "else", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies"];
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
 const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
@@ -251,8 +253,11 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 ///   match two, and `oneOf` refuses it; common alternatives are still compared for the path.
 /// - `prefixItems`: compared item by item; a changed length is breaking.
 /// - `examples`: an annotation, so compatible.
-/// - `not`, `allOf`, `$ref`, `if`/`then`/`else`, `patternProperties`, `dependentRequired`,
-///   `dependentSchemas`, `dependencies`: compared as a whole; any change is breaking.
+/// - `if`/`then`/`else`: adding `if` and `then` together with no `else` is compatible for an
+///   object schema if the guard requires a name excluded by the old closed schema or restricts
+///   an old required enum property to new values. Other changes are breaking.
+/// - `not`, `allOf`, `$ref`, `patternProperties`, `dependentRequired`, `dependentSchemas`,
+///   `dependencies`: compared as a whole; any change is breaking.
 /// - any other keyword: any change is breaking, because the classifier cannot tell.
 ///
 /// Outside the parameter schema (for example `scope`), any change is breaking. A command only in
@@ -337,12 +342,74 @@ fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
         return;
     };
     let closed = old_object.get("additionalProperties") == Some(&Value::Bool(false)) && !old_object.contains_key("patternProperties");
+    let compatible_if_then = is_disjoint_if_then(old_object, new_object, closed);
     for key in old_object.keys().chain(new_object.keys()).collect::<BTreeSet<_>>() {
         let (before, after) = (old_object.get(key), new_object.get(key));
         if before != after {
-            keyword(walk, &format!("{path}.{key}"), key, before, after, closed);
+            if compatible_if_then && matches!(key.as_str(), "if" | "then") {
+                walk.push(false, &format!("{path}.{key}"), format!("changed from {} to {}", shown(before), shown(after)));
+            } else {
+                keyword(walk, &format!("{path}.{key}"), key, before, after, closed);
+            }
         }
     }
+}
+
+/// Whether two JSON values are equal under JSON Schema equality (where `1` and `1.0` are equal).
+fn json_schema_equal(a: &Value, b: &Value) -> bool {
+    if a.is_number() && b.is_number() {
+        return number_order(a, b) == Some(std::cmp::Ordering::Equal);
+    }
+    a == b
+}
+
+/// A new `if`/`then` without `else` is compatible when its object guard cannot
+/// match any old input, including a required property the old schema disallows.
+fn is_disjoint_if_then(old: &Map<String, Value>, new: &Map<String, Value>, closed: bool) -> bool {
+    if old.contains_key("if") || old.contains_key("then") || old.contains_key("else") || new.contains_key("else") {
+        return false;
+    }
+    let (Some(Value::Object(if_obj)), Some(_)) = (new.get("if"), new.get("then")) else {
+        return false;
+    };
+    if old.get("type").and_then(Value::as_str) != Some("object") {
+        return false;
+    }
+    let Some(old_props) = old.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    if closed
+        && if_obj
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|names| names.iter().filter_map(Value::as_str).any(|name| !old_props.contains_key(name)))
+    {
+        return true;
+    }
+    let Some(old_required) = old.get("required").and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(if_props) = if_obj.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    if_props.iter().any(|(prop, cond)| {
+        if !old_required.iter().any(|name| name.as_str() == Some(prop.as_str())) {
+            return false;
+        }
+        let Some(old_enum) = old_props.get(prop).and_then(|s| s.get("enum")).and_then(Value::as_array) else {
+            return false;
+        };
+        let Some(cond_obj) = cond.as_object() else {
+            return false;
+        };
+        if let Some(const_val) = cond_obj.get("const") {
+            return !old_enum.iter().any(|member| json_schema_equal(member, const_val));
+        }
+        if let Some(cond_enum) = cond_obj.get("enum").and_then(Value::as_array) {
+            return cond_enum.iter().all(|v| !old_enum.iter().any(|member| json_schema_equal(member, v)));
+        }
+        false
+    })
 }
 
 /// Classify one keyword that differs between two schemas; see [`compare`] for the rules.
@@ -680,16 +747,12 @@ fn validate_snapshot(snapshot: &Value, label: &str) -> Result<u32, String> {
     Ok(version)
 }
 
-/// The snapshot section for `described` commands: one line per command, sorted by id, mapping
-/// the id to its [`contract_of`], so a change shows as a one-line diff.
+/// Format the sorted command contracts for pasting into the snapshot. Indent nested fields
+/// separately so changes to different parameters can merge within the same command.
 pub fn snapshot_section(described: &[Value]) -> String {
-    let entries: BTreeMap<&str, String> =
-        described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command).to_string())).collect();
-    if entries.is_empty() {
-        return "{}".to_owned();
-    }
-    let lines: Vec<String> = entries.iter().map(|(id, contract)| format!("    {}: {contract}", Value::String((*id).to_owned()))).collect();
-    format!("{{\n{}\n  }}", lines.join(",\n"))
+    let entries: BTreeMap<&str, Value> = described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command))).collect();
+    let snapshot = Value::Object(entries.into_iter().map(|(id, contract)| (id.to_owned(), contract)).collect());
+    format!("{snapshot:#}").replace('\n', "\n  ")
 }
 
 #[cfg(test)]

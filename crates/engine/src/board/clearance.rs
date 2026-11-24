@@ -40,6 +40,7 @@ impl std::fmt::Debug for Cached {
 #[derive(Clone, Debug)]
 pub struct Authority {
     snapshot: Arc<Project>,
+    fill_authority: Arc<()>,
     session: Arc<()>,
     target: BoardTarget,
     opening: u64,
@@ -76,15 +77,25 @@ impl Authority {
     pub(crate) fn view(&self) -> Option<BoardView<'_>> {
         self.snapshot.board_view(self.target)
     }
-    /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
+    /// Reject another session, reopen, Undo/Redo, authored edits or explicit pour changes.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {
-        Arc::ptr_eq(&self.session, &session.clearance_identity)
+        Arc::ptr_eq(&self.fill_authority, &self.snapshot.fill_authority())
+            && Arc::ptr_eq(&self.session, &session.clearance_identity)
             && self.opening == session.history_root_revision()
             && self.revision == session.revision()
             && session.snapshot().is_some_and(|current| Arc::ptr_eq(&self.snapshot, &current))
             && self.snapshot.board_view(self.target).is_some()
     }
+}
+
+/// Source feature type survives projection even when different features have identical contours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ObjectKind {
+    Pad,
+    Track,
+    Via,
+    Other,
 }
 
 /// An addressed copper or mechanical obstacle in the query's source snapshot. Membership indices are sorted,
@@ -93,6 +104,7 @@ impl Authority {
 #[derive(Clone, Debug)]
 pub struct Object {
     pub name: String,
+    pub(crate) kind: ObjectKind,
     pub contour: Contour,
     pub layers: Vec<Uuid>,
     pub intended_nets: Vec<usize>,
@@ -182,6 +194,7 @@ impl Session {
         });
         ClearanceQuery::from_geometry(
             &super::work::Source {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 target,
@@ -207,6 +220,7 @@ impl ClearanceQuery {
         Ok(Self {
             authority: Authority {
                 snapshot: source.snapshot.clone(),
+                fill_authority: source.fill_authority.clone(),
                 session: source.session.clone(),
                 target: source.target,
                 opening: source.opening,
@@ -228,6 +242,7 @@ impl ClearanceQuery {
     pub(super) fn with_objects(&self, items: Vec<Object>) -> Result<Self, CommandError> {
         let source = super::work::Source {
             snapshot: self.authority.snapshot.clone(),
+            fill_authority: self.authority.fill_authority.clone(),
             session: self.authority.session.clone(),
             target: self.authority.target,
             opening: self.authority.opening,
@@ -282,6 +297,33 @@ impl ClearanceQuery {
                 }
             }
         }
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
+    }
+    /// Exhaustively evaluate all shared-layer pairs involving the supplied object indices,
+    /// retaining only contact or clearance findings. Bounds memory for large boards where
+    /// `exhaustive_pairs` would materialize O(n^2) non-violating decisions.
+    pub fn exhaustive_findings_for(&self, indices: &[usize]) -> Results {
+        let mut selected = BTreeSet::new();
+        for &index in indices {
+            if index < self.geometry.items.len() {
+                selected.insert(index);
+            }
+        }
+        let mut decisions = Vec::new();
+        for &index in &selected {
+            for other in 0..self.geometry.items.len() {
+                if other == index || (other < index && selected.contains(&other)) {
+                    continue;
+                }
+                let (first, second) = if index < other { (index, other) } else { (other, index) };
+                if let Some(decision) = self.geometry.evaluate(first, second, self.pair_clearance(first, second))
+                    && (decision.touches || decision.clearance_violation)
+                {
+                    decisions.push(decision);
+                }
+            }
+        }
+        decisions.sort_by_key(|d| (d.first, d.second));
         Results { authority: self.authority.clone(), decisions, probe_rules: None }
     }
     /// Use independent object requirements for the narrow phase, retaining baseline behavior
@@ -354,7 +396,18 @@ impl ClearanceQuery {
         nets: &[usize],
         excluded: impl Fn(usize) -> bool,
     ) -> Result<Results, CommandError> {
-        let objects = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i)).map(|i| (i, &self.objects()[i]));
+        let candidates = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i));
+        self.probe_candidates(contour, nets, candidates)
+    }
+
+    /// Evaluate broad-phase candidates already collected for this contour and layer set.
+    pub(super) fn probe_candidates(
+        &self,
+        contour: &Contour,
+        nets: &[usize],
+        candidates: impl Iterator<Item = usize>,
+    ) -> Result<Results, CommandError> {
+        let objects = candidates.map(|i| (i, &self.objects()[i]));
         self.evaluate_probe(contour, nets, objects)
     }
 
@@ -466,6 +519,7 @@ impl BoardGeometry {
             let at = Point { x_nm: land.corners.iter().map(|p| p.x_nm).sum::<i64>() / 4, y_nm: land.corners.iter().map(|p| p.y_nm).sum::<i64>() / 4 };
             items.push(Object {
                 name: format!("{}:{}", land.key.0, land.key.1),
+                kind: ObjectKind::Pad,
                 contour: land.contour(),
                 layers: land.layers.clone(),
                 island,
@@ -479,6 +533,7 @@ impl BoardGeometry {
             let island = copper.tracks[&track.id];
             items.push(Object {
                 name: track.id.to_string(),
+                kind: ObjectKind::Track,
                 contour: Contour::capsule(track.start, track.end, track.width_nm as f64 / 2.),
                 layers: vec![track.layer],
                 island,
@@ -493,6 +548,7 @@ impl BoardGeometry {
             let island = copper.vias[&via.id];
             items.push(Object {
                 name: via.id.to_string(),
+                kind: ObjectKind::Via,
                 contour: Contour::capsule(via.at, via.at, via.diameter_nm as f64 / 2.),
                 layers: layers.clone(),
                 island,
@@ -510,6 +566,7 @@ impl BoardGeometry {
                 for (index, hole) in footprint.non_plated_holes(definition).enumerate() {
                     items.push(Object {
                         name: format!("footprint-{}:npth:{}", footprint.id, index + 1),
+                        kind: ObjectKind::Other,
                         contour: Contour::capsule(hole.center, hole.center, hole.diameter_nm as f64 / 2.),
                         layers: layers.clone(),
                         island: usize::MAX,

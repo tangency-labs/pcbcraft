@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod technical;
-pub(crate) use technical::lettering;
+pub(crate) use technical::{lettering, stroke_glyph};
 
 /// Board-local print dimensions in nanometers. Defaults follow a 1 mm / 0.15 mm text style
 /// and a 0.25 mm copper clearance; they are editable design choices, not a fabrication approval.
@@ -71,6 +71,7 @@ pub fn preview(settings: Settings) -> Result<Preview, String> {
             copper: CopperBinding::ComponentSide,
             corner_radius_nm: 0,
             drill_nm: None,
+            plated_slot: None,
         })
         .collect::<Vec<_>>();
     let mut paths = lettering("R1", -2_000_000, settings);

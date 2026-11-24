@@ -9,7 +9,9 @@ use crate::{
 use serde_json::json;
 
 mod capacity;
+mod metadata;
 mod retained;
+mod supply_range;
 mod voltage_rating;
 
 /// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.
@@ -119,13 +121,11 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         assert_eq!(project.footprint_assignments().len(), 1);
         let docs = encode_documents(project.clone()).unwrap();
         let header: Json = serde_json::from_slice(&docs[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/16");
+        assert_eq!(header["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         // Isolate the older vocabulary: remove occurrence records through the historical codec
         // before forging the format header, so only native part selections cause this rejection.
-        let mut reserved_format = encode_documents(crate::persistence::diagnostic_snapshot(project.clone())).unwrap();
-        let mut reserved: Json = serde_json::from_slice(&reserved_format[crate::persistence::ENTRY_POINT]).unwrap();
-        reserved["format"] = json!("pcbcraft-project/14");
-        reserved_format.insert(crate::persistence::ENTRY_POINT.into(), serde_json::to_vec(&reserved).unwrap());
+        let reserved_format =
+            crate::persistence::historical_documents(crate::persistence::diagnostic_snapshot(project.clone()), "pcbcraft-project/14");
         let error = decode_documents(&reserved_format).unwrap_err();
         assert!(error.contains("Pinned part selections require project format"), "unexpected rejection: {error}");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
@@ -201,14 +201,21 @@ fn gerber_x3_only_writes_orderable_metadata_for_compatible_parts() {
     let files = project.board_view(project.board_target().unwrap()).unwrap().gerber_part_layers().unwrap().files;
     let [top] = files.as_slice() else { panic!("Expected only a top layer") };
     let body = top.contents.split_once("\nD10*\n").unwrap().1;
-    let objects = body.split("%TD*%\n").collect::<Vec<_>>();
-    assert_eq!(objects.len(), 4);
+    // Main flashes carry .C and end with D03. Pins instead carry .P, and outlines end with D01.
+    let objects: Vec<_> = body
+        .split("%TD*%\n")
+        .filter_map(|object| {
+            let start = object.find("%TO.C,")?;
+            object.ends_with("D03*\n").then_some(&object[start..])
+        })
+        .collect();
+    assert_eq!(objects.len(), 3);
     assert!(objects[0].contains("%TO.CMfr,Illustrative Manufacturer*%\n%TO.CMPN,TEST-R100M-0603*%"));
-    for object in &objects[1..3] {
+    for object in &objects[1..] {
         assert!(!object.contains("%TO.CMfr,"));
         assert!(!object.contains("%TO.CMPN,"));
     }
-    for (index, object) in objects[..3].iter().enumerate() {
+    for (index, object) in objects.iter().enumerate() {
         assert!(object.starts_with(&format!("%TO.C,R{}*%\n", index + 1)));
         assert!(object.contains("%TO.CFtp,Resistor 0603 (1608 metric)*%\n%TO.CPgN,0603*%"));
         assert!(object.ends_with("D03*\n"));
@@ -413,12 +420,12 @@ fn native_part_selection_survives_first_save_storage_migration() {
         // Project the original command-created circuit into the supported historical flat encoding.
         let mut flat = crate::Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
         flat.layout = None;
-        let old = encode_documents(Arc::new(flat)).unwrap();
+        let old = crate::persistence::historical_documents(Arc::new(flat), "pcbcraft-project/9");
         session.open_snapshot(decode_documents(&old).unwrap());
         let params = placement(&session, true);
         apply(&mut session, PLACE_PART, params);
         let before = session.snapshot().unwrap();
-        let docs = encode_documents(before.clone()).unwrap();
+        let docs = crate::persistence::historical_documents(before.clone(), "pcbcraft-project/15");
         let migrated = crate::persistence::migrate_board_layout(docs.clone(), "electronics").unwrap();
         let reopened = decode_documents(&migrated).unwrap();
         assert_eq!(reopened.layout_root(), Some("electronics"));
@@ -445,7 +452,7 @@ fn native_part_without_package_adopts_legacy_allocation_watermark() {
     historical.layout = None;
     historical.numeric_id_high_water = None;
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
-    let documents = encode_documents(Arc::new(historical)).unwrap();
+    let documents = crate::persistence::historical_documents(Arc::new(historical), "pcbcraft-project/6");
     session = Session { libraries: session.libraries.clone(), ..Default::default() };
     session.open_snapshot(decode_documents(&documents).unwrap());
     assert!(session.project().unwrap().numeric_id_high_water.is_none());

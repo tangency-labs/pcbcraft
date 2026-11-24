@@ -50,6 +50,7 @@ impl PcbApp {
             if let Some(view) = self.views.view_mut(source) {
                 view.definition = None;
                 view.library = None;
+                view.manufacturing = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {
@@ -98,26 +99,42 @@ impl PcbApp {
     fn board_layout_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
-        let place = [RibbonTool {
-            icon: ToolIcon::Footprint,
-            label: "Footprint",
-            description: "Assign and place component footprints",
-            shortcut: "",
-            enabled: enabled && self.session.project().is_some_and(|p| p.components().next().is_some()),
-            active: false,
-            menu_check: None,
-        }];
-        let picked = workspace::ribbon_group(ui, "Place", &place);
-        if picked == Some(0) {
-            let component = self
-                .session
-                .project()
-                .and_then(|p| p.board_target().and_then(|target| p.board_view(target)))
-                .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
-            self.begin_footprint_assignment(component);
+        let place = [
+            RibbonTool {
+                icon: ToolIcon::Footprint,
+                label: "Footprint",
+                description: "Assign and place component footprints",
+                shortcut: "",
+                enabled: enabled && self.session.project().is_some_and(|p| p.components().next().is_some()),
+                active: false,
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Zone,
+                label: "Zone",
+                description: "Draw zone outlines",
+                shortcut: "",
+                enabled: enabled && self.can_route() && !editing,
+                active: self.views.active.board.zones.tool.is_some(),
+                menu_check: None,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Place", &place) {
+            Some(0) => {
+                let component = self
+                    .session
+                    .project()
+                    .and_then(|p| p.board_target().and_then(|target| p.board_view(target)))
+                    .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
+                self.begin_footprint_assignment(component);
+            }
+            Some(1) => self.begin_zone(),
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         self.board_route_tools(ui);
+        workspace::ribbon_separator(ui);
+        self.board_layout_actions(ui);
         workspace::ribbon_separator(ui);
         let idle = enabled && !crate::board_clipboard::busy(&self.views.active.board);
         let selected_items = self.session.project().is_some_and(|p| !crate::board_clipboard::selection(&self.views.active.board, p).is_empty());
@@ -214,8 +231,17 @@ impl PcbApp {
             Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
             _ => {}
         }
-        workspace::ribbon_separator(ui);
-        let design = [
+    }
+
+    /// Board-wide actions operate on the focused board. Removing pours keeps the authored zones.
+    fn board_layout_actions(&mut self, ui: &mut Ui) {
+        let project = self.session.project();
+        let enabled = project.and_then(|project| project.board_target()).is_some();
+        let board = project.and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)));
+        let can_pour = !self.views.active.board.editing_footprint() && board.is_some_and(|board| !board.zones().is_empty());
+        let fill_shortcut = ui.ctx().format_shortcut(&crate::POUR_COPPER);
+        let unfill_shortcut = ui.ctx().format_shortcut(&crate::REMOVE_POURS);
+        let tools = [
             RibbonTool {
                 icon: ToolIcon::Sync,
                 label: "Update PCB",
@@ -234,33 +260,52 @@ impl PcbApp {
                 active: false,
                 menu_check: None,
             },
+            RibbonTool {
+                icon: ToolIcon::Refill,
+                label: "Pour copper",
+                description: "Fill zone outlines with copper",
+                shortcut: &fill_shortcut,
+                enabled: can_pour,
+                active: false,
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Delete,
+                label: "Remove pours",
+                description: "Remove poured copper and keep zone outlines",
+                shortcut: &unfill_shortcut,
+                enabled: can_pour && board.is_some_and(|board| board.zone_fill_enabled()),
+                active: false,
+                menu_check: None,
+            },
         ];
-        match workspace::ribbon_group(ui, "Board", &design) {
+        match workspace::ribbon_group(ui, "Board", &tools) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
             Some(1) => self.begin_board_setup(self.views.active.id()),
+            Some(2) => self.refill_zones(),
+            Some(3) => self.unfill_zones(),
             _ => {}
         }
     }
 
-    /// Tracks and vias share their layer and dimension controls; planned copper tools
-    /// stay in the Route menu and cannot submit commands.
+    /// Tracks and vias share layer and dimension controls. Unfinished differential-pair and
+    /// length-tuning tools stay disabled in the shared Route menu.
     fn board_route_tools(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
         let planned =
             |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
-        let route = [RibbonTool {
-            icon: ToolIcon::Track,
-            label: "Track",
-            description: "Route tracks on the active copper layer",
-            shortcut: "X",
-            enabled: enabled && self.can_route() && !editing,
-            active: self.views.active.board.tracks.tool,
-            menu_check: None,
-        }];
         let via_shortcut = ui.ctx().format_shortcut(&crate::PLACE_VIA);
         let tools = [
-            route[0],
+            RibbonTool {
+                icon: ToolIcon::Track,
+                label: "Track",
+                description: "Route tracks on the active copper layer",
+                shortcut: "X",
+                enabled: enabled && self.can_route() && !editing,
+                active: self.views.active.board.tracks.tool,
+                menu_check: None,
+            },
             RibbonTool {
                 icon: ToolIcon::Via,
                 label: "Via",
@@ -270,27 +315,96 @@ impl PcbApp {
                 active: self.views.active.board.tracks.via_tool,
                 menu_check: None,
             },
-            RibbonTool {
-                icon: ToolIcon::Zone,
-                label: "Zone",
-                description: "Draw zone outlines",
-                shortcut: "",
-                enabled: enabled && self.can_route() && !editing,
-                active: self.views.active.board.zones.tool.is_some(),
-                menu_check: None,
-            },
         ];
-        let planned = [
+        let menu = [
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Router Settings",
+                description: "Interactive Router Settings",
+                shortcut: "",
+                enabled,
+                active: self.views.active.board.router_settings_open,
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
+            },
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
-            planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
         ];
-        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
+        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &menu) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
-            Some(2) => self.begin_zone(),
+            Some(2) => {
+                let view = &mut self.views.active;
+                view.board.router_settings_open = !view.board.router_settings_open;
+                if !view.board.router_settings_open {
+                    view.panels[crate::workspace_panels::ROUTER].cancel_drag();
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Draw live, view-local controls in the same movable shell as Layers and Properties.
+    /// An in-progress edit keeps its captured policy and may continue outside the card.
+    pub(super) fn router_settings_panel(&mut self, ui: &Ui, area: egui::Rect, dock: egui::Rect) -> egui::Rect {
+        use pcbcraft_chrome::{controls, settings, workspace::panels::Position};
+        use pcbcraft_engine::board::route::Mode;
+
+        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        let view = &mut self.views.active;
+        if !view.board.router_settings_open {
+            return egui::Rect::NOTHING;
+        }
+        let id = egui::Id::unique(("router_settings", self.views.host, view.id()));
+        let state = &mut view.board;
+        let panel = &mut view.panels[crate::workspace_panels::ROUTER];
+        let width = workspace::panels::card_width(area, false);
+        if panel.position() == Position::Floating && panel.saved_state().at.is_none() {
+            panel.set_position(Position::Floating, Some([(area.width() - width) / 2.0, 20.0]));
+        }
+        let available = enabled && !state.editing_footprint() && state.tracks.can_change_policy();
+        let (original, original_merge) = state.tracks.policy();
+        let (mut mode, mut merge) = (original, original_merge);
+        let mut close = false;
+        let (rect, toggle) = panel.show(ui, id, "Router Settings", area, dock, state.router_settings_collapsed, width, |ui| {
+            ui.add_enabled_ui(available, |ui| {
+                let mut policy = if mode == Mode::ShoveVias { Mode::Shove } else { mode };
+                ui.label("Policy");
+                if settings::choice(
+                    ui,
+                    "Router policy",
+                    &mut policy,
+                    &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
+                ) {
+                    mode = policy;
+                }
+                if policy == Mode::Shove {
+                    let mut vias = mode == Mode::ShoveVias;
+                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
+                        mode = if vias { Mode::ShoveVias } else { Mode::Shove };
+                    }
+                    settings::checkbox(ui, "Merge same-net copper", "Merge same-net copper", &mut merge);
+                }
+            })
+            .response
+            .on_disabled_hover_text("Finish or cancel the current edit to change router policy.");
+            let dismiss = controls::button(ui, "Close");
+            dismiss.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close Router Settings"));
+            close = dismiss.clicked();
+        });
+        if available {
+            if mode != original {
+                state.tracks.select_mode(mode);
+            }
+            if merge != original_merge {
+                state.tracks.select_same_net_merge(merge);
+            }
+        }
+        state.router_settings_collapsed ^= toggle;
+        if close {
+            state.router_settings_open = false;
+            panel.cancel_drag();
+        }
+        rect
     }
 
     /// Draw graphic paths on the active layer; routing and editing remain in Layout.
@@ -430,8 +544,19 @@ impl PcbApp {
             active: self.fabrication_exports.busy(),
             menu_check: None,
         }];
-        if workspace::ribbon_group(ui, "Fabrication", &outputs).is_some() {
-            self.export_fabrication(ui.ctx());
+        let review = RibbonTool {
+            icon: ToolIcon::Factory,
+            label: "Manufacturing",
+            description: "Open the Manufacturing workspace",
+            shortcut: "",
+            enabled: true,
+            active: false,
+            menu_check: None,
+        };
+        match workspace::ribbon_group(ui, "Fabrication", &[outputs[0], review]) {
+            Some(0) => self.export_fabrication(ui.ctx()),
+            Some(1) => self.message = self.enter_workspace(ui.ctx(), "manufacturing", Placement::Here).err(),
+            _ => {}
         }
     }
 
@@ -492,7 +617,9 @@ impl PcbApp {
             .map_err(|error| error.to_string())
             .and_then(|archive| {
                 let name = pcbcraft_engine::board::fabrication::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, archive)
+                let source = crate::board_outputs::Source { board: target, opening: self.session.history_root_revision() };
+                let directory = self.files.project_directory(&self.session).map(std::path::Path::to_owned);
+                self.fabrication_exports.start(ctx, source, name, archive, directory)
             });
         self.message = result.err();
     }
@@ -631,7 +758,7 @@ impl PcbApp {
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some() || pick.vertex_menu_edit))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some((source, error)) = pick.error
@@ -765,5 +892,32 @@ impl PcbApp {
             self.begin_board_setup(id);
             self.repaint_editors(ui.ctx());
         }
+    }
+}
+
+#[cfg(test)]
+mod pour_button_tests {
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    /// The real Board controls address the focused view; an unavailable target cannot inherit
+    /// the default board's pours. Render the ribbon directly so frame binding cannot repair it.
+    #[test]
+    fn pour_actions_follow_the_focused_board_target() {
+        let mut fixture = crate::tests::fill_harness();
+        let app = std::mem::take(fixture.state_mut());
+        let mut h = Harness::builder()
+            .with_context_setup(pcbcraft_chrome::install)
+            .with_size(egui::vec2(1200., 700.))
+            .build_ui_state(|ui, app: &mut crate::PcbApp| app.board_layout_actions(ui), app);
+        h.run();
+        assert!(!h.get_by_label("Fill zone outlines with copper").accesskit_node().is_disabled());
+        assert!(!h.get_by_label("Remove poured copper and keep zone outlines").accesskit_node().is_disabled());
+        h.state_mut().views.active.board.target = None;
+        h.run();
+        assert!(h.get_by_label("Fill zone outlines with copper").accesskit_node().is_disabled());
+        assert!(h.get_by_label("Remove poured copper and keep zone outlines").accesskit_node().is_disabled());
     }
 }

@@ -64,7 +64,8 @@ pub(super) struct Graph {
     pub networks: Vec<Network>,
     /// Current logical anchor membership; never serialized in the registry.
     pub by_anchor: BTreeMap<Anchor, usize>,
-    endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
+    /// Connected appearance and named-interface addresses used to verify exact net continuation.
+    pub(super) endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
 }
 
 /// Construction keys distinguish actual graph groups from isolated logical terminals/interfaces.

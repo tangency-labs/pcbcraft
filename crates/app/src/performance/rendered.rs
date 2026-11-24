@@ -149,8 +149,11 @@ impl RenderedApp {
             return Err("iterations must be 1..=10000 and screenshot timeout 1..=120 seconds".into());
         }
         let loaded = load_artifact(artifact)?;
-        if !matches!(loaded.trace_id.as_str(), super::replay::STANDARD_TRACE_ID | super::replay::COMMIT_TRACE_ID) {
-            return Err("rendered replay requires the versioned standard trace".into());
+        if !matches!(
+            loaded.trace_id.as_str(),
+            super::replay::STANDARD_TRACE_ID | super::replay::ENVELOPE_TRACE_ID | super::replay::COMMIT_TRACE_ID | super::replay::HELD_DRAG_TRACE_ID
+        ) {
+            return Err("rendered replay requires a versioned performance trace".into());
         }
         if !loaded.trace.last().is_some_and(|step| step.capture_after()) {
             return Err("rendered trace must end with a capturable release, move or edit".into());
@@ -369,10 +372,12 @@ impl RenderedApp {
                     input_policy:
                         "atomic press/release pairs; retained until UI acceptance; validated layer completion; at most 60 Hz; real framework clock"
                             .to_owned()
-                            + if self.artifact.trace_id == super::replay::COMMIT_TRACE_ID {
-                                "; validated preview and changed-target route publication; history/reopen checks outside commit interval"
-                            } else {
-                                ""
+                            + match self.artifact.trace_id.as_str() {
+                                super::replay::COMMIT_TRACE_ID => {
+                                    "; validated preview and changed-target route publication; history/reopen checks outside commit interval"
+                                }
+                                super::replay::ENVELOPE_TRACE_ID => "; validated capacity refusal on full-capacity boards",
+                                _ => "",
                             },
                     iterations: self.iterations,
                     warmup_frames: WARMUP,

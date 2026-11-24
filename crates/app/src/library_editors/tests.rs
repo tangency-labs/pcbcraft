@@ -346,6 +346,101 @@ fn canvas_selection_move_and_cancel_use_library_history() {
     assert_eq!(h.state().session.revision(), 0);
 }
 
+/// Both definition editors use the shared path handles, while their transactions preserve
+/// the library object's style, identity and independent undo history.
+#[test]
+fn symbol_and_footprint_polygons_share_the_canvas_path_editor() {
+    use pcbcraft_engine::{
+        authoring::Primitive,
+        board::definition::{Artwork, GraphicPurpose},
+        library_graphics::{Fill, Geometry, Graphic},
+        schematic::Point,
+    };
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let original = [point(5_080_000, -10_160_000), point(10_160_000, -10_160_000), point(10_160_000, -5_080_000), point(5_080_000, -5_080_000)];
+        let graphic = |points: Vec<Point>| Graphic {
+            geometry: Geometry::Polyline { points, closed: true },
+            stroke_nm: 180_000,
+            fill: if kind == Kind::Symbol { Fill::Solid } else { Fill::None },
+        };
+        let primitive = |points: Vec<Point>| {
+            if kind == Kind::Symbol {
+                Primitive::Graphic { graphic: graphic(points) }
+            } else {
+                Primitive::Artwork { artwork: Artwork { purpose: GraphicPurpose::Silkscreen, graphic: graphic(points) } }
+            }
+        };
+        let mut app = PcbApp::default();
+        app.new_library_item(kind);
+        let doc_id = app.library_editors.active.unwrap();
+        let doc = app.library_editors.documents.get_mut(&doc_id).unwrap();
+        doc.execute(0, Action::Insert { primitive: primitive(original.to_vec()) }).unwrap();
+        let object = doc.selected.unwrap();
+        let mut h =
+            Harness::builder().with_size(egui::vec2(1500., 950.)).with_max_steps(64).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let doc = h.state_mut().library_editors.documents.get_mut(&doc_id).unwrap();
+        assert!(doc.camera.set_snap_nm(10_000));
+        doc.camera.set_zoom(3.);
+        doc.camera.center_on(point(7_620_000, -7_620_000));
+        h.run();
+        let at = |h: &Harness<'_, PcbApp>, model| {
+            let rect = h.get_by_label("Library canvas").rect();
+            h.state().library_editors.documents[&doc_id].camera.screen(model, rect)
+        };
+        let edge = at(&h, point(7_620_000, -10_160_000));
+        let resize = at(&h, point(8_890_000, -11_430_000));
+        h.hover_at(edge);
+        h.run();
+        h.drag_at(edge);
+        h.run();
+        h.hover_at(resize);
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&doc_id].session.revision(), 1);
+        h.drop_at(resize);
+        h.run();
+        let mut resized = original.to_vec();
+        resized[0].y_nm = -11_430_000;
+        resized[1].y_nm = -11_430_000;
+        let snapshot = |h: &Harness<'_, PcbApp>| h.state().library_editors.documents[&doc_id].session.snapshot();
+        assert_eq!(snapshot(&h).objects[&object], primitive(resized.clone()));
+
+        let vertex = point(7_620_000, -11_430_000);
+        let edge = at(&h, vertex);
+        for label in ["Add vertex", "Remove vertex"] {
+            h.hover_at(edge);
+            h.run();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: edge, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run();
+            }
+            crate::tests::click(&mut h, label);
+            let current = snapshot(&h);
+            let authored = &current.objects[&object];
+            let mut expected = resized.clone();
+            if label == "Add vertex" {
+                let geometry = match authored {
+                    Primitive::Graphic { graphic } => &graphic.geometry,
+                    Primitive::Artwork { artwork } => &artwork.graphic.geometry,
+                    other => panic!("expected the original graphic type, got {other:?}"),
+                };
+                let Geometry::Polyline { points, .. } = geometry else { panic!("expected a vertex path") };
+                assert!(points[1].x_nm.abs_diff(vertex.x_nm) <= 4);
+                assert_eq!(points[1].y_nm, vertex.y_nm);
+                expected.insert(1, points[1]);
+            }
+            assert_eq!(authored, &primitive(expected));
+        }
+        assert_eq!(h.state().library_editors.documents[&doc_id].session.revision(), 4);
+        for _ in 0..3 {
+            crate::tests::click(&mut h, "Undo Library Edit");
+        }
+        assert_eq!(snapshot(&h).objects[&object], primitive(original.to_vec()));
+        assert_eq!(h.state().session.revision(), 0);
+    }
+}
+
 /// A completed old save cannot clear newer edits, a busy owner's close is refused, and a lost
 /// worker releases the slot so file handling remains usable after failure.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1337,6 +1432,85 @@ fn library_command_chords_use_the_pressed_event_modifiers() {
                 }
             }
         }
+    }
+}
+
+/// Tool letters and R's direction read the pressed event's own modifiers too: a
+/// command released before batch end cannot leak a chord into a tool start, a
+/// command arriving after the letter cannot suppress it, and a shift released
+/// before batch end cannot flip the rotation direction.
+#[test]
+fn library_tool_keys_and_rotate_use_the_pressed_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [egui::Key::P, egui::Key::L, egui::Key::T] {
+            for (command_at_press, command_at_end, focused, starts) in
+                [(false, false, true, true), (true, false, true, false), (false, true, true, true), (false, false, false, false)]
+            {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                let modifiers = |command| egui::Modifiers { ctrl: command, command, ..Default::default() };
+                h.input_mut().focused = focused;
+                h.input_mut().events.extend([
+                    egui::Event::ModifiersChanged(modifiers(command_at_press)),
+                    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::ModifiersChanged(modifiers(command_at_end)),
+                ]);
+                h.run();
+                assert_eq!(
+                    matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { .. }),
+                    starts,
+                    "{kind:?}: {key:?} tool start must follow the press (press={command_at_press}, end={command_at_end}, focus={focused})"
+                );
+            }
+        }
+        // The selection rotates around the first object's anchor, so the last
+        // object's anchor lands in a different place for +90 and -90 turns.
+        let anchor_after = |shift_at_press: bool, shift_at_end: bool, focused: bool| {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let all: Vec<u64> = h.state().library_editors.documents[&id].session.snapshot().objects.keys().copied().collect();
+            let last = *all.last().unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = all.into_iter().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            let modifiers = |shift| egui::Modifiers { shift, ..Default::default() };
+            h.input_mut().focused = focused;
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(shift_at_press)),
+                egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: Some(egui::Key::R),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: modifiers(shift_at_press),
+                },
+                egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: Some(egui::Key::R),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: modifiers(shift_at_press),
+                },
+                egui::Event::ModifiersChanged(modifiers(shift_at_end)),
+            ]);
+            h.run();
+            h.state().library_editors.documents[&id].session.snapshot().objects[&last].anchor()
+        };
+        assert_eq!(anchor_after(true, false, true), anchor_after(true, true, true), "{kind:?}: Shift+R direction must follow the press event");
+        assert_eq!(anchor_after(false, true, true), anchor_after(false, false, true), "{kind:?}: R must ignore a shift arriving after the letter");
+        assert_ne!(anchor_after(true, true, true), anchor_after(false, false, true), "{kind:?}: +90 and -90 quarter turns must land differently");
+        assert_ne!(anchor_after(true, false, false), anchor_after(true, true, true), "{kind:?}: a focus-loss batch must not rotate");
     }
 }
 

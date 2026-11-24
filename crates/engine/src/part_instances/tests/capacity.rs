@@ -390,6 +390,8 @@ fn published_schemas_state_the_pad_and_terminal_limits() {
     let footprints = read(include_str!("../../../../../docs/schemas/footprint-v1.schema.json"));
     assert_eq!(footprints["properties"]["pads"]["maxItems"], MAX_PADS);
     assert_eq!(footprints["properties"]["artwork"]["maxItems"], MAX_ARTWORK);
+    let slotted = read(include_str!("../../../../../docs/schemas/footprint-v5.schema.json"));
+    assert_eq!(slotted["properties"]["pads"]["maxItems"], MAX_PADS);
     for symbols in [
         include_str!("../../../../../docs/schemas/symbol-v1.schema.json"),
         include_str!("../../../../../docs/schemas/symbol-v2.schema.json"),

@@ -172,7 +172,7 @@ fn parameters_are_stored_one_per_line_and_round_trip() {
     let untouched = encode_documents(s.snapshot().unwrap()).unwrap();
     let entry: Value = serde_json::from_slice(&untouched[ENTRY_POINT]).unwrap();
     assert!(entry.get("parameters").is_none());
-    assert_ne!(entry["format"], "pcbcraft-project/22");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Title","value":"Power supply"})).unwrap();
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(documents[ENTRY_POINT], untouched[ENTRY_POINT]);
@@ -184,7 +184,7 @@ fn parameters_are_stored_one_per_line_and_round_trip() {
     let project = s.snapshot().unwrap();
     let documents = encode_documents(project.clone()).unwrap();
     let entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/22");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(entry["parameters"], json!({"Company":"Tangency","Revision":"B"}));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(reopened.parameters(), project.parameters());
@@ -198,7 +198,7 @@ fn parameters_are_stored_one_per_line_and_round_trip() {
     let lines = |bytes: &[u8]| String::from_utf8(bytes.to_vec()).unwrap().lines().map(str::to_owned).collect::<Vec<_>>();
     let (old, new) = (lines(&documents[ENTRY_POINT]), lines(&changed[ENTRY_POINT]));
     assert_eq!(old.iter().zip(&new).filter(|(a, b)| a != b).count(), 1);
-    // Removing the last project value returns to the previous format.
+    // Removing the last project value omits the optional record under the same format.
     edit(&mut s, SET, json!({"scope":"project","name":"Revision","value":null})).unwrap();
     edit(&mut s, SET, json!({"scope":"project","name":"Company","value":null})).unwrap();
     let entry: Value = serde_json::from_slice(&encode_documents(s.snapshot().unwrap()).unwrap()[ENTRY_POINT]).unwrap();
@@ -225,7 +225,14 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(ENTRY_POINT, &|v| v["format"] = json!("pcbcraft-project/21")).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({"bad name":"x"})).is_err());
-    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).is_err());
+    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).is_ok());
+    assert!(
+        mutate(ENTRY_POINT, &|v| {
+            v["format"] = json!("pcbcraft-project/22");
+            v.as_object_mut().unwrap().remove("parameters");
+        })
+        .is_err()
+    );
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title":"x".repeat(MAX_VALUE_LEN + 1)})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());
