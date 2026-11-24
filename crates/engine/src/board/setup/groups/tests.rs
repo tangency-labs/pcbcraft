@@ -379,30 +379,30 @@ fn named_group_fields_and_unicode_labels_use_native_validation() {
 
 /// A portable profile maps group member identities to the target board's retained copper.
 #[test]
-fn profile_groups_rebase_members_and_require_the_group_header() {
+fn profile_groups_rebase_members_and_require_a_compatible_header() {
+    use super::super::profile::{CURRENT_FORMAT, SetupProfile};
     let mut source = session(4);
     let source_ids = copper(&source);
     let mut setup = candidate(&source);
     setup["stackup"]["layer_groups"] = json!([{"id":crate::fresh_id().unwrap(),"name":"Inner","layers":[source_ids[1],source_ids[2]]}]);
     apply(&mut source, setup);
-    let profile =
-        super::super::profile::SetupProfile::new("Shared stack".into(), source.project().unwrap().board_setup().unwrap().clone(), Default::default())
-            .unwrap();
+    let profile = SetupProfile::new("Shared stack".into(), source.project().unwrap().board_setup().unwrap().clone(), Default::default()).unwrap();
     let bytes = profile.encode().unwrap();
     let mut raw: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(raw["format"], "pcbcraft-setup-profile/5");
-    assert_eq!(super::super::profile::SetupProfile::decode(&bytes).unwrap(), profile);
+    assert_eq!(raw["format"], CURRENT_FORMAT);
+    assert_eq!(SetupProfile::decode(&bytes).unwrap(), profile);
     let target = session(4);
     let target_ids = copper(&target);
-    let rebased = target.project().unwrap().board_setup().unwrap().with_profile(&profile).unwrap();
+    raw["format"] = json!("pcbcraft-setup-profile/5");
+    let historical = SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    assert_eq!(historical.encode().unwrap(), bytes);
+    let rebased = target.project().unwrap().board_setup().unwrap().with_profile(&historical).unwrap();
     assert_eq!(rebased.stackup().layer_groups[0].layers, vec![target_ids[1], target_ids[2]]);
     raw["format"] = json!("pcbcraft-setup-profile/1");
     raw["setup"]["stackup"]["layer_groups"] = json!([]);
-    assert!(
-        super::super::profile::SetupProfile::decode(&serde_json::to_vec(&raw).unwrap())
-            .unwrap_err()
-            .contains("layer_groups field requires setup profile version 5")
-    );
+    assert!(SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap_err().contains("layer_groups field requires setup profile version 5"));
+    raw["format"] = json!(CURRENT_FORMAT);
+    assert!(SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap_err().contains("must be omitted when empty"));
     let mut query = session(4);
     let error = query.execute(INSPECT_LAYER_GROUPS, &json!({"board":crate::fresh_id().unwrap()})).unwrap_err();
     assert!(matches!(error, CommandError::NotFound(_)), "{error:?}");
@@ -513,7 +513,7 @@ fn groups_preserve_reports_vias_and_profile_adoptions() {
         super::super::profile::SetupProfile::new("Combined setup".into(), s.project().unwrap().board_setup().unwrap().clone(), Default::default())
             .unwrap();
     let bytes = profile.encode().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap()["format"], "pcbcraft-setup-profile/5");
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap()["format"], super::super::profile::CURRENT_FORMAT);
     assert_eq!(super::super::profile::SetupProfile::decode(&bytes).unwrap(), profile);
     let mut without_groups = candidate(&s);
     without_groups["stackup"]["layer_groups"] = json!([]);
