@@ -2,7 +2,7 @@
 
 Local implementation `d6ce94a271e6197c33903f5e322058c4dc86117d` applies assigned rules to contact defaults,
 changed copper, snapshot queries/overlays and both DRC paths. The
-[consumer contract](../../../../docs/net-class-consumers.md) defines identities,
+[consumer contract](../../../../docs/formats/net-class-consumers.md) defines identities,
 conflicts, provenance and limits. [Verification](verification.json) records checks;
 [the failure-path review](failure-review.md) separates exercised cases from code review.
 

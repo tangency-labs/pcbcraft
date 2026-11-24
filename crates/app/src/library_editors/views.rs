@@ -21,7 +21,10 @@ pub(super) struct Presentation {
     drawing_stroke_nm: i64,
     drawing_fill: pcbcraft_engine::library_graphics::Fill,
     array_requested: bool,
+    courtyard_requested: bool,
     details_requested: bool,
+    show_courtyard: bool,
+    selected_vertex: Option<usize>,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -40,7 +43,10 @@ impl Presentation {
             drawing_stroke_nm: doc.drawing_stroke_nm,
             drawing_fill: doc.drawing_fill,
             array_requested: false,
+            courtyard_requested: false,
             details_requested: false,
+            show_courtyard: doc.show_courtyard,
+            selected_vertex: None,
             draft: None,
             camera: doc.camera.fork_navigation(),
             collapsed: doc.collapsed,
@@ -58,7 +64,10 @@ impl Presentation {
         std::mem::swap(&mut self.drawing_stroke_nm, &mut doc.drawing_stroke_nm);
         std::mem::swap(&mut self.drawing_fill, &mut doc.drawing_fill);
         std::mem::swap(&mut self.array_requested, &mut doc.array_requested);
+        std::mem::swap(&mut self.courtyard_requested, &mut doc.courtyard_requested);
         std::mem::swap(&mut self.details_requested, &mut doc.details_requested);
+        std::mem::swap(&mut self.show_courtyard, &mut doc.show_courtyard);
+        std::mem::swap(&mut self.selected_vertex, &mut doc.selected_vertex);
         std::mem::swap(&mut self.draft, &mut doc.draft);
         std::mem::swap(&mut self.camera, &mut doc.camera);
         std::mem::swap(&mut self.collapsed, &mut doc.collapsed);
@@ -153,6 +162,9 @@ impl PcbApp {
     }
     /// Native titles and pane headers resolve the actual document instead of its parked project target.
     pub(crate) fn view_title(&self, view: ViewId) -> String {
+        if self.views.view(view).is_some_and(|view| view.manufacturing.is_some()) {
+            return "Manufacturing".into();
+        }
         if self.views.view(view).is_some_and(|view| view.library.is_some()) {
             return "Parts Library".into();
         }
@@ -271,6 +283,7 @@ impl PcbApp {
             target.release_input();
             target.definition = Some(document);
             target.library = None;
+            target.manufacturing = None;
         }
         self.home = false;
         if host == self.views.host {
@@ -301,8 +314,11 @@ impl PcbApp {
         let Some(panel) = self.views.view_mut(view).map(|view| &mut view.panels[crate::workspace_panels::PROPERTIES]) else { return };
         let expanded = ui.push_id(("library_document", view, id), |ui| doc.show(ui, self.preferences.navigation, active, panel)).inner;
         let array = std::mem::take(&mut doc.array_requested).then(|| editing::ArrayDraft::new(id, view, doc));
+        let courtyard_dialog = std::mem::take(&mut doc.courtyard_requested).then(|| courtyard::CourtyardDraft::new(id, view, doc));
         if let Some(array) = array {
             self.dialog = Dialog::LibraryArray(Box::new(array));
+        } else if let Some(draft) = courtyard_dialog {
+            self.dialog = Dialog::LibraryCourtyard(Box::new(draft));
         }
         if expanded {
             self.dialog = Dialog::LibraryProperties(id, view);

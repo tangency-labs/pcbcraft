@@ -53,6 +53,26 @@ fn aperture_fixture_with_pitch(
     aperture_fixture_with_radii_and_pitch(&pads, rotation, bottom, (offset, pitch), position, plated_from, mapping)
 }
 
+/// Add optional authored graphics or pad labels before pinning and placing the library item.
+fn decorated_aperture_fixture(
+    pads: &[(PadShape, i64, i64, u16)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    position: Point,
+    plated_from: Option<usize>,
+    mapping: Option<serde_json::Value>,
+    decorate: impl FnOnce(&mut crate::authoring::Session),
+) -> Session {
+    let pads: Vec<_> = pads
+        .iter()
+        .map(|&(shape, width, height, pad_rotation)| {
+            let radius = if shape == PadShape::RoundedRectangle { (width.min(height) / 4).max(1) } else { 0 };
+            (shape, width, height, pad_rotation, radius)
+        })
+        .collect();
+    build_footprint_fixture(&pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, &[], decorate)
+}
+
 /// Author command-built lands with an explicit corner radius per pad.
 fn aperture_fixture_with_radii(
     pads: &[(PadShape, i64, i64, u16, i64)],
@@ -76,6 +96,34 @@ fn aperture_fixture_with_radii_and_pitch(
     plated_from: Option<usize>,
     mapping: Option<serde_json::Value>,
 ) -> Session {
+    footprint_fixture(pads, (rotation, bottom), (offset, pitch), position, plated_from, mapping, &[])
+}
+
+/// Build a physical package with an explicit corner radius per pad and optional non-plated
+/// holes through normal editor transactions.
+fn footprint_fixture(
+    pads: &[(PadShape, i64, i64, u16, i64)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    position: Point,
+    plated_from: Option<usize>,
+    mapping: Option<serde_json::Value>,
+    holes: &[crate::board::definition::CircularNpth],
+) -> Session {
+    build_footprint_fixture(pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, holes, |_| {})
+}
+
+/// Shared footprint-fixture builder supporting explicit pad radii, non-plated holes and
+/// optional authored graphics or pad labels before pinning and placing the library item.
+fn build_footprint_fixture(
+    pads: &[(PadShape, i64, i64, u16, i64)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    (position, plated_from): (Point, Option<usize>),
+    mapping: Option<serde_json::Value>,
+    holes: &[crate::board::definition::CircularNpth],
+    decorate: impl FnOnce(&mut crate::authoring::Session),
+) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     editor.execute(editor.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
@@ -97,6 +145,10 @@ fn aperture_fixture_with_radii_and_pitch(
         let action = if index == 0 { Action::Replace { object: 1, primitive } } else { Action::Insert { primitive } };
         editor.execute(editor.revision(), action).unwrap();
     }
+    decorate(&mut editor);
+    for &hole in holes {
+        editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
+    }
     let definition = editor.snapshot().footprint().unwrap();
     let document = editor.snapshot().export_native().unwrap().to_string();
     let mut s = Session::default();
@@ -110,11 +162,11 @@ fn aperture_fixture_with_radii_and_pitch(
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":copper_layers,"expected_revision":s.revision()})).unwrap();
     s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let component = s.project().unwrap().components().next().unwrap().id();
-    let unconnected = if mapping.is_some() { Vec::new() } else { (3..=pads.len()).map(|number| number.to_string()).collect() };
+    let unconnected: Vec<&str> = if mapping.is_some() { Vec::new() } else { definition.pads[2..].iter().map(|pad| pad.number.as_str()).collect() };
     s.apply(
         crate::ASSIGN_FOOTPRINT,
         &json!({"component":component,"library":definition.library,"definition":definition.id,
-        "definition_revision":definition.revision,"mapping":mapping.unwrap_or_else(|| json!({"1":"1","2":"2"})),
+        "definition_revision":definition.revision,"mapping":mapping.unwrap_or_else(|| json!({"1":definition.pads[0].number,"2":definition.pads[1].number})),
         "unconnected_pads":unconnected,"expected_revision":s.revision()}),
     )
     .unwrap();
@@ -203,23 +255,36 @@ fn gerber_x3_places_one_main_flash_per_part_on_its_own_side() {
     for (file, function) in [(top, "L1,Top"), (bottom, "L4,Bot")] {
         assert!(file.contents.contains(&format!("%TF.FileFunction,Component,{function}*%\n")));
         assert!(file.contents.contains("%FSLAX46Y46*%\n%MOMM*%\n"));
-        assert!(file.contents.contains("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD.AperFunction*%\nD10*\n"));
-        assert_eq!(file.contents.lines().filter(|line| *line == "D10*").count(), 1);
+        assert!(file.contents.contains("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD.AperFunction*%\n"));
+        assert!(file.contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD11P,0.360000X4X0.0*%\n%TD.AperFunction*%\n"));
+        assert_eq!(file.contents.lines().filter(|line| *line == "D10*").count(), if function == "L1,Top" { 2 } else { 1 });
         assert!(!file.contents.contains(".SameCoordinates"));
+        assert!(!file.contents.contains("%TO.CRot,"));
     }
-    let object_body = |file: &Output| file.contents.split_once("\nD10*\n").unwrap().1.to_owned();
+    let main_objects = |file: &Output| {
+        file.contents
+            .split("%TD*%\n")
+            .filter_map(|object| {
+                let start = object.find("%TO.C,")?;
+                object.ends_with("D03*\n").then_some(&object[start..])
+            })
+            .collect::<String>()
+    };
     assert_eq!(
-        object_body(top),
+        main_objects(top),
         concat!(
             "%TO.C,R2*%\n%TO.CVal,4k7\\u002C±1\\u0025\\u002A\\u005Cnominal*%\n",
-            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX-1000000Y1000001D03*\n%TD*%\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX-1000000Y1000001D03*\n",
             "%TO.C,R3*%\n%TO.CVal,R*%\n",
-            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX4000000Y-5999999D03*\n%TD*%\nM02*\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX4000000Y-5999999D03*\n",
         )
     );
-    assert_eq!(object_body(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n%TD*%\nM02*\n"));
+    assert_eq!(main_objects(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n"));
     assert_eq!(layers, view(&s).gerber_part_layers().unwrap());
-    assert!(bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains("%TF.SameCoordinates,Original*%")));
+    let frame_id = same_coordinates_id(view(&s).placement_origin().unwrap());
+    assert!(
+        bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains(&format!("%TF.SameCoordinates,{frame_id}*%")))
+    );
     assert_eq!(bare_board, view(&s).fabrication_outputs().unwrap());
     assert_eq!(revision, s.revision());
     assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
@@ -272,6 +337,82 @@ fn gerber_x3_flashes_the_adopted_centroid_in_top_view() {
     assert_eq!(flash(&s), "X29800000Y4700000D03*");
     adopt(&mut s, uuid::Uuid::from_u128(2), "Second house", 400_000);
     assert_eq!(flash(&s), "X30000000Y5000000D03*");
+}
+
+/// Ucamco Gerber rev. 2026.05 §§4.2.2, 4.7.2, 5.6.10 and 5.6.14–15: in 4.6 mm the
+/// authored outline centerline is exact to a nanometre. `.P` uses physical pad labels and the
+/// key pin uses the mandated 0.360 mm four-point diamond instead of the ordinary 0.100 mm circle.
+#[test]
+fn gerber_x3_pins_and_closed_outlines_use_the_placed_package_geometry() {
+    use crate::{
+        authoring::{Action, Primitive},
+        board::definition::Artwork,
+        library_graphics::{Fill, Geometry, Graphic},
+    };
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let mut s = decorated_aperture_fixture(
+        &[(PadShape::Circle, 800_000, 800_000, 0); 2],
+        (90, true),
+        (p(123, 457), p(2_000_000, 0)),
+        p(31_000_001, -21_000_003),
+        None,
+        None,
+        |editor| {
+            for (object, number) in [(1, "B2"), (4, "A1")] {
+                let Primitive::Pad { mut pad } = editor.snapshot().objects[&object].clone() else { panic!("pad") };
+                pad.number = number.into();
+                editor.execute(editor.revision(), Action::Replace { object, primitive: Primitive::Pad { pad } }).unwrap();
+            }
+            let rectangle = Geometry::Rectangle { min: p(-600_001, -410_003), max: p(500_007, 420_013) };
+            for (purpose, geometry) in [
+                (GraphicPurpose::Fabrication, rectangle.clone()),
+                (GraphicPurpose::Courtyard, Geometry::Circle { center: p(-10, 20), radius_nm: 900_019 }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 360 }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(-200, -300), radius_nm: 920_000, start_degrees: 14, sweep_degrees: -360 }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57), p(13, 27)], closed: false }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57)], closed: false }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 359 }),
+                (GraphicPurpose::Fabrication, Geometry::Line { from: p(0, 0), to: p(4, 3) }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(0, 0), p(8, 8), p(0, 8), p(7, 0)], closed: true }),
+                (GraphicPurpose::Silkscreen, rectangle),
+            ] {
+                let artwork = Artwork { purpose, graphic: Graphic { geometry, stroke_nm: 150_000, fill: Fill::None } };
+                editor.execute(editor.revision(), Action::Insert { primitive: Primitive::Artwork { artwork } }).unwrap();
+            }
+        },
+    );
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"point","x_nm":8_000_000,"y_nm":10_000_001}}),
+    )
+    .unwrap();
+    let output = view(&s).gerber_part_layers().unwrap();
+    let [bottom] = output.files.as_slice() else { panic!("Expected only a bottom layer") };
+    let contents = &bottom.contents;
+    assert!(contents.contains("%TF.FileFunction,Component,L2,Bot*%\n"));
+    assert!(contents.contains("%FSLAX46Y46*%\n%MOMM*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD11C,0.100000*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD12P,0.360000X4X0.0*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentOutline,Body*%\n%ADD13C,0.100000*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentOutline,Courtyard*%\n%ADD14C,0.100000*%\n%TD.AperFunction*%\n"));
+    // Bottom +90° maps (x,y) to (y,-x) in this output frame. These are the independently
+    // calculated centers and contour commands, including the closing draw and arc center.
+    let (_, geometry) = contents.split_once("\nD11*\n").unwrap();
+    assert_eq!(
+        geometry,
+        concat!(
+            "%TO.P,R1,B2*%\nX23000458Y30999881D03*\n%TD*%\n",
+            "D12*\n%TO.P,R1,A1*%\nX23000458Y28999881D03*\n%TD*%\n",
+            "D13*\n%TO.C,R1*%\nX22589998Y31600005D02*\n",
+            "X22589998Y30499997D01*\nX23420014Y30499997D01*\nX23420014Y31600005D01*\nX22589998Y31600005D01*\n%TD*%\n",
+            "D14*\n%TO.C,R1*%\nX23900040Y31000014D02*\nG75*\nG03*\nX23900040Y31000014I-900019J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23910201Y30999904D02*\nG75*\nG03*\nX23910201Y30999904I-910000J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23919701Y31000204D02*\nG75*\nG03*\nX23919701Y31000204I-920000J0D01*\nG01*\n%TD*%\n",
+            "D13*\n%TO.C,R1*%\nX23000028Y30999991D02*\n",
+            "X23000028Y30999971D01*\nX23000058Y30999991D01*\nX23000028Y30999991D01*\n%TD*%\nM02*\n",
+        )
+    );
 }
 
 /// Empty sides stay absent, and unavailable setup or origin produces a specific refusal.
@@ -475,6 +616,16 @@ fn read_coordinate(value: &str) -> Result<i64, &'static str> {
     Ok(number)
 }
 
+/// Deterministic `.SameCoordinates` GUID for `Frame::BOARD_ZERO` in direct `Gerber` unit tests.
+fn board_zero_frame_id() -> String {
+    same_coordinates_id(Resolved {
+        anchor: crate::board::origin::Anchor::BoardZero,
+        source: crate::board::origin::Source::Builtin,
+        at: Point { x_nm: 0, y_nm: 0 },
+        axes: "x_right_y_up",
+    })
+}
+
 /// Read the fixture subset: file identity, modes, standard and rounded apertures,
 /// the writer's per-definition/region TA/TD pairs and object attribute lifetimes,
 /// operation order and contour closure.
@@ -485,10 +636,15 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
     }
     let mut lines = text.lines();
     let software = format!("%TF.GenerationSoftware,PCBcraft,PCBcraft,{}*%", env!("CARGO_PKG_VERSION"));
-    for expected in ["G04 PCBcraft fabrication output*", software.as_str(), "%TF.SameCoordinates,Original*%"] {
+    for expected in ["G04 PCBcraft fabrication output*", software.as_str()] {
         if lines.next() != Some(expected) {
             return Err("invalid header");
         }
+    }
+    let same_coordinates =
+        lines.next().and_then(|line| line.strip_prefix("%TF.SameCoordinates,")).and_then(|line| line.strip_suffix("*%")).ok_or("invalid header")?;
+    if uuid::Uuid::parse_str(same_coordinates).is_err() {
+        return Err("invalid header");
     }
     let function = lines
         .next()
@@ -733,6 +889,10 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
         false,
     );
     let outputs = view(&s).fabrication_outputs().unwrap();
+    let archive = Archive::new(&outputs).unwrap();
+    let plotted = review::Package::read(archive.bytes()).unwrap();
+    let top = plotted.layers.iter().find(|layer| layer.role == review::LayerRole::TopCopper).unwrap();
+    assert_eq!(top.marks.len(), 13);
     let read = read_gerber(&outputs, TOP_COPPER);
     assert!(read.strokes.is_empty() && read.regions.is_empty());
     assert_eq!(read.apertures.len(), 4);
@@ -849,7 +1009,7 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
         gerber.body.push_str("X0Y0D03*\n");
     }
     gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000, Some(ApertureFunction::Material));
-    let text = gerber.finish("Soldermask,Top", "Negative");
+    let text = gerber.finish("Soldermask,Top", "Negative", &board_zero_frame_id());
     let read = try_read_gerber(&text, "Soldermask,Top", "Negative").unwrap();
     assert_eq!(read.apertures.len(), 7);
     assert_eq!(read.flashes.len(), 7);
@@ -1018,8 +1178,9 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
     let set = "%TA.AperFunction,SMDPad,CuDef*%\n";
     let clear = "%TD.AperFunction*%\n";
     let definition_block = format!("{set}{first_definition}\n{clear}");
+    let same_coordinates_line = text.lines().find(|line| line.starts_with("%TF.SameCoordinates,")).unwrap();
     for (mutant, reason) in [
-        (text.replace("%TF.SameCoordinates,Original*%\n", ""), "invalid header"),
+        (text.replace(&format!("{same_coordinates_line}\n"), ""), "invalid header"),
         (text.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Unknown*%"), "invalid file function"),
         (text.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Legend,Top*%"), "wrong file function"),
         (text.replace("Copper,L1,Top", "Copper,L1,Bot"), "wrong file side"),
@@ -1439,6 +1600,7 @@ fn tiny_and_composed_rotations_do_not_flash_rectangular_or_obround_apertures() {
             assert_eq!(axis_aligned_size(&corners), None);
         }
         let outputs = view(&s).fabrication_outputs().unwrap();
+        review::Package::read(Archive::new(&outputs).unwrap().bytes()).expect("Manufacturing opens the exported rotated and collapsed lands");
         for output in surface_files(bottom) {
             let read = read_gerber(&outputs, output);
             assert!(read.apertures.values().all(|a| a.kind == 'C' && a.width > 0 && a.height > 0));
@@ -1617,11 +1779,11 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             let read = read_gerber(&outputs, output);
             assert_eq!(read.flashes, expected, "{}", output.0);
             assert!(read.regions.is_empty() && read.strokes.is_empty());
-            let reference = view(&s).footprints().next().unwrap().reference;
+            let reference = view(&s).footprints().next().unwrap().reference.into_owned();
             for (index, (_, object)) in read.objects.iter().enumerate() {
                 if output.1.starts_with("Copper,") {
                     assert_eq!(object.net.as_deref(), Some(""));
-                    assert_eq!(object.component.as_deref(), Some(reference));
+                    assert_eq!(object.component.as_deref(), Some(reference.as_str()));
                     let pin = (!output.1.ends_with(",Inr")).then(|| (reference.to_owned(), (index + 1).to_string()));
                     assert_eq!(object.pin, pin);
                 } else {
@@ -1727,7 +1889,7 @@ fn gerber_object_attributes_round_trip_two_layer_board_netlist() {
     let outputs = s.export_fabrication(&json!({"board":board})).unwrap();
     assert_eq!(outputs, s.export_fabrication(&json!({"board":board})).unwrap());
     assert_eq!(s.revision(), revision);
-    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.to_owned())).collect();
+    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.into_owned())).collect();
     let inspection = s.inspect();
     let netlist = &inspection["project"]["board"]["netlist"];
     assert_eq!(netlist["basis"], "accepted");
@@ -1888,7 +2050,7 @@ fn gerber_object_field_escaping_is_reversible_and_keeps_reserved_names_distinct(
         gerber.object(Object { net: Some(name), component: Some((reference, Some(pin))) }, |gerber| {
             gerber.stroke(&[Point { x_nm: 0, y_nm: 0 }], 100_000, Some(ApertureFunction::ThroughHolePad));
         });
-        let text = gerber.finish("Copper,L1,Top", "Positive");
+        let text = gerber.finish("Copper,L1,Top", "Positive", &board_zero_frame_id());
         let object = try_read_gerber(&text, "Copper,L1,Top", "Positive").unwrap().objects.remove(0).1;
         assert_eq!(object.net.as_deref(), Some(exported));
         assert_eq!(object.pin, Some((reference.to_owned(), pin.to_owned())));
@@ -2005,27 +2167,93 @@ fn outputs_require_setup_and_a_closed_outline() {
     assert!(error.contains("closed Board Outline"), "{error}");
 }
 
-/// Ucamco Gerber 2026.05 §§5.6.10 and 6.5: a disconnected line is not the physical profile.
-/// Preserve the existing line and loop coordinates but separate the same-width apertures.
+/// Open outline artwork stays in the board document while export uses the closed profile.
 #[test]
-fn only_the_closed_outline_drawing_gets_the_profile_function() {
+fn fabrication_omits_open_outline_artwork_from_the_profile_file() {
+    use crate::persistence::encode_documents;
+
     let mut s = routed_fixture();
     outline(&mut s);
-    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let original = view(&s).fabrication_outputs().unwrap();
     let stray = [Point { x_nm: 30_000_000, y_nm: 0 }, Point { x_nm: 35_000_000, y_nm: 0 }];
-    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    add_fabrication_drawing(&mut s, LayerPurpose::Outline, &stray, false);
+    assert!(view(&s).drawings().iter().any(|drawing| !drawing.closed && drawing.points == stray));
+    let revision = s.revision();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let outputs = view(&s).fabrication_outputs().unwrap();
-    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
-    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
-    let loop_points =
-        [(-5_000_000, 5_000_000), (25_000_000, 5_000_000), (25_000_000, -35_000_000), (-5_000_000, -35_000_000), (-5_000_000, 5_000_000)]
-            .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
-    let expected: Vec<_> = loop_points.windows(2).map(|pair| (pair[0], pair[1], profile)).collect();
-    let (tagged, untagged): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
-    assert_eq!(read.apertures.len(), 2);
-    assert!(read.flashes.is_empty() && read.regions.is_empty());
-    assert_eq!(tagged, expected);
-    assert_eq!(untagged, [(stray[0], stray[1], ReadAperture { function: None, ..profile })]);
+    assert_eq!(file(&outputs, "-Outline.gbr"), file(&original, "-Outline.gbr"));
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Add an open or closed path through the shared drawing command, not by mutating a test board.
+fn add_fabrication_drawing(s: &mut Session, purpose: LayerPurpose, points: &[Point], closed: bool) {
+    let layer = view(s).layers().into_iter().find(|layer| layer.purpose == purpose).unwrap().id;
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":closed,"stroke_nm":100_000,"expected_revision":s.revision()}))
+        .unwrap();
+}
+
+/// Refuse export on a board with only an almost closed path and preserve its undo history.
+#[test]
+fn fabrication_requires_a_closed_outline_loop() {
+    use crate::persistence::encode_documents;
+
+    let mut s = routed_fixture();
+    let open = [
+        Point { x_nm: -1_250_001, y_nm: 2_000_003 },
+        Point { x_nm: -2_000_000, y_nm: 3_000_000 },
+        Point { x_nm: -1_000_000, y_nm: 3_000_000 },
+        Point { x_nm: -1_250_000, y_nm: 2_000_003 },
+    ];
+    let drawings = view(&s).drawings().len();
+    add_fabrication_drawing(&mut s, LayerPurpose::Outline, &open, false);
+    let revision = s.revision();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let error = s.execute(EXPORT_FABRICATION, &json!({})).unwrap_err();
+    assert!(
+        matches!(&error, CommandError::Unavailable(message) if message == "Draw a closed Board Outline before generating fabrication outputs."),
+        "{error}"
+    );
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(view(&s).drawings().len(), drawings);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// Read the profile's exact move and draw sequence at its existing nanometre resolution.
+/// See Ucamco Gerber Layer Format Specification 2026.05 sections 4.7–4.8 for plotting modes and operations.
+#[test]
+fn fabrication_emits_one_closed_profile_path_per_outline_loop() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let outer = ["X-5000000Y5000000D02*", "X25000000Y5000000D01*", "X25000000Y-35000000D01*", "X-5000000Y-35000000D01*", "X-5000000Y5000000D01*"];
+    let inner = ["X1000001Y-2000003D02*", "X2000005Y-2000003D01*", "X2000005Y-3000007D01*", "X1000001Y-3000007D01*", "X1000001Y-2000003D01*"];
+    let cutout = [
+        Point { x_nm: 1_000_001, y_nm: 2_000_003 },
+        Point { x_nm: 2_000_005, y_nm: 2_000_003 },
+        Point { x_nm: 2_000_005, y_nm: 3_000_007 },
+        Point { x_nm: 1_000_001, y_nm: 3_000_007 },
+    ];
+    add_fabrication_drawing(&mut s, LayerPurpose::Silkscreen, &cutout[..2], false);
+    for has_cutout in [false, true] {
+        if has_cutout {
+            add_fabrication_drawing(&mut s, LayerPurpose::Outline, &cutout, true);
+        }
+        let outputs = view(&s).fabrication_outputs().unwrap();
+        let profile = file(&outputs, "-Outline.gbr");
+        let read = try_read_gerber(profile, "Profile,NP", "Positive").unwrap();
+        assert_eq!(read.strokes.len(), if has_cutout { 8 } else { 4 });
+        assert!(read.strokes.iter().all(|(_, _, aperture)| aperture.function == Some("Profile")), "every closed loop is the board profile");
+        assert!(read.flashes.is_empty() && read.regions.is_empty());
+        let records: Vec<_> = profile.lines().filter(|line| line.starts_with('X')).collect();
+        let (paths, remainder) = records.as_chunks::<5>();
+        assert!(remainder.is_empty());
+        assert_eq!(paths.len(), if has_cutout { 2 } else { 1 });
+        assert!(paths.contains(&outer));
+        assert_eq!(paths.contains(&inner), has_cutout);
+    }
 }
 
 /// A local reference move affects only that footprint's silk and round-trips through native storage.
@@ -2187,10 +2415,364 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert!(drill.contains("X7.000Y-20.000\n"), "{drill}");
 }
 
+/// Exercise one bottom-side, quarter-turned footprint with plated lands and a board via.
+fn drill_fixture(holes: &[crate::board::definition::CircularNpth]) -> Session {
+    let mut s = footprint_fixture(
+        &[(PadShape::Circle, 2_000_000, 2_000_000, 0, 0); 2],
+        (90, true),
+        (Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 2_000_000, y_nm: 0 }),
+        Point { x_nm: 30_000_000, y_nm: -25_000_000 },
+        Some(0),
+        None,
+        holes,
+    );
+    s.apply(
+        crate::ADD_VIA,
+        &json!({"at":{"x_nm":12_000_000,"y_nm":20_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s
+}
+
+/// Separate round hits, preserve the plated output bytes, and include the new file in the manifest.
+#[test]
+fn mechanical_holes_use_their_own_drill_file() {
+    use crate::board::definition::CircularNpth;
+    let holes = [
+        CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: -4_000_000, y_nm: 6_000_000 }, diameter_nm: 3_200_000 },
+    ];
+    let mut with = drill_fixture(&holes);
+    let without = drill_fixture(&[]);
+    let params = json!({});
+    let legacy = without.export_fabrication(&params).unwrap();
+    let mixed = with.export_fabrication(&params).unwrap();
+    assert_eq!(&mixed[..mixed.len() - 1], legacy.as_slice(), "no NPTH hits in plated, copper, mask or paste files");
+    // The legacy serializer emits via tools first here, then the two pads in board coordinate order.
+    let frame_id = same_coordinates_id(view(&with).placement_origin().unwrap());
+    let software = format!("; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}\n; #@! TF.SameCoordinates,{frame_id}\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        file(&legacy, "-PTH.drl"),
+        format!(
+            "M48\n; PCBcraft plated drill file\n; TYPE=PLATED\n{software}; #@! TF.FileFunction,Plated,1,4,PTH\nFMAT,2\nMETRIC\nT1C0.300\nT2C1.000\n%\nG90\nG05\nT1\nX11.000Y-22.000\nT2\nX29.000Y23.000\nX29.000Y21.000\nM30\n"
+        )
+    );
+    assert!(!legacy.iter().any(|out| out.name.ends_with("-NPTH.drl")));
+    // Mirror local X, rotate 90°, add board placement, subtract origin, then negate Y.
+    let npth = mixed.last().unwrap();
+    assert!(npth.name.ends_with("-NPTH.drl"));
+    assert_eq!(
+        npth.contents,
+        format!(
+            "M48\n; PCBcraft non-plated drill file\n; TYPE=NON_PLATED\n{software}; #@! TF.FileFunction,NonPlated,1,4,NPTH\nFMAT,2\nMETRIC\nT1C3.200\n%\nG90\nG05\nT1\nX34.000Y20.000\nX35.000Y27.000\nM30\n"
+        )
+    );
+    let capture = with.export_fabrication_archive(&params).unwrap();
+    assert_eq!(capture, with.export_fabrication_archive(&params).unwrap());
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
+    let mut drill = String::new();
+    zip.by_name(&npth.name).unwrap().read_to_string(&mut drill).unwrap();
+    assert_eq!(drill, npth.contents);
+    let manifest = embedded_manifest(&capture);
+    assert_eq!(with.execute(EXPORT_FABRICATION, &params).unwrap()["fabrication"]["manifest"], manifest);
+    assert_eq!(
+        manifest["files"].as_array().unwrap().last().unwrap(),
+        &json!({"name":npth.name,"size_bytes":npth.contents.len(),"sha256":format!("{:x}", Sha256::digest(npth.contents.as_bytes()))})
+    );
+}
+
+/// The drill files as an XNC reader sees them: X2 file attributes from standard comments
+/// (XNC 2021.11 §4.1), the tool table and the drill hits per tool.
+#[derive(Debug, Default)]
+struct ReadXnc {
+    attributes: Vec<(String, Vec<String>)>,
+    tools: BTreeMap<u32, String>,
+    hits: BTreeMap<u32, usize>,
+}
+
+/// Parse a plain ASCII decimal number (rejecting exponents, `inf`, and `NaN`).
+fn parse_xnc_decimal(text: &str, allow_sign: bool) -> Option<f64> {
+    let unsigned = if allow_sign { text.strip_prefix(['+', '-']).unwrap_or(text) } else { text };
+    let (whole, frac) = match unsigned.split_once('.') {
+        Some((whole, frac)) => (whole, Some(frac)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    let has_digit = !whole.is_empty() || frac.is_some_and(|part| !part.is_empty());
+    if !has_digit || !digits(whole) || !frac.is_none_or(digits) {
+        return None;
+    }
+    text.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+/// Read one drill file with the XNC 2021.11 grammar (§2.10, §3): M48 first, one METRIC unit
+/// in the header before the tool table, `%` ends the header, G05 drill mode, tool selections
+/// and hits, and M30 last. `FMAT,2`, `G90` and one-digit tool numbers in declarations are the
+/// IPC-NC-349 forms legacy readers expect; they are accepted where they appear and change
+/// nothing. Anything else fails.
+fn read_xnc(text: &str) -> Result<ReadXnc, String> {
+    let mut read = ReadXnc::default();
+    let mut lines = text.lines();
+    if lines.next() != Some("M48") {
+        return Err("the first line must be M48".into());
+    }
+    let (mut unit, mut header, mut drilling, mut tool, mut ended) = (false, true, false, None, false);
+    for line in lines {
+        if ended {
+            return Err(format!("data after M30: {line}"));
+        }
+        if let Some(comment) = line.strip_prefix(';') {
+            if comment.len() > 255 || comment.contains(';') {
+                return Err(format!("invalid comment: {line}"));
+            }
+            if let Some(attribute) = comment.strip_prefix(" #@! TF.") {
+                let mut fields = attribute.split(',').map(str::to_owned);
+                let name = fields.next().unwrap_or_default();
+                read.attributes.push((name, fields.collect()));
+            }
+            continue;
+        }
+        if line.contains(' ') || line != line.to_ascii_uppercase() {
+            return Err(format!("commands are upper case without spaces: {line}"));
+        }
+        if header {
+            match line {
+                "FMAT,2" if !unit => {}
+                "METRIC" if !unit => unit = true,
+                "%" if unit => header = false,
+                _ => {
+                    let (number, diameter) =
+                        line.strip_prefix('T').and_then(|rest| rest.split_once('C')).ok_or_else(|| format!("not a header command: {line}"))?;
+                    let number: u32 = number.parse().map_err(|_| format!("tool number: {line}"))?;
+                    let size = parse_xnc_decimal(diameter, false).ok_or_else(|| format!("tool diameter: {line}"))?;
+                    if !unit || !(1..=99).contains(&number) || size <= 0. || read.tools.insert(number, diameter.to_owned()).is_some() {
+                        return Err(format!("invalid tool declaration: {line}"));
+                    }
+                }
+            }
+            continue;
+        }
+        match line {
+            "G90" if !drilling => {}
+            "G05" => drilling = true,
+            "M30" => ended = true,
+            _ if line.starts_with('T') => {
+                let number: u32 = line.get(1..).unwrap_or_default().parse().map_err(|_| format!("tool selection: {line}"))?;
+                if !read.tools.contains_key(&number) {
+                    return Err(format!("selected an undefined tool: {line}"));
+                }
+                tool = Some(number);
+            }
+            _ => {
+                let (x, y) = line.strip_prefix('X').and_then(|rest| rest.split_once('Y')).ok_or_else(|| format!("not a body command: {line}"))?;
+                if parse_xnc_decimal(x, true).is_none() || parse_xnc_decimal(y, true).is_none() {
+                    return Err(format!("coordinate: {line}"));
+                }
+                let selected = tool.filter(|_| drilling).ok_or_else(|| format!("hit without drill mode and tool: {line}"))?;
+                *read.hits.entry(selected).or_default() += 1;
+            }
+        }
+    }
+    if !ended {
+        return Err("the last command must be M30".into());
+    }
+    Ok(read)
+}
+
+/// The existing plated file parses as XNC and its attributes name it plated PTH over every copper
+/// layer; the non-plated file names itself NonPlated NPTH. Both share the Gerber layers' frame.
+/// XNC 2021.11 §4.1; Ucamco Gerber rev. 2026.05 §5.6.3 (file function), §5.6.5 (same coordinates).
+#[test]
+fn plated_drill_file_parses_as_xnc_with_plated_pth_attributes() {
+    use crate::board::definition::CircularNpth;
+    let holes = [CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 }];
+    let s = drill_fixture(&holes);
+    let copper = view(&s).setup().unwrap().copper_stack().count();
+    assert_eq!(copper, 4, "the plated fixture spans inner copper");
+    let outputs = s.export_fabrication(&json!({})).unwrap();
+    let attribute = |read: &ReadXnc, name: &str| -> Vec<Vec<String>> {
+        read.attributes.iter().filter(|(key, _)| key == name).map(|(_, fields)| fields.clone()).collect()
+    };
+    let frame_id = same_coordinates_id(view(&s).placement_origin().unwrap());
+    let software = vec![vec!["PCBcraft".to_owned(), "PCBcraft".to_owned(), env!("CARGO_PKG_VERSION").to_owned()]];
+    for (suffix, function, tools, hits) in
+        [("-PTH.drl", ["Plated", "1", "4", "PTH"], vec!["0.300", "1.000"], 3), ("-NPTH.drl", ["NonPlated", "1", "4", "NPTH"], vec!["3.200"], 1)]
+    {
+        let read = read_xnc(file(&outputs, suffix)).unwrap_or_else(|error| panic!("{suffix}: {error}"));
+        assert_eq!(attribute(&read, "FileFunction"), vec![function.map(str::to_owned).to_vec()], "{suffix}");
+        assert_eq!(attribute(&read, "GenerationSoftware"), software, "{suffix}");
+        assert_eq!(attribute(&read, "SameCoordinates"), vec![vec![frame_id.clone()]], "{suffix}");
+        assert_eq!(read.tools.values().map(String::as_str).collect::<Vec<_>>(), tools, "{suffix}: tools sorted by diameter");
+        assert_eq!(read.hits.values().sum::<usize>(), hits, "{suffix}");
+    }
+    // The drill files share the identity every Gerber layer of this export declares.
+    assert!(
+        outputs
+            .iter()
+            .filter(|output| output.name.ends_with(".gbr"))
+            .all(|output| output.contents.contains(&format!("%TF.SameCoordinates,{frame_id}*%")))
+    );
+    // A file the reader must refuse: hits before drill mode, data after M30, and non-decimal
+    // or non-positive numeric forms that Rust's `f64::parse` would otherwise accept.
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nT1\nX0Y0\nM30\n").unwrap_err(), "hit without drill mode and tool: X0Y0");
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\nX0Y0\nM30\nX1Y1\n").unwrap_err(), "data after M30: X1Y1");
+    for hit in ["XINFY0", "X0Y-INF", "XNANY0", "X1E2Y0", "X0Y1.5E-1"] {
+        assert_eq!(read_xnc(&format!("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\n{hit}\nM30\n")).unwrap_err(), format!("coordinate: {hit}"));
+    }
+    for decl in ["T1CINF", "T1CNAN", "T1C1E-1", "T1C-0.300"] {
+        assert_eq!(read_xnc(&format!("M48\nMETRIC\n{decl}\n%\nG05\nT1\nX0Y0\nM30\n")).unwrap_err(), format!("tool diameter: {decl}"));
+    }
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.000\n%\nG05\nT1\nX0Y0\nM30\n").unwrap_err(), "invalid tool declaration: T1C0.000");
+}
+
+/// Gerber, PTH and NPTH files of one fabrication export share one deterministic `.SameCoordinates`
+/// GUID for the resolved export frame; repeating the export keeps the same identifier, while
+/// moving the placement origin produces a distinct identifier.
+#[test]
+fn fabrication_same_coordinates_tracks_resolved_export_frame() {
+    use crate::board::definition::CircularNpth;
+    let holes = [CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 }];
+    let mut s = drill_fixture(&holes);
+    let extract_ids = |outputs: &[Output]| -> Vec<(String, String)> {
+        outputs
+            .iter()
+            .map(|output| {
+                let id = if output.name.ends_with(".gbr") {
+                    output
+                        .contents
+                        .lines()
+                        .find_map(|line| line.strip_prefix("%TF.SameCoordinates,")?.strip_suffix("*%"))
+                        .unwrap_or_else(|| panic!("{}: missing TF.SameCoordinates", output.name))
+                        .to_owned()
+                } else if output.name.ends_with(".drl") {
+                    let read = read_xnc(&output.contents).unwrap_or_else(|error| panic!("{}: {error}", output.name));
+                    let mut values: Vec<_> =
+                        read.attributes.iter().filter(|(key, _)| key == "SameCoordinates").map(|(_, fields)| fields.clone()).collect();
+                    assert_eq!(values.len(), 1, "{}: expected one SameCoordinates attribute", output.name);
+                    let fields = values.pop().unwrap();
+                    assert_eq!(fields.len(), 1, "{}: expected one SameCoordinates field", output.name);
+                    fields.into_iter().next().unwrap()
+                } else {
+                    panic!("unexpected fabrication output {}", output.name);
+                };
+                assert!(uuid::Uuid::parse_str(&id).is_ok(), "{}: invalid GUID {id:?}", output.name);
+                (output.name.clone(), id)
+            })
+            .collect()
+    };
+
+    let first = s.export_fabrication(&json!({})).unwrap();
+    let repeat = s.export_fabrication(&json!({})).unwrap();
+    let first_ids = extract_ids(&first);
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with(".gbr")));
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with("-PTH.drl")));
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with("-NPTH.drl")));
+    let first_id = &first_ids[0].1;
+    assert!(first_ids.iter().all(|(_, id)| id == first_id), "all files in one export share one frame id: {first_ids:?}");
+    assert_eq!(extract_ids(&repeat), first_ids, "same frame gives the same id");
+    assert!(file(&first, "-PTH.drl").contains("X11.000Y-22.000\n"));
+
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":2_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let moved = s.export_fabrication(&json!({})).unwrap();
+    let moved_ids = extract_ids(&moved);
+    let moved_id = &moved_ids[0].1;
+    assert!(moved_ids.iter().all(|(_, id)| id == moved_id), "all files in moved export share one frame id: {moved_ids:?}");
+    assert_ne!(first_id, moved_id, "moving the placement origin must change the SameCoordinates id");
+    assert!(file(&moved, "-PTH.drl").contains("X10.000Y-22.000\n"));
+}
+
+/// A half-unit diameter rounds up to a nonzero tool; a smaller diameter cannot produce any archive.
+#[test]
+fn non_plated_drill_rejects_a_diameter_that_rounds_to_zero() {
+    use crate::board::definition::CircularNpth;
+    let at = Point { x_nm: 3_000_000, y_nm: 5_000_000 };
+    let minimum = drill_fixture(&[CircularNpth { center: at, diameter_nm: 500 }]);
+    let params = json!({});
+    let outputs = minimum.export_fabrication(&params).unwrap();
+    assert!(file(&outputs, "-NPTH.drl").contains("T1C0.001\n"));
+    let too_small = drill_fixture(&[CircularNpth { center: at, diameter_nm: 499 }]);
+    assert!(matches!(too_small.export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
+        if message.contains("499 nm") && message.contains("rounds to zero")));
+}
+
+/// Keep the smallest representable plated tool, and reject the next smaller input on export.
+#[test]
+fn plated_drill_rejects_a_diameter_that_rounds_to_zero() {
+    let fixture = |size| {
+        aperture_fixture_at(
+            &[(PadShape::Circle, size, size, 0); 2],
+            0,
+            false,
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 30_000_000, y_nm: -25_000_000 },
+            Some(0),
+            None,
+        )
+    };
+    let params = json!({});
+    let archive = fixture(1000).export_fabrication_archive(&params).unwrap();
+    let review = review::Package::read(archive.bytes()).unwrap();
+    let plated = review.layers.iter().find(|layer| layer.role == review::LayerRole::PlatedDrill).unwrap();
+    assert_eq!(plated.tools[0].diameter_nm, 1_000);
+    assert!(matches!(fixture(998).export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
+        if message.contains("Plated drill diameter 499 nm") && message.contains("rounds to zero")));
+}
+
 /// Read the JSON actually stored in a captured ZIP.
 fn embedded_manifest(capture: &Archive) -> Value {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
     serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap()
+}
+
+/// Even an unfilled or suppressed zone carries copper intent that fabrication would omit.
+#[test]
+fn fabrication_refuses_boards_with_zones_in_every_fill_state() {
+    use crate::board::{
+        fill::{INSPECT_FILL, REFILL_ZONES, UNFILL_ZONES},
+        zones::{ADD_ZONE, Connection, DELETE_ZONES, Options},
+    };
+    use std::sync::Arc;
+
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let (target, points) = {
+        let view = view(&session);
+        let airwires = view.ratsnest().unwrap();
+        let end = &airwires.lines[0].from;
+        let target = view.net_class_target_for_copper(&format!("{}:{}", end.footprint, end.pad.number.as_str())).unwrap().unwrap();
+        let points = view.drawings().first().unwrap().points.clone();
+        (target, points)
+    };
+    let layer = copper_layers(&session)[0];
+    let options = Options { connection: Connection::Solid, ..Options::default() };
+    session
+        .apply(ADD_ZONE, &json!({"target":target,"points":points,"layer":layer,"options":options,"expected_revision":session.revision()}))
+        .unwrap();
+    let params = json!({});
+    let revision = session.revision();
+    let snapshot = session.snapshot().unwrap();
+    for (command, state) in [(INSPECT_FILL, "pending"), (REFILL_ZONES, "ready"), (UNFILL_ZONES, "unfilled")] {
+        let result = session.execute(command, &params).unwrap();
+        assert_eq!(result["zone_fill"]["result"]["state"], state);
+        let check = |error: CommandError| assert!(matches!(error, CommandError::Unavailable(message) if message.contains("copper zones")));
+        check(session.export_fabrication_archive(&params).unwrap_err());
+        check(session.execute(EXPORT_FABRICATION, &params).unwrap_err());
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    }
+    session.apply(DELETE_ZONES, &json!({"zones":[view(&session).zones()[0].id],"expected_revision":revision})).unwrap();
+    assert!(session.export_fabrication_archive(&params).is_ok());
 }
 
 /// The same board gives byte-identical outputs and archives, including rounded pad macros.

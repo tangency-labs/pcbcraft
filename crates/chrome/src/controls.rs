@@ -157,12 +157,27 @@ pub fn search(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str, name: &
 /// Shared quiet hit target for caller-painted command glyphs. The host owns its bounds,
 /// identity and action; toolkit hover/focus/selected chrome preserves disabled behavior.
 pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, enabled: bool, selected: bool) -> Response {
+    glyph_target_with_hover(ui, id, bounds, label, label, enabled, selected)
+}
+
+/// Draw a host-identified icon target whose single tooltip is `hover_text`. The toolkit renders the
+/// tooltip from the chrome label, so callers that would otherwise stack a second `on_hover_text`
+/// pass their full text here. The accessible and automation names always stay the plain `label`.
+pub fn glyph_target_with_hover(
+    ui: &mut Ui,
+    id: egui::Id,
+    bounds: egui::Rect,
+    label: &str,
+    hover_text: &str,
+    enabled: bool,
+    selected: bool,
+) -> Response {
     let response = kit::panel_host_control(
         ui,
         id,
         bounds,
         kit::HostChrome {
-            label,
+            label: hover_text,
             icon: None,
             icon_only: true,
             attention: false,
@@ -174,6 +189,7 @@ pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, 
             rtl: crate::i18n::is_rtl(),
         },
     );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, enabled, label));
     crate::automation::publish_enabled(ui, &response, format!("button:{label}"), enabled);
     response
 }
@@ -265,5 +281,39 @@ mod tests {
             .map(|update| update.nodes.iter().filter_map(|(_, node)| node.label()).collect())
             .unwrap_or_default();
         assert!(labels.contains(&"הרחבה Details"), "expected logical Hebrew accessible label in {labels:?}");
+    }
+
+    /// A tooltip that adds a shortcut must not replace the automation/accessibility name. The
+    /// toolkit renders the tooltip from the chrome label, so the helper restores the plain label.
+    #[test]
+    fn glyph_tooltip_keeps_the_plain_accessible_name() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::install(&ctx);
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 200.0))), ..Default::default() },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    glyph_target_with_hover(
+                        ui,
+                        ui.scope_id().with("save"),
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(24.0, 24.0)),
+                        "Save Project",
+                        "Save Project (Ctrl+S)",
+                        true,
+                        false,
+                    );
+                });
+            },
+        );
+        output.textures_delta.clear();
+        let labels: Vec<&str> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| update.nodes.iter().filter_map(|(_, node)| node.label()).collect())
+            .unwrap_or_default();
+        assert!(labels.contains(&"Save Project"), "plain automation name lost in {labels:?}");
+        assert!(!labels.contains(&"Save Project (Ctrl+S)"), "tooltip text leaked into the accessible name in {labels:?}");
     }
 }

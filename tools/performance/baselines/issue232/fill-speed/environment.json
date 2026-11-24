@@ -1,0 +1,30 @@
+{
+  "baseline_revision": "105c0f4ea9fe1f973de2d64cb8abbf9f4f175825",
+  "baseline_overlay": "zone_fill_perf diagnostic; no production changes",
+  "fixture_sha256": "d5ad83c6f15369c243ff4818d482d6c7b56b4418f49f52e1d88e65222aaa6fde",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "platform": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "machine": "x86_64",
+  "release_profile": {
+    "opt_level": "s",
+    "lto": "thin",
+    "codegen_units": 16
+  },
+  "samples": 3,
+  "scope": "Headless fill capture/calculation/connectivity, not physical input-to-visible latency or KiCad comparison. Stage probe is separately instrumented dev code; its timings are not the matched release comparison.",
+  "hashes": {
+    "before-dev.json": "e3fa7132665ef6ea5e144bb9cc865e4eba2384f79a0d095d631e3b6870b83c9b",
+    "before-release.json": "3b5c41c2763f30c76c3624a12e1dd5788fdb63e8c2b8497cc75040edcecbb1d0",
+    "cached-dev.json": "52f5df9ecb7b94ba95ef9b8dc2529f5be69f1bc42aab4b2eb408179949d1cc67",
+    "after-dev.json": "b9990ca95eee6f863ebe7e0285c3f8c27d745b51a8a611960fd4cb1a7428cb3c",
+    "before-release-executable": "47747ab037a1f821809450ff08602adaae5c93d326457e1f8f63883d2c5d9f7c",
+    "before-fill.rs": "6f9f96088a750b5dfd633eb6432a2de8cc78ba3635166dbecaa9a4c8eb6c7266",
+    "before-planar.rs": "9f185f4a3193976733886698b40dd636632798d8a9a34111e412382e5015c384",
+    "before-kernel.rs": "e4314a233325eb1e4cdd760ab440fb120319df01e7ba1f09d199f90d468c9df2",
+    "stage-probe-fill.rs": "9b321fe4e87eba55addcb6303d3c1611fbb0173023cfc69681d095e6a2492071"
+  },
+  "after_source": "105c0f4 plus the prepared-operand cache; after-sources.json identifies production files and the driver",
+  "after_diagnostic_sha256": "edaf476846a1b9b31f683ac923abd51c10d2da19179bed2e431bf5a96a24ddc2",
+  "development_after_scope": "Intermediate final cache path before the empty-operand guard and WASM-only test gating; use the release pair for the completed optimization.",
+  "concurrency_note": "Shared development host; no task-owned builds/tests or Chrome run were active during the final release samples. Other workspace activity and thermal state were not controlled."
+}

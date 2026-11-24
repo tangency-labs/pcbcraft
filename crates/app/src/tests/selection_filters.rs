@@ -248,6 +248,22 @@ fn filters_follow_the_view_and_restore_from_local_arrangements() {
     let app = h.state_mut();
     app.views.switch_workspace(id, Workspace::Board, &app.session);
     app.set_selection_filters(id, &json!({"footprints":false})).unwrap();
+    let default = serde_json::to_value(app.views.active.saved_state(&app.session).unwrap()).unwrap();
+    assert_eq!(default["filters"]["include_locked"], true);
+    app.set_selection_filters(id, &json!({"include_locked":false})).unwrap();
+    let current = serde_json::to_value(app.views.active.saved_state(&app.session).unwrap()).unwrap();
+    assert_eq!(current["filters"]["include_locked"], false);
+    let restored = serde_json::from_value(current.clone()).unwrap();
+    assert!(!EditorView::from_state(ViewId(903), &restored, &app.session).filters.include_locked);
+    let mut legacy = current;
+    legacy["filters"].as_object_mut().unwrap().remove("include_locked");
+    let restored = serde_json::from_value(legacy).unwrap();
+    assert!(EditorView::from_state(ViewId(904), &restored, &app.session).filters.include_locked);
+    let other = app.views.open_beside(id).unwrap();
+    app.set_selection_filters(other, &json!({"include_locked":true})).unwrap();
+    assert!(!app.views.view(id).unwrap().filters.include_locked);
+    assert!(app.views.view(other).unwrap().filters.include_locked);
+    app.views.close_view(other);
     app.views.switch_workspace(id, Workspace::Schematic, &app.session);
     assert!(!app.views.active.filters.symbols && !app.views.active.filters.footprints && app.views.active.filters_collapsed);
     app.views.active.bind_opened_project(&app.session);
@@ -309,7 +325,12 @@ fn live_filters_match_the_card_and_refuse_unsupported_or_filtered_targets() {
     assert_eq!(crate::window_commands::inspect_editor(h.state())["views"][0]["selection_filters"]["symbols"], false);
     assert!(h.state_mut().run_window_command(&ctx, "view.select", &json!({"view":id,"items":{"symbols":["symbol-2"],"wires":[]}})).is_err());
     let filters = h.state().views.active.filters;
-    for bad in [json!({"view":id,"symbols":true,"footprints":false}), json!({"view":id,"symbols":"false"}), json!({"view":999,"symbols":false})] {
+    for bad in [
+        json!({"view":id,"symbols":true,"include_locked":false}),
+        json!({"view":id,"symbols":true,"footprints":false}),
+        json!({"view":id,"symbols":"false"}),
+        json!({"view":999,"symbols":false}),
+    ] {
         assert!(h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &bad).is_err());
         assert_eq!(h.state().views.active.filters, filters);
     }
@@ -431,7 +452,7 @@ fn named_labels_follow_the_label_selection_category() {
         h.state_mut().set_selection_filters(id, &json!({other:false})).unwrap();
         assert_eq!(h.state().views.active.schematic.selection.single_net_label(), Some(label.id));
         let revision = h.state().session.revision();
-        h.state_mut().views.active.schematic.tool = Some(Tool::NetLabel { label: label.clone(), revision, drag: None });
+        h.state_mut().views.active.schematic.tool = Some(Tool::NetLabel { label: label.clone(), revision, drag: None, orient_to_pin: false });
         h.state_mut().set_selection_filters(id, &json!({category:false})).unwrap();
         assert!(h.state().views.active.schematic.selection.single_net_label().is_none());
         assert!(h.state().views.active.schematic.tool.is_none());
@@ -496,4 +517,163 @@ fn definition_views_refuse_filter_panel_actions_and_report_the_card_hidden() {
             assert_eq!(h.query_by_label("Collapse Selection filters").is_some(), open);
         }
     }
+}
+
+/// PCB Selection filters card with the Locked objects row in its default checked state.
+#[test]
+fn pcb_selection_filters_card_shows_locked_objects_checked() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    assert!(h.state().views.active.filters.include_locked);
+    assert_eq!(h.get_by_label("Select locked objects").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+}
+
+/// PCB Selection filters card with the Locked objects row cleared.
+#[test]
+fn pcb_selection_filters_card_shows_locked_objects_cleared() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    click(&mut h, "Select locked objects");
+    assert!(!h.state().views.active.filters.include_locked);
+    assert_eq!(h.get_by_label("Select locked objects").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+}
+
+/// Float the filter card so its header covers `point`, then confirm that point lies on a
+/// foreground layer above the canvas.
+fn float_filters_over(h: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
+    use crate::workspace_panels::FILTERS;
+    use pcbcraft_chrome::workspace::panels::Position;
+    let label = if h.state().views.active.workspace == Workspace::Board { "PCB canvas" } else { "Schematic canvas" };
+    let canvas = h.get_by_label(label).rect();
+    h.state_mut().views.active.panels[FILTERS].set_position(Position::Floating, Some([point.x - canvas.left() - 20., point.y - canvas.top() - 12.]));
+    h.run();
+    h.get_by_label("Move Selection filters");
+    assert!(h.ctx.layer_id_at(point).is_some_and(|layer| layer.order != egui::Order::Background));
+}
+
+/// The screen corners of a model-space box: bottom-left to start a window, top-right to end it.
+fn window_corners(h: &Harness<'_, PcbApp>, min: (i64, i64), max: (i64, i64)) -> (egui::Pos2, egui::Pos2) {
+    let (a, b) = (at(h, min.0, min.1), at(h, max.0, max.1));
+    (egui::pos2(a.x.min(b.x), a.y.max(b.y)), egui::pos2(a.x.max(b.x), a.y.min(b.y)))
+}
+
+/// Input events around the release of a held box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Interrupt {
+    None,
+    /// The cursor moves again before the frame processing the release.
+    MoveAfterRelease,
+    Escape,
+    /// A dialog disables canvas input for one frame, then input is enabled again.
+    Disabled,
+}
+
+/// Drag a primary box from the canvas and release it at `to`, after an optional interruption.
+fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, interrupt: Interrupt) {
+    use egui::PointerButton::Primary;
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(from + (to - from) * 0.5));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    match interrupt {
+        Interrupt::None | Interrupt::MoveAfterRelease => {}
+        Interrupt::Escape => {
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        Interrupt::Disabled => {
+            h.state_mut().dialog = crate::Dialog::About;
+            h.run();
+            h.state_mut().dialog = crate::Dialog::None;
+            h.run();
+        }
+    }
+    let release = egui::Event::PointerButton { pos: to, button: Primary, pressed: false, modifiers: Modifiers::NONE };
+    if interrupt == Interrupt::MoveAfterRelease {
+        // Harness::event processes each event in a separate frame, so batch the raw input.
+        h.input_mut().events.extend([release, egui::Event::PointerMoved(from)]);
+    } else {
+        h.event(release);
+    }
+    h.run();
+}
+
+/// A schematic box that starts on the canvas keeps its hits when released over the floating
+/// filter card. Escape or a frame of disabled input still cancels it, and plain clicks still
+/// select or clear.
+#[test]
+fn schematic_box_released_over_the_filter_card_selects_enclosed_items() {
+    let mut h = fixture();
+    let before = document(&h);
+    let (from, to) = window_corners(&h, (-15, -5), (15, 15));
+    let origin = at(&h, 0, 0);
+    click_canvas_at(&mut h, origin);
+    assert_eq!(h.state().views.active.schematic.selection.symbols.len(), 1);
+    click_canvas_at(&mut h, from);
+    assert!(h.state().views.active.schematic.selection.is_empty());
+    float_filters_over(&mut h, to);
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::MoveAfterRelease, Interrupt::None] {
+        box_onto(&mut h, from, to, interrupt);
+        assert!(h.state().views.active.schematic.tool.is_none());
+        let selection = &h.state().views.active.schematic.selection;
+        let expected = if matches!(interrupt, Interrupt::None | Interrupt::MoveAfterRelease) { (1, 1) } else { (0, 0) };
+        assert_eq!((selection.symbols.len(), selection.wires.len()), expected, "{interrupt:?}");
+    }
+    assert_eq!(document(&h), before);
+}
+
+/// A PCB box that starts on the canvas keeps its hits when released over the floating filter
+/// card. Escape or a frame of disabled input still cancels it, and plain clicks still select or clear.
+#[test]
+fn board_box_released_over_the_filter_card_selects_enclosed_items() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    let before = document(&h);
+    let (from, to) = window_corners(&h, (-8, -8), (8, 8));
+    let origin = at(&h, 0, 0);
+    click_canvas_at(&mut h, origin);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    click_canvas_at(&mut h, from);
+    assert!(h.state().views.active.board.selection.is_empty());
+    float_filters_over(&mut h, to);
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::MoveAfterRelease, Interrupt::None] {
+        box_onto(&mut h, from, to, interrupt);
+        assert!(h.state().views.active.board.box_drag.is_none());
+        assert_eq!(
+            h.state().views.active.board.selection.len(),
+            usize::from(matches!(interrupt, Interrupt::None | Interrupt::MoveAfterRelease)),
+            "{interrupt:?}"
+        );
+    }
+    assert_eq!(document(&h), before);
 }
