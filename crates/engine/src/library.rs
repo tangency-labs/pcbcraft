@@ -1,5 +1,5 @@
 //! Schematic symbol libraries. A library is a folder with a `library.json` manifest and one
-//! versioned JSON file per symbol in `symbols/`; see `docs/symbol-library.md` for the format.
+//! versioned JSON file per symbol in `symbols/`; see `docs/libraries/symbol-library.md` for the format.
 //! Symbols describe only what the schematic draws and connects. Layout footprints are separate
 //! definitions in their own libraries, linked to a symbol by assignment, so nothing here names
 //! a footprint or a pad.

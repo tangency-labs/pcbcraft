@@ -528,7 +528,7 @@ fn equal_overlaps_pair_the_closest_nets() {
 /// The format guide names the current difference and note labels in their respective categories.
 #[test]
 fn format_guide_lists_every_kind() {
-    let guide = include_str!("../../../../../docs/netlist-format.md");
+    let guide = include_str!("../../../../../docs/formats/netlist-format.md");
     let all = [
         Kind::Project,
         Kind::Basis,
@@ -567,7 +567,7 @@ fn format_guide_lists_every_kind() {
         };
         let name = serde_json::to_value(kind).unwrap();
         let name = name.as_str().unwrap();
-        assert!(section.contains(&format!("`{name}`")), "docs/netlist-format.md names `{name}` in the right category");
+        assert!(section.contains(&format!("`{name}`")), "docs/formats/netlist-format.md names `{name}` in the right category");
     }
 }
 

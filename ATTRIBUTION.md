@@ -720,7 +720,7 @@ Dimensional references are Vishay's [D/CRCW e3](https://www.vishay.com/docs/2003
 silkscreen are original demo choices, not vendor-qualified manufacturing data.
 NPN terminal naming follows [Nexperia PMBT3904](https://assets.nexperia.com/documents/data-sheet/PMBT3904.pdf)
 (16-Feb-2024); the symbol's vector drawing is original. The definition metadata
-and [footprint contract](docs/footprint-library.md) record exact dimensions.
+and [footprint contract](docs/libraries/footprint-library.md) record exact dimensions.
 No manufacturer artwork, PDF, third-party footprint asset or GPL implementation
 source was incorporated. The manufacturers' documents retain their own rights;
 only dimensional facts informed these original definitions.
@@ -831,7 +831,7 @@ view identities, revision checks, command transactions, field validation and
 physical board painter. No prototype model, session or file format is imported.
 The new package preview projects native definitions through existing chrome
 primitives. Published manual observations and deliberate differences are recorded
-in [the properties/editor notes](docs/properties-and-library-editors.md); no EDA
+in [the properties/editor notes](docs/libraries/properties-and-library-editors.md); no EDA
 implementation source, external drawings, icons or example assets were used.
 
 
@@ -1130,7 +1130,7 @@ The pinned SolidCraft source also supplies its `egui-wgpu` 0.37.0 patch
 dependency packages, and upstream's `vendor/README.md` at the pinned revision
 documents the rendering, surface lifecycle and Wayland gesture changes. The
 shared renderer and SolidCore library dependency closure is recorded in
-[the migration notes](docs/shared-ui-migration.md); PCBcraft does not depend on
+[the migration notes](docs/design/shared-ui-migration.md); PCBcraft does not depend on
 SolidCraft's executable or mechanical application orchestration.
 
 The task-oriented ribbon regrouping, tab compatibility aliases and compact

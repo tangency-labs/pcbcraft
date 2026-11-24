@@ -3,7 +3,7 @@
 The implementation is `23f58ac`, followed by the form resize/choice-width fix
 `64831ae`, based on PR #349's merge `6be9dec`. This slice adds the shared Rules
 class/assignment workflow; it does not change the saved vocabulary or introduce
-per-frame connectivity work. The [workflow](../../../../docs/net-class-editor.md)
+per-frame connectivity work. The [workflow](../../../../docs/pcb/net-class-editor.md)
 and [failure review](failure-review.md) describe behavior and tested boundaries.
 
 Required checks passed: workspace Clippy/tests, browser compilation and packaging,
