@@ -97,27 +97,27 @@ fn resize(path: &Path, width: &str, height: &str) -> Result<()> {
 fn snapshot(source: &Path, step: &Path) -> Result<()> {
     let project = decode_packed(&read_bytes(File::open(source)?)?)?.project;
     let board = view(&project)?;
-    let drawings = outlines(board);
-    let outline = anchored_rectangle(&drawings)?;
     let solid = BoardSolid::build(board)?;
     let Thickness::SpecifiedFinishedNm(thickness) = solid.thickness else {
         return Err("Declare the finished board thickness in Board Setup before publishing.".into());
     };
     let bounds = solid.body.bounding_box()?;
-    let contour = |drawing: &Drawing| {
-        let points = drawing.points.iter().map(|p| [mm(p.x_nm), mm(-p.y_nm)]).collect::<Vec<_>>();
-        json!({"id":drawing.id,"points":points})
-    };
+    let outline_paths = outlines(board)
+        .into_iter()
+        .map(|drawing| {
+            let points = drawing.points.into_iter().map(|p| [mm(p.x_nm), mm(-p.y_nm)]).collect::<Vec<_>>();
+            json!({"id":drawing.id,"points":points,"closed":drawing.closed})
+        })
+        .collect::<Vec<_>>();
     let data = json!({
         "format":"board/1",
         "project":board.target.project,
         "board":board.target.board,
         "thickness_mm":mm(thickness),
-        "outline":contour(outline),
-        "cutouts":drawings.iter().filter(|drawing| drawing.id != outline.id).map(contour).collect::<Vec<_>>(),
+        "outline_paths":outline_paths,
         "bounds_mm":{"min":bounds.min_nm.map(mm),"max":bounds.max_nm.map(mm)},
-        "width_mm":mm(outline.points[2].x_nm),
-        "height_mm":mm(outline.points[2].y_nm)
+        "width_mm":mm(bounds.max_nm[0] - bounds.min_nm[0]),
+        "height_mm":mm(bounds.max_nm[1] - bounds.min_nm[1])
     });
     let step_bytes = pcbcraft_geometry::write_step("PCBcraft outline", &[solid.body])?;
     fs::write(step, step_bytes)?;

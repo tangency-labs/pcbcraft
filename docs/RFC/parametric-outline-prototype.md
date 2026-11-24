@@ -39,8 +39,11 @@ From another terminal, resize the fixture from the worktree:
 ```
 
 The publisher reports revision 2. Use **Update Links** in SolidCraft to see
-the width change on the same assembly component. The project can also be
-opened in PCBcraft to inspect its native outline. With `publish` in place of
+the width change on the same assembly component. You can also edit the Board
+Outline in PCBcraft and save the project while the publisher is running. The
+publisher uses the board solid builder to validate the edited outline and
+reports errors in its terminal. Use **Update Links** after a new revision is
+published. With `publish` in place of
 `watch`, the publisher runs once. Omitting `--solidcraft-cli` writes only the
 exchange. Stop a running watcher with Ctrl+C.
 
@@ -48,8 +51,9 @@ exchange. Stop a running watcher with Ctrl+C.
 
 The prototype adopts the RFC's `.craftx` ZIP, `craft-exchange/1` manifest,
 source UUID, revision, millimetre frame and hashed parts. It uses a provisional
-manifest layout and a small `board/1` JSON payload alongside the exact STEP
-substrate and width and height in `params.json`. The exchange keeps its source
+manifest layout and a small `board/1` JSON payload with authored outline paths
+alongside the exact STEP substrate and its overall width and height in
+`params.json`. The exchange keeps its source
 UUID through resizes, and repeating an unchanged publish leaves the files
 byte-identical.
 
@@ -60,8 +64,9 @@ prototype exercises the live file handoff and component refresh without
 requiring a native SolidCraft `.craftx` reader. The exchange, adapter file,
 and adapter stamp belong in one dedicated output directory with one publisher.
 
-The prototype is restricted to the PCB-driven, rectangular substrate
-workflow. Width and height are command inputs, and the saved project stores
+The prototype covers the PCB-driven substrate workflow. The resize command
+applies to the rectangular fixture. Its width and height are command inputs,
+and the saved project stores
 their evaluated outline through the existing board format. Expressions,
 persisted driving dimensions, face naming, footprint holds, copper updates
 and enclosure-driven imports belong to later slices.
