@@ -22,7 +22,9 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Maximum editor document size, including metadata and stable primitive identities.
 pub const MAX_BYTES: usize = 1 << 20;
 const MAX_SYMBOL_OBJECTS: usize = 512;
-const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWORK + 256;
+/// Maximum primitives in one footprint drawing; no document kind accepts more, so it also bounds object-ID lists.
+pub const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWORK + 256;
+const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_SYMBOL_OBJECTS);
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";

@@ -12746,7 +12746,7 @@
               "minimum": 1,
               "type": "integer"
             },
-            "maxItems": 512,
+            "maxItems": 1536,
             "type": "array",
             "uniqueItems": true
           },

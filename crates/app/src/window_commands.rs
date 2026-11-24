@@ -208,7 +208,9 @@ mod live {
                 Self::PinRemaps => pcbcraft_engine::authoring::remap::schema(),
                 Self::RemapRuntime => pcbcraft_engine::authoring::remap::Scalar::Runtime.schema(),
                 Self::RemapToken => pcbcraft_engine::authoring::remap::Scalar::Token.schema(),
-                Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::PrimitiveIds => {
+                    json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS,"uniqueItems":true})
+                }
                 Self::PartReferenceField => {
                     json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"enum":["footprint","new_package"]},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
                 }
@@ -299,7 +301,7 @@ mod live {
                 Self::RemapRuntime => return pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(value).map(|_| ()),
                 Self::RemapToken => return pcbcraft_engine::authoring::remap::Scalar::Token.parse(value).map(|_| ()),
                 Self::PrimitiveIds => value.as_array().is_some_and(|items| {
-                    items.len() <= 512
+                    items.len() <= pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
                         && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
                 }),
@@ -2202,6 +2204,20 @@ mod live {
             );
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
+        }
+
+        /// Group selection reaches every pad of a 26 x 26 ball grid; the published `maxItems` and
+        /// validation share the engine's footprint primitive limit, and IDs stay positive and distinct.
+        #[test]
+        fn primitive_ids_accept_a_full_footprint_and_refuse_one_more() {
+            let limit = pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS;
+            assert_eq!(Kind::PrimitiveIds.schema()["maxItems"], json!(limit));
+            let ids = |count: u64| Value::from((1..=count).collect::<Vec<_>>());
+            assert!(Kind::PrimitiveIds.validate(&ids(676)).is_ok());
+            assert!(Kind::PrimitiveIds.validate(&ids(limit as u64)).is_ok());
+            assert!(Kind::PrimitiveIds.validate(&ids(limit as u64 + 1)).is_err());
+            assert!(Kind::PrimitiveIds.validate(&json!([1, 1])).is_err());
+            assert!(Kind::PrimitiveIds.validate(&json!([0])).is_err());
         }
 
         /// Minimal JSON Schema evaluator covering the keywords used in command contracts
