@@ -4915,6 +4915,40 @@
         "type": "object"
       }
     },
+    "pcb.merge_tracks": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tracks": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 65536,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "board",
+          "expected_revision",
+          "tracks"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.move_items": {
       "params": {
         "additionalProperties": false,

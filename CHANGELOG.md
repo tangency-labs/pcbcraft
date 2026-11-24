@@ -27,6 +27,14 @@ accepts an optional pin to that API version, refusing a different version with
 successful calls that use them add warnings without changing the ordinary result.
 See [stating a version](docs/automation/command-api.md#stating-a-version).
 
+`pcb.merge_tracks` tidies routed copper: it merges the listed collinear segments
+on the same layer and width that meet at a free end, and absorbs stacked
+duplicates, keeping the lowest UUID with the merged ends. Ends at a junction,
+via or pad and locked segments stay as they are, so connectivity does not change.
+The whole merge is one undo step, and a dry run returns the same diff without
+changing the project. In the PCB editor, **Layout → Modify → Merge Tracks** runs
+it on the selected tracks.
+
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
 keeping the effective track width, net-class clearances and board-edge clearance.
