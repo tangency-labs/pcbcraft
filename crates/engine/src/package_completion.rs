@@ -145,23 +145,14 @@ impl PackageCompletionJob {
             if is_cancelled() {
                 return Ok(None);
             }
-            let (mut prepared, highest) =
+            let (prepared, highest) =
                 Session::prepare_change_from_snapshot(Some(before), self.source.defer_net_reconciliation, next, |candidate, _| {
                     candidate.rekey_nets(before, &terminals)
                 })?;
-            let next_revision = (self.source.revision + 1).max(highest);
-            // Transfers keep placements, footprint pad maps and pinned definitions, so relation
-            // references resolve unchanged. This path has no consent inputs: should a later change
-            // break that, refuse any loss or remap instead of publishing it unreviewed.
-            let input = crate::board::relations::RelationInput::default();
-            if before.board.relations.is_some()
-                && !crate::board::relations::verify_final(Some(&**before), &mut prepared, next_revision, &input)?.is_empty()
-            {
-                return Err(CommandError::Unavailable("package completion would lose or remap board relation references".into()));
-            }
             if self.dry_run {
                 None
             } else {
+                let next_revision = (self.source.revision + 1).max(highest);
                 report["revision"] = json!(next_revision);
                 Some((prepared, highest))
             }
