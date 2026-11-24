@@ -65,18 +65,22 @@ fn objects(bytes: &[u8]) -> Vec<&str> {
 
 /// Extract shown strings using page font resources and their ToUnicode maps, not by looking
 /// for metadata or expected string literals in the output. Each PDF text object starts a line.
-fn extract(objects: &[&str]) -> String {
-    runs(objects).into_iter().map(|(text, _)| text + "\n").collect()
+fn extract(objects: &[&str], page: usize) -> String {
+    runs(objects, page).into_iter().map(|(text, _)| text + "\n").collect()
 }
 
-/// Decode each PDF text object with the translation of its text matrix, in points.
-fn runs(objects: &[&str]) -> Vec<(String, [f64; 2])> {
-    text_runs(objects).into_iter().map(|(text, matrix)| (text, [matrix[4], matrix[5]])).collect()
+/// Decode each PDF text object of the one-based page object with the translation of its
+/// text matrix, in points.
+fn runs(objects: &[&str], page: usize) -> Vec<(String, [f64; 2])> {
+    text_runs(objects, page).into_iter().map(|(text, matrix)| (text, [matrix[4], matrix[5]])).collect()
 }
 
-/// Decode each PDF text object with its full 6-number text matrix (`a b c d e f Tm`).
-fn text_runs(objects: &[&str]) -> Vec<(String, [f64; 6])> {
-    let resources = objects[2].split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
+/// Decode each PDF text object of the one-based page object with its full 6-number text
+/// matrix (`a b c d e f Tm`).
+fn text_runs(objects: &[&str], page: usize) -> Vec<(String, [f64; 6])> {
+    let object = objects[page - 1];
+    let contents = reference(object, "/Contents ").unwrap();
+    let resources = object.split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
     let resources: Vec<_> = resources.split_whitespace().collect();
     let mut encodings = BTreeMap::new();
     let (resources, remainder) = resources.as_chunks::<4>();
@@ -104,7 +108,7 @@ fn text_runs(objects: &[&str]) -> Vec<(String, [f64; 6])> {
     let mut runs = Vec::new();
     let mut text = String::new();
     let mut matrix = [f64::NAN; 6];
-    for line in objects[3].lines() {
+    for line in objects[contents - 1].lines() {
         if line == "ET" {
             runs.push((std::mem::take(&mut text), matrix));
         } else if let Some(tm) = line.strip_suffix(" Tm") {
@@ -150,7 +154,7 @@ fn addressed_sheet_has_searchable_text_and_its_saved_media_box() {
     let (x, y) = objects[3].lines().find_map(|line| line.strip_suffix(" m")).unwrap().split_once(' ').unwrap();
     assert!((x.parse::<f64>().unwrap() * 25.4 / 72. - 5.).abs() < 0.1);
     assert!((y.parse::<f64>().unwrap() * 25.4 / 72. - 205.).abs() < 0.1);
-    let text = extract(&objects);
+    let text = extract(&objects, 3);
     for expected in ["R1", "R2", "R3", "CLOCK_IN", "POWER_OUT", "Révision (B)"] {
         assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
     }
@@ -170,7 +174,7 @@ fn quarter_turned_fields_sit_beside_the_body() {
     let turned = view.symbols().iter().find(|s| s.turns() == 1).unwrap().id();
     apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":turned,"reference":"R9","value":"4k7"}));
     let bytes = export(session.project().unwrap(), target).unwrap();
-    let runs = runs(&objects(&bytes));
+    let runs = runs(&objects(&bytes), 3);
     let find = |shown: &str| runs.iter().find(|(text, _)| text == shown).unwrap().1;
     let (reference, value) = (find("R9"), find("4k7"));
     // The A4 paper's top-left is the sheet origin. Upright Start-aligned text begins at its anchor.
@@ -212,7 +216,7 @@ fn saved_net_name_offset_turns_with_contact() {
         json!({"sheet":target.id(),"name":"TURNED_NET","style":"local","x_nm":x,"y_nm":y,"rotation":90,"text":text}),
     );
     let bytes = export(session.project().unwrap(), target).unwrap();
-    let runs = runs(&objects(&bytes));
+    let runs = runs(&objects(&bytes), 3);
     let (_, [tx, ty]) = runs.iter().find(|(name, _)| name == "TURNED_NET").unwrap();
     let contact_x = x as f64 * PT_PER_NM;
     let contact_y = (210_000_000 - y) as f64 * PT_PER_NM;
@@ -231,7 +235,7 @@ fn hierarchy_labels_point_to_their_contacts() {
     }
     let bytes = export(session.project().unwrap(), target).unwrap();
     let objects = objects(&bytes);
-    let runs = runs(&objects);
+    let runs = runs(&objects, 3);
     let contact_x = x as f64 * PT_PER_NM;
     let grid = GRID_NM as f64 * PT_PER_NM;
     for (name, _, y, side) in labels {
@@ -296,7 +300,7 @@ fn ohm_and_common_unit_symbols_draw_real_glyphs() {
     apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":r3,"reference":"R3","value":"±5% 25°C ?"}));
     let bytes = export(session.project().unwrap(), target).unwrap();
     let objects = objects(&bytes);
-    let text = extract(&objects);
+    let text = extract(&objects, 3);
     for expected in ["10 kΩ", "10 k\u{2126} 10 µF 10 μF", "±5% 25°C ?"] {
         assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
     }
@@ -382,7 +386,218 @@ fn unicode_runs_cross_font_dictionaries_without_losing_text() {
     let bytes = page.finish().unwrap();
     let objects = objects(&bytes);
     assert!(objects[2].contains("/F1 "));
-    assert_eq!(extract(&objects).trim_end(), text);
+    assert_eq!(extract(&objects, 3).trim_end(), text);
+}
+
+/// Read the one-based indirect reference named by a dictionary key.
+fn reference(object: &str, key: &str) -> Option<usize> {
+    let (_, value) = object.split_once(key)?;
+    let (id, _) = value.split_once(" 0 R")?;
+    Some(id.parse().unwrap())
+}
+
+/// Exercise the actual command and persistence paths with three levels and nonalphabetical
+/// slot/root order. The repeated definition is added separately at the occurrence boundary.
+fn hierarchy_fixture() -> (std::sync::Arc<Project>, SheetTarget, SheetTarget, SheetTarget) {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let root = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::sheets::RENAME_SHEET, json!({"sheet":root.id(),"name":"Main"}));
+    apply(&mut session, crate::sheets::CREATE_SHEET, json!({"name":"Flat"}));
+    let add_child = |session: &mut Session, parent: SheetTarget, name, x| {
+        apply(session, crate::hierarchy::CREATE_CHILD, json!({"sheet":parent.id(),"name":name,"x_nm":x,"y_nm":20*GRID_NM}));
+        session.project().unwrap().sheets().last().unwrap().target
+    };
+    let left = add_child(&mut session, root, "Z Branch", 60 * GRID_NM);
+    let right = add_child(&mut session, root, "A Branch", 20 * GRID_NM);
+    let shared = add_child(&mut session, left, "Shared (µ) 🚀", 20 * GRID_NM);
+    apply(&mut session, crate::sheets::page::SET_PAGE, json!({"sheet":shared.id(),"paper":"a3","orientation":"portrait","at":{"x_nm":0,"y_nm":0}}));
+    apply(&mut session, crate::net_labels::ADD, json!({"sheet":shared.id(),"name":"SHARED_INK","style":"local","x_nm":20*GRID_NM,"y_nm":20*GRID_NM}));
+    let original = session.snapshot().unwrap();
+    let stored = encode_documents(original.clone()).unwrap();
+    let reopened = prepare_opened(decode_documents(&stored).unwrap()).unwrap();
+    assert_eq!(export_project(&original).unwrap(), export_project(&reopened).unwrap());
+    (reopened, root, right, shared)
+}
+
+/// Follow the page tree's actual references and verify their page-tree parent and distinctness.
+fn kids(objects: &[&str]) -> Vec<usize> {
+    let tree = reference(objects[0], "/Pages ").unwrap();
+    let node = objects[tree - 1];
+    let refs = node.split_once("/Kids [").unwrap().1.split_once(']').unwrap().0;
+    let words: Vec<_> = refs.split_whitespace().collect();
+    assert_eq!(words.len() % 3, 0);
+    assert!(node.contains(&format!("/Count {} /Kids", words.len() / 3)));
+    words
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|r| {
+            assert_eq!(r[1..], ["0", "R"]);
+            let id: usize = r[0].parse().unwrap();
+            let page = objects[id - 1];
+            assert!(page.starts_with("<< /Type /Page "));
+            assert_eq!(reference(page, "/Parent "), Some(tree));
+            id
+        })
+        .collect()
+}
+
+struct Outline<'a>(&'a str, &'a [Outline<'a>]);
+
+/// Walk the emitted tree via First/Next, checking reverse links, parent links, last child,
+/// open-descendant counts, UTF-16 titles and destinations against the expected occurrence tree.
+fn check_outline(objects: &[&str], parent: usize, pages: &[usize], cursor: &mut usize, expected: &[Outline<'_>]) {
+    let object = objects[parent - 1];
+    let mut next = reference(object, "/First ");
+    let mut prev = None;
+    let start = *cursor;
+    for Outline(title, children) in expected {
+        let id = next.unwrap();
+        let item = objects[id - 1];
+        let hex = item.split_once("/Title <FEFF").unwrap().1.split_once('>').unwrap().0;
+        assert_eq!(hex.len() % 4, 0);
+        let utf16: Vec<_> =
+            hex.as_bytes().as_chunks::<4>().0.iter().map(|hex| u16::from_str_radix(std::str::from_utf8(hex).unwrap(), 16).unwrap()).collect();
+        assert_eq!(String::from_utf16(&utf16).unwrap(), *title);
+        assert_eq!(reference(item, "/Parent "), Some(parent));
+        assert_eq!(reference(item, "/Prev "), prev);
+        assert!(item.contains(&format!("/Dest [{} 0 R /Fit]", pages[*cursor])));
+        *cursor += 1;
+        check_outline(objects, id, pages, cursor, children);
+        next = reference(item, "/Next ");
+        prev = Some(id);
+    }
+    assert_eq!(next, None);
+    assert_eq!(reference(object, "/Last "), prev);
+    let count = object.split_once("/Count ").map(|(_, s)| s.split_whitespace().next().unwrap().parse::<usize>().unwrap());
+    assert_eq!(count, (start != *cursor).then_some(*cursor - start));
+}
+
+/// Export the supported single-use project and follow its real bookmarks and pages.
+#[test]
+fn project_pages_follow_saved_roots_and_hierarchy() {
+    let (project, _, right, _) = hierarchy_fixture();
+    let before = encode_documents(project.clone()).unwrap();
+    let bytes = export_project(&project).unwrap();
+    assert_eq!(bytes, export_project(&project.for_sheet(right).unwrap()).unwrap());
+    assert_eq!(encode_documents(project).unwrap(), before);
+    let objects = objects(&bytes);
+    let pages = kids(&objects);
+    assert_eq!(pages.len(), 5);
+    let root = reference(objects[0], "/Outlines ").unwrap();
+    check_outline(
+        &objects,
+        root,
+        &pages,
+        &mut 0,
+        &[Outline("Main", &[Outline("Z Branch", &[Outline("Shared (µ) 🚀", &[])]), Outline("A Branch", &[])]), Outline("Flat", &[])],
+    );
+    assert!(extract(&objects, pages[2]).lines().any(|line| line == "SHARED_INK"));
+}
+
+/// Opposite definition and placement orders must not split frame numbers from PDF destinations.
+#[test]
+fn reverse_sibling_placement_numbers_pdf_pages_and_bookmarks_together() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let main = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::sheets::RENAME_SHEET, json!({"sheet":main.id(),"name":"Main"}));
+    let [a, b] = ["A", "B"].map(|name| {
+        apply(&mut session, crate::sheets::CREATE_SHEET, json!({"name":name}));
+        session.project().unwrap().sheets().last().unwrap().target
+    });
+    for (child, x) in [(b, 20 * GRID_NM), (a, 60 * GRID_NM)] {
+        apply(&mut session, crate::hierarchy::PLACE_SHEET, json!({"sheet":main.id(),"child":child.id(),"x_nm":x,"y_nm":20*GRID_NM}));
+    }
+    // A nested, mixed-case reference uses the same occurrence context as the Default Page field.
+    apply(&mut session, crate::parameters::SET, json!({"scope":"sheet","sheet":b.id(),"name":"Title","value":"Index @instance.pAgE"}));
+    let project = session.project().unwrap();
+    assert_eq!(project.page_order(), [main, a, b]);
+    let bytes = export_project(project).unwrap();
+    let pdf = objects(&bytes);
+    let pages = kids(&pdf);
+    assert_eq!(pages.len(), 3);
+    check_outline(&pdf, reference(pdf[0], "/Outlines ").unwrap(), &pages, &mut 0, &[Outline("Main", &[Outline("B", &[]), Outline("A", &[])])]);
+    for (page, expected) in pages.iter().zip(["1 of 3", "2 of 3", "3 of 3"]) {
+        let text = extract(&pdf, *page);
+        assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
+    }
+    assert!(extract(&pdf, pages[1]).lines().any(|line| line == "Index 2"));
+
+    let bytes = export(project, b).unwrap();
+    let pdf = objects(&bytes);
+    let pages = kids(&pdf);
+    assert_eq!(pages.len(), 1);
+    let text = extract(&pdf, pages[0]);
+    assert!(text.lines().any(|line| line == "3 of 3"));
+    assert!(text.lines().any(|line| line == "Index 3"));
+}
+
+/// The page content outside text objects, independent of that page's font codes.
+fn vector_ink<'a>(objects: &[&'a str], page: usize) -> Vec<&'a str> {
+    let id = reference(objects[page - 1], "/Contents ").unwrap();
+    let (_, stream) = objects[id - 1].split_once("\nstream\n").unwrap();
+    let mut sections = stream.split("BT\n");
+    std::iter::once(sections.next().unwrap()).chain(sections.map(|text| text.split_once("ET\n").unwrap().1)).collect()
+}
+
+/// The exporter accepts distinct occurrence IDs of the same definition without folding them.
+/// Until native repeated-instance authoring exists, only the extra occurrence is synthetic.
+#[test]
+fn repeated_definition_has_two_destinations_and_reproducible_bytes() {
+    let (project, _, right, shared) = hierarchy_fixture();
+    let mut records = project.occurrence_instances().sheet_occurrences;
+    let shared_occurrence = records.iter().find(|r| r.definition == shared.id()).unwrap();
+    let parent = records.iter().find(|r| r.definition == right.id()).unwrap().id;
+    let id = (1..).map(uuid::Uuid::from_u128).find(|id| records.iter().all(|r| r.id != *id)).unwrap();
+    records.push(crate::instances::SheetOccurrence { id, parent: Some(parent), parent_slot: Some(1), ..shared_occurrence.clone() });
+    let bytes = export_occurrences(&project, &records).unwrap();
+    records.reverse();
+    assert_eq!(bytes, export_occurrences(&project, &records).unwrap());
+    let objects = objects(&bytes);
+    let pages = kids(&objects);
+    assert_eq!(pages.len(), 6);
+    assert_eq!(pages.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), 6);
+    let root = reference(objects[0], "/Outlines ").unwrap();
+    check_outline(
+        &objects,
+        root,
+        &pages,
+        &mut 0,
+        &[
+            Outline("Main", &[Outline("Z Branch", &[Outline("Shared (µ) 🚀", &[])]), Outline("A Branch", &[Outline("Shared (µ) 🚀", &[])])]),
+            Outline("Flat", &[]),
+        ],
+    );
+    let first = extract(&objects, pages[2]);
+    let second = extract(&objects, pages[4]);
+    assert!(first.lines().any(|line| line == "SHARED_INK"));
+    assert!(first.lines().any(|line| line == "3 of 6"));
+    assert!(second.lines().any(|line| line == "5 of 6"));
+    assert!(first.lines().filter(|line| *line != "3 of 6").eq(second.lines().filter(|line| *line != "5 of 6")));
+    assert_eq!(vector_ink(&objects, pages[2]), vector_ink(&objects, pages[4]));
+    for page in [pages[2], pages[4]] {
+        let media = objects[page - 1].split_once("/MediaBox [0 0 ").unwrap().1.split_once(']').unwrap().0;
+        let (width, height) = media.split_once(' ').unwrap();
+        assert!((width.parse::<f64>().unwrap() * 25.4 / 72. - 297.).abs() < 0.1);
+        assert!((height.parse::<f64>().unwrap() * 25.4 / 72. - 420.).abs() < 0.1);
+    }
+}
+
+/// Reject an unreachable parent cycle and do not emit partial bytes for missing paper.
+#[test]
+fn hierarchy_export_refuses_an_incomplete_document() {
+    let (project, root, _, shared) = hierarchy_fixture();
+    let mut records = project.occurrence_instances().sheet_occurrences;
+    let leaf = records.iter().find(|r| r.definition == shared.id()).unwrap().id;
+    let root = records.iter_mut().find(|r| r.definition == root.id()).unwrap();
+    root.parent = Some(leaf);
+    root.parent_slot = Some(1);
+    assert_eq!(export_occurrences(&project, &records), Err(PdfError::InvalidHierarchy));
+    let mut active = project.for_sheet(shared).unwrap();
+    active.sheet_mut().page = None;
+    assert_eq!(export_project(&active), Err(PdfError::MissingPaper));
 }
 
 /// Selecting an alternate pin function replaces the primary pin label in exported schematic PDFs.
@@ -429,7 +644,7 @@ fn selected_alternate_pin_function_appears_in_exported_pdf() {
     );
 
     let before_bytes = export(session.project().unwrap(), target).unwrap();
-    let before_text = extract(&objects(&before_bytes));
+    let before_text = extract(&objects(&before_bytes), 3);
     assert!(before_text.contains("GPIO"), "missing primary pin label before override: {before_text}");
     assert!(!before_text.contains("ADC_IN"), "unexpected alternate pin label before override: {before_text}");
 
@@ -442,7 +657,7 @@ fn selected_alternate_pin_function_appears_in_exported_pdf() {
         .unwrap();
 
     let after_bytes = export(session.project().unwrap(), target).unwrap();
-    let after_text = extract(&objects(&after_bytes));
+    let after_text = extract(&objects(&after_bytes), 3);
     assert!(after_text.contains("ADC_IN"), "missing selected alternate pin label in PDF: {after_text}");
     assert!(!after_text.contains("GPIO"), "overridden primary pin label remained in PDF: {after_text}");
 }
@@ -461,7 +676,7 @@ fn saved_net_label_text_keeps_180_rotation_and_start_alignment() {
         json!({"sheet":target.id(),"name":"INVERTED_NET","style":"local","x_nm":x,"y_nm":y,"rotation":0,"text":text}),
     );
     let bytes = export(session.project().unwrap(), target).unwrap();
-    let runs = text_runs(&objects(&bytes));
+    let runs = text_runs(&objects(&bytes), 3);
     let (_, [a, b, c, d, tx, ty]) = *runs.iter().find(|(name, _)| name == "INVERTED_NET").unwrap();
     assert!(
         (a + 1.).abs() < 1e-5 && b.abs() < 1e-5 && c.abs() < 1e-5 && (d + 1.).abs() < 1e-5,
