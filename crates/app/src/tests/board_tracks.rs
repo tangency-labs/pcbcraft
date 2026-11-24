@@ -852,7 +852,12 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     h.run();
     click_route(&mut h, start);
     right_click_route(&mut h, via);
-    let close = at(&h, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    // Dismiss on the open side of the canvas even as the route menu grows or flips.
+    let canvas = h.get_by_label("PCB canvas").rect().shrink(12.);
+    let menu = h.get_by_label("Cancel").rect();
+    let close = if menu.center().x < canvas.center().x { canvas.right_center() } else { canvas.left_center() };
+    assert!(!menu.expand(12.).contains(close));
+    let dismissal = h.state().views.active.camera.snap(close, h.get_by_label("PCB canvas").rect());
     click_canvas_at(&mut h, close);
     assert!(h.query_by_label("Place through via").is_none());
     assert!(h.state().views.active.board.tracks.routing());
@@ -867,7 +872,7 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
     let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
     assert!(ends.contains(&start) && ends.contains(&end));
-    assert!(!ends.contains(&Point { x_nm: 7_620_000, y_nm: -2_540_000 }));
+    assert!(!ends.contains(&dismissal));
 }
 
 /// Without a tool, clicking a track selects it and Delete removes it through the shared command.
@@ -3055,6 +3060,161 @@ fn shove_menu_preview_cancel_and_atomic_publication() {
             h.run();
             assert_eq!(after, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
         }
+    }
+}
+
+/// The route menu enables through-via shove in either theme. Preview replaces the live
+/// ring at its source, with Escape and publication sharing the normal route lifecycle.
+#[test]
+fn shove_via_menu_previews_and_publishes_the_displayed_center() {
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let (start, end) = (p(2_540_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    for (theme, cancel) in [(ThemeChoice::Dark, true), (ThemeChoice::Light, false)] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let id = vias(&h)[0].id;
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        let tracks_row = h.get_by_label("Shove tracks").rect();
+        let vias_row = h.get_by_label("Shove tracks and vias").rect();
+        assert!((tracks_row.left() - vias_row.left()).abs() < 1. && vias_row.top() >= tracks_row.bottom() - 1.);
+        click(&mut h, "Shove tracks and vias");
+        click_route(&mut h, start);
+        h.hover_at(at(&h, end));
+        h.run_steps(200);
+        let moves = h.state().views.active.board.tracks.displacements().1;
+        assert_eq!(moves.len(), 1, "{theme:?} {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(moves[0].via, id);
+        let target = moves[0].at;
+        assert_ne!(target, original);
+        let ring_at = |h: &Harness<'_, PcbApp>, point, color| {
+            let center = at(h, point);
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == color && c.center.distance(center) < 0.05))
+        };
+        let tokens = pcbcraft_chrome::Tokens::get();
+        assert!(ring_at(&h, target, tokens.accent.gamma_multiply(0.6)));
+        assert!(!ring_at(&h, original, tokens.board_through));
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(ring_at(&h, original, tokens.board_through));
+            assert_eq!(h.state().session.revision(), revision);
+        } else {
+            click_route(&mut h, end);
+            h.key_press(Key::Enter);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, target));
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Finish track uses the popup's canvas target and commits the shown via move in the same edit.
+#[test]
+fn finish_track_menu_commits_the_open_leg_and_its_via_move() {
+    let mut h = routable();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (start, prefix, end) = (p(2_540_000, -7_620_000), p(3_810_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"expected_revision":revision}));
+    h.run();
+    let id = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks and vias");
+    click_route(&mut h, start);
+    click_route(&mut h, prefix);
+    h.hover_at(at(&h, end));
+    h.run_steps(200);
+    let state = &h.state().views.active.board.tracks;
+    assert_eq!(state.fixed_route_points().unwrap(), [start, prefix]);
+    let moves = state.displacements().1;
+    assert_eq!(moves.len(), 1);
+    let shown = moves[0].at;
+    assert_ne!(shown, original);
+    assert_eq!(h.state().session.revision(), revision);
+
+    right_click_route(&mut h, end);
+    click(&mut h, "Finish track");
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(tracks(&h).iter().any(|track| track.end == end));
+    assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, shown));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// D retains the selected shove policy, stretches the attached track, and moves an
+/// unrelated rail to its prepared preview geometry in the same undoable command.
+#[test]
+fn shove_drag_previews_connected_ends_and_publishes_the_neighbor() {
+    let mut h = routable();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let joint = p(2_540_000, -5_080_000);
+    let pinned = p(2_540_000, -2_540_000);
+    let segment = add_track(&mut h, joint, p(7_620_000, -5_080_000));
+    let attached = add_track(&mut h, pinned, joint);
+    let rail = add_track(&mut h, p(0, -7_720_000), p(10_160_000, -7_720_000));
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
+    let revision = h.state().session.revision();
+    let pickup = p(5_080_000, -5_080_000);
+    let target = p(5_080_000, -7_620_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, pickup);
+    click(&mut h, "Shove tracks");
+    h.key_press(Key::Escape);
+    h.run();
+    for cancel in [true, false] {
+        h.hover_at(at(&h, pickup));
+        h.run();
+        h.key_press(Key::D);
+        h.run();
+        h.hover_at(at(&h, target));
+        h.run_steps(200);
+        let paths = h.state().views.active.board.tracks.replacements().to_vec();
+        assert!(paths.iter().any(|path| path.track == rail), "missing dragged rail: {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(h.state().views.active.board.tracks.replacements().is_empty());
+        } else {
+            click_route(&mut h, target);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            let laid = tracks(&h);
+            let dragged = laid.iter().find(|t| t.id == segment).unwrap();
+            let follower = laid.iter().find(|t| t.id == attached).unwrap();
+            assert_eq!((dragged.start, dragged.end), (p(joint.x_nm, target.y_nm), p(7_620_000, target.y_nm)));
+            assert_eq!((follower.start, follower.end), (pinned, dragged.start));
+            assert_published_replacements(&originals, &laid, &paths);
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
     }
 }
 
