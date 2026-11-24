@@ -260,9 +260,9 @@ fn sheet_formats(s: &Session) -> Vec<String> {
         .collect()
 }
 
-/// A copied bus label pastes into another project as a bus, and the destination sheet is then
-/// written as sheet format 16. A net-name suffix cannot rename a bus, so that paste is refused
-/// whole with a message that names the bus, and nothing changes.
+/// A copied bus label pastes into another project as a bus, and the destination sheet keeps its
+/// sheet format, because a bus label is an optional record. A net-name suffix cannot rename a
+/// bus, so that paste is refused whole with a message that names the bus, and nothing changes.
 #[test]
 fn bus_labels_copy_and_paste_but_refuse_a_suffix() {
     let mut source = fixture();
@@ -272,12 +272,12 @@ fn bus_labels_copy_and_paste_but_refuse_a_suffix() {
     let text = Fragment::capture(source.project().unwrap(), &all(&source)).unwrap().to_text().unwrap();
     let mut destination = Session::default();
     destination.apply("project.new", &json!({"name":"Clipboard destination"})).unwrap();
-    assert_ne!(sheet_formats(&destination), ["pcbcraft-sheet/16"]);
+    assert_eq!(sheet_formats(&destination), ["pcbcraft-sheet/9"]);
     destination.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":0,"expected_revision":destination.revision()})).unwrap();
     let project = destination.project().unwrap();
     let bus = project.net_labels().iter().find(|label| label.style == crate::net_labels::Style::Bus).unwrap();
     assert_eq!(bus.name, "D[0..7]");
-    assert_eq!(sheet_formats(&destination), ["pcbcraft-sheet/16"]);
+    assert_eq!(sheet_formats(&destination), ["pcbcraft-sheet/9"]);
 
     let before = destination.snapshot().unwrap();
     let params = json!({"text":text,"x_nm":0,"y_nm":30*GRID_NM,"net_name_suffix":"_B","expected_revision":destination.revision()});

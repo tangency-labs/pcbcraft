@@ -165,7 +165,7 @@ fn bus_label_preview_and_apply_share_mcp_dispatch() {
     let preview = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
     assert_eq!(preview["revision"], revision);
     assert_eq!(preview["provisional"], true);
-    assert!(preview["changes"].as_array().unwrap().iter().any(|change| change["after"].as_str().unwrap().contains("pcbcraft-sheet/16")));
+    assert!(preview["changes"].as_array().unwrap().iter().any(|change| change["after"].as_str().unwrap().contains("D[0..3]")));
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     params["params"]["dry_run"] = json!(false);
     let applied = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();

@@ -165,51 +165,46 @@ fn bus_labels_cannot_end_wires() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
-/// The decoder's refusal of a bus label under an older format or of format 16 without one.
-const FORMAT_REFUSAL: &str = "bus labels require sheet format 16, and sheet format 16 requires a bus label";
-
-/// Only a sheet holding a bus label is written as sheet format 16; it round-trips exactly.
-/// Format 16 without a bus, and a bus under an older format, are both refused.
+/// A bus label is an optional record in a sheet's net-label array, never a sheet format of its
+/// own. It round-trips exactly in the highest sheet format (9, with paper) and in the lowest one
+/// that holds net labels (3). The writer picks the format from the sheet's other contents, and
+/// removing the bus label writes the sheet's earlier bytes again.
 #[test]
-fn bus_sheets_use_format_16() {
-    let (mut s, main, _) = bus_fixture();
-    apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Plain"}));
-    let plain = s.project().unwrap().sheets().nth(1).unwrap().target;
-    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+fn bus_labels_round_trip_in_the_lowest_and_highest_sheet_formats() {
+    let mut s = session();
+    let main = s.project().unwrap().sheet_target();
     let path = format!("sheets/{}.json", main.id());
-    let plain_path = format!("sheets/{}.json", plain.id());
-    let sheet: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(sheet["format"], "pcbcraft-sheet/16");
-    let other: Value = serde_json::from_slice(&documents[&plain_path]).unwrap();
-    assert_eq!(other["format"], "pcbcraft-sheet/9");
-    let reopened = persistence::decode_documents(&documents).unwrap();
-    assert_eq!(persistence::encode_documents(reopened).unwrap(), documents);
+    let plain = persistence::encode_documents(s.snapshot().unwrap()).unwrap()[&path].clone();
+    apply(&mut s, ADD, json!({"sheet":main.id(),"name":"D[0..7]","style":"bus","x_nm":0,"y_nm":-20*G}));
+    let bus = s.project().unwrap().for_sheet(main).unwrap().net_labels().last().unwrap().object_id();
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let highest: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    let before: Value = serde_json::from_slice(&plain).unwrap();
+    assert_eq!(highest["format"], "pcbcraft-sheet/9");
+    assert_eq!(highest["format"], before["format"], "a bus label never selects the sheet format");
+    assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
 
-    let mut downgraded = documents.clone();
-    let mut older = sheet.clone();
-    older["format"] = json!("pcbcraft-sheet/9");
-    downgraded.insert(path.clone(), serde_json::to_vec(&older).unwrap());
-    assert!(persistence::decode_documents(&downgraded).unwrap_err().contains(FORMAT_REFUSAL));
-
-    let mut upgraded = documents.clone();
-    let mut newer = other.clone();
-    newer["format"] = json!("pcbcraft-sheet/16");
-    upgraded.insert(plain_path, serde_json::to_vec(&newer).unwrap());
-    assert!(persistence::decode_documents(&upgraded).unwrap_err().contains(FORMAT_REFUSAL));
-
-    let mut paperless = documents.clone();
-    let mut bare = sheet.clone();
-    bare.as_object_mut().unwrap().remove("page");
-    paperless.insert(path.clone(), serde_json::to_vec(&bare).unwrap());
-    assert!(persistence::decode_documents(&paperless).is_ok(), "paper stays optional in format 16");
+    let mut lowest = highest.clone();
+    lowest["format"] = json!("pcbcraft-sheet/3");
+    lowest.as_object_mut().unwrap().remove("page");
+    let mut older = documents.clone();
+    older.insert(path.clone(), serde_json::to_vec(&lowest).unwrap());
+    let rewritten = persistence::encode_documents(persistence::decode_documents(&older).unwrap()).unwrap();
+    let written: Value = serde_json::from_slice(&rewritten[&path]).unwrap();
+    assert_eq!(written, lowest, "the bus label survives sheet format 3 unchanged");
+    assert!(written["net_labels"].as_array().unwrap().iter().any(|label| label["style"] == "bus" && label["name"] == "D[0..7]"));
+    assert_eq!(persistence::encode_documents(persistence::decode_documents(&rewritten).unwrap()).unwrap(), rewritten);
 
     let mut malformed = documents;
-    let mut broken = sheet;
+    let mut broken = highest;
     let labels = broken["net_labels"].as_array_mut().unwrap();
-    let bus = labels.iter_mut().find(|label| label["style"] == "bus").unwrap();
-    bus["name"] = json!("D[0..64]");
-    malformed.insert(path, serde_json::to_vec(&broken).unwrap());
+    let record = labels.iter_mut().find(|label| label["style"] == "bus").unwrap();
+    record["name"] = json!("D[0..64]");
+    malformed.insert(path.clone(), serde_json::to_vec(&broken).unwrap());
     assert!(persistence::decode_documents(&malformed).unwrap_err().contains("a bus carries at most 64 members"));
+
+    apply(&mut s, DELETE, json!({"sheet":main.id(),"id":bus}));
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap()[&path], plain, "removing the bus label gives the plain sheet bytes");
 }
 
 /// A dry run of place, edit or delete returns the changed documents and edits nothing.
@@ -244,7 +239,7 @@ fn label_dry_runs_preview_without_editing() {
     };
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(after, std::str::from_utf8(&saved[&path]).unwrap());
-    assert!(String::from_utf8(saved[&path].clone()).unwrap().contains("pcbcraft-sheet/9"), "removing the last bus returns to format 9");
+    assert!(String::from_utf8(saved[&path].clone()).unwrap().contains("pcbcraft-sheet/9"), "removing the bus keeps sheet format 9");
 }
 
 /// Dragging a bus label previews its moved and rotated pose without failing on missing wire
