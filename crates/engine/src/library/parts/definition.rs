@@ -1,6 +1,7 @@
 //! Reusable generic parts link schematic, category and physical package definitions.
 use super::{
-    Category, CategoryBinding, LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
+    Category, CategoryBinding, LEGACY_PART_FORMAT, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINK_URL_CHARS,
+    MAX_LINKS, MAX_TERMINAL_RATINGS, METADATA_PART_FORMAT, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
     codec::{decode, encode, header, unique_map},
     field_id,
 };
@@ -9,7 +10,23 @@ use crate::{
     schematic::{ElectricalType, SymbolDefinition, wiring::PinNumber},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+/// A bounded human-facing reference. Labels and URLs are descriptive metadata, never fetched on load.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PartLink {
+    /// Display label, 1 to [`MAX_LINK_LABEL_CHARS`] characters, stored trimmed.
+    pub label: String,
+    /// HTTP(S) reference, 1 to [`MAX_LINK_URL_CHARS`] characters, never fetched on load.
+    pub url: String,
+}
+
+impl PartLink {
+    /// Validate a trimmed link URL before it is stored. No URL is fetched.
+    pub fn validate_url(url: &str) -> Result<(), String> {
+        crate::library::check_http_url("Link URL", url, MAX_LINK_URL_CHARS)
+    }
+}
 /// A reusable generic part contains no drawings, manufacturer identity, stock or prices.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +49,15 @@ pub struct PartDefinition {
     /// Device limits keyed by the exact symbol's logical terminal ID, never its display name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "rating_map")]
     pub terminal_ratings: BTreeMap<String, SupplyRange>,
+    /// One-line human summary, 1 to [`MAX_DESCRIPTION_CHARS`] characters. Explicit null is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "optional_description")]
+    pub description: Option<String>,
+    /// Short searchable tags, stored trimmed and unique by case-insensitive text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "keyword_list")]
+    pub keywords: Vec<String>,
+    /// Bounded reference links; their labels and URLs are never treated as search keywords.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "link_list")]
+    pub links: Vec<PartLink>,
 }
 impl PartDefinition {
     /// Parse an actual native part file; unresolved dependencies are checked separately by the catalog.
@@ -62,6 +88,36 @@ impl PartDefinition {
         self.terminal_ratings.get(terminal)
     }
 
+    /// Lowercase search text made only from the authored description and keywords. Link labels
+    /// and URLs are deliberately excluded: they are references, not searchable part metadata.
+    /// Shared by catalog search and presentation surfaces so both match the same content.
+    pub fn search_text(&self) -> String {
+        let mut text = self.description.as_deref().unwrap_or_default().to_lowercase();
+        for keyword in &self.keywords {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(&keyword.to_lowercase());
+        }
+        text
+    }
+
+    /// Whether this definition carries any format-5 metadata.
+    fn has_metadata(&self) -> bool {
+        self.description.is_some() || !self.keywords.is_empty() || !self.links.is_empty()
+    }
+
+    /// Check field-level bounds of the optional metadata, independent of the declared format.
+    /// Drafts may be otherwise incomplete, but no metadata collection may exceed its limit or
+    /// carry a duplicate identity (compared after trimming and case folding).
+    pub(crate) fn validate_metadata(&self) -> Result<(), String> {
+        if let Some(description) = &self.description {
+            crate::library::check_text("description", description, MAX_DESCRIPTION_CHARS)?;
+        }
+        validate_keywords(&self.keywords)?;
+        validate_links(&self.links)
+    }
+
     /// Change one range in a draft. Parse both bounds before mutation; two blanks remove
     /// the rating. The normal publication validator checks the exact symbol dependency.
     pub fn set_supply_range(&mut self, terminal: &str, min: &str, max: &str) -> Result<(), String> {
@@ -76,19 +132,26 @@ impl PartDefinition {
         } else {
             self.terminal_ratings.remove(terminal);
         }
-        self.select_rating_format();
+        self.select_format();
         Ok(())
     }
 
-    /// Select the current rated envelope for an authored map. Otherwise retain the
-    /// original unrated format, or use /2 after the last rating was removed from /4.
+    /// Choose the smallest native envelope that carries the draft's content. A retired format-1
+    /// record keeps its encoding only while it still has a symbol and no ratings or metadata;
+    /// ratings need /4, metadata needs /5, and downgrades return to /2 when the content is removed.
     /// Only draft transitions use this; native readers always enforce the declared header.
-    pub(crate) fn select_rating_format(&mut self) {
-        match self.format.as_str() {
-            LEGACY_PART_FORMAT | PART_FORMAT if !self.terminal_ratings.is_empty() => self.format = RATED_PART_FORMAT.into(),
-            RATED_PART_FORMAT if self.terminal_ratings.is_empty() => self.format = PART_FORMAT.into(),
-            _ => {}
+    pub(crate) fn select_format(&mut self) {
+        let retain_legacy = self.format == LEGACY_PART_FORMAT && !self.has_metadata() && self.terminal_ratings.is_empty() && self.symbol.is_some();
+        self.format = if retain_legacy {
+            LEGACY_PART_FORMAT
+        } else if self.has_metadata() {
+            METADATA_PART_FORMAT
+        } else if !self.terminal_ratings.is_empty() {
+            RATED_PART_FORMAT
+        } else {
+            PART_FORMAT
         }
+        .into();
     }
 
     /// Check bounds and map size without resolving the symbol or requiring other draft fields.
@@ -134,12 +197,22 @@ impl PartDefinition {
         let expected = match self.format.as_str() {
             LEGACY_PART_FORMAT => LEGACY_PART_FORMAT,
             RATED_PART_FORMAT => RATED_PART_FORMAT,
+            METADATA_PART_FORMAT => METADATA_PART_FORMAT,
             _ => PART_FORMAT,
         };
         header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
-        if (self.format == RATED_PART_FORMAT) == self.terminal_ratings.is_empty() {
-            return Err("Only pcbcraft-part/4 carries terminal_ratings, and it requires at least one entry.".into());
+        let rated = !self.terminal_ratings.is_empty();
+        let metadata = self.has_metadata();
+        match self.format.as_str() {
+            METADATA_PART_FORMAT if !metadata => return Err("pcbcraft-part/5 requires a description, keyword or link.".into()),
+            LEGACY_PART_FORMAT | PART_FORMAT | RATED_PART_FORMAT if metadata => {
+                return Err("Part description, keywords and links require pcbcraft-part/5.".into());
+            }
+            LEGACY_PART_FORMAT | PART_FORMAT if rated => return Err("Terminal ratings require pcbcraft-part/4 or pcbcraft-part/5.".into()),
+            RATED_PART_FORMAT if !rated => return Err("pcbcraft-part/4 requires at least one terminal rating.".into()),
+            _ => {}
         }
+        self.validate_metadata()?;
         if self.symbol.is_none()
             && let Some(terminal) = self.terminal_ratings.keys().next()
         {
@@ -242,4 +315,65 @@ fn rating_map<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTree
 /// An absent association is optional; explicit null is not an exact reference.
 fn optional_symbol<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Reference>, D::Error> {
     Reference::deserialize(deserializer).map(Some)
+}
+
+/// An omitted description has no summary; an explicit null is not a description.
+fn optional_description<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
+/// Validate the stored form of a keyword list: bounded count, canonical trimmed text and
+/// identities unique after case folding. An empty list is the omitted default, not an error here.
+fn validate_keywords(items: &[String]) -> Result<(), String> {
+    if items.len() > MAX_KEYWORDS {
+        return Err(format!("A part supports at most {MAX_KEYWORDS} keywords, not {}.", items.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for keyword in items {
+        crate::library::check_text("keyword", keyword, MAX_KEYWORD_CHARS)?;
+        if !seen.insert(keyword.to_lowercase()) {
+            return Err(format!("Duplicate keyword {keyword:?} after trimming and case folding."));
+        }
+    }
+    Ok(())
+}
+
+/// Validate stored links: bounded count, unique trimmed labels and fetched-free HTTP(S) URLs.
+fn validate_links(links: &[PartLink]) -> Result<(), String> {
+    if links.len() > MAX_LINKS {
+        return Err(format!("A part supports at most {MAX_LINKS} links, not {}.", links.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for link in links {
+        crate::library::check_text("link label", &link.label, MAX_LINK_LABEL_CHARS)?;
+        if !seen.insert(link.label.to_lowercase()) {
+            return Err(format!("Duplicate link label {:?} after trimming and case folding.", link.label));
+        }
+        PartLink::validate_url(&link.url)?;
+    }
+    Ok(())
+}
+
+/// Read keywords into their canonical stored form: trimmed, nonempty and case-insensitively unique.
+/// Explicit null and an explicitly empty list are refused rather than silently defaulted.
+fn keyword_list<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    let raw = Vec::<String>::deserialize(deserializer)?;
+    if raw.is_empty() {
+        return Err(serde::de::Error::custom("keywords must be omitted when empty"));
+    }
+    let trimmed: Vec<String> = raw.iter().map(|keyword| keyword.trim().to_owned()).collect();
+    validate_keywords(&trimmed).map_err(serde::de::Error::custom)?;
+    Ok(trimmed)
+}
+
+/// Read links into their canonical stored form: trimmed labels, unique identities and safe URLs.
+/// Explicit null and an explicitly empty list are refused rather than silently defaulted.
+fn link_list<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<PartLink>, D::Error> {
+    let raw = Vec::<PartLink>::deserialize(deserializer)?;
+    if raw.is_empty() {
+        return Err(serde::de::Error::custom("links must be omitted when empty"));
+    }
+    let normalized: Vec<PartLink> = raw.into_iter().map(|link| PartLink { label: link.label.trim().to_owned(), url: link.url }).collect();
+    validate_links(&normalized).map_err(serde::de::Error::custom)?;
+    Ok(normalized)
 }

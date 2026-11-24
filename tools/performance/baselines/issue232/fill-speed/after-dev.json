@@ -1,0 +1,37 @@
+{
+  "debug_assertions": true,
+  "fixture": "/home/travisl/projects/PCBcraft/setup/issue232/fill-demo-final/zone-fill.pc",
+  "samples": [
+    {
+      "airwires": 0,
+      "capture_ms": 0.020268,
+      "compute_ms": 1313.296275,
+      "first_ratsnest_ms": 0.07173500000000001,
+      "islands": 1,
+      "repeat_ratsnest_ms": 0.006102,
+      "triangles": 470,
+      "zones": 1
+    },
+    {
+      "airwires": 0,
+      "capture_ms": 0.132821,
+      "compute_ms": 1281.262029,
+      "first_ratsnest_ms": 0.07401,
+      "islands": 1,
+      "repeat_ratsnest_ms": 0.006241999999999999,
+      "triangles": 470,
+      "zones": 1
+    },
+    {
+      "airwires": 0,
+      "capture_ms": 0.084139,
+      "compute_ms": 1277.247795,
+      "first_ratsnest_ms": 0.07462,
+      "islands": 1,
+      "repeat_ratsnest_ms": 0.0060209999999999994,
+      "triangles": 470,
+      "zones": 1
+    }
+  ],
+  "unchanged_native_and_revision": true
+}

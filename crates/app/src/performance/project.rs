@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, sync::Arc};
 /// between two cached sizes. Reports distinguish this trace from the navigation smoke.
 pub fn zoom_all(project: Arc<Project>, environment: Environment) -> Result<Value> {
     environment.validate()?;
+    let fill_state = prepare_fill(&project)?;
     let original = encode_packed(project.clone())?;
     let mut targets: Vec<_> = project
         .sheets()
@@ -66,7 +67,7 @@ pub fn zoom_all(project: Arc<Project>, environment: Environment) -> Result<Value
         results.push(json!({"workspace":format!("{workspace:?}"),"document":name,"sheet":sheet,"texture_upload_bytes":texture_upload_bytes,"metrics":samples.into_iter().map(|(id,samples)|Metric::new(&id,samples)).collect::<Vec<_>>()}));
     }
     Ok(
-        json!({"schema":"pcbcraft-project-zoom/1","project_sha256":super::digest(&original),"environment":environment,"viewport":[2560,1600],"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"results":results}),
+        json!({"schema":"pcbcraft-project-zoom/1","project_sha256":super::digest(&original),"environment":environment,"viewport":[2560,1600],"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"zone_fill":fill_state,"results":results}),
     )
 }
 
@@ -74,6 +75,7 @@ pub fn zoom_all(project: Arc<Project>, environment: Environment) -> Result<Value
 /// Eight warmup passes precede each ten-frame group; raw CPU samples exclude presentation.
 pub fn navigation(project: Arc<Project>, environment: Environment) -> Result<Value> {
     environment.validate()?;
+    let fill_state = prepare_fill(&project)?;
     let original = encode_packed(project.clone())?;
     let mut results = Vec::new();
     for workspace in [Workspace::Schematic, Workspace::Board] {
@@ -123,6 +125,23 @@ pub fn navigation(project: Arc<Project>, environment: Environment) -> Result<Val
         results.push(json!({"workspace":format!("{workspace:?}"),"metrics":samples.into_iter().map(|(id,samples)|Metric::new(&id,samples)).collect::<Vec<_>>()}));
     }
     Ok(
-        json!({"schema":"pcbcraft-project-navigation/2","environment":environment,"project_sha256":super::digest(&original),"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"geometry":{"components":project.components().count(),"symbols":project.all_symbols().count(),"sheets":project.sheets().len(),"footprints":project.boards().map(|b|b.footprints().count()).sum::<usize>()},"results":results}),
+        json!({"schema":"pcbcraft-project-navigation/2","fill_state":fill_state,"environment":environment,"project_sha256":super::digest(&original),"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"geometry":{"components":project.components().count(),"symbols":project.all_symbols().count(),"sheets":project.sheets().len(),"footprints":project.boards().map(|b|b.footprints().count()).sum::<usize>()},"results":results}),
     )
+}
+
+/// Measure steady navigation with current source fill, rather than racing background worker
+/// completion inside a short timing trace. Preparation itself is not a navigation sample.
+fn prepare_fill(project: &Arc<Project>) -> Result<Value> {
+    let Some(target) = project.board_target() else { return Ok(Value::Null) };
+    if project.board_view(target).is_none_or(|v| v.zones().is_empty()) {
+        return Ok(Value::Null);
+    }
+    let mut session = pcbcraft_engine::Session::default();
+    session.open_snapshot(project.clone());
+    let mut job = session.prepare_zone_fill(target, false).map_err(|e| e.to_string())?;
+    job.step(1);
+    if matches!(job.take_result(), Ok(None)) {
+        return Err("Navigation fill preparation was canceled".into());
+    }
+    session.zone_fill_status(target).map_err(|e| e.to_string())
 }

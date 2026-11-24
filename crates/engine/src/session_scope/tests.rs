@@ -150,6 +150,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             | nets::INSPECT_CLASSES
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
+            | INSPECT_LAYER_GROUPS
             | sources::LIST
             | sources::AVAILABLE_REVISIONS
             | sources::lifecycle::INSPECT
@@ -246,6 +247,25 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
     assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
     assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), documents);
     assert_eq!(reader.execute("not.a.command", &Value::Null).unwrap_err().code(), ErrorCode::UnknownCommand);
+}
+
+/// The layer-group query is a reviewed read: it matches an unrestricted session and leaves the
+/// project, revision and Undo history unchanged.
+#[test]
+fn read_only_layer_group_query_matches_edit_session() {
+    let project = fixture().snapshot().unwrap();
+    let mut reader = Session::with_scope(SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    let mut control = Session::default();
+    control.open_snapshot(project.clone());
+    let before = reader.inspect();
+    let revision = reader.revision();
+    let expected = control.execute(INSPECT_LAYER_GROUPS, &json!({})).unwrap();
+    assert_eq!(expected["layer_groups"]["outer"].as_array().unwrap().len(), 2);
+    assert_eq!(reader.execute(INSPECT_LAYER_GROUPS, &json!({})).unwrap(), expected);
+    assert_eq!(reader.apply(INSPECT_LAYER_GROUPS, &json!({})).unwrap(), revision);
+    assert_eq!(reader.inspect(), before);
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
 }
 
 /// Address the placed resistor's exact symbol revision.

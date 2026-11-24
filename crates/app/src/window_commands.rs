@@ -1,7 +1,7 @@
 //! Window commands: the editor's view, window, settings and file controls as named commands, so
 //! a live MCP client reaches them through the same handlers as the ribbon, sheet tabs, status
-//! bar and Preferences. They change how the project is shown, never the project document, its
-//! revision or its undo history. Each view or window is addressed by the ID inspection reports.
+//! bar and Preferences. Appearance edits retain local undo entries without changing project
+//! documents or revisions. Each view or window is addressed by the ID inspection reports.
 
 use egui::Context;
 
@@ -125,6 +125,19 @@ mod live {
     };
     use pcbcraft_chrome::workspace::PanelStyle;
 
+    /// Read one offered interval, including JSON's whole-number float spellings. Integer
+    /// numbers are checked exactly before floating-point values; only 0, 1, 5 and 10 match.
+    fn interval_minutes(value: &Value) -> Option<u8> {
+        if let Some(number) = value.as_u64() {
+            return u8::try_from(number).ok().filter(|minutes| crate::preferences::valid_interval(*minutes));
+        }
+        if value.as_i64().is_some() {
+            return None;
+        }
+        let number = value.as_f64()?;
+        crate::preferences::INTERVAL_MINUTES.into_iter().find(|minutes| number == f64::from(*minutes))
+    }
+
     /// The kinds of value a window command parameter takes.
     #[derive(Clone, Copy, Debug)]
     enum Kind {
@@ -164,6 +177,8 @@ mod live {
             max: i64,
             step: i64,
         },
+        /// An interval in whole minutes that Preferences offers for snapshots and saves; 0 is Off.
+        Minutes,
         /// A schematic point in nanometres within the coordinate bounds.
         Point,
         /// Symbol, wire and optional named-net anchor ID lists, as the project's group commands take.
@@ -201,7 +216,46 @@ mod live {
                     json!({"type":"object","description":"A bounded native reusable or manufacturer part record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
-                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": [
+                                    "insert",
+                                    "replace",
+                                    "replace_many",
+                                    "delete",
+                                    "transform",
+                                    "duplicate",
+                                    "paste",
+                                    "array",
+                                    "metadata",
+                                    "generate_courtyard",
+                                    "undo",
+                                    "redo"
+                                ]
+                            }
+                        },
+                        "required": ["operation"],
+                        "if": {
+                            "properties": {
+                                "operation": {"const": "generate_courtyard"}
+                            },
+                            "required": ["operation"]
+                        },
+                        "then": {
+                            "properties": {
+                                "clearance_nm": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": pcbcraft_engine::authoring::courtyard::MAX_CLEARANCE_NM
+                                }
+                            },
+                            "required": ["clearance_nm"]
+                        },
+                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
+                    })
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     json!({"type": "integer", "minimum": 0})
@@ -214,6 +268,7 @@ mod live {
                 Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
+                Self::Minutes => json!({"type": "integer", "enum": crate::preferences::INTERVAL_MINUTES}),
                 Self::Point => {
                     json!({"type": "object", "properties": {"x_nm": coordinate, "y_nm": coordinate}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
                 }
@@ -265,6 +320,7 @@ mod live {
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
+                Self::Minutes => interval_minutes(value).is_some(),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
                 Self::Path => value.as_str().is_some_and(|path| path.chars().count() <= 4096 && std::path::Path::new(path).is_absolute()),
@@ -299,6 +355,7 @@ mod live {
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
+                Self::Minutes => "must be 0 (Off), 1, 5 or 10 minutes".to_owned(),
                 Self::Point => "must be a point with whole-nanometre x_nm and y_nm within the schematic bounds".to_owned(),
                 Self::Inspection => "must be a bounded list of distinct qualified terminal or pad addresses".into(),
                 Self::Selection => "must contain unique symbol, wire and optional named-net anchor ID lists".to_owned(),
@@ -359,7 +416,9 @@ mod live {
                 .iter()
                 .map(|param| {
                     let mut schema = param.kind.schema();
-                    schema["description"] = json!(param.summary);
+                    if schema.get("description").is_none() {
+                        schema["description"] = json!(param.summary);
+                    }
                     (param.name.to_owned(), schema)
                 })
                 .collect();
@@ -918,6 +977,22 @@ mod live {
             params: &[VIEW, Param { name: "visible", summary: "Show copper net names", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "view.set_net_colors_visibility",
+            title: "Show Net Colors",
+            summary: "Show personal net colors or the physical layer palette in one PCB view.",
+            params: &[VIEW, Param { name: "visible", summary: "Use personal net colors", required: true, kind: Kind::Bool }],
+        },
+        WindowCommand {
+            id: "view.set_net_color",
+            title: "Net Color",
+            summary: "Set or reset a personal color shared by a board's zones and connected copper on an active persistent net.",
+            params: &[
+                VIEW,
+                Param { name: "net", summary: "Active persistent net UUID on the view's board", required: true, kind: Kind::Object },
+                Param { name: "color", summary: "Opaque #RRGGBB or null to use the layer palette", required: true, kind: Kind::Color },
+            ],
+        },
+        WindowCommand {
             id: "view.set_board_flipped",
             title: "Flip Board View",
             summary: "View the board from below or above in this PCB view, as Design › Flip view does. Keeps the centered point and zoom; changes no project data or undo history.",
@@ -926,7 +1001,7 @@ mod live {
         WindowCommand {
             id: "view.set_layer_color",
             title: "Layer Color",
-            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
+            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board and saved locally. Changes are undoable in the editor.",
             params: &[
                 VIEW,
                 Param { name: "layer", summary: "Layer UUID on the view's board", required: true, kind: Kind::Object },
@@ -980,6 +1055,7 @@ mod live {
                 setting("labels", "Select hierarchical labels", Kind::Bool),
                 setting("no_connects", "Select no-connect markers", Kind::Bool),
                 setting("footprints", "Select board footprints", Kind::Bool),
+                setting("include_locked", "Include locked footprints, tracks and vias in selection", Kind::Bool),
                 setting("tracks", "Select board tracks", Kind::Bool),
                 setting("vias", "Select board vias", Kind::Bool),
                 setting("graphics", "Select board graphics", Kind::Bool),
@@ -1138,6 +1214,16 @@ mod live {
                 setting("middle_drag_zoom", "Make middle-button drag zoom instead of panning", Kind::Bool),
                 setting("right_drag_pan", "Make right-button drag pan instead of selecting a box", Kind::Bool),
                 setting("panel_style", "How the ribbon and edge panels are framed", Kind::Choice(PANEL_STYLES)),
+                setting(
+                    "autosave_minutes",
+                    "Minutes between recovery snapshots in the recovery folder; 0 (the default) records nothing",
+                    Kind::Minutes,
+                ),
+                setting(
+                    "save_to_project_minutes",
+                    "Minutes between automatic saves of a changed project that has a folder or .pc file, through the ordinary save; 0 never saves automatically",
+                    Kind::Minutes,
+                ),
             ],
         },
         WindowCommand {
@@ -1258,6 +1344,8 @@ mod live {
             "middle_drag_zoom": preferences.navigation.middle_drag_zoom,
             "right_drag_pan": preferences.navigation.right_drag_pan,
             "panel_style": match preferences.panel_style { PanelStyle::Floating => "floating", PanelStyle::Compact => "compact" },
+            "autosave_minutes": preferences.autosave_minutes,
+            "save_to_project_minutes": preferences.save_to_project_minutes,
         })
     }
 
@@ -1343,6 +1431,12 @@ mod live {
         }
         if let Some(style) = text("panel_style") {
             preferences.panel_style = if style == "compact" { PanelStyle::Compact } else { PanelStyle::Floating };
+        }
+        if let Some(minutes) = params.get("autosave_minutes").and_then(interval_minutes) {
+            preferences.autosave_minutes = minutes;
+        }
+        if let Some(minutes) = params.get("save_to_project_minutes").and_then(interval_minutes) {
+            preferences.save_to_project_minutes = minutes;
         }
         preferences
     }
@@ -1433,6 +1527,10 @@ mod live {
                         "reference_selection": view.board.reference.selected,
                         "hidden_layers": view.board.hidden_layers,
                         "net_names_visible": !view.board.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY),
+                        "net_colors_visible": view.board.net_colors_visible(),
+                        "net_colors": view.board.target.and_then(|target| app.board_appearance.net_palette(target, true))
+                            .map(|palette| palette.iter().map(|(net, color)| json!({"net":net,"color":crate::board_appearance::hex(*color)})).collect::<Vec<_>>())
+                            .unwrap_or_default(),
                         "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
                             .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)),
                         "active_layer": view.board.active_layer,
@@ -1739,6 +1837,16 @@ mod live {
                         self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
                     state.board.set_net_names_visibility(params["visible"].as_bool() == Some(true));
                 }
+                ("view.set_net_colors_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    state.board.set_net_colors_visible(params["visible"].as_bool() == Some(true));
+                }
+                ("view.set_net_color", Some((view, _)), _) => {
+                    let net = uuid::Uuid::parse_str(params["net"].as_str().unwrap_or_default()).map_err(|_| "Expected a persistent net UUID")?;
+                    let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
+                    self.set_net_color(view, net, rgb)?;
+                }
                 ("view.set_board_flipped", Some((view, _)), _) => {
                     let state =
                         self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
@@ -1814,20 +1922,16 @@ mod live {
                     if reference && wanted.len() != 1 {
                         return Err("Reference selection requires exactly one footprint ID".into());
                     }
-                    let placed: std::collections::BTreeSet<String> = self
-                        .views
-                        .view(view)
-                        .and_then(|view| view.board.target)
-                        .zip(self.session.project())
-                        .and_then(|(target, project)| project.board_view(target))
-                        .into_iter()
-                        .flat_map(|board| board.footprint_ids())
-                        .collect();
-                    if !wanted.is_subset(&placed) {
+                    let state = self.views.view(view).ok_or("The addressed view closed")?;
+                    let board = state.board.target.and_then(|target| self.session.project()?.board_view(target));
+                    if wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)).is_none()) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
                     }
-                    if !wanted.is_empty() && self.views.view(view).is_some_and(|v| !v.filters.footprints) {
+                    if !wanted.is_empty() && !state.filters.footprints {
                         return Err("Footprint selection is disabled in this view".into());
+                    }
+                    if !state.filters.include_locked && wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)) == Some(true)) {
+                        return Err("Locked footprint selection is disabled in this view".into());
                     }
                     let previous = self.views.active.id();
                     self.views.bind(view);
@@ -2031,6 +2135,199 @@ mod live {
                     "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
                     changes.join("\n")
                 ),
+            }
+        }
+
+        /// Discovery for `app.library_edit` preserves the detailed `Action` field description
+        /// (including required `clearance_nm` and optional `source`/`stroke_nm`/`replace_existing`
+        /// for `generate_courtyard`), while native `Action` validation still enforces `clearance_nm`.
+        #[test]
+        fn library_edit_discovery_documents_generate_courtyard_fields_and_requires_clearance() {
+            let described = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let action = &described["params"]["properties"]["action"];
+            let operations = action["properties"]["operation"]["enum"].as_array().expect("operation enum");
+            assert!(operations.contains(&json!("generate_courtyard")));
+            let description = action["description"].as_str().expect("action description");
+            assert!(
+                description.contains("generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing"),
+                "unexpected description: {description}"
+            );
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
+        }
+
+        /// Minimal JSON Schema evaluator covering the keywords used in command contracts
+        /// (`type`, `const`, `enum`, numeric bounds, object `properties`/`required`/
+        /// `additionalProperties`, and combinators `if`/`then`/`else`/`allOf`/`anyOf`/`oneOf`/`not`).
+        fn schema_accepts(schema: &Value, instance: &Value) -> bool {
+            if let Some(allowed) = schema.as_bool() {
+                return allowed;
+            }
+            let Some(obj) = schema.as_object() else {
+                return true;
+            };
+            if let Some(expected_type) = obj.get("type") {
+                let matches_one = |kind: &str| match kind {
+                    "object" => instance.is_object(),
+                    "array" => instance.is_array(),
+                    "string" => instance.is_string(),
+                    "boolean" => instance.is_boolean(),
+                    "null" => instance.is_null(),
+                    "integer" => instance.is_i64() || instance.is_u64(),
+                    "number" => instance.is_number(),
+                    _ => false,
+                };
+                let ok = match expected_type {
+                    Value::String(kind) => matches_one(kind),
+                    Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).any(matches_one),
+                    _ => false,
+                };
+                if !ok {
+                    return false;
+                }
+            }
+            if let Some(expected) = obj.get("const")
+                && instance != expected
+            {
+                return false;
+            }
+            if let Some(allowed) = obj.get("enum").and_then(Value::as_array)
+                && !allowed.contains(instance)
+            {
+                return false;
+            }
+            if let Some(min) = obj.get("minimum").and_then(Value::as_i64)
+                && let Some(actual) = instance.as_i64()
+                && actual < min
+            {
+                return false;
+            }
+            if let Some(max) = obj.get("maximum").and_then(Value::as_i64)
+                && let Some(actual) = instance.as_i64()
+                && actual > max
+            {
+                return false;
+            }
+            if let Some(map) = instance.as_object() {
+                if let Some(required) = obj.get("required").and_then(Value::as_array)
+                    && required.iter().filter_map(Value::as_str).any(|key| !map.contains_key(key))
+                {
+                    return false;
+                }
+                let props = obj.get("properties").and_then(Value::as_object);
+                if let Some(props) = props {
+                    for (key, sub) in props {
+                        if let Some(val) = map.get(key)
+                            && !schema_accepts(sub, val)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                if let Some(additional) = obj.get("additionalProperties") {
+                    for (key, val) in map {
+                        if props.is_none_or(|p| !p.contains_key(key)) && !schema_accepts(additional, val) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            if let Some(cond) = obj.get("if") {
+                if schema_accepts(cond, instance) {
+                    if let Some(then_schema) = obj.get("then")
+                        && !schema_accepts(then_schema, instance)
+                    {
+                        return false;
+                    }
+                } else if let Some(else_schema) = obj.get("else")
+                    && !schema_accepts(else_schema, instance)
+                {
+                    return false;
+                }
+            }
+            if let Some(all) = obj.get("allOf").and_then(Value::as_array)
+                && !all.iter().all(|sub| schema_accepts(sub, instance))
+            {
+                return false;
+            }
+            if let Some(any) = obj.get("anyOf").and_then(Value::as_array)
+                && !any.iter().any(|sub| schema_accepts(sub, instance))
+            {
+                return false;
+            }
+            if let Some(one) = obj.get("oneOf").and_then(Value::as_array)
+                && one.iter().filter(|sub| schema_accepts(sub, instance)).count() != 1
+            {
+                return false;
+            }
+            if let Some(neg) = obj.get("not")
+                && schema_accepts(neg, instance)
+            {
+                return false;
+            }
+            true
+        }
+
+        /// The published `app.library_edit` action schema (both live discovery and the committed
+        /// contract snapshot) must reject `generate_courtyard` without `clearance_nm`, accept it
+        /// with a valid `clearance_nm`, and not require `clearance_nm` for other operations.
+        #[test]
+        fn library_edit_published_schema_requires_clearance_only_for_generate_courtyard() {
+            let live_entry = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let live_action = &live_entry["params"]["properties"]["action"];
+            let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+            let snapshot_action = &snapshot["window_commands"]["app.library_edit"]["params"]["properties"]["action"];
+
+            for (source, schema) in [("window_catalog", live_action), ("command-contracts.json", snapshot_action)] {
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard"})),
+                    "{source}: generate_courtyard without clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": "250000"})),
+                    "{source}: non-integer clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": -1})),
+                    "{source}: negative clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(
+                        schema,
+                        &json!({"operation": "generate_courtyard", "clearance_nm": pcbcraft_engine::authoring::courtyard::MAX_CLEARANCE_NM + 1})
+                    ),
+                    "{source}: clearance_nm above MAX_CLEARANCE_NM must be rejected"
+                );
+                assert!(
+                    schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": 0})),
+                    "{source}: generate_courtyard with minimum clearance_nm must be accepted"
+                );
+                assert!(
+                    schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": 250_000})),
+                    "{source}: generate_courtyard with clearance_nm must be accepted"
+                );
+                assert!(
+                    schema_accepts(
+                        schema,
+                        &json!({
+                            "operation": "generate_courtyard",
+                            "clearance_nm": 250_000,
+                            "source": "pads_only",
+                            "stroke_nm": 50_000,
+                            "replace_existing": false
+                        })
+                    ),
+                    "{source}: generate_courtyard with optional fields must be accepted"
+                );
+                assert!(!schema_accepts(schema, &json!({"clearance_nm": 250_000})), "{source}: missing operation must be rejected");
+                for operation in
+                    ["insert", "replace", "replace_many", "delete", "transform", "duplicate", "paste", "array", "metadata", "undo", "redo"]
+                {
+                    assert!(
+                        schema_accepts(schema, &json!({"operation": operation})),
+                        "{source}: operation `{operation}` must not require clearance_nm"
+                    );
+                }
             }
         }
 

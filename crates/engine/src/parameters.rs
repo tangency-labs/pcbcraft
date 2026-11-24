@@ -484,8 +484,23 @@ impl Project {
     /// typed and are listed in [`Resolved::unknown`]. The result is never longer than that limit
     /// or `text` itself, whichever is longer.
     pub fn resolve_text(&self, sheet: Option<SheetTarget>, text: &str) -> Resolved {
+        Self::resolve_text_with(text, &|scope, name| self.parameter_value(scope, sheet, name))
+    }
+
+    /// Resolve frame text for an output occurrence, using its one-based page number and the
+    /// output page count instead of the editor's Browser order.
+    pub(crate) fn resolve_text_for_output_page(&self, sheet: SheetTarget, text: &str, page: usize, pages: usize) -> Resolved {
+        Self::resolve_text_with(text, &|scope, name| match scope {
+            Scope::Instance if name.eq_ignore_ascii_case("Page") => Some(page.to_string()),
+            Scope::Instance if name.eq_ignore_ascii_case("Pages") => Some(pages.to_string()),
+            _ => self.parameter_value(scope, Some(sheet), name),
+        })
+    }
+
+    /// Resolve all references, including nested ones, through the same lookup for this text.
+    fn resolve_text_with(text: &str, lookup: &dyn Fn(Scope, &str) -> Option<String>) -> Resolved {
         let mut out = Resolved::default();
-        self.resolve_into(sheet, text, 0, 0, &mut { MAX_EXPANSIONS }, &mut out);
+        Self::resolve_into(lookup, text, 0, 0, &mut { MAX_EXPANSIONS }, &mut out);
         out
     }
 
@@ -494,7 +509,14 @@ impl Project {
     /// follow `text`; an expansion happens only when the output so far, the value, the rest of
     /// `text` and `pending` all fit in [`MAX_RESOLVED_LEN`], so appending a reference as typed
     /// instead always keeps the result inside it. Depth and budget are checked before any lookup.
-    fn resolve_into(&self, sheet: Option<SheetTarget>, text: &str, pending: usize, depth: usize, budget: &mut usize, out: &mut Resolved) {
+    fn resolve_into(
+        lookup: &dyn Fn(Scope, &str) -> Option<String>,
+        text: &str,
+        pending: usize,
+        depth: usize,
+        budget: &mut usize,
+        out: &mut Resolved,
+    ) {
         for piece in pieces(text) {
             match piece {
                 Piece::Text(text) => out.text.push_str(text),
@@ -502,13 +524,13 @@ impl Project {
                     // Bytes of `text` after this reference; `raw` is a slice of `text`.
                     let after = text.len() - (raw.as_ptr() as usize - text.as_ptr() as usize) - raw.len();
                     let value = (depth < MAX_DEPTH && *budget > 0)
-                        .then(|| self.parameter_value(scope, sheet, name))
+                        .then(|| lookup(scope, name))
                         .flatten()
                         .filter(|value| out.text.len() + value.len() + after + pending <= MAX_RESOLVED_LEN);
                     match value {
                         Some(value) => {
                             *budget -= 1;
-                            self.resolve_into(sheet, &value, after + pending, depth + 1, budget, out);
+                            Self::resolve_into(lookup, &value, after + pending, depth + 1, budget, out);
                         }
                         None => {
                             let start = out.text.len();

@@ -261,6 +261,18 @@ impl ProjectFiles {
         session.snapshot().is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project)))
     }
 
+    /// Whether the next Save to the current location would perform a first-time format,
+    /// manifest, layout or compatibility upgrade. Timed Save holds back for these targets so
+    /// only an explicit Save upgrades legacy files in place.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn needs_upgrade(&self, session: &Session) -> bool {
+        session.snapshot().is_some_and(|project| {
+            self.saved
+                .as_ref()
+                .is_some_and(|saved| saved.snapshot.same_document(&project) && (saved.opened.is_some() || saved.target.needs_upgrade()))
+        })
+    }
+
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.
     pub(super) fn open(&mut self, revision: u64, ctx: &egui::Context, folder: bool) -> Result<(), String> {
         let (send, receive) = mpsc::channel();

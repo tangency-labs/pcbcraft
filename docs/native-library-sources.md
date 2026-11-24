@@ -366,6 +366,10 @@ engine to read a path.
 | `library.search` | Optional `query` and `kind` (`symbol`, `footprint`, `category` or `part`). Returns current unambiguous items, their exact keys, formats, provenance and content digests. |
 | `library.remove_source` | `source`. Removes an external catalog source without changing pinned definitions; bundled sources are read-only. Use `app.library_source` in the live editor to also forget a personal registration. |
 
+Part search also matches authored description and keyword text, but not link
+labels or URLs; see [descriptive metadata](part-schema.md#descriptive-metadata-and-search)
+for the normalization and bounds.
+
 Use `execute` with normal inspection enabled to receive these results;
 `inspect: false` intentionally returns only the unchanged project revision for
 these source commands. The focused headless `library.preview_pin_remap` query is
@@ -483,6 +487,25 @@ Several pads can belong to one terminal. Selecting a mapping row highlights its
 pad and corresponding terminal, including a terminal on another symbol unit.
 Units are read-only here and remain editable in the Symbol Editor. The model
 slot is reserved for future package-bound 3D support.
+
+The part document also carries **Description**, **Keywords** and **Links**
+fields: a one-line summary, a list of search tags and a list of label/URL
+pairs. Leaving a field blank, or removing its last row, leaves that key out of
+the native record entirely — no `null`, no empty array. The
+[descriptive metadata contract](part-schema.md#descriptive-metadata-and-search)
+defines the exact character/count bounds, case-insensitive duplicate rules,
+HTTP(S) URL requirement and the rule that a loaded record never fetches a link.
+Draft edits check those bounds before they are accepted; publication checks the
+declared envelope and resolves the exact dependencies.
+
+The first description, keyword or link selects the `pcbcraft-part/5` envelope
+for the draft. Removing the last metadata field downgrades a rated draft to
+`pcbcraft-part/4` and an unrated one to `pcbcraft-part/2`; adding metadata to a
+retained format-1 draft upgrades it. Publication reselects and validates the
+envelope. Because the full definition is pinned with the part, editing its
+metadata changes the dependency digest and invalidates a placement captured
+against the earlier content. Descriptive metadata adds no electrical
+requirement: schematic placement still needs an exact symbol.
 
 The fixed footer has the primary **Publish…** action and publication/destination
 state. It opens the destination form; choose a writable library, or use **New
