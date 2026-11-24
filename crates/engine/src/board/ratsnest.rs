@@ -93,7 +93,7 @@ impl BoardView<'_> {
         if !self.has_accepted_connectivity() {
             return Err("board has no accepted connectivity".into());
         }
-        let copper = if self.tracks().is_empty() && self.vias().is_empty() && self.arc_tracks().is_empty() {
+        let copper = if self.tracks().is_empty() && self.vias().is_empty() && self.arc_tracks().is_empty() && self.zones().is_empty() {
             super::track::Copper::default()
         } else {
             self.copper()?

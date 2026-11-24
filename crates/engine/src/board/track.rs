@@ -238,6 +238,14 @@ pub struct Copper {
     pub arcs: BTreeMap<Uuid, usize>,
 }
 
+/// Physical copper and its unambiguous intended nets for one presentation snapshot.
+pub struct CopperPresentation {
+    pub copper: Copper,
+    pub names: BTreeMap<Uuid, String>,
+    /// Active persistent net per physical island. Unresolved or conflicting islands have no ID.
+    pub net_ids: Vec<Option<Uuid>>,
+}
+
 /// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
 #[derive(Clone)]
 pub(super) struct Land {
@@ -276,6 +284,9 @@ impl<'a> BoardView<'a> {
     /// and unconfigured pads have no copper and stay isolated. Teardrops return an error.
     pub fn copper(self) -> Result<Copper, String> {
         self.require_no_teardrops()?;
+        if let Some(Ok(fill)) = self.filled_zones() {
+            return Ok(fill.copper.clone());
+        }
         let lands = lands(self);
         let items = CopperItems { lands: &lands, tracks: self.tracks(), vias: self.vias(), arcs: self.arc_tracks() };
         Ok(islands_with_arcs(items)?.0)
@@ -309,13 +320,24 @@ impl<'a> BoardView<'a> {
     /// Resolve physical islands and complete authored/contact-derived intent in one contact pass,
     /// including circular arcs. Teardrops return an error before any partial geometry is resolved.
     pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
+        let projected = self.copper_presentation(false)?;
+        Ok((projected.copper, projected.names))
+    }
+
+    /// Resolve optional persistent colors in the same contact pass as the existing display names,
+    /// including circular arcs. When IDs are omitted, no additional registry reconciliation is
+    /// performed. Teardrops return an error before any partial geometry is resolved.
+    pub fn copper_presentation(self, include_ids: bool) -> Result<CopperPresentation, String> {
         self.require_no_teardrops()?;
         let lands = lands(self);
         let (tracks, vias, arcs) = (self.tracks(), self.vias(), self.arc_tracks());
         let items = CopperItems { lands: &lands, tracks, vias, arcs };
-        let (copper, members) = islands_with_arcs(items)?;
+        let (copper, members) = match self.filled_zones() {
+            Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
+            _ => islands_with_arcs(items)?,
+        };
         let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
-        let intent = self.project().board_intent_memberships();
+        let intent = if include_ids { self.project().accepted_net_memberships() } else { self.project().board_intent_memberships() };
         let intrinsic = super::via_nets::node_membership_with_arcs(self.project(), items, &intent);
         let island_net: Vec<_> = members
             .iter()
@@ -328,11 +350,18 @@ impl<'a> BoardView<'a> {
                 if unresolved || ids.len() != 1 {
                     return None;
                 }
-                intent.names.get(ids.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
+                ids.first().copied()
             })
             .collect();
+        let net_ids = if include_ids {
+            let ids: BTreeMap<_, _> = intent.ids.iter().map(|(&id, &member)| (member, id)).collect();
+            island_net.iter().map(|member| member.and_then(|index| ids.get(&index).copied())).collect()
+        } else {
+            Vec::new()
+        };
         let mut nets = BTreeMap::new();
-        for (nodes, name) in members.iter().zip(island_net) {
+        for (nodes, member) in members.iter().zip(island_net) {
+            let name = member.and_then(|member| intent.names.get(&member).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone())));
             let Some(name) = name else { continue };
             for node in nodes {
                 if let Some(index) = node.checked_sub(lands.len()) {
@@ -347,7 +376,7 @@ impl<'a> BoardView<'a> {
                 }
             }
         }
-        Ok((copper, nets))
+        Ok(CopperPresentation { copper, names: nets, net_ids })
     }
 }
 
@@ -605,9 +634,14 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.node = 0;
-        builder.nearby = Nearby::Lookup;
+        builder.begin_pad_contacts();
         builder
+    }
+
+    /// Begin direct pad contacts on the existing roots and index after the track/via pass.
+    fn begin_pad_contacts(&mut self) {
+        self.node = 0;
+        self.nearby = Nearby::Lookup;
     }
 
     /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
@@ -844,6 +878,207 @@ fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
     Point { x_nm: (ox + u * ux + v * vx).round() as i64, y_nm: (oy + u * uy + v * vy).round() as i64 }
 }
 
+/// One moved pad entry indexed for fast layer-and-bounds carrier lookup.
+struct CarryPad {
+    order: usize,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    from: [Point; 4],
+    to: Option<[Point; 4]>,
+    contour: PadContour,
+}
+
+/// Per-layer X-sorted moved pads with prefix `max_x` for bounded carrier lookup.
+struct LayerCarryPads {
+    pads: Vec<CarryPad>,
+    prefix_max_x: Vec<f64>,
+}
+
+/// Spatial index over moved pads preserving exact first-match (`old.iter().find`) semantics.
+struct CarryIndex {
+    by_layer: BTreeMap<Uuid, LayerCarryPads>,
+}
+
+impl CarryIndex {
+    /// Group moved pad contours by copper layer and sort by `min_x` for fast overlap pruning.
+    fn new(old: Vec<(Land, PadContour)>, new: &BTreeMap<(String, String), Land>) -> Self {
+        let mut grouped: BTreeMap<Uuid, Vec<CarryPad>> = BTreeMap::new();
+        for (order, (land, contour)) in old.into_iter().enumerate() {
+            let [min_x, min_y, max_x, max_y] = contour.bounds();
+            let moved_land = new.get(&land.key);
+            for layer in &land.layers {
+                let to = moved_land.filter(|moved| moved.layers.contains(layer)).map(|moved| moved.corners);
+                grouped.entry(*layer).or_default().push(CarryPad {
+                    order,
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                    from: land.corners,
+                    to,
+                    contour: contour.clone(),
+                });
+            }
+        }
+        let by_layer = grouped
+            .into_iter()
+            .map(|(layer, mut pads)| {
+                pads.sort_by(|a, b| a.min_x.total_cmp(&b.min_x).then_with(|| a.order.cmp(&b.order)));
+                let mut prefix_max_x = Vec::with_capacity(pads.len());
+                let mut running_max = f64::NEG_INFINITY;
+                for pad in &pads {
+                    running_max = running_max.max(pad.max_x);
+                    prefix_max_x.push(running_max);
+                }
+                (layer, LayerCarryPads { pads, prefix_max_x })
+            })
+            .collect();
+        Self { by_layer }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_layer.is_empty()
+    }
+
+    /// Resolve a track endpoint against the first matching moved pad on its layer.
+    fn follow(&self, track: &Track, end: Point) -> Point {
+        let Some(layer_pads) = self.by_layer.get(&track.layer) else { return end };
+        let radius = track.width_nm as f64 / 2.;
+        let x = end.x_nm as f64;
+        let y = end.y_nm as f64;
+        let upper = layer_pads.pads.partition_point(|pad| pad.min_x <= x + radius + 1.);
+        let mut best: Option<(usize, &CarryPad)> = None;
+        for index in (0..upper).rev() {
+            if layer_pads.prefix_max_x[index] < x - radius - 1. {
+                break;
+            }
+            let pad = &layer_pads.pads[index];
+            if pad.max_x < x - radius - 1. || pad.max_y < y - radius - 1. || pad.min_y > y + radius + 1. {
+                continue;
+            }
+            if best.is_some_and(|(best_order, _)| pad.order >= best_order) {
+                continue;
+            }
+            if pad.contour.overlaps_segment(end, end, radius) {
+                best = Some((pad.order, pad));
+            }
+        }
+        match best {
+            Some((_, pad)) => pad.to.map_or(end, |to| reframe(end, &pad.from, &to)),
+            None => end,
+        }
+    }
+}
+
+/// Resumable attached-track pass for prepared footprint-pitch edits. Yields between bounded
+/// footprint-indexing and track-scanning batches so worker cancellation takes effect promptly.
+pub(super) struct CarryPass {
+    candidate: Project,
+    moved: BTreeSet<String>,
+    target: super::view::BoardTarget,
+    footprint_next: usize,
+    old_lands: Vec<(Land, PadContour)>,
+    new_lands: BTreeMap<(String, String), Land>,
+    index: Option<CarryIndex>,
+    track_next: usize,
+    carried: Vec<Track>,
+    added: BTreeSet<Uuid>,
+}
+
+impl CarryPass {
+    pub(super) fn new(candidate: Project, moved: BTreeSet<String>, target: super::view::BoardTarget) -> Self {
+        Self {
+            candidate,
+            moved,
+            target,
+            footprint_next: 0,
+            old_lands: Vec::new(),
+            new_lands: BTreeMap::new(),
+            index: None,
+            track_next: 0,
+            carried: Vec::new(),
+            added: BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn completed(&self) -> usize {
+        self.footprint_next.saturating_add(self.track_next)
+    }
+
+    pub(super) fn total(&self, before: &Project) -> usize {
+        before.board.footprints.len().saturating_add(before.board.tracks.len()).max(1)
+    }
+
+    /// Advance at most `budget` units of pad projection or track scanning, returning `true` once
+    /// all attached tracks have been validated and collected.
+    pub(super) fn step(&mut self, before: &Project, budget: usize) -> Result<bool, CommandError> {
+        let (Some(old_view), Some(new_view)) = (before.board_view(self.target), self.candidate.board_view(self.target)) else {
+            return Ok(true);
+        };
+        if self.index.is_none() {
+            let total_footprints = before.board.footprints.len();
+            let count = budget.min(32);
+            let moved = &self.moved;
+            self.old_lands.extend(
+                lands_from_footprints(old_view.footprints_range(self.footprint_next, count))
+                    .into_iter()
+                    .filter(|land| moved.contains(&land.key.0))
+                    .map(|land| {
+                        let contour = land.contour();
+                        (land, contour)
+                    }),
+            );
+            for land in
+                lands_from_footprints(new_view.footprints_range(self.footprint_next, count)).into_iter().filter(|land| moved.contains(&land.key.0))
+            {
+                self.new_lands.insert(land.key.clone(), land);
+            }
+            self.footprint_next = self.footprint_next.saturating_add(count).min(total_footprints);
+            if self.footprint_next < total_footprints {
+                return Ok(false);
+            }
+            let index = CarryIndex::new(std::mem::take(&mut self.old_lands), &self.new_lands);
+            self.new_lands.clear();
+            if index.is_empty() {
+                return Ok(true);
+            }
+            self.index = Some(index);
+            return Ok(false);
+        }
+        let Some(index) = &self.index else {
+            return Ok(true);
+        };
+        let tracks = old_view.tracks();
+        let end_index = self.track_next.saturating_add(budget).min(tracks.len());
+        for track in &tracks[self.track_next..end_index] {
+            let (start, end) = (index.follow(track, track.start), index.follow(track, track.end));
+            if (start, end) != (track.start, track.end) {
+                let moved_track = Track { start, end, ..track.clone() };
+                moved_track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
+                self.added.insert(moved_track.id);
+                self.carried.push(moved_track);
+            }
+        }
+        self.track_next = end_index;
+        Ok(self.track_next >= tracks.len())
+    }
+
+    /// Install all validated carried tracks into the private placement candidate in exact order.
+    pub(super) fn finish(mut self) -> (Project, BTreeSet<String>, BTreeSet<Uuid>) {
+        if !self.carried.is_empty() {
+            let tracks = &mut std::sync::Arc::make_mut(&mut self.candidate.board).tracks;
+            for track in self.carried {
+                if let Ok(index) = tracks.binary_search_by_key(&track.id, |t| t.id) {
+                    tracks[index] = track;
+                }
+            }
+        }
+        (self.candidate, self.moved, self.added)
+    }
+}
+
 /// Tracks whose ends ride on pads of the `moved` footprints, by footprint ID, between `before`
 /// and `after` (the same board before and after those footprints moved). Each end that
 /// overlapped one of their pads on the track's layer keeps its place on that pad; the rest of
@@ -856,18 +1091,12 @@ pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSe
     }
     let new: BTreeMap<(String, String), Land> =
         lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
-    let follow = |end: Point, track: &Track| {
-        let Some(land) = carrier(&old, track, end) else { return end };
-        match new.get(&land.key) {
-            Some(moved) if moved.layers.contains(&track.layer) => reframe(end, &land.corners, &moved.corners),
-            _ => end,
-        }
-    };
+    let index = CarryIndex::new(old, &new);
     before
         .tracks()
         .iter()
         .filter_map(|track| {
-            let (start, end) = (follow(track.start, track), follow(track.end, track));
+            let (start, end) = (index.follow(track, track.start), index.follow(track, track.end));
             ((start, end) != (track.start, track.end)).then(|| Track { start, end, ..track.clone() })
         })
         .collect()
@@ -913,8 +1142,17 @@ pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTr
 /// carried track would collapse or leave the coordinate range, or when the moved pads or the
 /// carried tracks would join two nets.
 pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
-    let Some(target) = before.board_target() else { return Ok(()) };
-    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(()) };
+    let added = install_carried_tracks(before, next, moved)?;
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved).map_err(CommandError::InvalidParams)? {
+        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+    }
+    Ok(())
+}
+
+/// Update attached track ends in a private placement candidate before validating its contacts.
+fn install_carried_tracks(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<BTreeSet<Uuid>, CommandError> {
+    let Some(target) = before.board_target() else { return Ok(BTreeSet::new()) };
+    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(BTreeSet::new()) };
     let carried = carry(old, new, moved);
     for track in &carried {
         track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
@@ -928,10 +1166,7 @@ pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSe
             }
         }
     }
-    if let Some((a, b)) = short_for_copper_edit(next, &added, moved).map_err(CommandError::InvalidParams)? {
-        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
-    }
-    Ok(())
+    Ok(added)
 }
 
 /// Parse a JSON value into a typed parameter, reporting serde's message as invalid input.

@@ -34,6 +34,9 @@ impl Record {
             fixed_parameters: BTreeMap::new(),
             packages: BTreeMap::new(),
             terminal_ratings: BTreeMap::new(),
+            description: None,
+            keywords: Vec::new(),
+            links: Vec::new(),
         }))
     }
     /// Orderable drafts require a resolved published generic part and an explicit package.
@@ -103,9 +106,9 @@ impl Record {
         Ok(())
     }
     /// Keep session drafts and the publication preview on the same lazy native envelope.
-    fn select_rating_format(&mut self) {
+    fn select_format(&mut self) {
         if let Self::Part(part) = self {
-            part.select_rating_format();
+            part.select_format();
         }
     }
     /// A derivative retains the original record's licence and portable provenance.
@@ -140,6 +143,7 @@ impl Record {
                     return Err("A part supports at most 64 packages and fixed parameters.".into());
                 }
                 p.validate_rating_values()?;
+                p.validate_metadata()?;
             }
             Self::Orderable(p) if p.specifications.len() > 64 => return Err("At most 64 specifications are supported.".into()),
             _ => {}
@@ -171,7 +175,7 @@ impl Session {
     /// Admit a bounded draft or already published record without allocating a content revision.
     pub fn new(mut record: Record, published: bool) -> Result<Self, String> {
         if !published {
-            record.select_rating_format();
+            record.select_format();
         }
         record.bounded()?;
         Ok(Self { saved: published.then(|| record.clone()), record, revision: 1, undo: Vec::new(), redo: Vec::new() })
@@ -207,7 +211,7 @@ impl Session {
             }
             require_supply_range_reentry(new)?;
         }
-        record.select_rating_format();
+        record.select_format();
         record.bounded()?;
         if record == self.record {
             return Ok(());
@@ -344,7 +348,7 @@ pub fn prepare_record(
     let mut published = if copy { record.copy()? } else { record.clone() };
     let next = if copy { 1 } else { latest.checked_add(1).ok_or("Library revision limit reached.")? };
     published.rebind(&Reference { library, id: published.reference().id, revision: next });
-    published.select_rating_format();
+    published.select_format();
     published.validate(catalog)?;
     let (directory, text) = match &published {
         Record::Part(p) => ("parts", p.encode()?),
@@ -482,16 +486,15 @@ impl Record {
                     require_supply_range_reentry(p)?;
                 } else {
                     p.terminal_ratings.clear();
-                    p.select_rating_format();
                 }
                 p.symbol = reference;
                 if p.symbol.is_none() {
-                    p.format = crate::library::parts::PART_FORMAT.into();
                     for package in p.packages.values_mut() {
                         package.mapping.clear();
                         package.unconnected_pads.clear();
                     }
                 }
+                p.select_format();
             }
             (Self::Part(p), ReferenceField::Category, r) => {
                 p.category = r.map(|definition| crate::library::parts::CategoryBinding { definition, primary_value: None });

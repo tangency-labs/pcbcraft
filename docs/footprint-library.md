@@ -146,8 +146,8 @@ holes uses `pcbcraft-footprint/4` without slots (and may have zero pads), or `pc
 follow rotation, side changes and movement; board inspection lists their
 transformed centers and diameters, separately from pads. Routing and design
 checks treat the circle as a mechanical obstacle without adding a net.
-Fabrication output refuses boards containing these holes until a separate
-non-plated drill export is supported.
+Fabrication sends these openings to a [separate non-plated drill file](pcb-layout-workflow.md#fabrication-drill-files),
+not to the plated drill or copper, mask or paste layers.
 
 Optional `artwork` adds up to 256 parameterized drawing objects. Each carries a
 `purpose` (`fabrication`, `silkscreen`, `courtyard`) and `graphic` with editable

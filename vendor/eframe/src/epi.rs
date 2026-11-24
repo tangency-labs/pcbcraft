@@ -698,6 +698,10 @@ pub struct Frame {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) retire_root_window: bool,
 
+    /// Whether the current native logic callback runs without a following UI callback.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) logic_only: bool,
+
     /// Information about the integration.
     pub(crate) info: IntegrationInfo,
 
@@ -774,6 +778,8 @@ impl Frame {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             retire_root_window: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            logic_only: false,
             #[cfg(feature = "glow")]
             gl: None,
             #[cfg(all(feature = "glow", not(target_arch = "wasm32")))]
@@ -803,6 +809,13 @@ impl Frame {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn retire_root_window(&mut self) {
         self.retire_root_window = true;
+    }
+
+    /// True inside a native [`App::logic`] callback when this pass has no [`App::ui`].
+    /// This describes the actual integration path, not window visibility or focus.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_logic_only(&self) -> bool {
+        self.logic_only
     }
 
     /// True if you are in a web environment.

@@ -195,9 +195,9 @@ fn circular_pad_names_stay_inside_the_land() {
         copper: Some(corners),
         color: None,
         contour: PadContour::Circle,
-        drill_radius: Some(10.),
+        drill_radius: None,
         plated_slot: None,
-        through_hole: true,
+        through_hole: false,
         net: Some("R1.2".into()),
     };
     let labels = text_shapes(|p| pad_label(p, &pad, corners, Color32::RED));
@@ -206,6 +206,40 @@ fn circular_pad_names_stay_inside_the_land() {
     let bounds = labels[0].galley.rect.translate(labels[0].pos.to_vec2());
     for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
         assert!(corner.distance(center) < 40.);
+    }
+}
+
+/// A label spanning both the opening and a bright annulus keeps contrast when another layer provides pad ink.
+#[test]
+fn plated_pad_labels_keep_contrast_across_openings() {
+    let center = pos2(200., 200.);
+    let corners = [pos2(120., 120.), pos2(280., 120.), pos2(280., 280.), pos2(120., 280.)];
+    for dark in [false, true] {
+        for plated_slot in [None, Some(([pos2(172., 200.), pos2(228., 200.)], 22.))] {
+            let pad = PadDrawing {
+                number: "1".into(),
+                center,
+                copper: Some(corners),
+                color: None,
+                contour: PadContour::Circle,
+                drill_radius: plated_slot.is_none().then_some(44.),
+                plated_slot,
+                through_hole: true,
+                net: Some("UART_RTS_N".into()),
+            };
+            for copper in [Color32::RED, Color32::from_rgb(128, 212, 132)] {
+                let labels = text_shapes(|p| {
+                    crate::theme::apply(p.ctx(), dark);
+                    land_opening(p, p, &pad, corners, copper);
+                });
+                assert_eq!(labels.len(), 5);
+                let (foreground, halo) = labels.split_last().unwrap();
+                assert_eq!(foreground.galley.job.text, "1\nUART_RTS_N");
+                assert_eq!(foreground.fallback_color, Color32::WHITE);
+                assert!(halo.iter().all(|text| text.override_text_color == Some(Tokens::get().board_canvas)));
+                assert!(halo.iter().all(|text| text.pos.distance(foreground.pos) <= 1.));
+            }
+        }
     }
 }
 

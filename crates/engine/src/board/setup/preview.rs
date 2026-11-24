@@ -26,6 +26,9 @@ pub struct SetupChanges {
     pub added_layers: Vec<Layer>,
     pub renumbered_layers: Vec<LayerPosition>,
     pub affected_objects: Vec<AffectedObject>,
+    pub affected_groups: Vec<super::groups::UserLayerGroup>,
+    /// Memberships discarded during normalization, keyed by proposed group UUID.
+    pub pruned_group_memberships: Vec<super::groups::PrunedGroupMembership>,
 }
 
 /// A surviving copper layer whose one-based physical position changes.
@@ -93,12 +96,12 @@ impl Session {
     /// capability. A refusal is review data; malformed candidates and stale revisions are errors.
     pub(crate) fn preview_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
-        let request = setup_request(params)?;
-        let setup: BoardSetup = serde_json::from_value(request["setup"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+        let (setup, pruned) = super::groups::candidate(self.open_project()?, &params["setup"])?;
+        let request = setup_request(&setup, params)?;
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let before = snapshot.board_setup().ok_or_else(|| CommandError::Unavailable("initialize board setup first".into()))?;
         let target = snapshot.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let changes = changes(&snapshot, before, &setup)?;
+        let changes = changes(&snapshot, before, &setup, pruned)?;
         let refusal = self
             .board_setup_candidate(params)
             .and_then(|candidate| candidate.map(|project| self.prepare_change(project)).transpose())
@@ -135,7 +138,8 @@ impl Session {
         if !preview.matches(self) {
             return Err(CommandError::Unavailable("board setup preview is stale; preview again".into()));
         }
-        if preview.request != setup_request(params)? {
+        let (setup, _) = super::groups::candidate(self.open_project()?, &params["setup"])?;
+        if preview.request != setup_request(&setup, params)? {
             return Err(CommandError::InvalidParams("board setup preview does not match the candidate, consent or silkscreen settings".into()));
         }
         Ok(())
@@ -153,8 +157,7 @@ impl Session {
 }
 
 /// Canonical candidate data excludes transport addressing, revisions and the capability itself.
-fn setup_request(params: &Value) -> Result<Value, CommandError> {
-    let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+fn setup_request(setup: &BoardSetup, params: &Value) -> Result<Value, CommandError> {
     let mut request = json!({"setup":setup,"resolve_existing_footprints":params["resolve_existing_footprints"].as_bool() == Some(true)});
     if let Some(silk) = params.get("silkscreen") {
         let silk: crate::board::silkscreen::Settings =
@@ -202,7 +205,12 @@ fn append(objects: &mut Vec<AffectedObject>, budget: &mut ReportSize, kind: &'st
 
 /// Enumerate layer-addressed authored objects without computing geometry or electrical connectivity.
 /// Through vias and all-copper pads are affected when their resolved physical spans change.
-fn changes(project: &Project, before: &BoardSetup, after: &BoardSetup) -> Result<SetupChanges, CommandError> {
+fn changes(
+    project: &Project,
+    before: &BoardSetup,
+    after: &BoardSetup,
+    pruned_group_memberships: Vec<super::groups::PrunedGroupMembership>,
+) -> Result<SetupChanges, CommandError> {
     let positions = |setup: &BoardSetup| setup.copper_stack().enumerate().map(|(i, layer)| (layer.layer, i + 1)).collect::<BTreeMap<_, _>>();
     let (old, new) = (positions(before), positions(after));
     let changed: BTreeSet<_> = before
@@ -225,6 +233,8 @@ fn changes(project: &Project, before: &BoardSetup, after: &BoardSetup) -> Result
             })
             .collect(),
         affected_objects: Vec::new(),
+        affected_groups: before.stackup.layer_groups.iter().filter(|group| !after.stackup.layer_groups.contains(group)).cloned().collect(),
+        pruned_group_memberships,
     };
     let mut budget = ReportSize::new(MAX_CHANGES_BYTES);
     serde_json::to_writer(&mut budget, &report).map_err(report_budget)?;

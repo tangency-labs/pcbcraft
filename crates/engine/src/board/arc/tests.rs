@@ -208,8 +208,9 @@ fn invalid_arcs_fail_atomically_on_the_shared_command_path() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Connectivity and short detection handle circular arcs; every remaining unsupported consumer
-/// still refuses curves instead of substituting a chord.
+/// Connectivity and short detection handle circular arcs; every remaining unsupported geometry
+/// consumer still refuses curves instead of substituting a chord, while stackup inspection
+/// remains available.
 #[test]
 fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     let (mut s, arc) = fixture();
@@ -240,6 +241,11 @@ fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     assert_unavailable(super::super::clipboard::BoardFragment::capture(s.project().unwrap(), &selection, false).err().unwrap(), UNSUPPORTED);
     assert_unavailable(fragment.preview(s.project().unwrap(), 1_000, &Default::default()).err().unwrap(), UNSUPPORTED);
     let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    let groups = view(&s).setup().unwrap().layer_groups();
+    assert_eq!(
+        s.execute(crate::INSPECT_LAYER_GROUPS, &json!({"board":target.board})).unwrap(),
+        json!({"revision":s.revision(),"layer_groups":groups})
+    );
     assert_unavailable(
         s.apply(crate::ADD_VIA, &json!({"board":target.board,"at":{"x_nm":0,"y_nm":0},"expected_revision":s.revision()})).unwrap_err(),
         UNSUPPORTED,

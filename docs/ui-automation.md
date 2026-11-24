@@ -76,6 +76,42 @@ so pins and pads at the edge of the drawing area can be targeted. Projection is 
 camera, selection, project data or Undo history. It is geometry only, not image
 recognition or object picking; use project inspection to find object positions.
 
+## Size a window for recording
+
+```json
+{"name":"execute","arguments":{"command":"ui.resize","params":{"window":0,"width":1280,"height":800}}}
+```
+
+`ui.resize` asks a native window for a client size in logical points before a
+recording, without desktop window-manager scripts. It reuses the existing
+window, so the open project, views, selection and Undo history stay as they were.
+The response only says the request is `pending`; it never reports the requested
+size as the window's size.
+
+`ui.window` takes `window` and reports what the last accepted paint measured:
+the `client` width and height, the display `scale`, `maximized`, `fullscreen`
+and `minimized` (`null` where the platform does not say; macOS reports
+maximized and minimized only when the window opens, so they are `null` there),
+focus, the `monitor`
+size when known, the current `layout` and the latest request. Poll it until
+`resize.state` leaves `pending`:
+
+- `applied`: the measured client size equals the request in whole physical pixels.
+- `constrained`: two seconds passed and the window kept another size, for
+  example because the compositor or a tiling window manager limited it. `client`
+  shows the size it actually has.
+
+Requests are refused, changing nothing, for an unknown or closed window, a size
+below the window's minimum (640×400 for the main window, 480×400 for detached
+ones) or above its monitor, a window reported as maximized, fullscreen or
+minimized, and
+detached editors on platforms that embed them in the main window.
+
+An accepted request cancels queued input and retires the current `layout`.
+Until it settles, `ui.handles`, `ui.at`, `ui.project` and input report stale
+geometry; afterwards, look up targets again. Window position and screen recording
+are outside these commands.
+
 ## Perform input
 
 ```json

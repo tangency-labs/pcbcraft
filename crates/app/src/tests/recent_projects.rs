@@ -100,7 +100,7 @@ fn saved_projects_reopen_from_home_and_history_survives_restart() {
         cc.storage = Some(&storage);
         PcbApp::new(cc)
     });
-    h.run();
+    finish_previews(&mut h);
     open_recent(&mut h, "Power controller", &path);
     finish_file(&mut h);
     assert!(!h.state().home);
@@ -111,7 +111,9 @@ fn saved_projects_reopen_from_home_and_history_survives_restart() {
     h.state_mut().files.open_path(path.join("project.json"), revision, &ctx).unwrap();
     finish_file(&mut h);
     assert_eq!(h.state().files.recent.entries().len(), 1);
-    open_home(&mut h);
+    h.get_by_label("Home").click();
+    finish_previews(&mut h);
+    assert!(h.state().home);
     let before = h.state().session.snapshot().unwrap();
     click(&mut h, &format!("Remove Power controller ({}) from recent projects", path.display()));
     h.get_by_label("No recent projects yet");

@@ -1001,3 +1001,48 @@ fn the_committed_snapshot_matches_itself_as_base() {
     let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
     assert_eq!(compare_snapshots(&snapshot, &snapshot), Ok(vec![]));
 }
+
+/// Adding an `if`/`then` (without `else`) whose condition matches only values absent from the
+/// old schema's required property enum is compatible, whereas matching an old value, adding an
+/// `else`, or lacking an object/required enum guard remains breaking.
+#[test]
+fn if_then_for_newly_added_enum_variant_is_compatible() {
+    let old = json!({
+        "type": "object",
+        "properties": {"operation": {"type": "string", "enum": ["undo", "redo"]}},
+        "required": ["operation"]
+    });
+    let new_variant = json!({
+        "type": "object",
+        "properties": {"operation": {"type": "string", "enum": ["undo", "redo", "generate_courtyard"]}},
+        "required": ["operation"],
+        "if": {"properties": {"operation": {"const": "generate_courtyard"}}, "required": ["operation"]},
+        "then": {"properties": {"clearance_nm": {"type": "integer", "minimum": 0}}, "required": ["clearance_nm"]}
+    });
+    let changes = compare("app.library_edit", &contract_of(&command(old.clone())), &contract_of(&command(new_variant.clone())));
+    assert!(!changes.is_empty());
+    assert!(changes.iter().all(|c| !c.breaking), "{changes:?}");
+
+    // Matching an existing enum member is breaking.
+    let existing_variant = json!({
+        "type": "object",
+        "properties": {"operation": {"type": "string", "enum": ["undo", "redo"]}},
+        "required": ["operation"],
+        "if": {"properties": {"operation": {"const": "undo"}}, "required": ["operation"]},
+        "then": {"required": ["extra"]}
+    });
+    let changes = compare("app.library_edit", &contract_of(&command(old.clone())), &contract_of(&command(existing_variant)));
+    assert!(changes.iter().any(|c| c.breaking), "{changes:?}");
+
+    // Adding an `else` branch applies to old values and is breaking.
+    let mut with_else = new_variant.clone();
+    with_else["else"] = json!({"required": ["extra"]});
+    let changes = compare("app.library_edit", &contract_of(&command(old.clone())), &contract_of(&command(with_else)));
+    assert!(changes.iter().any(|c| c.breaking), "{changes:?}");
+
+    // Without `type: "object"` on `old`, non-object values could satisfy `if` vacuously, so breaking.
+    let mut untyped_old = old;
+    untyped_old.as_object_mut().unwrap().remove("type");
+    let changes = compare("app.library_edit", &contract_of(&command(untyped_old)), &contract_of(&command(new_variant)));
+    assert!(changes.iter().any(|c| c.breaking), "{changes:?}");
+}
