@@ -767,9 +767,10 @@ four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
 zones use **Layout → Place → Zone** to draw
 [editable zone outlines](copper-zone-outlines.md). **Pour copper** and **Remove
-pours** are in the **Board** group on the same ribbon. Non-copper shapes remain independent
-editable graphics: select a line, drag a vertex or segment, use M to move it, or
-Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
+pours** are in the **Board** group on the same ribbon. Non-copper paths share
+the [zone outline editing gestures](copper-zone-outlines.md#drawing-and-editing).
+Drag an edge of a closed path to resize that side, or press M to move the whole
+path. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
 remain documentation in the native board.
 
@@ -1036,6 +1037,14 @@ one definition share its history while retaining independent navigation and
 selection. Closing a pane retains the definition and any unapplied fields.
 Definition placements currently last for the session, with the last saved project
 arrangement retained while definition panes are open.
+
+In either library canvas, select a polyline or polygon to show its vertices.
+Right-click an edge to add a vertex or right-click a corner to remove one.
+Drag a corner to reshape it or a closed edge to resize that side. Drag inside
+a selected closed outline to move the entire shape. The same axis guides and
+Alt override apply as in PCB Layout. Completed edits use the definition's
+undo history and retain its original fill, stroke and artwork purpose.
+Use the Footprint Editor's **Courtyard** controls for courtyard outlines.
 
 ## Opening and saving projects
 
