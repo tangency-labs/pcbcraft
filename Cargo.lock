@@ -2947,7 +2947,9 @@ version = "0.1.0"
 dependencies = [
  "pcbcraft-engine",
  "pcbcraft-geometry",
+ "pcbcraft-units",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
