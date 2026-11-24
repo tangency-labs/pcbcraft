@@ -1,6 +1,6 @@
 //! Gerber X3 assembly objects, separate from the bare-board fabrication files.
 
-use super::{Aperture, ApertureFunction, Fabrication, Gerber, Output, file_part, xy};
+use super::{Aperture, ApertureFunction, DrillChart, Fabrication, Gerber, Output, file_part, xy};
 use crate::{
     board::{
         Footprint,
@@ -92,7 +92,8 @@ impl BoardView<'_> {
                 contents: writer.finish_in_frame(&format!("Component,L{layer},{side}"), "Positive", None),
             })
             .collect();
-        Ok(Fabrication { origin, files })
+        // Assembly layers carry no drill files, so they have no drill tools.
+        Ok(Fabrication { origin, files, drill_chart: DrillChart::default() })
     }
 
     /// The Gerber export does not select a vendor profile. Use an explicit centroid from

@@ -1095,7 +1095,12 @@ fn rounded_pad_macros_read_back_radius_and_orientation() {
                 let capture = s.export_fabrication_archive(&json!({})).unwrap();
                 assert_eq!(
                     returned["fabrication"],
-                    json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": embedded_manifest(&capture)})
+                    json!({
+                        "files": fabrication.files,
+                        "origin": fabrication.origin,
+                        "drill_chart": fabrication.drill_chart,
+                        "manifest": embedded_manifest(&capture),
+                    })
                 );
                 assert_eq!(s.revision(), revision);
                 assert_eq!(zip(&fabrication.files).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
@@ -2127,7 +2132,12 @@ fn aperture_exports_preserve_revision_storage_and_history() {
         .collect();
     assert_eq!(
         result["fabrication"],
-        json!({"files": direct.files, "origin": direct.origin, "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records}})
+        json!({
+            "files": direct.files,
+            "origin": direct.origin,
+            "drill_chart": direct.drill_chart,
+            "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records},
+        })
     );
     assert_eq!(s.revision(), revision);
     assert_eq!(s.apply(EXPORT_FABRICATION, &json!({})).unwrap(), revision);
@@ -2727,6 +2737,53 @@ fn plated_drill_rejects_a_diameter_that_rounds_to_zero() {
     assert_eq!(plated.tools[0].diameter_nm, 1_000);
     assert!(matches!(fixture(998).export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
         if message.contains("Plated drill diameter 499 nm") && message.contains("rounds to zero")));
+}
+
+/// The drill chart lists every tool each written drill file declares, with the size it writes
+/// and the number of hits an XNC reader counts under it, in the files' declaration order. A board
+/// without non-plated holes writes no non-plated file and gets no non-plated rows.
+#[test]
+fn drill_chart_counts_equal_the_drill_file_census() {
+    use crate::board::definition::CircularNpth;
+    let holes = [
+        CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: -4_000_000, y_nm: 6_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: 6_000_000, y_nm: -5_000_000 }, diameter_nm: 2_000_000 },
+    ];
+    let plated = [(DrillPlating::Plated, 1, 300_000, "0.300", 1), (DrillPlating::Plated, 2, 1_000_000, "1.000", 2)];
+    let non_plated = [(DrillPlating::NonPlated, 1, 2_000_000, "2.000", 1), (DrillPlating::NonPlated, 2, 3_200_000, "3.200", 2)];
+    let with_holes: Vec<_> = plated.iter().chain(&non_plated).copied().collect();
+    for (holes, expected, drill_files) in [(&holes[..], with_holes, 2), (&[][..], plated.to_vec(), 1)] {
+        let mut s = drill_fixture(holes);
+        let fabrication = view(&s).fabrication().unwrap();
+        let mut census = Vec::new();
+        let drills: Vec<_> = fabrication.files.iter().filter(|output| output.name.ends_with(".drl")).collect();
+        assert_eq!(drills.len(), drill_files);
+        for output in drills {
+            let plating = if output.name.ends_with("-NPTH.drl") { DrillPlating::NonPlated } else { DrillPlating::Plated };
+            let read = read_xnc(&output.contents).unwrap_or_else(|error| panic!("{}: {error}", output.name));
+            for (tool, size) in &read.tools {
+                census.push((plating, *tool as usize, size.clone(), read.hits.get(tool).copied().unwrap_or_default()));
+            }
+        }
+        let rows = &fabrication.drill_chart.rows;
+        let chart: Vec<_> = rows.iter().map(|row| (row.plating, row.tool, row.size_mm.clone(), row.count)).collect();
+        assert_eq!(chart, census, "chart rows equal each drill file's tools and hit counts");
+        let expected_rows: Vec<_> = expected
+            .iter()
+            .map(|&(plating, tool, diameter_nm, size, count)| DrillChartRow { plating, tool, diameter_nm, size_mm: size.into(), count })
+            .collect();
+        assert_eq!(rows, &expected_rows);
+        let revision = s.revision();
+        let reported = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+        assert_eq!(reported["fabrication"]["drill_chart"], json!({ "rows": rows }));
+        assert_eq!(s.revision(), revision, "reporting the chart edits nothing");
+    }
+    let reported = drill_fixture(&holes).execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(
+        reported["fabrication"]["drill_chart"]["rows"][2],
+        json!({"plating":"non_plated","tool":1,"diameter_nm":2_000_000,"size_mm":"2.000","count":1})
+    );
 }
 
 /// Read the JSON actually stored in a captured ZIP.
