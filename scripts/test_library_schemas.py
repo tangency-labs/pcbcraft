@@ -222,6 +222,29 @@ class LibrarySchemaTests(unittest.TestCase):
         part["terminal_ratings"] = {"1": {"supply_max": {"type": "quantity", "value": "36", "unit": "V"}}}
         self.assertFalse(validator.is_valid(part))
 
+    def test_current_part_accepts_omitted_ratings_and_metadata(self):
+        validator = self.checks[checker.FORMATS["pcbcraft-part/6"]]
+        part = self.part5()
+        part["format"] = "pcbcraft-part/6"
+        part["terminal_ratings"] = {"1": {"supply_min": {"type": "quantity", "value": "4.5", "unit": "V"}}}
+        validator.validate(part)
+        for field in ("description", "keywords", "links"):
+            del part[field]
+            validator.validate(part)
+        invalid = copy.deepcopy(part)
+        del invalid["symbol"]
+        self.assertFalse(validator.is_valid(invalid))
+        invalid["packages"] = {}
+        self.assertFalse(validator.is_valid(invalid))
+        del part["terminal_ratings"]
+        validator.validate(part)
+        del part["symbol"]
+        self.assertFalse(validator.is_valid(part))
+        part["packages"] = {}
+        validator.validate(part)
+        part["keywords"] = []
+        self.assertFalse(validator.is_valid(part))
+
     def test_legacy_part_schemas_still_reject_all_metadata(self):
         for version in (1, 2, 4):
             old = copy.deepcopy(self.part5())

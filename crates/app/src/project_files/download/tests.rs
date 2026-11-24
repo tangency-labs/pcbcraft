@@ -1,7 +1,10 @@
 use super::*;
 use pcbcraft_engine::{
     MOVE_SYMBOL, Session,
-    persistence::{CURRENT_PROJECT_FORMAT, ENTRY_POINT, decode, decode_documents, encode_documents, migrate_bundled_libraries},
+    persistence::{
+        CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, ENTRY_POINT, decode, decode_documents,
+        encode_documents, migrate_bundled_libraries,
+    },
 };
 use serde_json::json;
 
@@ -21,7 +24,7 @@ fn encode(current: Arc<Project>, original: Option<Original>) -> Documents {
 #[test]
 fn unchanged_download_advances_the_project_header() {
     let mut session = Session::default();
-    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    session.apply("project.new", &json!({})).unwrap();
     let current = encode_documents(session.snapshot().unwrap()).unwrap();
     let mut previous = current.clone();
     let entry = String::from_utf8(previous[ENTRY_POINT].clone()).unwrap().replacen(CURRENT_PROJECT_FORMAT, "pcbcraft-project/16", 1);
@@ -93,27 +96,72 @@ fn edited_download_keeps_unaffected_bytes_and_new_geometry() {
     assert_eq!(encode_documents(decode_documents(&downloaded).unwrap()).unwrap(), encode_documents(current).unwrap());
 }
 
-/// Group-free legacy downloads reuse exact board bytes, while boards with named groups
-/// download and round-trip in format 41.
+/// A papered legacy sheet is rewritten by the incremental browser download even when
+/// no in-memory edits or paper adoption were needed.
 #[test]
-fn legacy_board_download_reuses_bytes_and_grouped_board_round_trips_in_format_41() {
+fn unchanged_download_advances_the_sheet_header() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let path = format!("sheets/{}.json", snapshot.sheet_target().id());
+    let current = encode_documents(snapshot).unwrap();
+    let mut previous = current.clone();
+    let historical = String::from_utf8(current[&path].clone()).unwrap().replacen(CURRENT_SHEET_FORMAT, "pcbcraft-sheet/9", 1);
+    previous.insert(path, historical.into_bytes());
+    let opened = decode_documents(&previous).unwrap();
+    let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();
+    assert!(baseline.unchanged(&opened).is_none());
+    let migrated = encode(opened, Some(baseline));
+    assert_eq!(migrated, current);
+    let reopened = decode_documents(&migrated).unwrap();
+    let baseline = Original::for_project(reopened.clone(), Arc::new(migrated), &reopened).unwrap();
+    assert_eq!(baseline.unchanged(&reopened).as_deref(), Some(&current));
+}
+
+/// An unchanged archive with an older instance document bypasses raw reuse once.
+#[test]
+fn unchanged_download_advances_the_instances_header() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let path = snapshot.instances_document_path().unwrap();
+    let current = encode_documents(snapshot).unwrap();
+    let mut previous = current.clone();
+    let historical = String::from_utf8(current[&path].clone()).unwrap().replacen(CURRENT_INSTANCES_FORMAT, "pcbcraft-instances/1", 1);
+    previous.insert(path, historical.into_bytes());
+    let opened = decode_documents(&previous).unwrap();
+    let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();
+    assert!(baseline.unchanged(&opened).is_none());
+    let migrated = encode(opened, Some(baseline));
+    assert_eq!(migrated, current);
+    let reopened = decode_documents(&migrated).unwrap();
+    let baseline = Original::for_project(reopened.clone(), Arc::new(migrated), &reopened).unwrap();
+    assert_eq!(baseline.unchanged(&reopened).as_deref(), Some(&current));
+}
+
+/// Browser downloads migrate a historical board with or without an unrelated edit,
+/// and subsequent exports keep the current format when groups are added.
+#[test]
+fn legacy_board_download_migrates_and_groups_keep_the_current_format() {
     let saved = migrate_bundled_libraries(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap()).unwrap();
     let saved = Arc::new(saved.with_board_folders(".").unwrap().with_sheet_occurrences().unwrap());
-    let mut original = encode_documents(saved.clone()).unwrap();
+    let current = encode_documents(saved.clone()).unwrap();
+    let mut original = current.clone();
     let board_path = saved.board_document_path().unwrap();
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&original[&board_path]).unwrap()["format"], "pcbcraft-board/1");
-    original.get_mut(&board_path).unwrap().extend_from_slice(b"\n \t");
+    let old = String::from_utf8(current[&board_path].clone()).unwrap().replacen(CURRENT_BOARD_FORMAT, "pcbcraft-board/1", 1);
+    original.insert(board_path.clone(), format!("{old}\n \t").into_bytes());
     let saved = decode_documents(&original).unwrap();
     let original = Arc::new(original);
     let mut session = Session::default();
     session.open_snapshot(saved.clone());
     let baseline = Original::for_project(saved.clone(), original.clone(), &saved).unwrap();
-    assert_eq!(baseline.unchanged(&saved).unwrap().as_ref(), original.as_ref());
+    assert!(baseline.unchanged(&saved).is_none());
+    assert_eq!(encode(saved.clone(), Some(baseline)), current);
     session.apply(MOVE_SYMBOL, &json!({"symbol":"symbol-2","x_nm":1270000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let edited = session.snapshot().unwrap();
     let edited_baseline = Original::for_project(saved, original.clone(), &edited).unwrap();
     let downloaded = encode(edited.clone(), Some(edited_baseline));
-    assert_eq!(downloaded[&board_path], original[&board_path]);
+    assert_eq!(downloaded[&board_path], current[&board_path]);
     assert_eq!(encode_documents(decode_documents(&downloaded).unwrap()).unwrap(), encode_documents(edited).unwrap());
 
     session
@@ -128,6 +176,6 @@ fn legacy_board_download_reuses_bytes_and_grouped_board_round_trips_in_format_41
     session.apply(pcbcraft_engine::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
     let grouped = session.snapshot().unwrap();
     let grouped_download = encode(grouped.clone(), None);
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&grouped_download[&board_path]).unwrap()["format"], "pcbcraft-board/41");
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&grouped_download[&board_path]).unwrap()["format"], CURRENT_BOARD_FORMAT);
     assert_eq!(encode_documents(decode_documents(&grouped_download).unwrap()).unwrap(), encode_documents(grouped).unwrap());
 }

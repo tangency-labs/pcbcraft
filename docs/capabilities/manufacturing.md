@@ -45,3 +45,7 @@ could self-intersect and no exact fill is supported, export stops without a file
 A collapsed tiny rectangle can emit a retraced path with zero area. Mask uses outer-layer pads without process
 expansion; paste excludes through-hole pads. Persistent layer/width/via controls stay visible across PCB tabs, with
 routing in Layout and alignment in its Modify menu.
+
+[Output recipes](../formats/native-project-storage.md#authored-output-recipes) can be saved,
+inspected and undone through the shared command set. This stores the requested
+configuration only; the editor and export command do not run recipes yet.

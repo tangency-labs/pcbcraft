@@ -120,8 +120,8 @@ fn wire_contacts_and_moving_pins_rebuild_named_connectivity() {
     assert_eq!(s.project().unwrap().connectivity().nets.len(), n - 1);
 }
 
-/// Format 3 is required only for sheets with named anchors. Allocation changes the entry-point
-/// watermark and the owning sheet; other documents stay identical and archives round-trip.
+/// Adding a named anchor updates the watermark and the owning sheet. Other documents
+/// stay byte-identical, and the current format round-trips in folders and archives.
 #[test]
 fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     let mut s = session();
@@ -133,7 +133,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
     assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.json", &path]);
-    assert!(String::from_utf8(docs[&path].clone()).unwrap().contains("pcbcraft-sheet/9"));
+    assert!(String::from_utf8(docs[&path].clone()).unwrap().contains(crate::persistence::CURRENT_SHEET_FORMAT));
     let reopened = persistence::decode_documents(&docs).unwrap();
     assert_eq!(persistence::encode_documents(reopened.clone()).unwrap(), docs);
     let packed = persistence::encode_packed(reopened.clone()).unwrap();
@@ -233,9 +233,9 @@ fn label_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
     let path = format!("sheets/{}.json", after.sheet_target().id());
     let mut downgraded = documents.clone();
     let mut sheet: Value = serde_json::from_slice(&downgraded[&path]).unwrap();
-    assert_eq!(sheet["format"], "pcbcraft-sheet/9");
+    assert_eq!(sheet["format"], crate::persistence::CURRENT_SHEET_FORMAT);
     sheet["format"] = json!("pcbcraft-sheet/3");
-    // Sheet/3 would also reject sheet/9's paper; remove it so only the label text is tested.
+    // Sheet/3 would also reject the page record; remove it so only the label text is tested.
     sheet.as_object_mut().unwrap().remove("page").unwrap();
     downgraded.insert(path, serde_json::to_vec(&sheet).unwrap());
     assert!(persistence::decode_documents(&downgraded).is_err());

@@ -18,37 +18,19 @@ impl Default for Layout {
     }
 }
 
+/// Windows device names refused in portable single-segment paths and file stems.
+pub const RESERVED_PORTABLE_SEGMENTS: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5",
+    "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 /// Bound one lowercase portable segment, including Windows device-name restrictions.
 pub fn portable_segment(segment: &str) -> bool {
     (1..=96).contains(&segment.len())
         && segment.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         && !segment.starts_with('-')
         && !segment.ends_with('-')
-        && !matches!(
-            segment,
-            "con"
-                | "prn"
-                | "aux"
-                | "nul"
-                | "com1"
-                | "com2"
-                | "com3"
-                | "com4"
-                | "com5"
-                | "com6"
-                | "com7"
-                | "com8"
-                | "com9"
-                | "lpt1"
-                | "lpt2"
-                | "lpt3"
-                | "lpt4"
-                | "lpt5"
-                | "lpt6"
-                | "lpt7"
-                | "lpt8"
-                | "lpt9"
-        )
+        && !RESERVED_PORTABLE_SEGMENTS.contains(&segment)
 }
 
 /// A layout root is the project root or one portable non-system directory segment.
