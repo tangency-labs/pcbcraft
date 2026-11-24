@@ -116,7 +116,7 @@ fn a_breaking_change_needs_a_raised_api_version() {
     };
     assert_eq!(changes, ["compatible: `edit.undo` params.properties.note: added"]);
     assert_eq!(check_snapshot(&snapshot_of(&optional, 1), "commands", &optional, 1), Ok(()));
-    assert!(section.contains("\"edit.undo\": {\"params\":"));
+    assert!(section.contains("\n    \"edit.undo\": {\n      \"params\": {\n"));
 
     let mut required = optional.clone();
     let undo = required.iter_mut().find(|command| command["id"] == "edit.undo").unwrap();
@@ -392,7 +392,7 @@ fn breaking_changes_are_labelled_breaking() {
     assert_eq!(changes, [Change { breaking: true, what: "`window.synthetic` scope: changed from \"window\" to \"pane\"".to_owned() }]);
 }
 
-/// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried at the
+/// Every row of the rule table in `compare`'s documentation (and docs/automation/command-api.md), tried at the
 /// parameter root and the nested positions listed below. Local labels hold in positive positions;
 /// `oneOf`, negation, conditionals and `allOf` make changes breaking, as does the conservative
 /// whole-parameter guard for references or unevaluated keywords.
@@ -1000,6 +1000,33 @@ fn rewriting_the_snapshot_cannot_hide_a_breaking_change_from_the_base() {
 fn the_committed_snapshot_matches_itself_as_base() {
     let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
     assert_eq!(compare_snapshots(&snapshot, &snapshot), Ok(vec![]));
+}
+
+/// The conditional shove bound accepts the whole older reshape contract, whose closed schema
+/// excluded mode. A schema that already accepts mode cannot receive the same proof.
+#[test]
+fn reshape_shove_limit_is_compatible_with_plain_reshape() {
+    let current = contract_of(&crate::command(crate::RESHAPE_TRACKS).unwrap().to_json());
+    let params = &current["params"];
+    assert_eq!(params["properties"]["tracks"]["maxItems"], json!(crate::board::track::MAX_TRACKS));
+    assert_eq!(params["if"], json!({"required":["mode"]}));
+    assert_eq!(params["then"]["properties"]["tracks"]["maxItems"], json!(crate::board::track::MAX_PATH_POINTS));
+
+    let mut old = current.clone();
+    let params = old["params"].as_object_mut().unwrap();
+    params.remove("if");
+    params.remove("then");
+    params.get_mut("properties").unwrap().as_object_mut().unwrap().remove("mode");
+    let changes = compare(crate::RESHAPE_TRACKS, &old, &current);
+    assert!(!changes.is_empty() && changes.iter().all(|change| !change.breaking), "{changes:?}");
+
+    let mut open = old.clone();
+    open["params"]["additionalProperties"] = json!(true);
+    old["params"]["patternProperties"] = json!({"^mode$":true});
+    for allows_mode in [open, old] {
+        let changes = compare(crate::RESHAPE_TRACKS, &allows_mode, &current);
+        assert!(changes.iter().any(|change| change.breaking && change.what.contains("params.if")), "{changes:?}");
+    }
 }
 
 /// Adding an `if`/`then` (without `else`) whose condition matches only values absent from the

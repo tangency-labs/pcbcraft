@@ -69,8 +69,7 @@ fn assessment_round_trips_offline_and_adopts_in_one_undo_step() {
     let (mut session, _, draft, released) = placed();
     let starting = encode_documents(session.snapshot().unwrap()).unwrap();
     let entry: Value = serde_json::from_slice(&starting["project.json"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/16");
-    assert!(entry.get("board_instances").is_none());
+    assert_eq!(entry["format"], CURRENT);
     assert!(!starting.contains_key("library/lifecycle.json"));
     let pre_revision = session.revision();
     let mut preview = params(&session, &draft);
@@ -82,7 +81,7 @@ fn assessment_round_trips_offline_and_adopts_in_one_undo_step() {
     session.execute(ADOPT, &params(&session, &draft)).unwrap();
     let draft_files = encode_documents(session.snapshot().unwrap()).unwrap();
     let draft_entry: Value = serde_json::from_slice(&draft_files["project.json"]).unwrap();
-    assert_eq!(draft_entry["format"], "pcbcraft-project/64");
+    assert_eq!(draft_entry["format"], CURRENT);
     assert!(draft_files.contains_key("library/lifecycle.json"));
     let changed = session.execute(ADOPT, &params(&session, &released)).unwrap();
     assert_eq!(changed["before"]["revision"], 1);
@@ -268,20 +267,21 @@ fn codecs_refuse_wrong_versions_unknown_fields_and_limits() {
     assert!(policy.validate().unwrap_err().contains("Duplicate lifecycle state ID"));
 }
 
-/// A lifecycle document and the project/64 header must appear together and stay valid.
+/// The lifecycle document is optional under the current header, which it never changes; older
+/// headers refuse it, and an invalid document is refused.
 #[test]
-fn lifecycle_file_and_project_header_must_agree() {
+fn lifecycle_file_is_optional_under_the_current_header_and_refused_under_older_ones() {
     let (mut session, _, draft, _) = placed();
     let before = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&before["project.json"]).unwrap()["format"], "pcbcraft-project/16");
+    assert_eq!(serde_json::from_slice::<Value>(&before["project.json"]).unwrap()["format"], CURRENT);
     session.apply(ADOPT, &params(&session, &draft)).unwrap();
     let after = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after["project.json"]).unwrap()["format"], "pcbcraft-project/64");
+    assert_eq!(serde_json::from_slice::<Value>(&after["project.json"]).unwrap()["format"], CURRENT);
     let mut missing = after.clone();
     missing.remove("library/lifecycle.json");
-    assert!(decode_documents(&missing).unwrap_err().contains("project/64 requires library/lifecycle.json"));
-    let orphan = edit_project_header(&after, |header| header["format"] = json!("pcbcraft-project/16"));
-    assert!(decode_documents(&orphan).unwrap_err().contains("requires project/64"));
+    assert!(decode_documents(&missing).unwrap().lifecycle().is_empty());
+    let orphan = edit_project_header(&after, |header| header["format"] = json!("pcbcraft-project/56"));
+    assert!(decode_documents(&orphan).unwrap_err().contains(REFUSAL));
     let mut empty = after.clone();
     empty.insert("library/lifecycle.json".into(), br#"{"assertions":[],"policies":[]}"#.to_vec());
     assert!(decode_documents(&empty).unwrap_err().contains("assessment or policy count"));
@@ -291,11 +291,17 @@ fn lifecycle_file_and_project_header_must_agree() {
         let header = edit_project_header(&before, |header| header["format"] = json!(unshipped));
         assert!(decode_documents(&header).unwrap_err().contains(&format!("unsupported project format {unshipped}")));
     }
-    // Clearing the last adopted assessment from a reopened /64 project reverts to the prior format.
+    // Clearing the last adopted assessment from a reopened project restores the exact prior bytes.
     let mut cleared = (*decode_documents(&after).unwrap()).clone();
     cleared.lifecycle = Arc::default();
     assert_eq!(encode_documents(Arc::new(cleared)).unwrap(), before);
 }
+
+/// The one project header the writer produces; lifecycle assessments never select another.
+const CURRENT: &str = crate::persistence::CURRENT_PROJECT_FORMAT;
+
+/// The reader's refusal of a lifecycle document under any other project header.
+const REFUSAL: &str = "library/lifecycle.json requires pcbcraft-project/61";
 
 /// Edit only the project entry point, keeping the exact other documents.
 fn edit_project_header(documents: &crate::persistence::Documents, edit: impl FnOnce(&mut Value)) -> crate::persistence::Documents {
@@ -387,10 +393,10 @@ fn lock_first(session: &mut Session) {
     session.apply(crate::SET_SYMBOL_FIELDS, &params).unwrap();
 }
 
-/// Without adopted assessments, locking selects project/51 as on main; adopting an assessment
-/// upgrades to project/64 (with board_instances when board-owned) and removing it returns to /51.
+/// A designator lock and an adopted assessment share the current header in both storage homes;
+/// the historical lock header /51 refuses the lifecycle document, and Undo restores the lock-only bytes.
 #[test]
-fn designator_lock_and_assessment_share_project_64_and_read_historical_51() {
+fn designator_lock_and_assessment_share_the_current_header_and_refuse_historical_51() {
     for board in [false, true] {
         let (documents, draft, _) = source();
         let mut session = Session::default();
@@ -404,17 +410,13 @@ fn designator_lock_and_assessment_share_project_64_and_read_historical_51() {
         lock_first(&mut session);
         let locked = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&locked[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/51");
-        assert!(entry.get("board_instances").is_none());
+        assert_eq!(entry["format"], CURRENT);
         assert!(entry.get("layout_root").is_some());
         assert!(!locked.contains_key("library/lifecycle.json"));
-        let bad_51_instances = edit_project_header(&locked, |header| header["board_instances"] = json!(true));
-        assert!(decode_documents(&bad_51_instances).unwrap_err().contains("board_instances requires project/64"));
         session.apply(ADOPT, &params(&session, &draft)).unwrap();
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&saved[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/64");
-        assert_eq!(entry.get("board_instances"), board.then_some(&Value::Bool(true)));
+        assert_eq!(entry["format"], CURRENT);
         assert_eq!(entry.get("schematic_instances").is_some(), !board);
         assert!(saved.contains_key("library/lifecycle.json"));
         let reopened = decode_documents(&saved).unwrap();
@@ -424,35 +426,15 @@ fn designator_lock_and_assessment_share_project_64_and_read_historical_51() {
         assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
         let packed = crate::persistence::encode_packed(reopened).unwrap();
         assert_eq!(crate::persistence::decode_packed(&packed).unwrap().documents, saved);
-        for (bad, reason) in [(Value::Null, "expected a boolean"), (json!(false), "invalid board_instances"), (json!("true"), "expected a boolean")] {
-            let invalid = edit_project_header(&saved, |header| header["board_instances"] = bad);
-            let error = decode_documents(&invalid).unwrap_err();
-            assert!(error.contains(reason), "{error}");
-        }
         if let Some(path) = session.project().unwrap().instances_document_path() {
-            let mut missing = saved.clone();
-            missing.remove(&path);
-            assert_eq!(decode_documents(&missing).unwrap_err(), format!("{path}: missing project document"));
-            let undeclared = edit_project_header(&saved, |header| {
-                header.as_object_mut().unwrap().remove("board_instances");
-            });
-            assert!(decode_documents(&undeclared).unwrap_err().contains("require instance records"));
-            let undeclared_unlocked = edit_project_header(&undeclared, |header| {
-                for component in header["components"].as_array_mut().unwrap() {
-                    component.as_object_mut().unwrap().remove("designator_locked");
-                }
-            });
-            assert!(decode_documents(&undeclared_unlocked).unwrap_err().contains("unexpected or unused project document"));
+            assert_eq!(saved[&path], locked[&path]);
         }
 
         // Project/51 cannot carry the lifecycle document.
-        let lifecycle_51 = edit_project_header(&saved, |header| {
-            header["format"] = json!("pcbcraft-project/51");
-            header.as_object_mut().unwrap().remove("board_instances");
-        });
-        assert!(decode_documents(&lifecycle_51).unwrap_err().contains("requires project/64"));
+        let lifecycle_51 = edit_project_header(&saved, |header| header["format"] = json!("pcbcraft-project/51"));
+        assert!(decode_documents(&lifecycle_51).unwrap_err().contains(REFUSAL));
 
-        // Undoing the adoption reverts cleanly to project/51 with exact prior bytes.
+        // Undoing the adoption restores the exact lock-only bytes.
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), locked);
     }
@@ -473,10 +455,10 @@ fn alternate_symbol() -> Arc<Item> {
     editor.snapshot()
 }
 
-/// An adopted assessment and a chosen alternate pin function together select project/64;
-/// both reopen intact and re-save byte-identically. The unreleased /52 and /58 numbers are refused.
+/// An adopted assessment and a chosen alternate pin function share the current header; both
+/// reopen intact and re-save byte-identically. Other headers refuse the lifecycle document.
 #[test]
-fn assessment_with_pin_function_selects_project_64() {
+fn assessment_with_pin_function_keeps_the_current_header() {
     use crate::persistence::ENTRY_POINT;
     for board in [false, true] {
         let (documents, draft, _) = source_for(alternate_symbol());
@@ -492,13 +474,12 @@ fn assessment_with_pin_function_selects_project_64() {
         let choice = json!({"target":target,"function":"ADC_IN","expected_revision":session.revision()});
         session.apply(crate::pin_functions::SET, &choice).unwrap();
         let chosen = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&chosen[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        assert_eq!(serde_json::from_slice::<Value>(&chosen[ENTRY_POINT]).unwrap()["format"], CURRENT);
         session.apply(ADOPT, &params(&session, &draft)).unwrap();
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/64");
+        assert_eq!(entry["format"], CURRENT);
         assert_eq!(entry["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
-        assert_eq!(entry.get("board_instances"), board.then_some(&Value::Bool(true)));
         assert!(saved.contains_key("library/lifecycle.json"));
         let reopened = decode_documents(&saved).unwrap();
         assert_eq!(reopened.lifecycle(), session.snapshot().unwrap().lifecycle());
@@ -507,10 +488,10 @@ fn assessment_with_pin_function_selects_project_64() {
         assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
         let packed = crate::persistence::encode_packed(reopened).unwrap();
         assert_eq!(crate::persistence::decode_packed(&packed).unwrap().documents, saved);
-        for retired in ["pcbcraft-project/52", "pcbcraft-project/58"] {
-            let header = edit_project_header(&saved, |header| header["format"] = json!(retired));
+        for other in ["pcbcraft-project/48", "pcbcraft-project/52", "pcbcraft-project/58", "pcbcraft-project/64"] {
+            let header = edit_project_header(&saved, |header| header["format"] = json!(other));
             let error = decode_documents(&header).unwrap_err();
-            assert!(error.contains("library/lifecycle.json requires project/64"), "{error}");
+            assert!(error.contains(REFUSAL), "{error}");
         }
         // Undoing the adoption returns to the exact pin-function-only bytes.
         session.apply("edit.undo", &Value::Null).unwrap();
@@ -518,11 +499,11 @@ fn assessment_with_pin_function_selects_project_64() {
     }
 }
 
-/// A project/56 project (a chosen alternate pin function and an active designator lock) that
-/// adopts a lifecycle assessment saves as project/64 with both records and reopens intact.
-/// The /56 bytes themselves still reopen and re-save unchanged, and Undo restores them exactly.
+/// A project with a chosen alternate pin function and an active designator lock that adopts a
+/// lifecycle assessment keeps the current header with all three records and reopens intact.
+/// The lock and pin-function bytes reopen and re-save unchanged, and Undo restores them exactly.
 #[test]
-fn pin_function_and_lock_project_56_with_assessment_saves_as_project_64() {
+fn pin_function_and_lock_with_assessment_keep_the_current_header() {
     use crate::persistence::ENTRY_POINT;
     for board in [false, true] {
         let (documents, draft, _) = source_for(alternate_symbol());
@@ -539,17 +520,16 @@ fn pin_function_and_lock_project_56_with_assessment_saves_as_project_64() {
         session.apply(crate::pin_functions::SET, &choice).unwrap();
         lock_first(&mut session);
         let locked = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&locked[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/56");
+        assert_eq!(serde_json::from_slice::<Value>(&locked[ENTRY_POINT]).unwrap()["format"], CURRENT);
         assert!(!locked.contains_key("library/lifecycle.json"));
         assert_eq!(encode_documents(decode_documents(&locked).unwrap()).unwrap(), locked);
 
         session.apply(ADOPT, &params(&session, &draft)).unwrap();
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/64");
+        assert_eq!(entry["format"], CURRENT);
         assert_eq!(entry["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         assert_eq!(entry["components"][0]["designator_locked"], json!(true));
-        assert_eq!(entry.get("board_instances"), board.then_some(&Value::Bool(true)));
         assert!(saved.contains_key("library/lifecycle.json"));
         let reopened = decode_documents(&saved).unwrap();
         let part = reopened.components().next().unwrap();
@@ -566,10 +546,10 @@ fn pin_function_and_lock_project_56_with_assessment_saves_as_project_64() {
     }
 }
 
-/// Ordinary edits without adopted assessments stay at the prior format version; adopting an
-/// assessment selects /64, and removing the last assessment returns to the prior format.
+/// Ordinary edits and adopting an assessment keep the current header; adopting writes only the
+/// lifecycle document beside unchanged ones, and removing the last assessment restores the exact bytes.
 #[test]
-fn ordinary_edit_without_assessments_preserves_prior_format_and_removing_last_assessment_reverts() {
+fn ordinary_edit_and_assessment_keep_the_current_header_and_removing_it_restores_bytes() {
     for board in [false, true] {
         let (documents, draft, _) = source();
         let mut session = Session::default();
@@ -582,27 +562,24 @@ fn ordinary_edit_without_assessments_preserves_prior_format_and_removing_last_as
         session.apply(PLACE_SYMBOL, &place).unwrap();
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
         let before_entry: Value = serde_json::from_slice(&before[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(before_entry["format"], "pcbcraft-project/16");
-        assert!(before_entry.get("board_instances").is_none());
+        assert_eq!(before_entry["format"], CURRENT);
         assert!(!before.contains_key("library/lifecycle.json"));
 
-        // An ordinary edit that rewrites project.json keeps project/16 and round-trips cleanly.
+        // An ordinary edit that rewrites project.json keeps the header and round-trips cleanly.
         let symbol_id = session.project().unwrap().symbols()[0].id();
         let edit = json!({"symbol":symbol_id,"reference":"U1","value":"REV-A","expected_revision":session.revision()});
         session.apply(crate::SET_SYMBOL_FIELDS, &edit).unwrap();
         let edited = encode_documents(session.snapshot().unwrap()).unwrap();
         let edited_entry: Value = serde_json::from_slice(&edited[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(edited_entry["format"], "pcbcraft-project/16");
-        assert!(edited_entry.get("board_instances").is_none());
+        assert_eq!(edited_entry["format"], CURRENT);
         assert!(!edited.contains_key("library/lifecycle.json"));
         assert_eq!(encode_documents(decode_documents(&edited).unwrap()).unwrap(), edited);
 
-        // Adopting an assessment selects project/64 and writes library/lifecycle.json.
+        // Adopting an assessment keeps the header and writes library/lifecycle.json.
         session.apply(ADOPT, &params(&session, &draft)).unwrap();
         let adopted = encode_documents(session.snapshot().unwrap()).unwrap();
         let adopted_entry: Value = serde_json::from_slice(&adopted[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(adopted_entry["format"], "pcbcraft-project/64");
-        assert_eq!(adopted_entry.get("board_instances"), board.then_some(&Value::Bool(true)));
+        assert_eq!(adopted_entry["format"], CURRENT);
         assert!(adopted.contains_key("library/lifecycle.json"));
         for (path, bytes) in &edited {
             if path != crate::persistence::ENTRY_POINT {
@@ -610,7 +587,7 @@ fn ordinary_edit_without_assessments_preserves_prior_format_and_removing_last_as
             }
         }
 
-        // Removing the last assessment (via Undo or on a reopened /64 snapshot) returns to project/16.
+        // Removing the last assessment (via Undo or on a reopened snapshot) restores the exact bytes.
         let mut cleared = (*decode_documents(&adopted).unwrap()).clone();
         cleared.lifecycle = Arc::default();
         assert_eq!(encode_documents(Arc::new(cleared)).unwrap(), edited);
@@ -796,9 +773,10 @@ fn assessment_and_policy_count_and_size_limits_refuse_cleanly() {
     assert!(hit_size_limit, "expected 4 MiB lifecycle document limit refusal");
 }
 
-/// Pre-folder projects (/6, /9 and /13) can adopt a lifecycle assessment, write /64 and reopen cleanly.
+/// Pre-folder projects (/6 and /9) and a boardless project with a footprint choice can adopt a
+/// lifecycle assessment, save under the current header and reopen cleanly.
 #[test]
-fn pre_folder_projects_adopt_lifecycle_and_reopen_project_64() {
+fn pre_folder_projects_adopt_lifecycle_and_reopen_under_the_current_header() {
     let base: crate::persistence::Documents = [
         (crate::persistence::ENTRY_POINT, include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/project.json").as_slice()),
         ("board.json", include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/board.json").as_slice()),
@@ -824,7 +802,7 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_64() {
     project_9.remove("board.json");
 
     // A boardless project/9 pins a package for component 2 (R1) as a schematic footprint choice,
-    // which selects project/13. The command addresses the component, not a sheet symbol, and
+    // saved under the current header. The command addresses the component, not a sheet symbol, and
     // resolves only exact catalog footprints such as basic-components/resistor-0402 r4.
     let mut prep_13 = Session::default();
     prep_13.open_snapshot(decode_documents(&project_9).unwrap());
@@ -843,11 +821,11 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_64() {
         .unwrap();
     let project_13 = encode_documents(prep_13.snapshot().unwrap()).unwrap();
     let entry_13: Value = serde_json::from_slice(&project_13[crate::persistence::ENTRY_POINT]).unwrap();
-    assert_eq!(entry_13["format"], "pcbcraft-project/13");
+    assert_eq!(entry_13["format"], CURRENT);
     assert_eq!(entry_13["footprint_choices"][0]["component"], 2);
 
     let (documents, draft, _) = source();
-    for (label, fixture) in [("project/6", project_6), ("project/9", project_9), ("project/13", project_13)] {
+    for (label, fixture) in [("project/6", project_6), ("project/9", project_9), ("footprint choice", project_13)] {
         let mut session = Session::default();
         session.open_snapshot(decode_documents(&fixture).unwrap());
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -855,8 +833,8 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_64() {
         session.execute(ADOPT, &params(&session, &draft)).unwrap();
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&saved[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/64", "{label}");
-        assert_eq!(entry.get("footprint_choices").is_some(), label == "project/13", "{label}");
+        assert_eq!(entry["format"], CURRENT, "{label}");
+        assert_eq!(entry.get("footprint_choices").is_some(), label == "footprint choice", "{label}");
         assert!(saved.contains_key("library/lifecycle.json"), "{label}");
         let reopened = decode_documents(&saved).unwrap();
         assert_eq!(reopened.lifecycle().disposition(&draft.target), Some(Disposition::Draft), "{label}");

@@ -18,7 +18,7 @@ fn locked_clipboard(tree: bool) -> (Session, Value) {
     let envelope: Value = serde_json::from_str(response["clipboard"].as_str().unwrap()).unwrap();
     assert_eq!(envelope["format"], "pcbcraft-clipboard/3");
     let entry: Value = serde_json::from_str(envelope["documents"][persistence::ENTRY_POINT].as_str().unwrap()).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/51");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert!(clipboard::Fragment::from_text(&envelope.to_string()).is_ok());
     (source, envelope)
 }
@@ -192,15 +192,15 @@ fn designator_lock_real_document_limit_and_authority_precedence() {
     assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
 }
 
-/// Adopting a genuinely flat legacy board reports both added and removed native paths as null.
+/// Previewing a lock compares the current save representations of both snapshots.
 #[test]
-fn designator_lock_preview_reports_both_absent_document_sides() {
+fn designator_lock_preview_compares_migrated_save_paths() {
     let mut session = fixture(true);
     let mut historical = crate::Project::clone(&persistence::diagnostic_snapshot(session.snapshot().unwrap()));
     historical.layout = None;
     historical.numeric_id_high_water = None;
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
-    let native = persistence::encode_documents(Arc::new(historical)).unwrap();
+    let native = persistence::historical_documents(Arc::new(historical), "pcbcraft-project/6");
     session.open_snapshot(persistence::decode_documents(&native).unwrap());
     let before = documents(&session);
     let preview = session
@@ -213,8 +213,8 @@ fn designator_lock_preview_reports_both_absent_document_sides() {
     lock(&mut session, true);
     let after = documents(&session);
     let changes = preview["changes"].as_array().unwrap();
-    assert!(changes.iter().any(|change| change["before"].is_null()));
-    assert!(changes.iter().any(|change| change["after"].is_null()));
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["path"], persistence::ENTRY_POINT);
     let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
     let expected: Vec<_> = paths.into_iter().filter(|path| before.get(*path) != after.get(*path)).map(|path| {
         json!({"path":path,"before":before.get(path).map(|bytes| std::str::from_utf8(bytes).unwrap()),"after":after.get(path).map(|bytes| std::str::from_utf8(bytes).unwrap())})

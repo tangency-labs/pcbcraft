@@ -5,11 +5,12 @@
 Native libraries can ship revision-specific lifecycle assertions under
 `lifecycle-assertions/`, and projects can pin exact assertion revisions and
 scheme policies through `library.lifecycle_assertion`, `project.adopt_lifecycle`
-and `project.inspect_lifecycle`. `project.json` selects `pcbcraft-project/64`
-and writes `library/lifecycle.json` only when at least one adopted assessment is
-stored; projects without adopted assessments keep their existing format
-selection and byte reuse, and removing the last adopted assessment returns
-`project.json` to the format required by its remaining content.
+and `project.inspect_lifecycle`. Adopted assessments are saved as the optional
+`library/lifecycle.json` document under the current `pcbcraft-project/61`
+header, with no format change: projects without adopted assessments write no
+lifecycle document and keep their byte reuse, removing the last adopted
+assessment removes the document, and an older project header that carries it is
+refused.
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
@@ -17,7 +18,7 @@ its old slot. Splitting a pane itself opens another view. Separate Split window
 up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
-- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/ui-automation.md#size-a-window-for-recording).
+- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -30,11 +31,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+[command API version](docs/automation/command-api.md#command-api-version). MCP `execute` now
 accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
-See [stating a version](docs/mcp.md#stating-a-version).
+See [stating a version](docs/automation/command-api.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -52,7 +53,7 @@ rejected before changing layers.
 Failed MCP calls and live editor replies now carry a stable error code, such
 as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
 details, so an agent can act on a failure without parsing its message. The
-codes are published in [error codes](docs/mcp.md#error-codes) and are never
+codes are published in [error codes](docs/automation/command-api.md#error-codes) and are never
 renamed or reused. Messages are unchanged, except that `ui.` commands now
 refuse unknown keys, missing required keys and non-null scalar or array
 parameter lists with the same wording as window commands. Omitted or null

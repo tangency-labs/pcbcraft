@@ -4,7 +4,7 @@ use crate::project_files::{Job, ProjectFiles, Update};
 use pcbcraft_engine::persistence::encode_packed;
 use pcbcraft_engine::{
     DELETE_SYMBOL, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{decode, encode_documents},
+    persistence::{CURRENT_PROJECT_FORMAT, decode, encode_documents},
 };
 use serde_json::json;
 use std::{
@@ -14,12 +14,52 @@ use std::{
 
 mod open_preservation;
 
+/// Save rewrites the old entry point even when opening it required no metadata migration.
+/// The archive reuse fast path and the folder byte reuse path both retain unaffected files.
+#[test]
+fn unchanged_native_save_advances_only_the_project_header() {
+    for archive in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name":"Migration test","create_board":true})).unwrap();
+        apply(&mut session, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+        let expected = encode_documents(session.snapshot().unwrap()).unwrap();
+        let mut old = expected.clone();
+        let entry = String::from_utf8(old[ENTRY_POINT].clone()).unwrap().replacen(CURRENT_PROJECT_FORMAT, "pcbcraft-project/16", 1);
+        old.insert(ENTRY_POINT.into(), entry.into_bytes());
+        let path = dir.path().join(if archive { "legacy.pc" } else { "legacy" });
+        if archive {
+            fs::write(&path, encode_packed_documents(old.clone()).unwrap()).unwrap();
+        } else {
+            folder::save(&path, None, &old, &mut |_| Ok(())).unwrap();
+        }
+        let read = || {
+            if archive { decode_packed(&fs::read(&path).unwrap()).unwrap().documents } else { folder::load(&path).unwrap() }
+        };
+        let opened = load(&path).unwrap();
+        assert!(opened.target.needs_upgrade());
+        assert_eq!(read(), old);
+        save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
+        assert_eq!(read(), expected);
+
+        let reopened = load(&path).unwrap();
+        assert!(!reopened.target.needs_upgrade());
+        save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
+        assert_eq!(read(), expected);
+    }
+}
+
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs. The
 /// snapshot is prepared as opening does, so it already has its paper.
 fn session() -> Session {
     let mut s = Session::default();
     s.open_snapshot(pcbcraft_engine::persistence::prepare_opened(legacy_snapshot()).unwrap());
     s
+}
+
+/// Source documents from an actual flat split archive, before layout migration.
+fn flat_documents() -> Documents {
+    decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc")).unwrap().documents
 }
 
 /// Retain an actual old bundled namespace for tests specifically exercising opening upgrades.
@@ -42,7 +82,7 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("old");
     let original = decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap();
-    let documents = encode_documents(original.clone()).unwrap();
+    let documents = flat_documents();
     fs::create_dir(&root).unwrap();
     for (path, bytes) in &documents {
         let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
@@ -171,7 +211,7 @@ fn component_metadata_opens_and_saves_through_every_native_entry_path() {
         let snapshot = s.snapshot().unwrap();
         let documents = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/16");
+        assert_eq!(entry["format"], CURRENT_PROJECT_FORMAT);
         let root = dir.path().join("metadata");
         let archive = dir.path().join("metadata.pc");
         folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
@@ -316,7 +356,7 @@ fn unchanged_documents_are_never_rewritten() {
 fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    let original = decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc")).unwrap().documents;
+    let original = flat_documents();
     folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
     let loaded = load(&root.join(ENTRY_POINT)).unwrap();
     assert_eq!(folder::load(&root).unwrap(), original);
@@ -336,7 +376,7 @@ fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() 
     save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let after = folder::load(&root).unwrap();
     let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/16");
+    assert_eq!(header["format"], CURRENT_PROJECT_FORMAT);
     assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().sheets().len(), 2);
     for (path, bytes) in
         migrated.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/") && !path.ends_with("/instances.json"))
@@ -711,7 +751,7 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert!(!reopened.target.needs_manifest);
     let migrated = pcbcraft_engine::persistence::migrate_board_layout((*documents).clone(), ".").unwrap();
     assert_eq!(reopened.target.documents.as_deref(), Some(&migrated));
-    let mut custom = (*documents).clone();
+    let mut custom = migrated.clone();
     custom.get_mut(ENTRY_POINT).unwrap().extend_from_slice(b"\n  ");
     let root = dir.path().join("custom");
     folder::save(&root, None, &custom, &mut |_| Ok(())).unwrap();
@@ -1079,7 +1119,7 @@ fn first_save_adopts_layout_only_on_success_and_keeps_it_through_history() {
     let root = dir.path().join("project");
     let mut s = Session::default();
     s.open_snapshot(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap());
-    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let before = flat_documents();
     folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
     fs::create_dir(root.join("boards")).unwrap();
     fs::write(root.join("boards/notes.txt"), b"keep").unwrap();
@@ -1149,8 +1189,7 @@ fn migration_adoption_preserves_edits_made_while_the_worker_runs() {
 fn designator_lock_unchanged_save_adopts_layout_across_undo() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    let flat = decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap();
-    folder::save(&root, None, &encode_documents(flat).unwrap(), &mut |_| Ok(())).unwrap();
+    folder::save(&root, None, &flat_documents(), &mut |_| Ok(())).unwrap();
     let mut s = Session::default();
     let mut files = ProjectFiles::default();
     assert!(matches!(complete(&mut files, &mut s, load(&root).map(Outcome::Opened)), Some(Update::Opened)));
@@ -1211,7 +1250,12 @@ fn occurrence_adoption_preserves_sheets_created_after_save_capture() {
     s.open_snapshot(Arc::new(old.with_board_folders(".").unwrap()));
     let captured = s.snapshot().unwrap();
     let initial = captured.sheet_instances();
-    let documents = encode_documents(captured.clone()).unwrap();
+    let mut documents = encode_documents(captured.clone()).unwrap();
+    let instance_path = pcbcraft_engine::persistence::project_instances_path(&documents[ENTRY_POINT]).unwrap().unwrap();
+    documents.remove(&instance_path).unwrap();
+    let mut entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+    entry["format"] = json!("pcbcraft-project/14");
+    documents.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
     folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
     let loaded = load(&root).unwrap();
     assert!(!loaded.snapshot.has_sheet_occurrences());
@@ -1326,16 +1370,16 @@ fn bundled_library_upgrade_is_saved_once_and_preserves_unrelated_source_bytes() 
     }
 }
 
-/// Ordinary edits to a project without adopted lifecycle assessments stay at the existing project
-/// format version and keep desktop byte reuse on unaffected documents.
+/// Ordinary edits to a project without adopted lifecycle assessments keep the current project
+/// header, write no lifecycle document and keep desktop byte reuse on unaffected documents.
 #[test]
-fn ordinary_edit_save_preserves_prior_project_format_and_unrelated_bytes() {
+fn ordinary_edit_save_keeps_the_current_header_and_unrelated_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("ordinary");
     let mut s = session();
     let mut initial = encode_documents(s.snapshot().unwrap()).unwrap();
     let initial_entry: serde_json::Value = serde_json::from_slice(&initial[ENTRY_POINT]).unwrap();
-    assert_eq!(initial_entry["format"], "pcbcraft-project/16");
+    assert_eq!(initial_entry["format"], CURRENT_PROJECT_FORMAT);
     let board_path = s.project().unwrap().board_document_path().unwrap();
     initial.get_mut(&board_path).unwrap().extend_from_slice(b"\n  ");
     folder::save(&root, None, &initial, &mut |_| Ok(())).unwrap();
@@ -1346,8 +1390,7 @@ fn ordinary_edit_save_preserves_prior_project_format_and_unrelated_bytes() {
     save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let after = folder::load(&root).unwrap();
     let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/16");
-    assert!(header.get("board_instances").is_none());
+    assert_eq!(header["format"], CURRENT_PROJECT_FORMAT);
     assert!(!after.contains_key("library/lifecycle.json"));
     assert_eq!(after[&board_path], initial[&board_path]);
     assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().components().next().unwrap().value(), "10k");
