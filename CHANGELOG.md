@@ -5,7 +5,7 @@
 Native libraries can ship revision-specific lifecycle assertions under
 `lifecycle-assertions/`, and projects can pin exact assertion revisions and
 scheme policies through `library.lifecycle_assertion`, `project.adopt_lifecycle`
-and `project.inspect_lifecycle`. `project.json` selects `pcbcraft-project/52`
+and `project.inspect_lifecycle`. `project.json` selects `pcbcraft-project/64`
 and writes `library/lifecycle.json` only when at least one adopted assessment is
 stored; projects without adopted assessments keep their existing format
 selection and byte reuse, and removing the last adopted assessment returns

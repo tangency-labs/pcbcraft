@@ -864,10 +864,10 @@ fn validate_with_hierarchy(
     let mut components = BTreeMap::new();
     for record in records {
         if record.pin_functions.is_some() {
-            return Err("Alternate pin functions require native project format 48, 56 or 58.".into());
+            return Err("Alternate pin functions require native project format 48, 56 or 64.".into());
         }
         if record.designator_locked.is_some() {
-            return Err("Designator locks require split project format 51, 52, 56 or 58.".into());
+            return Err("Designator locks require split project format 51, 56 or 64.".into());
         }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());

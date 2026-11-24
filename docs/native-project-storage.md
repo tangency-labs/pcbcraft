@@ -19,7 +19,7 @@ Active [designator locks](#designator-locks) select project/51, or project/56
 together with [alternate pin functions](#alternate-pin-function-records), retaining the
 optional records and membership representations of the earlier envelopes.
 Adopted [lifecycle assessments](#adopted-lifecycle-assessments) select
-project/52, or project/58 together with alternate pin functions, and write
+project/64, with or without alternate pin functions and designator locks, and write
 `library/lifecycle.json`; projects without adopted
 assessments keep their existing format selection and byte reuse.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
@@ -163,8 +163,8 @@ When no other content requires a later project format, a nonempty class catalog
 selects project/20; saved [net-class bindings](net-class-assignments.md) select
 project/21. Parameters and generated numbers select project/22 and /23 unless
 other records require a later format. In precedence order, adopted lifecycle
-assessments with alternate pin functions select project/58, adopted lifecycle
-assessments /52, alternate pin functions with active designator locks /56,
+assessments select project/64 (with or without pin functions and locks),
+alternate pin functions with active designator locks /56,
 alternate pin functions /48, active designator locks /51, differential pairs
 /45, an assembly profile catalog /36,
 and part groups /39 with compact memberships or /24 otherwise. Board-owned
@@ -466,13 +466,13 @@ advance the footprint format.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/51`, `/52` or `/58` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs; [version 52](#adopted-lifecycle-assessments) requires adopted lifecycle assessments in `library/lifecycle.json` and keeps the earlier extensions optional |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/51` or `/64` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs; [version 52](#adopted-lifecycle-assessments) requires adopted lifecycle assessments in `library/lifecycle.json` and keeps the earlier extensions optional |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37` or `/41` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; versions 27–33, 36 and 38–40 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
-| `library/lifecycle.json` | No own `format` field; required by and accepted only with `project.json` format `pcbcraft-project/52` or `/58` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](schemas/lifecycle-v1.schema.json) |
+| `library/lifecycle.json` | No own `format` field; required by and accepted only with `project.json` format `pcbcraft-project/64` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](schemas/lifecycle-v1.schema.json) |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
@@ -514,30 +514,30 @@ named-contact legs and adopted occurrence identities rather than discarding them
 
 ### Adopted lifecycle assessments
 
-Split saves select `pcbcraft-project/52` only when the project stores at least
+Split saves select `pcbcraft-project/64` only when the project stores at least
 one adopted lifecycle assessment in `library/lifecycle.json`. Projects without
 adopted assessments keep the existing content-driven project format selection
-and desktop byte reuse, so ordinary edits do not upgrade `project.json` to `/52`.
+and desktop byte reuse, so ordinary edits do not upgrade `project.json` to `/64`.
 Removing the last adopted assessment (for example by undoing the first adoption)
 omits `library/lifecycle.json` and returns `project.json` to the version
 required by its remaining content.
 
-Under `project/52`, earlier project records (catalogs, profiles, pairs and
-designator locks) remain optional with their existing validation rules.
+Under `project/64`, earlier project records (catalogs, profiles, pairs,
+designator locks and alternate pin functions) remain optional with their
+existing validation rules.
 `board_instances: true` declares a separate `instances.json` at the registered
 board's path; omit it when there are no instance records or when
 `schematic_instances` embeds them in a schematic-only project. Earlier project
-headers refuse `board_instances` and `library/lifecycle.json`, and `project/52`
+headers refuse `board_instances` and `library/lifecycle.json`, and `project/64`
 refuses a missing or empty `library/lifecycle.json`. A board-owned pair registry
 still uses `pcbcraft-instances/8`.
 
-`pcbcraft-project/58` is project/52 with [alternate pin functions](#alternate-pin-function-records):
-it accepts `pin_functions` and version-5 symbol definitions under the rules of
-project/48, alongside the lifecycle document and every record project/52
-accepts, including optional designator locks. The encoder selects /58 only when
-a project has both adopted assessments and alternate pin functions (or pins a
-version-5 symbol), /52 for assessments alone and /48 or /56 for pin functions
-alone. Readers accept /52 and /58 and every earlier format.
+Project/64 also accepts [alternate pin functions](#alternate-pin-function-records):
+`pin_functions` and version-5 symbol definitions follow the rules of project/48,
+and an active designator lock beside them follows project/56. A project/56 project
+that adopts an assessment therefore saves as /64 with its pin functions and locks,
+and removing the last assessment returns it to /56. Readers of /56 and every
+earlier format are unchanged.
 
 The [lifecycle schema](schemas/lifecycle-v1.schema.json) defines the required
 `assertions` and `policies` arrays (never null). Assertions contain the complete
@@ -642,7 +642,7 @@ refuses choices rather than omitting them.
 selects /56 only when both are present, /48 for pin functions alone and /51 for
 locks alone. Readers accept /48, /51 and /56 and every earlier format. With
 adopted lifecycle assessments, pin functions use
-[project/58](#adopted-lifecycle-assessments) instead.
+[project/64](#adopted-lifecycle-assessments) instead.
 
 ### Intentional no-connect records
 
