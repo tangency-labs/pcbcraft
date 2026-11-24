@@ -57,9 +57,11 @@
   diagnostics and same-board clipboard preservation.
 - Box, U and click select tracks and vias in lighter copper colors matching pads. Picking favors
   active-layer tracks, and Shift+Space cycles through overlapping visible objects.
-- M moves copper, D drags a segment with its neighbors attached (`pcb.reshape_tracks`), and
-  Properties edits track width and via size. Footprint moves, rotations, flips and alignments carry
-  attached track ends and refuse new shorts.
+- M and group drags move the selected copper rigidly. The
+  [dockable Router Settings](../pcb/route-planning.md#track-shove) apply Walkaround, Shove and
+  Highlight collisions to new routes, D and held drags on a single track with its neighbors
+  attached (`pcb.reshape_tracks`). Properties edits track width and via size. Footprint moves,
+  rotations, flips and alignments carry attached track ends and refuse new shorts.
 - Modify › Merge Tracks and `pcb.merge_tracks` merge collinear and stacked duplicate segments with
   free shared ends in one undo step.
 - Inspect › DRC and `pcb.check_design` check shorts (including direct pad and via-mediated contact),

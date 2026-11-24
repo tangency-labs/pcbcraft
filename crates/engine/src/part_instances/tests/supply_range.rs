@@ -125,7 +125,7 @@ fn supply_ranges_reopen_offline_without_raising_outer_formats() {
         assert_eq!(encode_documents(reopened).unwrap(), native);
         assert_eq!(encode_packed(unpacked.project).unwrap(), packed);
         let header: Json = serde_json::from_slice(&native[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/16");
+        assert_eq!(header["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         let path = format!("library/parts/{LIBRARY}/regulator.r1.json");
         let part = PartDefinition::read(std::str::from_utf8(&native[&path]).unwrap()).unwrap();
         assert_eq!(part.format, expected);

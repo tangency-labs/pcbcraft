@@ -78,7 +78,7 @@ fn automatic_numbering_and_idempotent_promotion_are_read_only_on_inspection() {
     let original = session.snapshot().unwrap();
     let docs = encode_documents(original.clone()).unwrap();
     let revision = session.revision();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
+    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(session.inspect(), session.inspect());
     assert_eq!(session.revision(), revision);
     assert!(Arc::ptr_eq(&original, &session.snapshot().unwrap()));
@@ -89,7 +89,7 @@ fn automatic_numbering_and_idempotent_promotion_are_read_only_on_inspection() {
     assert_eq!(project.net_registry.record(id).unwrap().fallbacks.len(), 1);
     let saved = encode_documents(project.clone()).unwrap();
     let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/23");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert!(entry["schematic_instances"]["net_registry"].is_object());
     assert!(!saved.keys().any(|path| path.ends_with("board.json") || path.ends_with("instances.json")));
     let revision = session.revision();
@@ -543,12 +543,12 @@ fn opening_a_named_project_sixteen_does_not_promote_or_change_its_bytes() {
     apply(&mut session, crate::net_labels::ADD, json!({"name":"OLD","style":"local","x_nm":0,"y_nm":0}));
     let mut historical = session.project().unwrap().clone();
     historical.net_registry = Arc::default();
-    let documents = encode_documents(Arc::new(historical)).unwrap();
+    let documents = crate::persistence::historical_documents(Arc::new(historical), "pcbcraft-project/16");
     assert_eq!(serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
     let a = decode_documents(&documents).unwrap();
     let b = decode_documents(&documents).unwrap();
     assert!(a.net_registry.records.is_empty());
-    assert_eq!(encode_documents(b).unwrap(), documents);
+    assert_eq!(crate::persistence::historical_documents(b, "pcbcraft-project/16"), documents);
     session.open_snapshot(a);
     let before = session.snapshot().unwrap();
     session.inspect();

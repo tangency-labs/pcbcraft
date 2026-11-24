@@ -123,6 +123,10 @@ pub(super) struct ViewState {
     filters_collapsed: bool,
     #[serde(default = "filters_open_default")]
     filters_open: bool,
+    #[serde(default)]
+    router_settings_open: bool,
+    #[serde(default)]
+    router_settings_collapsed: bool,
     #[serde(default = "crate::workspace_panels::saved_defaults")]
     panels: crate::workspace_panels::SavedPanels,
 }
@@ -211,6 +215,8 @@ pub(super) struct BoardState {
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
+    pub(super) router_settings_open: bool,
+    pub(super) router_settings_collapsed: bool,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
     /// The view-only ruler and whether its tool is armed.
@@ -377,7 +383,7 @@ pub(super) struct EditorView {
     inspection_layers: std::collections::BTreeSet<String>,
     pub(super) filters_collapsed: bool,
     pub(super) filters_open: bool,
-    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
+    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; crate::workspace_panels::PANEL_COUNT],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
     /// Library browsing is a view-local service presentation, never a project target.
@@ -535,6 +541,8 @@ impl EditorView {
             filters: self.filters,
             filters_collapsed: self.filters_collapsed,
             filters_open: self.filters_open,
+            router_settings_open: self.board.router_settings_open,
+            router_settings_collapsed: self.board.router_settings_collapsed,
             panels: crate::workspace_panels::SavedPanels::capture(&self.panels),
         }
     }
@@ -567,6 +575,8 @@ impl EditorView {
         view.filters = state.filters;
         view.filters_collapsed = state.filters_collapsed;
         view.filters_open = state.filters_open;
+        view.board.router_settings_open = state.router_settings_open;
+        view.board.router_settings_collapsed = state.router_settings_collapsed;
         view.panels = state.panels.restore();
         view
     }
@@ -638,6 +648,8 @@ impl EditorView {
                 layers_collapsed: self.board.layers_collapsed,
                 browser_collapsed: self.board.browser_collapsed,
                 properties_collapsed: self.board.properties_collapsed,
+                router_settings_open: self.board.router_settings_open,
+                router_settings_collapsed: self.board.router_settings_collapsed,
                 hidden_layers: self.board.hidden_layers.clone(),
                 layer_defaults_applied: self.board.layer_defaults_applied,
                 active_layer: self.board.active_layer.clone(),
