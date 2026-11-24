@@ -15,6 +15,7 @@ use crate::editor_layout::HostId;
 
 mod board_properties;
 mod pane_drag;
+mod window_size;
 
 /// A nested Assistant viewport does not begin editor collection and must not publish its
 /// window-local controls into the original editor's background layer.

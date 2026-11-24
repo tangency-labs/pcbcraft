@@ -62,7 +62,7 @@ fn commit(s: &mut Session, request: &Request, plan: &Plan) {
     s.apply(
         ADD_TRACKS,
         &json!({"board":view(s).target.board,"layer":request.layer,"width_nm":request.width_nm,
-        "points":points,"replacements":plan.replacements,"merge_same_net":request.merge_same_net,"expected_revision":rev}),
+        "points":points,"via_moves":plan.via_moves,"replacements":plan.replacements,"merge_same_net":request.merge_same_net,"expected_revision":rev}),
     )
     .unwrap();
     assert_eq!(s.revision(), rev + 1);
@@ -1135,4 +1135,210 @@ fn shove_displaces_more_than_ninety_six_rails_in_one_edit() {
     assert_eq!(displaced.points.first(), Some(&p(-1500, 0)));
     assert_eq!(displaced.points.last(), Some(&p(1500, 0)));
     commit(&mut s, &request, &plan);
+}
+
+/// A through via and its endpoint tracks on both sides move together in one edit.
+#[test]
+fn a_route_moves_the_via_and_its_attached_segments() {
+    let mut s = board();
+    let at = p(50, 0);
+    let layers = copper_layers(&s);
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let via = view(&s).vias()[0].id;
+    let lone_at = p(35, 0);
+    s.apply(crate::ADD_VIA, &json!({"at":lone_at,"expected_revision":s.revision()})).unwrap();
+    let lone = view(&s).vias().iter().find(|v| v.at == lone_at).unwrap().id;
+    for layer in &layers {
+        s.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":250000,"points":[p(50,-30),at],"expected_revision":s.revision()})).unwrap();
+    }
+    let mut request = request(&s);
+    request.head = p(20, 3);
+    request.target = p(80, 3);
+    request.mode = Mode::ShoveVias;
+    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.points, vec![request.head, request.target]);
+    assert_eq!(plan.via_moves.len(), 2, "{plan:?}");
+    let fixed = Request {
+        head: request.target,
+        origin: Some((request.head, request.layer)),
+        fixed: vec![FixedCopper::Segment { start: request.head, end: request.target, layer: request.layer, width_nm: request.width_nm }],
+        ..request.clone()
+    };
+    let at_vertex = s.plan_route(&query(&s), &fixed, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(at_vertex.outcome, Outcome::Reached, "{at_vertex:?}");
+    assert_eq!(at_vertex.points, vec![fixed.head]);
+    assert_eq!(at_vertex.via_moves, plan.via_moves);
+    assert_eq!(at_vertex.replacements, plan.replacements);
+    let moved = plan.via_moves.iter().find(|m| m.via == via).unwrap().at;
+    let free = plan.via_moves.iter().find(|m| m.via == lone).unwrap().at;
+    assert_eq!(free.x_nm, lone_at.x_nm);
+    assert_eq!(free.y_nm, moved.y_nm);
+    assert!(moved.y_nm < at.y_nm);
+    assert_eq!(moved.x_nm, at.x_nm);
+    assert_eq!(plan.replacements.len(), 2);
+    commit(&mut s, &request, &plan);
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, moved);
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == lone).unwrap().at, free);
+    for layer in layers {
+        assert!(view(&s).tracks().iter().any(|t| t.layer == layer && t.start == p(50, -30) && t.end == moved));
+    }
+    assert!(!query(&s).exhaustive_pairs().decisions.iter().any(|d| d.clearance_violation || d.conflicting_nets));
+}
+
+/// Shove on D stretches a connected neighbor and pushes an unrelated track atomically.
+#[test]
+fn connected_drag_pushes_a_neighbor() {
+    let mut s = board();
+    let a = add(&mut s, vec![p(20, 20), p(80, 20)], 250000)[0];
+    let b = add(&mut s, vec![p(20, 40), p(20, 20)], 250000)[0];
+    let obstacle = add(&mut s, vec![p(0, 0), p(100, 0)], 500000)[0];
+    let tracks = json!([{"track":a,"start":p(20,1),"end":p(80,1)},{"track":b,"start":p(20,40),"end":p(20,1)}]);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    s.apply(crate::RESHAPE_TRACKS, &json!({"tracks":tracks,"mode":"shove","expected_revision":s.revision()})).unwrap();
+    assert!(view(&s).tracks().iter().any(|t| t.id == a && t.start == p(20, 1) && t.end == p(80, 1)));
+    assert!(view(&s).tracks().iter().any(|t| t.id == b && t.end == p(20, 1)));
+    assert!(view(&s).tracks().iter().any(|t| t.id == obstacle && t.end != p(100, 0)));
+    assert!(!query(&s).exhaustive_pairs().decisions.iter().any(|d| d.clearance_violation || d.conflicting_nets));
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+}
+
+/// A manual compound commit cannot omit or move a locked follower, including one on inner copper.
+#[test]
+fn a_locked_inner_layer_endpoint_pins_its_via() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":s.revision()})).unwrap();
+    let inner = view(&s)
+        .layers()
+        .into_iter()
+        .find(|l| l.purpose == crate::board::setup::LayerPurpose::Copper && !copper_layers(&s).contains(&l.id))
+        .unwrap()
+        .id;
+    let at = p(50, 0);
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let via = view(&s).vias()[0].id;
+    s.apply(ADD_TRACKS, &json!({"layer":inner,"points":[p(50,-30),at],"expected_revision":s.revision()})).unwrap();
+    let follower = view(&s).tracks()[0].id;
+    let mut request = request(&s);
+    request.head = p(20, 3);
+    request.target = p(80, 3);
+    request.mode = Mode::ShoveVias;
+    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.via_moves.len(), 1);
+    let params = |s: &Session| json!({"layer":request.layer,"points":plan.points,"via_moves":plan.via_moves,"replacements":plan.replacements,"expected_revision":s.revision()});
+    let mut incomplete = params(&s);
+    incomplete["replacements"] = json!([]);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(s.apply(ADD_TRACKS, &incomplete).is_err());
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let original = params(&s);
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[follower],"locked":true,"expected_revision":s.revision()})).unwrap();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &original).is_err());
+    assert!(s.apply(ADD_TRACKS, &params(&s)).is_err());
+    assert!(s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap().via_moves.is_empty());
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, at);
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Shove-drag must preserve the original contact even when another path would keep the island connected.
+#[test]
+fn a_drag_cannot_pull_off_its_locked_neighbor() {
+    let mut s = board();
+    let moved = add(&mut s, vec![p(0, 0), p(40, 0)], 250000)[0];
+    let locked = add(&mut s, vec![p(40, 0), p(80, 0)], 250000)[0];
+    add(&mut s, vec![p(0, 0), p(0, -20), p(80, -20), p(80, 0)], 250000);
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let params = json!({"tracks":[{"track":moved,"start":p(0,0),"end":p(40,10)}],"mode":"shove","expected_revision":revision});
+    let mut abandoned = s.prepare_copper_edit(crate::RESHAPE_TRACKS, &params).unwrap();
+    assert!(!abandoned.step(1));
+    drop(abandoned);
+    let error = s.apply(crate::RESHAPE_TRACKS, &params).unwrap_err().to_string();
+    assert!(error.contains("lose a protected copper contact"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A via follower may pivot while its unchanged endpoint stays inside an oval land, off the pad axis.
+#[test]
+fn via_shove_keeps_an_off_axis_oval_pad_contact() {
+    use crate::board::{definition::PadShape, drc::contour_tests::fixture};
+
+    let mut s = fixture(PadShape::Oval, 2_000_000, 1_000_000, p(100, 0), 200_000);
+    let at = p(0, -50);
+    let pad_end = Point { x_nm: 0, y_nm: -250_000 };
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let track = add(&mut s, vec![pad_end, at], 250_000)[0];
+    let request = Request { head: p(-30, -47), target: p(30, -47), mode: Mode::ShoveVias, ..request(&s) };
+    let snapshot = query(&s);
+    let oval = snapshot.objects().iter().find(|item| item.at == p(0, 0)).unwrap();
+    assert!(oval.contour.track_centerline().is_some(), "the oval must have a capsule core");
+    let plan = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.via_moves.len(), 1, "{plan:?}");
+    assert_eq!(plan.replacements, vec![Replacement { track, points: vec![pad_end, plan.via_moves[0].at] }]);
+    commit(&mut s, &request, &plan);
+}
+
+/// A straight D-drag keeps its original angle even when neither routing elbow would hit the via.
+#[test]
+fn diagonal_drag_moves_a_via_on_the_actual_segment() {
+    let mut s = board();
+    let track = add(&mut s, vec![p(10, 40), p(90, 80)], 250_000)[0];
+    let at = p(50, 20);
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let tracks = json!([{"track":track,"start":p(10,0),"end":p(90,40)}]);
+    s.apply(crate::RESHAPE_TRACKS, &json!({"tracks":tracks,"mode":"shove_vias","expected_revision":s.revision()})).unwrap();
+    let board = view(&s);
+    assert_ne!(board.vias()[0].at, at);
+    assert_eq!([board.tracks()[0].start, board.tracks()[0].end], [p(10, 0), p(90, 40)]);
+    assert!(!query(&s).exhaustive_pairs().decisions.iter().any(|d| d.clearance_violation || d.conflicting_nets));
+}
+
+/// A via outside the conservative search region cannot exhaust the track solver's last probe.
+#[test]
+fn a_distant_via_leaves_the_track_shove_probe_budget_intact() {
+    let mut s = board();
+    s.apply(crate::ADD_VIA, &json!({"at":p(400, 400),"expected_revision":s.revision()})).unwrap();
+    add(&mut s, vec![p(0, 0), p(100, 0)], 500_000);
+    let request = request(&s);
+    let snapshot = query(&s);
+    let budget = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap().probes;
+    let track_only = s.plan_route(&snapshot, &request, budget, &|| false).unwrap();
+    assert_eq!(track_only.outcome, Outcome::Reached);
+    assert!(!track_only.replacements.is_empty());
+    let plan = s.plan_route(&snapshot, &Request { mode: Mode::ShoveVias, ..request }, budget, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert_eq!(plan.points, track_only.points);
+    assert_eq!(plan.replacements, track_only.replacements);
+    assert_eq!(plan.probes, track_only.probes);
+    assert!(plan.via_moves.is_empty());
+}
+
+/// An unrelated lock can force walkaround even after a proposed via exit clears the preferred path.
+#[test]
+fn a_rejected_incoming_path_discards_its_via_move() {
+    let mut s = board();
+    let at = p(40, 0);
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let locked = add(&mut s, vec![p(58, -10), p(58, 10)], 250_000)[0];
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
+    let request = Request { head: p(0, 3), target: p(90, 3), mode: Mode::ShoveVias, ..request(&s) };
+    let snapshot = query(&s);
+    let tentative = joints::Motion::preview_for_test(&snapshot, &request);
+    assert_eq!(tentative.len(), 1, "the rejected guide must propose a via move");
+    assert_eq!(tentative[0].via, view(&s).vias()[0].id);
+    assert_ne!(tentative[0].at, at);
+    let plan = s.plan_route(&snapshot, &request, MAX_BUDGET, &|| false).unwrap();
+    assert_ne!(plan.points, vec![request.head, request.target]);
+    assert!(plan.via_moves.is_empty(), "{plan:?}");
+    commit(&mut s, &request, &plan);
+    assert_eq!(view(&s).vias()[0].at, at);
 }
