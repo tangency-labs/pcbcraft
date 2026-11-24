@@ -41,14 +41,14 @@ pub struct SchematicSheet {
     pub(crate) net_labels: Arc<Vec<crate::net_labels::Label>>,
     pub(crate) subsheets: Arc<Vec<crate::hierarchy::SheetSymbol>>,
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
-    /// Provenance for legs drawn by retained named-contact poses; live records persist in sheet/7.
+    /// Provenance for legs drawn by retained named-contact poses; live records persist in the owning sheet.
     pub(crate) generated_legs: Arc<Vec<crate::wire::GeneratedLeg>>,
     /// Explicit no-connect intent on project-unique wire-end junction identities.
     pub(crate) no_connect_ends: Arc<BTreeSet<u64>>,
-    /// The sheet's paper. Decoding a format older than sheet/9 leaves it `None` until
+    /// The sheet's paper. Raw decoding leaves this `None` when paper is absent, until
     /// [`page::adopt`] places paper around the drawing on open.
     pub(crate) page: Option<page::Page>,
-    /// The sheet's own parameter values, `@sheet.Name`; stored only in sheet/9.
+    /// The sheet's own parameter values, `@sheet.Name`; stored with its paper.
     pub(crate) parameters: Arc<crate::parameters::Parameters>,
 }
 

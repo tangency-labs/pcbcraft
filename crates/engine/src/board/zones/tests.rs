@@ -122,7 +122,7 @@ fn creation_promotion_codec_and_history_are_atomic() {
     let encoded = encode_documents(p.clone()).unwrap();
     let board_path = p.board_document_path().unwrap();
     let doc: Value = serde_json::from_slice(&encoded[board_path.as_str()]).unwrap();
-    assert_eq!(doc["format"], "pcbcraft-board/20");
+    assert_eq!(doc["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(doc["zones"].as_array().unwrap().len(), 1);
     assert!(doc.get("fill").is_none());
     let reopened = decode_documents(&encoded).unwrap();
@@ -135,7 +135,7 @@ fn creation_promotion_codec_and_history_are_atomic() {
     edit(&mut s, DELETE_ZONES, json!({"zones":[id]})).unwrap();
     let remaining = encode_documents(s.snapshot().unwrap()).unwrap();
     let doc: Value = serde_json::from_slice(&remaining[board_path.as_str()]).unwrap();
-    assert_ne!(doc["format"], "pcbcraft-board/20");
+    assert_eq!(doc["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(doc.get("zones").is_none());
 }
 
@@ -179,7 +179,7 @@ fn zones_preserve_placement_origins_in_both_creation_orders() {
         let docs = encode_documents(both.clone()).unwrap();
         let path = both.board_document_path().unwrap();
         let board: Value = serde_json::from_slice(&docs[path.as_str()]).unwrap();
-        assert_eq!(board["format"], "pcbcraft-board/21");
+        assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         assert_eq!(board["zones"].as_array().unwrap().len(), 1);
         assert!(board["placement_origin"].is_object());
         assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
@@ -200,7 +200,7 @@ fn zones_preserve_placement_origins_in_both_creation_orders() {
         let zones_only = s.snapshot().unwrap();
         assert_eq!(zones_only.board.zones, vec![zone.clone()]);
         let encoded = encode_documents(zones_only).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&encoded[path.as_str()]).unwrap()["format"], "pcbcraft-board/20");
+        assert_eq!(serde_json::from_slice::<Value>(&encoded[path.as_str()]).unwrap()["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         s.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
         edit(&mut s, DELETE_ZONES, json!({"zones":[zone.id]})).unwrap();
@@ -208,7 +208,7 @@ fn zones_preserve_placement_origins_in_both_creation_orders() {
         assert_eq!(origin_only.board.placement_origin, origin);
         let encoded = encode_documents(origin_only).unwrap();
         let value: Value = serde_json::from_slice(&encoded[path.as_str()]).unwrap();
-        assert_eq!(value["format"], "pcbcraft-board/21");
+        assert_eq!(value["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         assert!(value.get("zones").is_none());
         assert_eq!(encode_documents(decode_documents(&encoded).unwrap()).unwrap(), encoded);
         s.apply("edit.undo", &Value::Null).unwrap();

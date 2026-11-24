@@ -6,7 +6,7 @@
 //! limit and basis. It writes no file, changes no project and records no history step.
 use super::{
     parse_manifest, parse_symbol,
-    parts::{LEGACY_PART_FORMAT, PART_FORMAT, Package, PartDefinition, Reference},
+    parts::{LEGACY_PART_FORMAT, Package, PartDefinition, Reference},
     sources::{Catalog, Documents, MAX_FILE_BYTES, check_documents},
 };
 use crate::{
@@ -487,7 +487,7 @@ fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, Check
 fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
-    if header.format != PART_FORMAT && header.format != LEGACY_PART_FORMAT {
+    if PartDefinition::supported_format(&header.format).is_none() {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: header.format });
     }
     let part: PartDefinition = serde_json::from_str(text).map_err(malformed)?;
@@ -575,7 +575,7 @@ impl Capture {
             transported.parts.iter().map(|(path, part)| (CaptureSource::Document { path: path.clone() }, part)).collect();
         match record {
             Some(Record::Part(part)) => {
-                if (part.format != PART_FORMAT && part.format != LEGACY_PART_FORMAT) || (part.format == LEGACY_PART_FORMAT && part.symbol.is_none()) {
+                if PartDefinition::supported_format(&part.format).is_none() || (part.format == LEGACY_PART_FORMAT && part.symbol.is_none()) {
                     return Err(CheckError::UnsupportedFormat { file: "record".into(), format: part.format.clone() });
                 }
                 parts.push((CaptureSource::Draft, part));

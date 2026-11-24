@@ -7,18 +7,16 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In board formats 34, 35, and 37, the placed footprint owns `locked`, an optional
-boolean that defaults to false and is omitted by fresh canonical encoding when
-false. Boards with active footprint locks use format 34, format 35 with arcs,
-or format 37 with straight-via teardrops. The flag leaves the pinned library
-definition and mapping unchanged. See
+In [board format 42](../formats/native-project-storage.md#current-board-records),
+the placed footprint owns `locked`, an optional boolean that defaults to false.
+Canonical encoding omits false. The flag lives on the placement, separate
+from its pinned library definition and mapping. See
 [the placement edit policy](../pcb/locks.md#placed-footprint-locks) for the
 commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
-Board format 15 adds local reference position and print overrides. Earlier board
-formats retain their existing encodings when these fields are absent. New
-footprint exports and publications use `pcbcraft-footprint/6` for any supported
+Historical board format 15 adds local reference position and print overrides.
+These fields are optional in current boards. New footprint exports and publications use `pcbcraft-footprint/6` for any supported
 mix of pads and holes. Published and project-pinned revisions retain their
 original formats and addresses.
 

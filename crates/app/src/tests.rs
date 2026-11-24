@@ -43,6 +43,7 @@ mod manufacturing;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;
+mod net_appearance;
 mod net_labels;
 mod no_connect;
 mod optional_board;

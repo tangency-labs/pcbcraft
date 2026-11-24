@@ -3,7 +3,10 @@ use crate::{
     Session,
     authoring::{Action, publishing},
     board::definition::{CURRENT_FORMAT, CircularNpth},
-    library::sources::{LOAD, NativeSource, PREPARE_PUBLICATION},
+    library::{
+        parts::{CURRENT_PART_FORMAT, PART_FORMAT},
+        sources::{LOAD, NativeSource, PREPARE_PUBLICATION},
+    },
     part_authoring::{self, ReferenceField},
     schematic::Point,
 };
@@ -387,6 +390,24 @@ fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
     let metadata_only = Documents::from([("library.json".into(), manifest), (path, metadata_part)]);
     let capture = Capture::from_documents(&metadata_only, &Catalog::default()).unwrap();
     assert!(check(&capture).is_clean());
+}
+
+/// Current-format parts are checked as both transported documents and drafts,
+/// including a package map that is not ready for publication.
+#[test]
+fn checks_current_part_format_in_documents_and_drafts() {
+    let fixture = fixture();
+    let mut draft = fixture.part_editor.record().clone();
+    let Record::Part(part) = &mut draft else { panic!("part expected") };
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
+    part.library = LIBRARY.into();
+    let mut documents = fixture.documents.clone();
+    documents.insert("parts/current.json".into(), serde_json::to_string(part).unwrap());
+
+    let transported = Capture::from_documents(&documents, &Catalog::default()).unwrap();
+    let draft = Capture::from_part_record(&draft, &fixture.documents, &Catalog::default()).unwrap();
+    assert_eq!(rules(&check(&transported)), [RuleId::PackageTerminalUnmapped]);
+    assert_eq!(rules(&check(&draft)), [RuleId::PackageTerminalUnmapped]);
 }
 
 /// A generic part draft with an unsupported format is rejected even without a symbol or

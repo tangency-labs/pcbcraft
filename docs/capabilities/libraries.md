@@ -24,7 +24,7 @@
 - Generic/orderable part documents inside Parts Library with exact symbol/package references,
   explicit complete pad maps, footprints of up to 1,024 pads and 256 artwork objects and symbols of
   up to 1,024 terminals, typed fixed values/specifications, authored part description, keywords and
-  labeled HTTP(S) links (`pcbcraft-part/5`), separate Undo/Redo, session-only drafts, publication
+  labeled HTTP(S) links, separate Undo/Redo, session-only drafts, publication
   and dependent-part reference review.
 - Live MCP.
 
