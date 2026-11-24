@@ -150,11 +150,13 @@ not perform manufacturing DRC. Drafts can temporarily have no terminals or pads
 and still save/reopen. Native export requires a terminal for a symbol, or a pad
 or circular non-plated hole for a footprint.
 
-The editable JSON envelope uses `pcbcraft-library-item/1` for single-unit symbols
-and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-unit
-symbols, `pcbcraft-library-item/3` for footprints with non-plated holes, and
-`pcbcraft-library-item/5` for symbols with alternate pin functions, single- or
-multi-unit; removing the last alternate keeps format 5. It records definition identity,
+The editable JSON envelope has its own versions. Plain single-unit and multi-unit
+symbol drafts start at `pcbcraft-library-item/1` and `pcbcraft-library-item/2`,
+respectively. Adding an alternate pin function or opening a version-5 native
+symbol for editing uses `pcbcraft-library-item/5`. Removing the last alternate
+keeps that version. Footprint drafts use `pcbcraft-library-item/1` by default,
+`pcbcraft-library-item/3` with non-plated holes, and `pcbcraft-library-item/4` with
+plated slots. The envelope records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
@@ -173,11 +175,12 @@ refuses replacing an already open identity. A cancelled picker or failed write
 leaves documents intact. Browser downloads and native-definition exports do not
 confirm a durable editor save, so they retain the unsaved state.
 
-Export Native Definition writes the existing standalone symbol/footprint schema
-to a new file. Keep the editor item as the provenance-bearing authoring master;
-the existing standalone symbol format does not carry its license or stable
-editor primitive IDs. Unknown symbol provenance requires recording its license
-before saving or exporting. Native source registration/search is available through
+Export Native Definition writes a new standalone file. New symbol exports and
+published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) even after optional
+records are removed. Older published and project-pinned revisions keep their
+original formats and addresses. Keep the editor item for the symbol's license
+and stable editor primitive IDs. If the license is unknown, record it before
+saving or exporting. Native source registration/search is available through
 the **Library** workspace (also reached through **Libraries → Sources**), as described in the [source guide](native-library-sources.md).
 Deliberate application of an authored definition to a project remains follow-up
 work; desktop **Library → Publish…** adds validated native revisions to a writable

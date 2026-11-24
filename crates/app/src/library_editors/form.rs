@@ -532,7 +532,7 @@ mod category_tests {
         let mut session = Session::new(item, false).unwrap();
         session.execute(0, draft.action().unwrap()).unwrap();
         assert_eq!(session.snapshot().category, symbol.category);
-        assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-symbol/3");
+        assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-symbol/5");
     }
 }
 

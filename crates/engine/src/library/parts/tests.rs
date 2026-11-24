@@ -254,10 +254,25 @@ fn symbol_category_binding_round_trips_without_reinterpreting_older_formats() {
     let mut symbol = crate::library::parse_symbol(&docs["symbols/resistor.json"]).unwrap();
     symbol.library = "parts-demo".into();
     symbol.provenance = Some(crate::library::sources::Provenance { library_name: "Native Parts Demo".into(), license: "MIT OR Apache-2.0".into() });
-    let item = crate::authoring::Item::from_symbol(&symbol).unwrap();
+    let mut item = crate::authoring::Item::from_symbol(&symbol).unwrap();
+    item.behavior = Some(crate::library::Behavior::Power { terminal: "1".into() });
+    item.defaults = Some(crate::library::Defaults::default());
     let exported = item.export_native().unwrap();
-    assert_eq!(exported["format"], "pcbcraft-symbol/3");
+    assert_eq!(exported["format"], crate::library::SYMBOL_FORMAT_V5);
     assert_eq!(exported["category"], json!(symbol.category));
+    assert!(exported["terminals"][0].get("name").is_none());
+    let reopened = crate::library::parse_symbol(&exported.to_string()).unwrap();
+    assert_eq!(reopened.power_terminal(), Some("1"));
+    assert_eq!(reopened.defaults, item.defaults);
+
+    item.behavior = None;
+    item.defaults = None;
+    item.category = None;
+    let exported = item.export_native().unwrap();
+    assert_eq!(exported["format"], crate::library::SYMBOL_FORMAT_V5);
+    for field in ["behavior", "defaults", "category"] {
+        assert!(exported.get(field).is_none());
+    }
     let saved = serde_json::to_value(crate::library::saved_copy(&symbol)).unwrap();
     assert_eq!(*crate::library::read_saved_copy(saved).unwrap(), symbol);
     let mut old: serde_json::Value = serde_json::from_str(&docs["symbols/resistor.json"]).unwrap();
