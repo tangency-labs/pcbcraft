@@ -3489,6 +3489,13 @@ impl Session {
         self.history_root_revision
     }
 
+    /// Whether the next Undo restores an authored snapshot rather than a host-local edit.
+    /// Local edits do not change the revision, so a host offering Undo for one authored edit
+    /// checks both this and the revision.
+    pub fn next_undo_is_authored(&self) -> bool {
+        matches!(self.undo.last(), Some(HistoryEntry::Project(_)))
+    }
+
     /// Whether the command can run now, for greying out a menu item. Setup initialization
     /// requires an unconfigured board; populated boards require explicit pad-resolution consent
     /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit

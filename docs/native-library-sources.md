@@ -229,7 +229,8 @@ With a project open, choose **Review library updates** in Parts Library, or
 instances, choose **Preview selected updates**, and read the exact before and
 after fields. **Apply reviewed updates** uses the same command and Undo history
 as the schematic editor. **Undo adoption** reverses the change directly from
-its result. A project or source change clears the current review or result;
+its result while the adoption is the next Undo step; after a later local edit,
+such as a color change, undo that edit first. A project or source change clears the current review or result;
 open the review again to see the current state. A pending library folder
 operation temporarily prevents review and adoption in the desktop and live
 MCP editor; the pane then shows that refusal in place of the review button.

@@ -98,8 +98,11 @@ impl Review {
         if let Some(result) = &self.result {
             ui.heading("Library revisions adopted");
             show_changes(ui, result);
-            if controls::enabled_button(ui, app.session.available("edit.undo"), "Undo adoption").clicked() {
-                // Only shown while this edit is still the current project revision.
+            // The pane closes when the revision changes, but a later local edit such as a color
+            // change keeps it. Offer Undo only while the adoption is the next entry Undo restores.
+            if !app.session.next_undo_is_authored() {
+                ui.label("Undo the later edits first to undo this adoption.");
+            } else if controls::enabled_button(ui, app.session.available("edit.undo"), "Undo adoption").clicked() {
                 app.run("edit.undo", &Value::Null);
                 app.repaint_editors(ui.ctx());
             }

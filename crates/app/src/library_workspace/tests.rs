@@ -188,6 +188,31 @@ fn review_library_updates_through_the_desktop_panel() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
+/// A later local edit keeps the revision, so Undo adoption waits until that edit is undone
+/// and then undoes the adoption rather than the newer edit.
+#[test]
+fn undo_adoption_never_undoes_a_later_local_edit() {
+    let mut h = adoption_fixture();
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    let adopted = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    // A personal color change records this kind of entry without changing the revision.
+    h.state_mut().session.record_local_edit("later local edit");
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    h.get_by_label("Library revisions adopted");
+    assert!(h.query_by_label("Undo adoption").is_none());
+    h.get_by_label("Undo the later edits first to undo this adoption.");
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.run();
+    assert!(Arc::ptr_eq(&adopted, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
+    click(&mut h, "Undo adoption");
+    h.get_by_label("Review library updates");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 1);
+}
+
 /// A pending refresh hides GUI Apply and rejects an otherwise valid live Apply without edits.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
