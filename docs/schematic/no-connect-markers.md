@@ -76,11 +76,12 @@ The first marker adopts the existing board-folder and single-use occurrence
 metadata, following the net registry's transaction precedent. Project/19 can
 carry either existing instance vocabulary, depending on whether a net registry
 exists. It adds no parallel instance home or derived connectivity records.
-Wire-end intent additionally uses `pcbcraft-sheet/8`, whose nonempty
-`no_connect_ends` array stores live junction IDs in ascending order. It composes
-with mirrored placements, field appearance and generated contact-leg provenance.
-Older sheet headers reject this field, and cross-sheet or unknown endpoint IDs
-are invalid. Removing the last wire flag lets the sheet use its previous header.
+Sheet/8 introduced the `no_connect_ends` array. The
+[current sheet format](../formats/native-project-storage.md#current-sheet-records)
+stores live junction IDs in ascending order when there is wire-end intent.
+It composes with mirrored placements, field appearance and generated contact-leg
+provenance. Sheet versions before /8 reject the field, and cross-sheet or unknown
+endpoint IDs are invalid. Removing the last wire-end flag omits the array.
 
 Older headers must reject the new field, and the diagnostic single-document
 encoder must refuse to drop it. Explicit null, empty or duplicate records,
