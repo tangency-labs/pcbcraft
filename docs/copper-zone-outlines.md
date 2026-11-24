@@ -21,9 +21,16 @@ including promotion of a previously derived net to a persistent identity.
 An unrelated project edit expires the chosen net even before the first point;
 accepted repeated zone creations retain the same choice until another edit occurs.
 
-Click an edge to select a zone. Drag a vertex to reshape it, drag an edge to
-translate it, or press M and click a destination. Delete removes the selected
-zone; Undo and Redo restore its authored records. Hiding its layer or turning off
+Click an edge to select a zone. Drag a corner to reshape it or drag an edge
+to shift that side parallel to its original direction. Drag inside the selected
+zone or press M and click a destination to move the whole outline. Right-click
+a selected edge and choose **Add vertex**, or right-click a corner and choose
+**Remove vertex**. The outline must keep at least three vertices.
+
+While drawing or moving a corner, a guide shows horizontal or vertical alignment
+when the pointer is close to an adjacent corner's coordinate. Hold Alt to bypass
+axis alignment. Delete removes the selected zone, and each completed edit is
+one undo step. Hiding its layer or turning off
 **Selection filters → Zones** prevents picking it and cancels pending edits.
 Zone outlines use the Board Outline gesture implementation, while their shared
 commands store zone intent rather than graphics or tracks.

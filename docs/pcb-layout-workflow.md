@@ -52,6 +52,12 @@ the active copper layer. Layer visibility and selection filters also apply when
 cycling. Tracks and vias in the gaps between footprint pads can be clicked
 directly.
 
+For closed Board Outline graphics, select an edge, then drag the edge to move
+that side parallel to itself. Drag inside the selected outline to move the whole
+shape or drag a corner to reshape it. Right-click a selected edge or corner to
+add or remove a vertex. The [zone editing guide](copper-zone-outlines.md#drawing-and-editing)
+describes the shared axis alignment and vertex controls.
+
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
 reports existing islands that contain conflicting intended nets, including direct
@@ -276,6 +282,8 @@ license review before it is added.
 - Save, undo and reopen keep the authored zone without saving the fill.
 
 ### 5. Push-and-shove
+
+The current [route and connected-drag guide](route-planning.md#through-vias-and-connected-segment-drags) describes the delivered stages and their limits. The stages below record the original plan.
 
 The interactive-routing part of #56, after #95's basic editing. It comes after clearance-aware routing because it
 needs the same clearance query and spatial index.

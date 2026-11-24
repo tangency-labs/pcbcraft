@@ -208,7 +208,7 @@ const UPPER_BOUNDS: &[&str] = &["maximum", "exclusiveMaximum", "maxLength", "max
 /// Keywords compared only as a whole: any change under one is breaking, because whether it accepts
 /// more or less depends on the schema around it (`not` inverts, `dependentRequired` and the other
 /// dependency maps tie parameters together, `$ref` points elsewhere). The sole exception is an
-/// added `if`/`then` pair (no `else`) guarded on a newly added enum variant (see
+/// added `if`/`then` pair (no `else`) whose guard excludes all old inputs (see
 /// `is_new_variant_if_then` and [`compare`]).
 const WHOLE: &[&str] = &["not", "allOf", "$ref", "if", "then", "else", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies"];
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
@@ -253,10 +253,9 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 ///   match two, and `oneOf` refuses it; common alternatives are still compared for the path.
 /// - `prefixItems`: compared item by item; a changed length is breaking.
 /// - `examples`: an annotation, so compatible.
-/// - `if`/`then`/`else`: adding `if` and `then` together with no `else` is compatible when the
-///   old schema is `type: "object"`, requires a property constrained by `enum`, and `if` restricts
-///   that property via `const` or `enum` exclusively to values absent from the old `enum`; any
-///   other change to `if`, `then`, or `else` is compared as a whole and is breaking.
+/// - `if`/`then`/`else`: adding `if` and `then` together with no `else` is compatible for an
+///   object schema if the guard requires a name excluded by the old closed schema or restricts
+///   an old required enum property to new values. Other changes are breaking.
 /// - `not`, `allOf`, `$ref`, `patternProperties`, `dependentRequired`, `dependentSchemas`,
 ///   `dependencies`: compared as a whole; any change is breaking.
 /// - any other keyword: any change is breaking, because the classifier cannot tell.
@@ -343,7 +342,7 @@ fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
         return;
     };
     let closed = old_object.get("additionalProperties") == Some(&Value::Bool(false)) && !old_object.contains_key("patternProperties");
-    let compatible_if_then = is_new_variant_if_then(old_object, new_object);
+    let compatible_if_then = is_disjoint_if_then(old_object, new_object, closed);
     for key in old_object.keys().chain(new_object.keys()).collect::<BTreeSet<_>>() {
         let (before, after) = (old_object.get(key), new_object.get(key));
         if before != after {
@@ -364,10 +363,9 @@ fn json_schema_equal(a: &Value, b: &Value) -> bool {
     a == b
 }
 
-/// Whether adding an `if`/`then` (with no `else`) to `old` is guaranteed compatible because `old`
-/// accepts only objects with a required `enum`-constrained property whose allowed values are
-/// disjoint from `if`'s condition on that property, so no value valid under `old` can match `if`.
-fn is_new_variant_if_then(old: &Map<String, Value>, new: &Map<String, Value>) -> bool {
+/// A new `if`/`then` without `else` is compatible when its object guard cannot
+/// match any old input, including a required property the old schema disallows.
+fn is_disjoint_if_then(old: &Map<String, Value>, new: &Map<String, Value>, closed: bool) -> bool {
     if old.contains_key("if") || old.contains_key("then") || old.contains_key("else") || new.contains_key("else") {
         return false;
     }
@@ -377,10 +375,18 @@ fn is_new_variant_if_then(old: &Map<String, Value>, new: &Map<String, Value>) ->
     if old.get("type").and_then(Value::as_str) != Some("object") {
         return false;
     }
-    let Some(old_required) = old.get("required").and_then(Value::as_array) else {
+    let Some(old_props) = old.get("properties").and_then(Value::as_object) else {
         return false;
     };
-    let Some(old_props) = old.get("properties").and_then(Value::as_object) else {
+    if closed
+        && if_obj
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|names| names.iter().filter_map(Value::as_str).any(|name| !old_props.contains_key(name)))
+    {
+        return true;
+    }
+    let Some(old_required) = old.get("required").and_then(Value::as_array) else {
         return false;
     };
     let Some(if_props) = if_obj.get("properties").and_then(Value::as_object) else {

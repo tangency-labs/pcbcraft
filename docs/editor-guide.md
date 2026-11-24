@@ -767,9 +767,10 @@ four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
 zones use **Layout → Place → Zone** to draw
 [editable zone outlines](copper-zone-outlines.md). **Pour copper** and **Remove
-pours** are in the **Board** group on the same ribbon. Non-copper shapes remain independent
-editable graphics: select a line, drag a vertex or segment, use M to move it, or
-Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
+pours** are in the **Board** group on the same ribbon. Non-copper paths share
+the [zone outline editing gestures](copper-zone-outlines.md#drawing-and-editing).
+Drag an edge of a closed path to resize that side, or press M to move the whole
+path. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
 remain documentation in the native board.
 
@@ -799,7 +800,7 @@ Click to start a route or fix the current target. The preview uses clearance-awa
 Clicked targets wait for full-path validation; blocked or incomplete searches fix no
 new vertex. Use **/**
 to flip whether the diagonal comes first. Click a copper connection, double-click
-or press **Enter** to finish.
+or press **Enter** to finish at the last clicked vertex.
 
 The route preview uses a lighter shade of each segment's copper layer color. A
 halo shows the default copper clearance (0.2 mm) around the draft tracks and vias.
@@ -810,7 +811,8 @@ copper, adding a via only when the layer changes. Hold **Ctrl** with either page
 key to place the via off-grid in free space. The **Via pad / drill** field beside the
 width field sets the pad diameter and drill (0.6 mm and 0.3 mm by default).
 **Backspace** removes the last via, returning to the previous layer, or else the
-last vertex. Right-click opens the route menu with Finish track, Remove last
+last vertex. Right-click a point on the board and choose **Finish track** to
+validate and finish the route at that target. The menu also offers Remove last
 vertex, Place through via, Flip track posture, and Cancel. **Esc** or **Cancel**
 drops the unfinished route, and a second **Esc** exits the tool. The whole route
 is one Undo step. When copper
@@ -864,22 +866,40 @@ so both shift exactly when the origin moves by a whole micrometre. Mask openings
 pads on the corresponding outer copper layer; paste includes only surface-mount pads,
 not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
 opening, but authored mask artwork can open them. The shape approximations below also
-apply to these openings. Generation needs a board setup, a
-closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
-It does not edit the project. Repeated generation from the same captured inputs and
-exporter build produces the same archive; project names affect filenames and exporter
+apply to these openings. Generation needs a board setup, at least one closed
+Board Outline loop and a resolvable placement origin. Each closed path, including a
+cutout, gets its own loop in the profile file. Export omits open Board Outline paths
+and leaves them in the design. Repeated generation from the same captured inputs and
+exporter build produces the same archive. Project names affect filenames, and exporter
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
+
+Choose **Manufacturing** from the workspace picker, or from **Manufacture →
+Fabrication** in PCB Layout. In Manufacturing, **Open ZIP** opens a PCBcraft
+fabrication archive and verifies each member against the sizes and SHA-256
+hashes in its manifest. On desktop, both **Outputs** and **Open ZIP** start in
+the saved project’s folder, or beside its `.pc` archive. **Last export** reopens
+the ZIP most recently saved by **Outputs** during this project opening.
+Toggle layers to compare the plotted copper, mask openings, paste, silkscreen,
+outline and drill hits. Drill layers list tool
+diameters and hit counts. The preflight checks for required copper, outline and
+plated drill files, and reports empty outlines and open ends. Select the open
+outline finding to center on an endpoint.
+
+The review uses the exported coordinates and checks that frame identifiers agree
+when present. The workspace is read-only. The manifest records
+the generator version and file hashes. It cannot identify the source board
+revision or tell whether it matches a board currently open in the editor. The
+viewer supports PCBcraft’s bare-board exports, including round drill hits, with
+a 64 MiB ZIP limit. Use PCB Layout’s DRC to check design rules.
 
 Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes,
 through-hole pad flashes, via pads and tracks, even when their apertures have the
 same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
-paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
-tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The aperture attributes do
-not change plotted geometry.
+paste and silkscreen artwork use `Material`. The closed loops in the outline file
+use the `Profile` aperture function.
 
 On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
 carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
@@ -1016,6 +1036,14 @@ one definition share its history while retaining independent navigation and
 selection. Closing a pane retains the definition and any unapplied fields.
 Definition placements currently last for the session, with the last saved project
 arrangement retained while definition panes are open.
+
+In either library canvas, select a polyline or polygon to show its vertices.
+Right-click an edge to add a vertex or right-click a corner to remove one.
+Drag a corner to reshape it or a closed edge to resize that side. Drag inside
+a selected closed outline to move the entire shape. The same axis guides and
+Alt override apply as in PCB Layout. Completed edits use the definition's
+undo history and retain its original fill, stroke and artwork purpose.
+Use the Footprint Editor's **Courtyard** controls for courtyard outlines.
 
 ## Opening and saving projects
 

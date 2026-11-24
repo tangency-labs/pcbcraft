@@ -246,3 +246,9 @@ Optimized calculation median falls from 428.011 to 105.841 ms on that one board;
 the initial development build took about 5.9 seconds. This isolates headless fill
 calculation and does not qualify physical presentation, large-board throughput,
 retained-topology memory growth or a vendor comparison.
+
+The [#248 measurements](../tools/performance/baselines/issue248/README.md) record
+matched native replay of four track-only shove cases and three candidate samples
+for each new operation. The via moved with both layer contacts and the connected
+drag pushed a rail. Changed-copper clearance, Undo/Redo and native reopen passed.
+Browser, rendering and physical pointer-to-visible latency remain unmeasured.
