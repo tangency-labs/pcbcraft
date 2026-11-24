@@ -2409,6 +2409,29 @@ fn non_plated_drill_rejects_a_diameter_that_rounds_to_zero() {
         if message.contains("499 nm") && message.contains("rounds to zero")));
 }
 
+/// Keep the smallest representable plated tool, and reject the next smaller input on export.
+#[test]
+fn plated_drill_rejects_a_diameter_that_rounds_to_zero() {
+    let fixture = |size| {
+        aperture_fixture_at(
+            &[(PadShape::Circle, size, size, 0); 2],
+            0,
+            false,
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 30_000_000, y_nm: -25_000_000 },
+            Some(0),
+            None,
+        )
+    };
+    let params = json!({});
+    let archive = fixture(1000).export_fabrication_archive(&params).unwrap();
+    let review = review::Package::read(archive.bytes()).unwrap();
+    let plated = review.layers.iter().find(|layer| layer.role == review::LayerRole::PlatedDrill).unwrap();
+    assert_eq!(plated.tools[0].diameter_nm, 1_000);
+    assert!(matches!(fixture(998).export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
+        if message.contains("Plated drill diameter 499 nm") && message.contains("rounds to zero")));
+}
+
 /// Read the JSON actually stored in a captured ZIP.
 fn embedded_manifest(capture: &Archive) -> Value {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();

@@ -134,6 +134,9 @@ impl Package {
             return Err("Fabrication ZIP exceeds 64 MiB.".into());
         }
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| format!("Invalid fabrication ZIP: {error}"))?;
+        if zip.has_duplicate_names() {
+            return Err("Fabrication ZIP contains duplicate member names.".into());
+        }
         if zip.len() > MAX_FILES {
             return Err("Fabrication ZIP contains too many members.".into());
         }
@@ -190,6 +193,7 @@ impl Package {
 }
 
 /// Check the presence of essential layers and closure of exported outline centerlines.
+/// Coincident strokes contribute only one edge, independent of plot direction.
 fn preflight(layers: &[Layer]) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (role, finding) in [
@@ -203,12 +207,14 @@ fn preflight(layers: &[Layer]) -> Vec<Finding> {
     }
     let profiles: Vec<_> = layers.iter().filter(|layer| layer.role == LayerRole::Profile).collect();
     let mut degrees = BTreeMap::<_, usize>::new();
+    let mut edges = BTreeSet::new();
     for mark in profiles.iter().flat_map(|layer| &layer.marks) {
-        if let Mark::Stroke { ends: [a, b], .. } = mark
-            && a != b
-        {
-            for p in [a, b] {
-                *degrees.entry((p.x_nm, p.y_nm)).or_default() += 1;
+        let Mark::Stroke { ends, .. } = mark else { continue };
+        let mut edge = ends.map(|p| (p.x_nm, p.y_nm));
+        edge.sort_unstable();
+        if edge[0] != edge[1] && edges.insert(edge) {
+            for endpoint in edge {
+                *degrees.entry(endpoint).or_default() += 1;
             }
         }
     }

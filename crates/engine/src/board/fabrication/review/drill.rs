@@ -2,7 +2,7 @@ use super::{Layer, LayerRole, Mark, Tool, add, decimal, xy};
 use std::collections::BTreeMap;
 
 /// Read the writer's absolute metric Excellon drill hits and tool declarations.
-/// Motion modes that could imply routing or slots are rejected.
+/// Require one plating declaration and reject motion modes that could imply routing or slots.
 pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
     let mut lines = text.lines();
     if lines.next() != Some("M48") {
@@ -16,8 +16,9 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
             "%" => break,
             "FMAT,2" => format = true,
             "METRIC" => metric = true,
-            "; TYPE=PLATED" => role = Some(LayerRole::PlatedDrill),
-            "; TYPE=NON_PLATED" => role = Some(LayerRole::NonPlatedDrill),
+            "; TYPE=PLATED" if role.is_none() => role = Some(LayerRole::PlatedDrill),
+            "; TYPE=NON_PLATED" if role.is_none() => role = Some(LayerRole::NonPlatedDrill),
+            c if c.starts_with("; TYPE=") => return Err("Invalid or duplicate drill plating declaration".into()),
             c if c.starts_with(';') || c.is_empty() => {}
             c => {
                 let (number, diameter) = c.strip_prefix('T').and_then(|s| s.split_once('C')).ok_or("Unsupported Excellon header record")?;

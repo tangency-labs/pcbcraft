@@ -47,3 +47,64 @@ fn fabrication_review_rejects_unverified_or_unsupported_geometry() {
     let bytes = tampered.finish().unwrap().into_inner();
     assert!(Package::read(&bytes).unwrap_err().contains("SHA-256 differs"));
 }
+
+/// Exercise both the ZIP library's collapsed exact duplicates and the review's case-folded check.
+#[test]
+fn fabrication_review_rejects_duplicate_members() {
+    let outline = gerber("Profile,NP", "");
+    let bytes = package(&[("outline.gbr", &outline), ("Outline.gbr", &outline)]);
+    assert!(Package::read(bytes.bytes()).unwrap_err().contains("Invalid or duplicate fabrication member name"));
+
+    // ZIP writers disallow exact duplicates. Rename the second file in both ZIP headers.
+    let mut bytes = bytes.bytes().to_vec();
+    let name = b"Outline.gbr";
+    let offsets: Vec<_> = bytes.windows(name.len()).enumerate().filter_map(|(offset, window)| (window == name).then_some(offset)).collect();
+    assert_eq!(offsets.len(), 2);
+    for offset in offsets {
+        bytes[offset] = b'o';
+    }
+    assert!(Package::read(&bytes).unwrap_err().contains("duplicate member names"));
+}
+
+/// An isolated stroke stays open even when the plot traverses it in both directions.
+#[test]
+fn fabrication_review_counts_retraced_outline_edges_once() {
+    let closed = "%ADD10C,0.100000*%\nD10*\nX0Y0D02*\nX100Y0D01*\nX100Y100D01*\nX0Y100D01*\nX0Y0D01*\n";
+    let outline = gerber("Profile,NP", closed);
+    let review = Package::read(package(&[("outline.gbr", &outline)]).bytes()).unwrap();
+    assert!(!review.findings.iter().any(|finding| matches!(finding, Finding::OpenOutline { .. })));
+    let outline = gerber("Profile,NP", &format!("{closed}X200Y0D02*\nX300Y0D01*\nX200Y0D01*\n"));
+    let review = Package::read(package(&[("outline.gbr", &outline)]).bytes()).unwrap();
+    assert!(review.findings.contains(&Finding::OpenOutline { endpoints: 2, first: point(200, 0) }));
+}
+
+/// The first or last header line cannot override the other, and plating must be present.
+#[test]
+fn fabrication_review_requires_one_drill_plating_declaration() {
+    for declarations in ["", "; TYPE=PLATED\n; TYPE=NON_PLATED\n", "; TYPE=NON_PLATED\n; TYPE=PLATED\n", "; TYPE=PLATED\n; TYPE=PLATED\n"] {
+        let drill = format!("M48\n{declarations}FMAT,2\nMETRIC\n%\nG90\nG05\nM30\n");
+        let error = Package::read(package(&[("drill.drl", &drill)]).bytes()).unwrap_err();
+        assert!(error.contains("plating"), "{error}");
+    }
+}
+
+/// A single circle is a valid dot aperture; an empty macro would silently lose that flash.
+#[test]
+fn fabrication_review_rejects_empty_rounded_pad_macros() {
+    let flash = "%\n%ADD10RoundRect0*%\nD10*\nX0Y0D03*\n";
+    let empty = gerber("Copper,L1,Top", &format!("%AMRoundRect0*\n{flash}"));
+    assert!(Package::read(package(&[("top.gbr", &empty)]).bytes()).unwrap_err().contains("macro has no primitives"));
+    let dot = gerber("Copper,L1,Top", &format!("%AMRoundRect0*\n1,1,0.3,0,0,0*\n{flash}"));
+    let review = Package::read(package(&[("top.gbr", &dot)]).bytes()).unwrap();
+    assert_eq!(review.layers[0].marks.len(), 1);
+}
+
+/// Zero signed area can mean a collapsed pad or a bow tie whose lobes cancel.
+#[test]
+fn fabrication_review_distinguishes_collapsed_pad_from_crossed_region() {
+    let bow_tie = gerber("Copper,L1,Top", "G36*\nX0Y0D02*\nX100Y100D01*\nX0Y100D01*\nX100Y0D01*\nX0Y0D01*\nG37*\n");
+    assert!(Package::read(package(&[("top.gbr", &bow_tie)]).bytes()).unwrap_err().contains("zero signed area"));
+    let collapsed = gerber("Copper,L1,Top", "G36*\nX0Y0D02*\nX0Y50D01*\nX0Y100D01*\nX0Y0D01*\nG37*\n");
+    let review = Package::read(package(&[("top.gbr", &collapsed)]).bytes()).unwrap();
+    assert!(review.layers[0].marks.is_empty());
+}

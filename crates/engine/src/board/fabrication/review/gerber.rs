@@ -59,6 +59,9 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<Layer, String> {
                 }
                 marks.push(macro_primitive(record)?);
             }
+            if marks.is_empty() {
+                return Err("Gerber aperture macro has no primitives".into());
+            }
             plot.macros.insert(name.into(), marks.into());
         } else {
             plot.record(line, budget).map_err(|error| format!("{error} ({})", line.chars().take(75).collect::<String>()))?;
@@ -262,10 +265,15 @@ fn turn(a: Point, b: Point, c: Point) -> i128 {
 }
 
 /// Split short regions into convex triangles after removing duplicate and collinear vertices.
-/// A collapsed pad region has no area. Refuse contours that cannot be triangulated.
+/// Accept collinear collapsed pads, and reject non-collinear contours whose signed areas cancel.
 fn triangulate(mut points: Vec<Point>) -> Result<Vec<[Point; 3]>, String> {
     let area: i128 = points.iter().zip(points.iter().cycle().skip(1)).map(|(&a, &b)| turn(point(0, 0), a, b)).sum();
     if area == 0 {
+        if let Some(edge) = points.windows(2).find(|edge| edge[0] != edge[1])
+            && points.iter().any(|&p| turn(edge[0], edge[1], p) != 0)
+        {
+            return Err("Gerber region has zero signed area but is not collinear".into());
+        }
         return Ok(Vec::new());
     }
     if area < 0 {

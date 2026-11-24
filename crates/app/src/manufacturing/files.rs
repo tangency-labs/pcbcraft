@@ -94,15 +94,30 @@ fn native(path: Option<std::path::PathBuf>, directory: Option<&std::path::Path>)
     if !std::fs::metadata(&path).map_err(|error| error.to_string())?.is_file() {
         return Err("Choose a regular fabrication ZIP file.".into());
     }
-    let file = std::fs::File::open(&path).map_err(|error| error.to_string())?;
-    let metadata = file.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file() || metadata.len() > MAX_ZIP_BYTES as u64 {
-        return Err("Choose a regular fabrication ZIP file up to 64 MiB.".into());
-    }
+    let file = open_zip_file(&path)?;
     let name = path.file_name().map_or_else(|| "Fabrication ZIP".into(), |name| name.to_string_lossy().into_owned());
     let mut bytes = Vec::new();
     file.take(MAX_ZIP_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
     load(name, &bytes)
+}
+
+/// Check the opened descriptor before reading. On Unix, a path replaced with a FIFO cannot
+/// block the worker while it opens the descriptor.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_zip_file(path: &std::path::Path) -> Result<std::fs::File, String> {
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags, open};
+        open(path, OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty()).map(std::fs::File::from)
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path);
+    let file = file.map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_ZIP_BYTES as u64 {
+        return Err("Choose a regular fabrication ZIP file up to 64 MiB.".into());
+    }
+    Ok(file)
 }
 
 /// The reader validates the archive and builds the plot from its actual member bytes.
@@ -151,4 +166,23 @@ async fn browser(file: js_sys::Promise) -> Completion {
         return Err("Fabrication ZIP exceeds 64 MiB.".into());
     }
     load(file.get(0).as_string().unwrap_or_else(|| "Fabrication ZIP".into()), &bytes.to_vec())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::open_zip_file;
+    use rustix::fs::{CWD, Mode, mkfifoat};
+    use std::{sync::mpsc, time::Duration};
+
+    /// Exercise the descriptor check when the path was replaced after the initial type check.
+    #[test]
+    fn manufacturing_fifo_open_returns_without_a_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fabrication.zip");
+        mkfifoat(CWD, &path, Mode::RUSR | Mode::WUSR).unwrap();
+        let (send, receive) = mpsc::channel();
+        std::thread::spawn(move || send.send(open_zip_file(&path)).unwrap());
+        let error = receive.recv_timeout(Duration::from_secs(5)).expect("opening a FIFO must not wait for a writer").unwrap_err();
+        assert!(error.contains("Choose a regular fabrication ZIP file"), "{error}");
+    }
 }

@@ -657,6 +657,7 @@ impl BoardView<'_> {
         }
         let origin = self.placement_origin()?;
         let frame = origin.frame();
+        let plated = self.plated_drill_hits()?;
         let non_plated = self.non_plated_drill_hits()?;
         let base = file_part(&self.project().name);
         let routed_nets = RoutedNets::new(self);
@@ -769,7 +770,7 @@ impl BoardView<'_> {
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 
-        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, self.plated_drill_hits()) });
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, plated) });
         if !non_plated.is_empty() {
             files.push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, DrillPlating::NonPlated, non_plated) });
         }
@@ -777,18 +778,21 @@ impl BoardView<'_> {
         Ok(Fabrication { origin, files })
     }
 
-    /// Group via and plated pad drill hits by diameter for the plated drill file.
-    fn plated_drill_hits(self) -> BTreeMap<i64, Vec<Point>> {
+    /// Group via and plated pad drill hits by diameter. Refuse tools that would round to zero.
+    fn plated_drill_hits(self) -> Result<BTreeMap<i64, Vec<Point>>, String> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
             holes.entry(via.drill_nm).or_default().push(via.at);
         }
         for pad in self.footprints().flat_map(|footprint| footprint.pads) {
             if let Some(drill) = pad.drill_nm {
+                if drill < DRILL_UNIT_NM / 2 {
+                    return Err(format!("Plated drill diameter {drill} nm rounds to zero at the 0.001 mm output resolution."));
+                }
                 holes.entry(drill).or_default().push(pad.center);
             }
         }
-        holes
+        Ok(holes)
     }
 
     /// Resolve mechanical openings from the pinned footprint with no copper or pad projection.
