@@ -204,8 +204,10 @@ The payload contains one field, `voltage`, with `magnitude_volts`, `basis` and
 `net_splits_seen` and `reference_splits_seen` are present only when nonzero: the
 number of registry records whose lineage named the owning or reference net when
 the declaration was last saved, so a later split is reported for review. A smaller
-count than the registry records opens as needing review; a larger one is refused, and
-so is any count on a net-class owner or an Earth reference, which have no lineage. A `reference` is
+count than the registry records opens as needing review; a larger one is refused.
+A net-class owner and an Earth reference have no lineage, so `net_splits_seen` on a
+class and `reference_splits_seen` on an Earth reference must be 0. A class with a net
+reference keeps a valid `reference_splits_seen`, up to that net's lineage count. A `reference` is
 `{"kind":"earth"}` or `{"kind":"net","net":UUID}` in the same persistent net
 registry. An existing historical reference is retained, not resolved to a new
 net. The payload, its `voltage` and its `reference` are objects with named
