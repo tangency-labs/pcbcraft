@@ -552,7 +552,7 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
                     draining = Some(indexed);
                     budget = 1;
                 }
-                phase => unreachable!("generated-leg scan reported phase {phase}"),
+                phase => panic!("generated-leg scan reported unexpected phase {phase}"),
             }
         }
     };
