@@ -2869,6 +2869,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
+    list.push(("PCB Layout", "Delete selected items", "Del or Backspace".to_owned()));
     list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
     list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
     list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));
