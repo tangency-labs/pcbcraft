@@ -125,6 +125,19 @@ mod live {
     };
     use pcbcraft_chrome::workspace::PanelStyle;
 
+    /// Read one offered interval, including JSON's whole-number float spellings. Integer
+    /// numbers are checked exactly before floating-point values; only 0, 1, 5 and 10 match.
+    fn interval_minutes(value: &Value) -> Option<u8> {
+        if let Some(number) = value.as_u64() {
+            return u8::try_from(number).ok().filter(|minutes| crate::preferences::valid_interval(*minutes));
+        }
+        if value.as_i64().is_some() {
+            return None;
+        }
+        let number = value.as_f64()?;
+        crate::preferences::INTERVAL_MINUTES.into_iter().find(|minutes| number == f64::from(*minutes))
+    }
+
     /// The kinds of value a window command parameter takes.
     #[derive(Clone, Copy, Debug)]
     enum Kind {
@@ -164,6 +177,8 @@ mod live {
             max: i64,
             step: i64,
         },
+        /// An interval in whole minutes that Preferences offers for snapshots and saves; 0 is Off.
+        Minutes,
         /// A schematic point in nanometres within the coordinate bounds.
         Point,
         /// Symbol, wire and optional named-net anchor ID lists, as the project's group commands take.
@@ -214,6 +229,7 @@ mod live {
                 Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
+                Self::Minutes => json!({"type": "integer", "enum": crate::preferences::INTERVAL_MINUTES}),
                 Self::Point => {
                     json!({"type": "object", "properties": {"x_nm": coordinate, "y_nm": coordinate}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
                 }
@@ -265,6 +281,7 @@ mod live {
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
+                Self::Minutes => interval_minutes(value).is_some(),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
                 Self::Path => value.as_str().is_some_and(|path| path.chars().count() <= 4096 && std::path::Path::new(path).is_absolute()),
@@ -299,6 +316,7 @@ mod live {
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
+                Self::Minutes => "must be 0 (Off), 1, 5 or 10 minutes".to_owned(),
                 Self::Point => "must be a point with whole-nanometre x_nm and y_nm within the schematic bounds".to_owned(),
                 Self::Inspection => "must be a bounded list of distinct qualified terminal or pad addresses".into(),
                 Self::Selection => "must contain unique symbol, wire and optional named-net anchor ID lists".to_owned(),
@@ -1155,6 +1173,16 @@ mod live {
                 setting("middle_drag_zoom", "Make middle-button drag zoom instead of panning", Kind::Bool),
                 setting("right_drag_pan", "Make right-button drag pan instead of selecting a box", Kind::Bool),
                 setting("panel_style", "How the ribbon and edge panels are framed", Kind::Choice(PANEL_STYLES)),
+                setting(
+                    "autosave_minutes",
+                    "Minutes between recovery snapshots in the recovery folder; 0 (the default) records nothing",
+                    Kind::Minutes,
+                ),
+                setting(
+                    "save_to_project_minutes",
+                    "Minutes between automatic saves of a changed project that has a folder or .pc file, through the ordinary save; 0 never saves automatically",
+                    Kind::Minutes,
+                ),
             ],
         },
         WindowCommand {
@@ -1275,6 +1303,8 @@ mod live {
             "middle_drag_zoom": preferences.navigation.middle_drag_zoom,
             "right_drag_pan": preferences.navigation.right_drag_pan,
             "panel_style": match preferences.panel_style { PanelStyle::Floating => "floating", PanelStyle::Compact => "compact" },
+            "autosave_minutes": preferences.autosave_minutes,
+            "save_to_project_minutes": preferences.save_to_project_minutes,
         })
     }
 
@@ -1360,6 +1390,12 @@ mod live {
         }
         if let Some(style) = text("panel_style") {
             preferences.panel_style = if style == "compact" { PanelStyle::Compact } else { PanelStyle::Floating };
+        }
+        if let Some(minutes) = params.get("autosave_minutes").and_then(interval_minutes) {
+            preferences.autosave_minutes = minutes;
+        }
+        if let Some(minutes) = params.get("save_to_project_minutes").and_then(interval_minutes) {
+            preferences.save_to_project_minutes = minutes;
         }
         preferences
     }
