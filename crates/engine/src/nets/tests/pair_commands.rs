@@ -52,7 +52,7 @@ fn pair_commands_round_trip_and_one_step_undo() {
             session
                 .undo
                 .iter()
-                .flatten()
+                .filter_map(|entry| entry.project())
                 .all(|earlier| earlier.differential_pairs().is_empty() || Arc::ptr_eq(&earlier.net_registry.records, &original.net_registry.records))
         );
         assert!(Arc::ptr_eq(&snapshot.sheets, &original.sheets));

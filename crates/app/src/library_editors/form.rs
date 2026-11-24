@@ -131,10 +131,86 @@ impl Draft {
             value["pad"]["height_nm"] = value["pad"]["width_nm"].clone();
         }
         if let Some(object) = self.object {
-            Ok(Action::Replace { object, primitive: serde_json::from_value(value).map_err(|e| e.to_string())? })
+            let primitive: pcbcraft_engine::authoring::Primitive = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            if let Some((points, stroke_nm)) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&primitive) {
+                let original_stroke = serde_json::from_value::<pcbcraft_engine::authoring::Primitive>(self.original.clone())
+                    .ok()
+                    .and_then(|existing| pcbcraft_engine::authoring::courtyard::courtyard_polygon(&existing).map(|(_, stroke)| stroke));
+                if original_stroke != Some(stroke_nm) {
+                    pcbcraft_engine::authoring::courtyard::validate_stroke(stroke_nm)?;
+                }
+                pcbcraft_engine::authoring::courtyard::validate_polygon(points)?;
+            }
+            Ok(Action::Replace { object, primitive })
         } else {
             serde_json::from_value(value).map_err(|e| e.to_string())
         }
+    }
+
+    /// Render the buffered stroke-width field for a selected courtyard outline.
+    /// Returns `true` when Enter was pressed while the field had focus.
+    pub(super) fn show_courtyard_stroke(&mut self, ui: &mut Ui) -> bool {
+        let stroke_nm = self
+            .value
+            .get("artwork")
+            .and_then(|a| a.get("graphic"))
+            .and_then(|g| g.get("stroke_nm"))
+            .and_then(Value::as_i64)
+            .unwrap_or(pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM);
+        let initial = format!("{}", stroke_nm as f64 / 1_000_000.0);
+        let field = self.numbers.entry(".artwork.graphic.stroke_nm".into()).or_insert_with(|| (initial.clone(), initial));
+        let response = properties::text(ui, "Stroke (mm)", &mut field.1);
+        response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    }
+
+    /// Render the buffered layer purpose selector for a selected courtyard outline.
+    pub(super) fn show_courtyard_purpose(&mut self, ui: &mut Ui) {
+        let Some(Value::String(purpose)) = self.value.get_mut("artwork").and_then(|a| a.get_mut("purpose")) else {
+            return;
+        };
+        let options = choices(".artwork.purpose").iter().map(|option| (*option, display(option))).collect::<Vec<_>>();
+        properties::choice(ui, &label(".artwork.purpose"), egui::Id::unique(".artwork.purpose"), purpose, &options);
+    }
+
+    /// Render the buffered X and Y coordinate fields for the selected courtyard vertex.
+    /// Returns `true` when Enter was pressed while either field had focus.
+    pub(super) fn show_courtyard_vertex(&mut self, ui: &mut Ui, index: usize) -> bool {
+        self.show_courtyard_vertex_labeled(ui, index, "Vertex X (mm)", "Vertex Y (mm)")
+    }
+
+    /// Render numbered vertex coordinate fields for the expanded properties dialog.
+    /// Returns `true` when Enter was pressed while either field had focus.
+    pub(super) fn show_courtyard_vertex_row(&mut self, ui: &mut Ui, index: usize) -> bool {
+        let x_label = format!("Vertex {} X (mm)", index + 1);
+        let y_label = format!("Vertex {} Y (mm)", index + 1);
+        self.show_courtyard_vertex_labeled(ui, index, &x_label, &y_label)
+    }
+
+    /// Shared implementation for editing one courtyard polygon vertex's buffered X/Y lengths.
+    fn show_courtyard_vertex_labeled(&mut self, ui: &mut Ui, index: usize, x_label: &str, y_label: &str) -> bool {
+        let Some(point) = self
+            .value
+            .get("artwork")
+            .and_then(|a| a.get("graphic"))
+            .and_then(|g| g.get("geometry"))
+            .and_then(|g| g.get("points"))
+            .and_then(Value::as_array)
+            .and_then(|pts| pts.get(index))
+        else {
+            return false;
+        };
+        let x_nm = point.get("x_nm").and_then(Value::as_i64).unwrap_or(0);
+        let y_nm = point.get("y_nm").and_then(Value::as_i64).unwrap_or(0);
+        let x_init = format!("{}", x_nm as f64 / 1_000_000.0);
+        let y_init = format!("{}", y_nm as f64 / 1_000_000.0);
+        let x_key = format!(".artwork.graphic.geometry.points.{index}.x_nm");
+        let y_key = format!(".artwork.graphic.geometry.points.{index}.y_nm");
+        let x_field = self.numbers.entry(x_key).or_insert_with(|| (x_init.clone(), x_init));
+        let x_resp = properties::text(ui, x_label, &mut x_field.1);
+        let y_field = self.numbers.entry(y_key).or_insert_with(|| (y_init.clone(), y_init));
+        let y_resp = properties::text(ui, y_label, &mut y_field.1);
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        enter && (x_resp.lost_focus() || y_resp.lost_focus())
     }
 }
 /// Edit exact names and types in the existing one-transaction primitive draft.

@@ -254,7 +254,7 @@ fn package_completion_retains_donor_footprint_display_on_reopen() {
     let board = reopened.boards().next().unwrap();
     let footprint = board.footprints().find(|fp| fp.component == donor.component_id()).unwrap();
     assert!(footprint.pending_removal);
-    assert_eq!((footprint.reference, &*footprint.value), ("U20", "Quad low noise"));
+    assert_eq!((footprint.reference.as_ref(), footprint.value.as_ref()), ("U20", "Quad low noise"));
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }

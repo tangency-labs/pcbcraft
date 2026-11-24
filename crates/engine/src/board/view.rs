@@ -154,10 +154,10 @@ pub struct FootprintView<'a> {
     pub board: BoardTarget,
     pub id: String,
     pub component: String,
-    pub reference: &'a str,
+    pub reference: std::borrow::Cow<'a, str>,
     /// Presentation value; typed primary quantities use SI prefixes.
     pub value: std::borrow::Cow<'a, str>,
-    pub definition: &'a str,
+    pub definition: std::borrow::Cow<'a, str>,
     pub position: Point,
     /// Counterclockwise whole degrees around the footprint origin, from 0 through 359.
     pub rotation: u16,
@@ -180,6 +180,18 @@ pub struct FootprintView<'a> {
     pub bottom: bool,
     /// Board-local lock intent. This storage foundation does not yet enforce manipulation protection.
     pub locked: bool,
+}
+
+impl FootprintView<'_> {
+    /// Retain a resolved display snapshot without borrowing its source project.
+    pub fn into_owned(self) -> FootprintView<'static> {
+        FootprintView {
+            reference: self.reference.into_owned().into(),
+            value: self.value.into_owned().into(),
+            definition: self.definition.into_owned().into(),
+            ..self
+        }
+    }
 }
 
 impl Project {
@@ -265,6 +277,12 @@ impl<'a> BoardView<'a> {
         self.project.board.footprints().iter().map(|footprint| format!("footprint-{}", footprint.id))
     }
 
+    /// Read the stored lock of a canonical placement without resolving geometry or net membership.
+    /// Unknown IDs and noncanonical aliases return `None`.
+    pub fn footprint_locked(self, id: &str) -> Option<bool> {
+        self.placement(id).map(|footprint| footprint.locked)
+    }
+
     /// Resolve one canonical placement ID, generating geometry only for that placement.
     /// Unknown IDs, other object kinds and noncanonical numeric aliases return `None`.
     pub fn footprint(self, id: &str) -> Option<FootprintView<'a>> {
@@ -324,9 +342,9 @@ impl<'a> BoardView<'a> {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),
                 component: format!("component-{}", footprint.component),
-                reference,
+                reference: reference.into(),
                 value,
-                definition: &footprint.definition,
+                definition: footprint.definition.as_str().into(),
                 position: Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm },
                 rotation: footprint.rotation,
                 pads: footprint
@@ -443,7 +461,7 @@ impl<'a> BoardView<'a> {
         let Ok(index) = placements.binary_search_by_key(&id, |footprint| footprint.id) else { return Vec::new() };
         let mut placement = placements[index].clone();
         placement.reference_text = view.reference_text.clone();
-        reference_graphics(self.project, &placement, view.reference, offset)
+        reference_graphics(self.project, &placement, &view.reference, offset)
     }
 
     /// Project schematic component selection into this board's placement IDs. Wires and missing
@@ -673,7 +691,7 @@ mod tests {
         for footprint in board.footprints() {
             let ordinal = crate::schematic::wiring::parse_id(&footprint.id, "footprint-").unwrap();
             let raw = project.board.footprints().iter().find(|f| f.id == ordinal).unwrap();
-            assert_eq!(footprint.graphics, build_graphics(&project, raw, footprint.reference));
+            assert_eq!(footprint.graphics, build_graphics(&project, raw, &footprint.reference));
         }
         assert_eq!(encode_documents(project).unwrap(), bytes);
     }

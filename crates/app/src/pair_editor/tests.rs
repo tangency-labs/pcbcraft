@@ -293,7 +293,7 @@ fn pair_preview_checks_mcp_api_version_before_revision() {
 /// project changes before the deferred result reaches its owner.
 #[test]
 fn pair_editor_live_cold_work_rejects_revoked_or_stale_requests() {
-    use std::sync::{atomic::Ordering, mpsc::TryRecvError};
+    use std::sync::mpsc::TryRecvError;
     let (h, choices) = fixture().unwrap();
     let ctx = egui::Context::default();
     for (disconnect, expected) in [(true, "cancelled"), (false, "stale_revision")] {
@@ -304,13 +304,13 @@ fn pair_editor_live_cold_work_rejects_revoked_or_stale_requests() {
         let request = json!({"method":"engine.execute","params":{"command":nets::CREATE_PAIR,"inspect":false,"params":{
             "pair":nets::new_pair_id().unwrap(),"name":"First pair","positive":choices[0].0,"negative":choices[1].0,"expected_revision":revision
         }}});
-        let (reply, connected) = live.begin_test_live_request(&ctx, request);
+        let (reply, drop_peer) = live.begin_test_live_request(&ctx, request);
         assert_eq!(reply.try_recv(), Err(TryRecvError::Empty));
         assert_eq!(live.session.revision(), revision);
         live.poll_remote_pair(&ctx);
         assert_eq!(reply.try_recv(), Err(TryRecvError::Empty));
         if disconnect {
-            connected.store(false, Ordering::Release);
+            drop_peer();
         } else {
             live.session.apply("project.rename", &json!({"name":"Changed while measuring"})).unwrap();
         }
