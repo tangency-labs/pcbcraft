@@ -248,6 +248,16 @@ window-local coordinates, window sizes, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
 
+To review a PCBcraft fabrication ZIP, use `app.set_workspace` with
+`workspace: "manufacturing"` and the desired pane placement, then call
+`app.open_fabrication_package` with that view ID and an absolute ZIP path.
+The `last_fabrication_export` field in `inspect_editor` reports the last
+successful desktop export path for the current project opening.
+Inspect `views[].manufacturing` for the pending read, verified layer and drill-tool
+details, preflight findings, or an error. A failed read preserves the previous
+package. Use `app.set_fabrication_layer` with the exact member filename to set
+visibility in that pane, and `view.fit` to frame the package.
+
 ### Preferences and external updates
 
 `app.set_preferences` changes personal editor settings, including the
