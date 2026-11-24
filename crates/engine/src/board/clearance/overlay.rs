@@ -146,7 +146,10 @@ impl Overlay<'_> {
         self.room(false)?;
         self.advance()?;
         let at = contour.core[0];
-        self.added.insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island, net: None, mechanical: false });
+        self.added.insert(
+            id,
+            Object { name: id.to_string(), kind: ObjectKind::Other, contour, layers, intended_nets: nets, at, island, net: None, mechanical: false },
+        );
         self.added_from.insert(id, intended_from);
         Ok(())
     }
