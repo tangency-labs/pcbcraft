@@ -1,4 +1,4 @@
-//! Single-page PDF encoding. The writer receives points and text, not project data.
+//! PDF page and outline encoding. The writer receives points and text, not project data.
 
 use std::{collections::BTreeMap, fmt::Write};
 
@@ -116,24 +116,133 @@ impl Page {
         Ok(code)
     }
 
-    /// Finish the page tree, font resources and classic byte-offset cross-reference table.
-    pub(super) fn finish(mut self) -> Result<Vec<u8>, PdfError> {
-        self.ink.push_str("Q\n");
-        let mut objects = Objects(vec![
-            "<< /Type /Catalog /Pages 2 0 R >>".into(),
-            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".into(),
-            String::new(),
-            stream(&self.ink),
-        ]);
+    /// Encode a single standalone page without an outline.
+    pub(super) fn finish(self) -> Result<Vec<u8>, PdfError> {
+        let mut document = Document::new();
+        document.add_page(self);
+        document.finish(&[])
+    }
+}
+
+/// An outline entry in page order. A child refers to an earlier parent page index.
+pub(super) struct Bookmark<'a> {
+    pub(super) title: &'a str,
+    pub(super) parent: Option<usize>,
+}
+
+pub(super) struct Document {
+    objects: Objects,
+    pages: Vec<usize>,
+}
+
+impl Document {
+    /// Reserve the catalog and page tree before assigning page and resource references.
+    pub(super) fn new() -> Self {
+        Self { objects: Objects(vec![String::new(); 2]), pages: Vec::new() }
+    }
+
+    /// Append a page and its local resources; each page gets a distinct indirect reference.
+    pub(super) fn add_page(&mut self, mut page: Page) {
+        page.ink.push_str("Q\n");
+        let id = self.objects.push(String::new());
+        let contents = self.objects.push(stream(&page.ink));
         let mut fonts = String::new();
-        for (i, glyphs) in self.glyphs.chunks(CODES).enumerate() {
-            let id = objects.font(glyphs);
-            let _ = write!(fonts, "/F{i} {id} 0 R ");
+        for (i, glyphs) in page.glyphs.chunks(CODES).enumerate() {
+            let font = self.objects.font(glyphs);
+            let _ = write!(fonts, "/F{i} {font} 0 R ");
         }
-        let [width, height] = self.size;
-        objects.0[2] =
-            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents 4 0 R >>");
-        objects.encode()
+        let [width, height] = page.size;
+        self.objects.fill(
+            id,
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents {contents} 0 R >>"
+            ),
+        );
+        self.pages.push(id);
+    }
+
+    /// Close the page tree and optional one-to-one outline, then write the xref table.
+    pub(super) fn finish(mut self, bookmarks: &[Bookmark<'_>]) -> Result<Vec<u8>, PdfError> {
+        let mut kids = String::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            let sep = if i == 0 { "" } else { " " };
+            let _ = write!(kids, "{sep}{page} 0 R");
+        }
+        self.objects.fill(2, format!("<< /Type /Pages /Count {} /Kids [{kids}] >>", self.pages.len()));
+        let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
+        if !bookmarks.is_empty() {
+            let outline = self.add_outlines(bookmarks);
+            let _ = write!(catalog, " /Outlines {outline} 0 R /PageMode /UseOutlines");
+        }
+        catalog.push_str(" >>");
+        self.objects.fill(1, catalog);
+        self.objects.encode()
+    }
+
+    /// Emit an open outline tree, with explicit sibling/parent links and one `/Fit` per page.
+    fn add_outlines(&mut self, bookmarks: &[Bookmark<'_>]) -> usize {
+        debug_assert_eq!(bookmarks.len(), self.pages.len());
+        let root = bookmarks.len();
+        let mut edges: Vec<_> = (0..=root).map(|_| OutlineLinks::default()).collect();
+        for (i, bookmark) in bookmarks.iter().enumerate().rev() {
+            // Children follow their parent, so each entry's descendants are complete here.
+            let parent = bookmark.parent.unwrap_or(root);
+            let descendants = edges.get(i).map_or(0, |links| links.descendants);
+            let next = edges.get_mut(parent).and_then(|links| {
+                links.last.get_or_insert(i);
+                links.descendants += 1 + descendants;
+                links.first.replace(i)
+            });
+            if let Some(links) = edges.get_mut(i) {
+                links.next = next;
+            }
+            if let Some(links) = next.and_then(|sibling| edges.get_mut(sibling)) {
+                links.prev = Some(i);
+            }
+        }
+        let base = self.objects.0.len() + 1;
+        let entry = |index: usize| base + 1 + index;
+        let mut outline = String::from("<< /Type /Outlines");
+        if let Some(links) = edges.get(root) {
+            links.write_children(&mut outline, entry);
+        }
+        outline.push_str(" >>");
+        self.objects.push(outline);
+        for ((bookmark, page), links) in bookmarks.iter().zip(&self.pages).zip(&edges) {
+            let parent = bookmark.parent.map_or(base, entry);
+            let mut item = String::from("<< /Title <FEFF");
+            for unit in bookmark.title.encode_utf16() {
+                let _ = write!(item, "{unit:04X}");
+            }
+            let _ = write!(item, "> /Parent {parent} 0 R /Dest [{page} 0 R /Fit]");
+            for (name, sibling) in [("Prev", links.prev), ("Next", links.next)] {
+                if let Some(sibling) = sibling {
+                    let _ = write!(item, " /{name} {} 0 R", entry(sibling));
+                }
+            }
+            links.write_children(&mut item, entry);
+            item.push_str(" >>");
+            self.objects.push(item);
+        }
+        base
+    }
+}
+
+#[derive(Default)]
+struct OutlineLinks {
+    first: Option<usize>,
+    last: Option<usize>,
+    prev: Option<usize>,
+    next: Option<usize>,
+    descendants: usize,
+}
+
+impl OutlineLinks {
+    /// Give non-leaves child references and a positive count of visible descendants.
+    fn write_children(&self, out: &mut String, entry: impl Fn(usize) -> usize) {
+        if let (Some(first), Some(last)) = (self.first, self.last) {
+            let _ = write!(out, " /First {} 0 R /Last {} 0 R /Count {}", entry(first), entry(last), self.descendants);
+        }
     }
 }
 
@@ -155,6 +264,16 @@ impl Objects {
     fn push(&mut self, object: String) -> usize {
         self.0.push(object);
         self.0.len()
+    }
+
+    /// Replace a reserved object by its one-based reference number. References come only from
+    /// [`Objects::push`] or the two slots that [`Document::new`] reserves.
+    fn fill(&mut self, id: usize, object: String) {
+        let slot = id.checked_sub(1).and_then(|index| self.0.get_mut(index));
+        debug_assert!(slot.is_some(), "unreserved PDF object {id}");
+        if let Some(slot) = slot {
+            *slot = object;
+        }
     }
 
     /// Build the Type 3 CharProcs, widths and ToUnicode CMap for one code range.

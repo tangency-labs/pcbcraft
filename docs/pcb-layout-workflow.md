@@ -340,6 +340,14 @@ The non-plated tool size is the finished diameter, with no plating allowance.
 A non-plated diameter that rounds to zero stops export instead of writing a
 zero-size tool. This is a file precision limit, not a fabrication rule.
 
+Each drill file's header names its content with Gerber X2 file attributes in
+XNC standard comments (`; #@! TF.…`): `FileFunction,Plated,1,N,PTH` or
+`FileFunction,NonPlated,1,N,NPTH`, where N is the board's copper layer count,
+plus `GenerationSoftware` and a deterministic `SameCoordinates` GUID derived
+from the resolved export frame (origin, axis convention and unit), matching the
+Gerber layers of that export. Readers that ignore attributes see ordinary
+comments. Tool and hole attributes, slots and rout paths are not written yet.
+
 ## Placed-footprint locks
 
 Placed footprints retain an optional `locked` flag in native board format 34,

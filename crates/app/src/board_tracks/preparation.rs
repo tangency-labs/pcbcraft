@@ -256,7 +256,11 @@ impl PcbApp {
     /// Polling never waits on a worker, and a source change invalidates other views' pending edits.
     pub(crate) fn poll_copper_preparations(&mut self, ctx: &egui::Context) {
         let mut changed = false;
-        let blocked = !matches!(self.dialog, crate::Dialog::None) || self.files.busy() || self.project_action_pending() || self.parts.is_modal();
+        let blocked = self.close_allowed
+            || !matches!(self.dialog, crate::Dialog::None)
+            || self.files.busy()
+            || self.project_action_pending()
+            || self.parts.is_modal();
         for view in self.views.all_mut() {
             let source = view.input(&self.session);
             let target = view.board.target;
