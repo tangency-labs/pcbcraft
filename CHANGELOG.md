@@ -20,7 +20,7 @@ project edits and reopened documents do not restore stale inspection selections.
 `pcb.set_test_point` marks individual placed pads and vias for assembly or
 bare-board fabrication testing. The two marks are independent, name the board
 face, and survive Undo/Redo and native save/reopen. Marked boards use board
-format 40 (which earlier releases refuse); clearing the last mark restores the
+format 56, which also carries named layer groups (earlier releases refuse it); clearing the last mark restores the
 format required by the remaining board data, and unmarked boards keep their
 existing format and bytes. This change does not add reports.
 

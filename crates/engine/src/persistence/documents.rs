@@ -94,7 +94,7 @@ const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
-const TEST_POINT_BOARD_FORMAT: &str = "pcbcraft-board/40";
+const TEST_POINT_BOARD_FORMAT: &str = "pcbcraft-board/56";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -992,27 +992,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let grouped = board.format == GROUP_BOARD_FORMAT;
     let with_test_points = board.format == TEST_POINT_BOARD_FORMAT;
     if (with_test_points && board.test_points.is_none())
-        || (!with_test_points && !grouped && board.test_points.is_some())
+        || (!with_test_points && board.test_points.is_some())
         || board.test_points.as_ref().is_some_and(Vec::is_empty)
     {
-        return Err("board.json: test-point marks require format 40 or 41 and a nonempty array; format 40 requires them.".into());
+        return Err("board.json: test-point marks require format 56 and a nonempty array; format 56 requires them.".into());
     }
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (with_teardrops && board.teardrops.is_none())
         || (!with_teardrops && !with_test_points && !grouped && board.teardrops.is_some())
         || board.teardrops.as_ref().is_some_and(Vec::is_empty)
     {
-        return Err("board.json: teardrops require board format 37, 40 or 41 and a nonempty array; format 37 requires teardrops.".into());
+        return Err("board.json: teardrops require board format 37, 41 or 56 and a nonempty array; format 37 requires teardrops.".into());
     }
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
     if (!with_test_points && !grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: arcs require format 26, 35, 40 or 41 and a nonempty array; format 26 requires arcs, as does format 35.".into());
+        return Err("board.json: arcs require format 26, 35, 41 or 56 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
     if !with_test_points && !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err(
-            "board.json: footprint locks require board format 34, 35, 37, 40 or 41; formats 34 and 35 each requires an authored footprint lock."
+            "board.json: footprint locks require board format 34, 35, 37, 41 or 56; formats 34 and 35 each requires an authored footprint lock."
                 .into(),
         );
     }
@@ -1021,7 +1021,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
     if (assigned_vias && !has_assigned_vias) || (!extended_board_format && !reported && !assigned_vias && has_assigned_vias) {
-        return Err("board.json: explicit via assignments require format 24, 25, 26, 34, 35 or 40; format 24 requires an assignment.".into());
+        return Err("board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41 or 56; format 24 requires an assignment.".into());
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
@@ -1029,7 +1029,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
         return Err(
-            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35 or 40. Format 22 requires at least one profile.".into(),
+            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41 or 56. Format 22 requires at least one profile."
+                .into(),
         );
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
@@ -1041,7 +1042,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
         return Err(
-            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35 or 40, and format 21 requires a placement origin.".into(),
+            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41 or 56, and format 21 requires a placement origin."
+                .into(),
         );
     }
     if let Some(origin) = &board.placement_origin {
@@ -1053,7 +1055,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
         return Err(
-            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35 or 40 and a nonempty array; format 20 requires zones.".into()
+            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41 or 56 and a nonempty array; format 20 requires zones.".into()
         );
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
@@ -1293,10 +1295,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
-    if !grouped && let Some(raw) = &board.setup {
+    if !grouped
+        && !with_test_points
+        && let Some(raw) = &board.setup
+    {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
         if value["stackup"].get("layer_groups").is_some() {
-            return Err("board.json: the layer_groups field requires board format 41.".into());
+            return Err("board.json: the layer_groups field requires board format 41 or 56.".into());
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
@@ -1363,16 +1368,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
-    if grouped != has_groups {
-        return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
+    if (grouped && !has_groups) || (!grouped && !with_test_points && has_groups) {
+        return Err("board.json: named layer groups require board format 41 or 56; format 41 requires at least one group.".into());
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
     if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35 or 40; format 25 requires at least one of them.".into());
+        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41 or 56; format 25 requires at least one of them.".into());
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
     if (stacked && !stack_fields) || (!extended_board_format && !reported && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35 or 40; format 23 requires at least one of them.".into());
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41 or 56; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -2533,9 +2538,9 @@ fn board_placements_header(project: &Project) -> &'static [u8] {
     if project.board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" }
 }
 
-/// Preserve canonical legacy encodings until authored content requires a newer format. Named
-/// layer groups select 41, which also carries test-point marks; otherwise test-point marks select
-/// 40; straight-via teardrops without marks select 37; arcs alone select 26, active
+/// Preserve canonical legacy encodings until authored content requires a newer format. Test-point
+/// marks select 56, which also carries named layer groups; otherwise named layer groups select
+/// 41; straight-via teardrops without marks select 37; arcs alone select 26, active
 /// footprint locks alone select 34, and both together select 35. These formats retain earlier
 /// physical fields. Material reports require at least 25; explicit via intent at least 24; copper
 /// roles, base copper, copper thickness qualifiers or finished board thickness at least 23;
@@ -2584,7 +2589,9 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         arc_or_lock_format
     };
     if let Some(setup) = setup {
-        let format = if setup.requires_group_format() {
+        let format = if board.has_test_points() {
+            TEST_POINT_BOARD_FORMAT
+        } else if setup.requires_group_format() {
             GROUP_BOARD_FORMAT
         } else if let Some(format) = arc_or_lock_format {
             format

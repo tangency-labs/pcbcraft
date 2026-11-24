@@ -350,8 +350,8 @@ comments. Tool and hole attributes, slots and rout paths are not written yet.
 
 Placed footprints retain an optional `locked` flag in native board format 34,
 35 when the board also contains arcs, 37 when it contains straight-via
-teardrops, 40 when it contains test-point marks, or 41 when it has named layer
-groups. Inspection and typed board
+teardrops, 41 when it has named layer groups, or 56 when it contains
+test-point marks. Inspection and typed board
 views report a boolean, defaulting to false for older files. Fresh canonical
 encoding omits false and preserves true; Native Save can reuse an unchanged
 board document verbatim, including explicit false. Without active locks the

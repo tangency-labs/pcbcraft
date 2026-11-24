@@ -53,7 +53,7 @@ fn pad_and_via_marks_survive_save_reopen_undo_and_redo() {
     let marked = save(&session);
     let path = test_board_path(&marked);
     let json: Value = serde_json::from_slice(&marked[&path]).unwrap();
-    assert_eq!(json["format"], "pcbcraft-board/40");
+    assert_eq!(json["format"], "pcbcraft-board/56");
     assert_eq!(
         json["test_points"],
         json!([
@@ -105,7 +105,7 @@ fn legacy_placeholder_cannot_be_marked_or_loaded_as_a_test_point() {
     assert_eq!(save(&session), documents);
     let path = test_board_path(&documents);
     let mut board: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    board["format"] = json!("pcbcraft-board/40");
+    board["format"] = json!("pcbcraft-board/56");
     board["test_points"] = json!([{"target":pad,"flags":{"assembly":"top"}}]);
     documents.insert(path, serde_json::to_vec(&board).unwrap());
     assert!(decode_documents(&documents).unwrap_err().contains("unresolved test-point target"));
@@ -239,7 +239,7 @@ fn validation_rejects_bad_addresses_sides_purposes_and_stale_revisions_atomicall
     session.apply(SET_TEST_POINT, &valid).unwrap();
 }
 
-/// Format 40 carries older authoring, even when the via is locked, and refuses malformed,
+/// Format 56 carries older authoring, even when the via is locked, and refuses malformed,
 /// duplicate, empty or mis-versioned marks instead of losing them during a later save.
 #[test]
 fn marked_format_composes_and_refuses_invalid_records() {
@@ -264,7 +264,7 @@ fn marked_format_composes_and_refuses_invalid_records() {
     let valid: Value = serde_json::from_slice(&marked[&path]).unwrap();
     assert_eq!(valid["placement_origin"]["anchor"]["x_nm"], 123);
     for (field, invalid, expected) in [
-        ("format", json!("pcbcraft-board/24"), "require format 40"),
+        ("format", json!("pcbcraft-board/24"), "require format 56"),
         ("test_points", json!([]), "nonempty array"),
         ("test_points", json!([valid["test_points"][0], valid["test_points"][0]]), "duplicate"),
         ("test_points", json!([{"target":pad,"flags":{}}]), "empty"),
@@ -282,7 +282,7 @@ fn marked_format_composes_and_refuses_invalid_records() {
     board.as_object_mut().unwrap().remove("test_points");
     let mut missing = marked;
     missing.insert(path, serde_json::to_vec(&board).unwrap());
-    assert!(decode_documents(&missing).unwrap_err().contains("require format 40"));
+    assert!(decode_documents(&missing).unwrap_err().contains("require format 56"));
     assert!(persistence::encode(persistence::diagnostic_snapshot(session.snapshot().unwrap())).unwrap_err().contains("test-point marks"));
     set(&mut session, &pad, "assembly", Value::Null).unwrap();
     set(&mut session, &via, "fabrication", Value::Null).unwrap();
@@ -317,39 +317,54 @@ fn raw_text_test_points_reject_positional_arrays_and_unknown_fields() {
     }
 }
 
-/// Named layer groups select format 41, which keeps the marks unchanged; removing the last group
-/// restores the format 40 bytes. Format 40 still refuses `layer_groups`, and format 41 may omit marks.
+/// Format 56 carries test-point marks together with named layer groups, so a board with both
+/// saves as 56 and reopens with both. Without marks the groups select 41, which refuses marks, and
+/// the retired format 40 refuses them too. Removing the groups restores the ungrouped format 56 bytes.
 #[test]
-fn marks_survive_in_the_named_layer_group_format() {
+fn marks_and_named_layer_groups_save_as_56_and_reopen() {
     let (mut session, pad, via) = fixture();
     set(&mut session, &pad, "assembly", json!("top")).unwrap();
     set(&mut session, &via, "fabrication", json!("bottom")).unwrap();
     let marked = save(&session);
     let path = test_board_path(&marked);
     let marked_board: Value = serde_json::from_slice(&marked[&path]).unwrap();
-    assert_eq!(marked_board["format"], "pcbcraft-board/40");
+    assert_eq!(marked_board["format"], "pcbcraft-board/56");
+    assert!(marked_board["setup"]["stackup"].get("layer_groups").is_none());
     let setup = session.project().unwrap().board_setup().unwrap();
     let copper: Vec<_> = setup.copper_stack().map(|facts| facts.layer).collect();
     let mut grouped_setup = json!(setup);
     grouped_setup["stackup"]["layer_groups"] = json!([{"id":crate::fresh_id().unwrap(),"name":"Probe sides","layers":copper}]);
     session.apply(crate::SET_BOARD_SETUP, &json!({"setup":grouped_setup,"expected_revision":session.revision()})).unwrap();
+    let both = save(&session);
+    let board: Value = serde_json::from_slice(&both[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/56");
+    assert_eq!(board["test_points"], marked_board["test_points"]);
+    assert_eq!(board["setup"]["stackup"]["layer_groups"].as_array().unwrap().len(), 1);
+    let reopened = decode_documents(&both).unwrap();
+    assert!(reopened.board.has_test_points());
+    assert!(reopened.board_setup().unwrap().requires_group_format());
+    assert_eq!(encode_documents(reopened).unwrap(), both);
+
+    let mut candidate = both.clone();
+    for (format, expected) in [("pcbcraft-board/41", "require format 56"), ("pcbcraft-board/40", "require format 56")] {
+        let mut wrong = board.clone();
+        wrong["format"] = json!(format);
+        candidate.insert(path.clone(), serde_json::to_vec(&wrong).unwrap());
+        let error = decode_documents(&candidate).unwrap_err();
+        assert!(error.contains(expected), "{format}: {error}");
+    }
+
+    set(&mut session, &pad, "assembly", Value::Null).unwrap();
+    set(&mut session, &via, "fabrication", Value::Null).unwrap();
     let grouped = save(&session);
     let board: Value = serde_json::from_slice(&grouped[&path]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/41");
-    assert_eq!(board["test_points"], marked_board["test_points"]);
+    assert!(board.get("test_points").is_none());
     assert_eq!(encode_documents(decode_documents(&grouped).unwrap()).unwrap(), grouped);
 
-    let mut candidate = grouped.clone();
-    let mut wrong = board.clone();
-    wrong["format"] = json!("pcbcraft-board/40");
-    candidate.insert(path.clone(), serde_json::to_vec(&wrong).unwrap());
-    assert!(decode_documents(&candidate).unwrap_err().contains("layer_groups field requires board format 41"));
-    let mut unmarked = board.clone();
-    unmarked.as_object_mut().unwrap().remove("test_points");
-    candidate.insert(path.clone(), serde_json::to_vec(&unmarked).unwrap());
-    let reopened = decode_documents(&candidate).unwrap();
-    assert!(!reopened.board.has_test_points());
-
+    set(&mut session, &pad, "assembly", json!("top")).unwrap();
+    set(&mut session, &via, "fabrication", json!("bottom")).unwrap();
+    assert_eq!(save(&session), both);
     let mut ungrouped_setup = json!(session.project().unwrap().board_setup().unwrap());
     ungrouped_setup["stackup"]["layer_groups"] = json!([]);
     session.apply(crate::SET_BOARD_SETUP, &json!({"setup":ungrouped_setup,"expected_revision":session.revision()})).unwrap();
