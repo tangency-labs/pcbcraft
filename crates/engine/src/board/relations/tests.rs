@@ -285,9 +285,10 @@ fn a_format_board_58_saves_and_reopens_relations() {
     }
 }
 
-/// Adding and deleting a reference-only horizontal dimension on a legacy `pcbcraft-project/6`
-/// project must not adopt explicit `board.json` registration or `numeric_id_high_water`,
-/// leaving `project.json` unchanged throughout and restoring the saved documents on delete.
+/// Adding and deleting a reference-only horizontal dimension on a project opened from legacy
+/// `pcbcraft-project/6` must not adopt explicit board registration or `numeric_id_high_water`
+/// in the session. Saves write the current project format, `project.json` is unchanged
+/// by the relation, and the delete restores the saved documents.
 #[test]
 fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
     let s = fixture(false);
@@ -295,15 +296,20 @@ fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
     historical.layout = None;
     historical.numeric_id_high_water = None;
     Arc::make_mut(&mut historical.board).ownership = board::identity::Ownership::Legacy;
-    let before = encode_documents(Arc::new(historical)).unwrap();
-    let entry: Value = serde_json::from_slice(&before[crate::persistence::ENTRY_POINT]).unwrap();
+    let legacy = crate::persistence::historical_documents(Arc::new(historical), "pcbcraft-project/6");
+    let entry: Value = serde_json::from_slice(&legacy[crate::persistence::ENTRY_POINT]).unwrap();
     assert_eq!(entry["format"], "pcbcraft-project/6");
     for field in ["boards", "layout_root", "numeric_id_high_water", "schematic_instances"] {
         assert!(entry.get(field).is_none(), "{field}");
     }
     let mut s = Session::default();
-    s.open_snapshot(decode_documents(&before).unwrap());
-    assert_eq!(bytes(&s), before);
+    s.open_snapshot(decode_documents(&legacy).unwrap());
+    assert_eq!(crate::persistence::historical_documents(s.snapshot().unwrap(), "pcbcraft-project/6"), legacy);
+    let before = bytes(&s);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&before[crate::persistence::ENTRY_POINT]).unwrap()["format"],
+        crate::persistence::CURRENT_PROJECT_FORMAT
+    );
 
     let a = pick(&mut s, 0, "fp.origin", None);
     let id = add(&mut s, "horizontal", origin(), a);
@@ -567,6 +573,7 @@ fn sliced_track_ids(n: u128) -> Vec<Uuid> {
 
 /// This exact bundle is the source witness for the separate #443 reader. Here we only
 /// qualify the current reader, without rewriting the board header or stripping any field.
+/// Saving adopts the current project format; the board keeps its own header.
 #[test]
 fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
     const ROOT: &str = "sheets/00000000-0000-4000-8000-000000000003.json";
@@ -577,7 +584,16 @@ fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
     ]);
     let mut s = Session::default();
     s.open_snapshot(decode_documents(&docs).unwrap());
-    assert_eq!(bytes(&s), docs);
+    let saved = bytes(&s);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[crate::persistence::ENTRY_POINT]).unwrap()["format"],
+        crate::persistence::CURRENT_PROJECT_FORMAT
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[&test_board_path(&saved)]).unwrap()["format"],
+        serde_json::from_slice::<Value>(&docs["board.json"]).unwrap()["format"]
+    );
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let list = run(&mut s, LIST, json!({})).unwrap();
     assert_eq!(list["relations"][0]["status"], "lost");
     assert_eq!(list["relations"][0]["last_resolved"][1]["at"]["x_nm"], 1_000_000);

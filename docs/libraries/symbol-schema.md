@@ -68,7 +68,8 @@ Removing the last alternate does not switch either record back.
 
 A placed part can select one alternate per terminal. Selection does not renumber,
 swap or move terminals or change connectivity. See [placed-part storage](../formats/native-project-storage.md#alternate-pin-function-records).
-A project with both a selected alternate and an active designator lock saves as project/56.
+The current project format stores alternate choices and designator locks
+independently. Project/56 remains readable for older projects that combine them.
 
 ## Explicit category defaults
 

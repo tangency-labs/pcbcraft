@@ -6588,7 +6588,8 @@
             "enum": [
               "walkaround",
               "shove",
-              "shove_vias"
+              "shove_vias",
+              "highlight"
             ],
             "type": "string"
           },
@@ -9841,7 +9842,9 @@
           "mode": {
             "enum": [
               "shove",
-              "shove_vias"
+              "shove_vias",
+              "walkaround",
+              "highlight"
             ],
             "type": "string"
           },

@@ -58,7 +58,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(inspect(&mut s, id)["status"], "ready");
     let assigned = s.snapshot().unwrap();
     let saved = encode_documents(assigned.clone()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
+    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     round_trip(&s);
     let addressed = address(&s, id);
     apply(&mut s, SET_CLASSES, json!({"target":addressed,"classes":[power]}));
@@ -78,7 +78,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(id_for(&s, &pins[0]), id);
     assert_eq!(
         serde_json::from_slice::<Value>(&encode_documents(s.snapshot().unwrap()).unwrap()[ENTRY_POINT]).unwrap()["format"],
-        "pcbcraft-project/23"
+        crate::persistence::CURRENT_PROJECT_FORMAT
     );
     apply(&mut s, "edit.undo", json!({}));
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
