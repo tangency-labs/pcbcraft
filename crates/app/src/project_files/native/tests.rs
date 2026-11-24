@@ -346,6 +346,7 @@ fn convert_zip_round_trip_and_keep_the_existing_encoding() {
     let root = fixture.dir.path().join("unpacked");
     save_new(snapshot.clone(), None, SaveFormat::Folder, root.clone()).unwrap();
     let folder = load(&root.join(ENTRY_POINT)).unwrap();
+    assert_eq!(folder.target.project_directory(), Some(normalize(&root).unwrap().as_path()));
     assert_eq!(folder.snapshot.pad_for_terminal(terminal), Some(pad));
     let path = fixture.dir.path().join("converted.pc");
     let previous = (folder.snapshot, folder.target);

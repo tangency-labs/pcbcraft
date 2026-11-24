@@ -1,7 +1,30 @@
 //! Native part relationships are edited here; geometry remains in the drawing editors.
 use super::*;
-use pcbcraft_engine::library::parts::{Category, FieldType, PartDefinition, Value as TypedValue};
-use std::sync::Arc;
+use pcbcraft_engine::library::parts::{
+    Category, FieldType, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINKS, PartDefinition, PartLink,
+    Value as TypedValue,
+};
+use std::{collections::BTreeSet, sync::Arc};
+
+impl Document {
+    /// Whether pending text still needs applying. Focused metadata fields can retain raw text
+    /// after the normalized value is committed, without blocking publication or history.
+    pub(crate) fn has_unapplied(&self) -> bool {
+        let Record::Part(part) = self.session.record() else {
+            return !self.pending.is_empty();
+        };
+        self.pending.iter().any(|(key, text)| match key.as_str() {
+            DESCRIPTION_KEY => !description_applied(text, part.description.as_deref()),
+            KEYWORDS_KEY => !keyword_applied(text, &part.keywords),
+            _ => !key
+                .strip_prefix("metadata/link/")
+                .and_then(|key| key.strip_suffix("/label"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| part.links.get(index))
+                .is_some_and(|link| text.trim() == link.label),
+        })
+    }
+}
 
 impl PcbApp {
     /// Render a retained document in the Items region, preserving invalid typed input until Apply/Reset.
@@ -17,6 +40,7 @@ impl PcbApp {
         let mut edit_orderable = None;
         let mut browse = None;
         let mut clear_field = None;
+        let mut applied = Vec::new();
         pcbcraft_chrome::part_form::document(ui, |ui, footer| {
             if footer {
                 let valid = record.validate(catalog);
@@ -25,7 +49,7 @@ impl PcbApp {
                     "Desktop required".into()
                 } else if busy {
                     "Library operation in progress".into()
-                } else if !doc.pending.is_empty() {
+                } else if doc.has_unapplied() {
                     "Unapplied values".into()
                 } else if valid.is_err() {
                     "Cannot publish".into()
@@ -34,8 +58,7 @@ impl PcbApp {
                 } else {
                     format!("Published r{} · {}", record.reference().revision, destination.as_deref().unwrap_or("Library unavailable"))
                 };
-                publish =
-                    pcbcraft_chrome::part_form::publication(ui, &status, !crate::IN_BROWSER && !busy && valid.is_ok() && doc.pending.is_empty());
+                publish = pcbcraft_chrome::part_form::publication(ui, &status, !crate::IN_BROWSER && !busy && valid.is_ok() && !doc.has_unapplied());
                 return;
             }
             ui.push_id(("part_form", id), |ui| {
@@ -48,8 +71,8 @@ impl PcbApp {
                 );
                 ui.horizontal(|ui| {
                     for (label, redo) in [("Undo", false), ("Redo", true)] {
-                        if controls::enabled_button(ui, doc.pending.is_empty(), label).clicked() {
-                            doc.error = doc.session.history(revision, redo).err();
+                        if controls::enabled_button(ui, !doc.has_unapplied(), label).clicked() {
+                            doc.error = doc.change_history(revision, redo).err();
                             record = doc.session.record().clone();
                         }
                     }
@@ -57,6 +80,7 @@ impl PcbApp {
                 match &mut record {
                     Record::Part(part) => {
                         properties::text(ui, "Name", &mut part.name);
+                        metadata_form(ui, part, &mut doc.pending, &mut applied, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Symbol",
@@ -67,11 +91,13 @@ impl PcbApp {
                             pcbcraft_chrome::part_form::ReferenceAction::Clear => clear_field = Some(ReferenceField::Symbol),
                             _ => {}
                         }
-                        if let Some(symbol) = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision)) {
+                        let symbol = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision));
+                        if let Some(symbol) = &symbol {
                             properties::field(ui, "Units", |ui| {
                                 ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                             });
                         }
+                        supply_ranges(ui, part, symbol.as_deref(), &mut doc.pending, &mut applied, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Category",
@@ -120,9 +146,12 @@ impl PcbApp {
                     }
                 }
                 if let Some(field) = clear_field.take() {
-                    if doc.pending.is_empty() {
+                    if !doc.has_unapplied() {
                         match record.select_reference(&field, None, catalog) {
-                            Ok(candidate) => record = candidate,
+                            Ok(candidate) => {
+                                applied.extend(doc.pending.keys().cloned());
+                                record = candidate;
+                            }
                             Err(error) => doc.error = Some(error),
                         }
                     } else {
@@ -152,8 +181,17 @@ impl PcbApp {
                 }
             });
         });
-        if record != *doc.session.record() {
-            doc.error = doc.session.replace(doc.session.revision(), record).err();
+        // Applied supply and metadata text is cleared only once the draft accepts the
+        // edit, so a refused replacement (for example at the size limit) keeps what was typed.
+        let accepted = record == *doc.session.record() || {
+            let result = doc.session.replace(doc.session.revision(), record);
+            doc.error = result.as_ref().err().cloned();
+            result.is_ok()
+        };
+        if accepted {
+            for key in applied {
+                doc.pending.remove(&key);
+            }
         }
         self.library_editors.parts.insert(id, doc);
         if let Some(field) = browse {
@@ -207,6 +245,445 @@ impl PcbApp {
         }
     }
 }
+/// Description and keywords occupy one pending key each; link rows use positional keys
+/// because an uncommitted row can sit beside authored links. The form never writes rejected
+/// text to the record, so the engine's bounded replacement stays the only commit path.
+const DESCRIPTION_KEY: &str = "metadata/description";
+const KEYWORDS_KEY: &str = "metadata/keywords";
+/// A link row whose text is valid but waits for earlier rows to be authored before it is
+/// committed. The marker keeps the row identity stable instead of appending the link early.
+const LINK_READY_FIELD: &str = "ready";
+
+fn link_key(index: usize, field: &str) -> String {
+    format!("metadata/link/{index}/{field}")
+}
+
+/// Pending key marking a valid link row that waits for earlier rows before being committed.
+fn link_ready_key(index: usize) -> String {
+    link_key(index, LINK_READY_FIELD)
+}
+
+/// Whether a raw description buffer still normalizes to the stored value. Such text is an
+/// active edit: the trimmed text is already the draft's value, so it must not block publishing.
+fn description_applied(raw: &str, stored: Option<&str>) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return stored.is_none();
+    }
+    trimmed.chars().count() <= MAX_DESCRIPTION_CHARS && !trimmed.chars().any(char::is_control) && stored == Some(trimmed)
+}
+
+/// Whether a raw keywords buffer normalizes to the stored list, so it is an active edit rather
+/// than unapplied input (the normalized value has already reached the draft).
+fn keyword_applied(raw: &str, stored: &[String]) -> bool {
+    keyword_lines(raw).eq(stored.iter().map(String::as_str))
+}
+
+/// Omit blank lines from the stored keywords while leaving them in the focused editor.
+fn keyword_lines(raw: &str) -> impl Iterator<Item = &str> {
+    raw.lines().map(str::trim).filter(|line| !line.is_empty())
+}
+
+/// Number of displayed link rows, including pending rows that have no authored link yet.
+fn pending_link_rows(pending: &BTreeMap<String, String>) -> usize {
+    pending
+        .keys()
+        .filter_map(|key| key.strip_prefix("metadata/link/"))
+        .filter_map(|rest| rest.split('/').next())
+        .filter_map(|index| index.parse::<usize>().ok())
+        .map(|index| index + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Drop one link row and compact the pending keys of later rows so their text stays attached
+/// to the same visible row after the list shifts. A blank pending row never removes an
+/// authored link: the accepted link in a later row can sit at a lower index in `part.links`.
+fn remove_link(part: &mut PartDefinition, pending: &mut BTreeMap<String, String>, index: usize) {
+    let displayed = |field: &str| {
+        pending.get(&link_key(index, field)).cloned().unwrap_or_else(|| {
+            part.links.get(index).map_or_else(String::new, |link| if field == "label" { link.label.clone() } else { link.url.clone() })
+        })
+    };
+    let blank = displayed("label").trim().is_empty() && displayed("url").trim().is_empty();
+    if !blank && index < part.links.len() {
+        part.links.remove(index);
+    }
+    for field in ["label", "url", LINK_READY_FIELD] {
+        pending.remove(&link_key(index, field));
+    }
+    let later: Vec<_> = pending
+        .keys()
+        .filter_map(|key| {
+            let rest = key.strip_prefix("metadata/link/")?;
+            let (number, field) = rest.split_once('/')?;
+            Some((number.parse::<usize>().ok()?, field.to_owned(), key.clone()))
+        })
+        .filter(|(number, _, _)| *number > index)
+        .collect();
+    for (number, field, key) in later {
+        if let Some(text) = pending.remove(&key) {
+            pending.insert(link_key(number - 1, &field), text);
+        }
+    }
+}
+
+/// Mirror the engine's one-line text bounds so rejected text stays editable instead of
+/// reaching the bounded session replacement. The engine remains authoritative on commit.
+fn metadata_text(field: &str, text: &str, limit: usize) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > limit || trimmed.chars().any(char::is_control) {
+        Err(format!("{field} must be 1 to {limit} characters on one line"))
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+/// Validate the one-keyword-per-line draft before it replaces the authored list.
+fn metadata_keywords(lines: &[&str]) -> Result<Vec<String>, String> {
+    if lines.len() > MAX_KEYWORDS {
+        return Err(format!("A part supports at most {MAX_KEYWORDS} keywords, not {}.", lines.len()));
+    }
+    let mut seen = BTreeSet::new();
+    let mut keywords = Vec::with_capacity(lines.len());
+    for line in lines {
+        let keyword = metadata_text("Keyword", line, MAX_KEYWORD_CHARS)?;
+        if !seen.insert(keyword.to_lowercase()) {
+            return Err(format!("Duplicate keyword {keyword:?} after trimming and case folding."));
+        }
+        keywords.push(keyword);
+    }
+    Ok(keywords)
+}
+
+/// Build one link from its row, checking it against the labels visible in every other row
+/// so a duplicate cannot be committed by editing either side of the pair.
+fn metadata_link(
+    index: usize,
+    label: &str,
+    url: &str,
+    part: &PartDefinition,
+    pending: &BTreeMap<String, String>,
+    rows: usize,
+) -> Result<PartLink, String> {
+    let label = metadata_text("Link label", label, MAX_LINK_LABEL_CHARS)?;
+    let url = url.trim();
+    PartLink::validate_url(url)?;
+    let duplicate = (0..rows).filter(|other| *other != index).any(|other| {
+        let other = pending
+            .get(&link_key(other, "label"))
+            .cloned()
+            .unwrap_or_else(|| part.links.get(other).map_or_else(String::new, |link| link.label.clone()));
+        other.trim().to_lowercase() == label.to_lowercase()
+    });
+    if duplicate {
+        return Err(format!("Duplicate link label {label:?} after trimming and case folding."));
+    }
+    Ok(PartLink { label, url: url.to_owned() })
+}
+
+/// Commit rows that were typed ahead of an unauthored row, in row order. A ready row keeps its
+/// text and identity in `pending` until every earlier row has an authored link, so an earlier
+/// completion inserts at its own index instead of overwriting the later link.
+fn flush_staged_links(
+    part: &mut PartDefinition,
+    pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
+    rows: usize,
+    error: &mut Option<String>,
+) {
+    for index in 0..rows {
+        let ready_key = link_ready_key(index);
+        if !pending.contains_key(&ready_key) || index != part.links.len() {
+            continue;
+        }
+        let label = pending.get(&link_key(index, "label")).cloned().unwrap_or_default();
+        let url = pending.get(&link_key(index, "url")).cloned().unwrap_or_default();
+        match metadata_link(index, &label, &url, part, pending, rows) {
+            Ok(link) => {
+                part.links.insert(index, link);
+                applied.extend([link_key(index, "label"), link_key(index, "url"), ready_key]);
+                *error = None;
+            }
+            Err(reason) => {
+                pending.remove(&ready_key);
+                *error = Some(reason);
+            }
+        }
+    }
+}
+
+/// Keep metadata near the part name behind one disclosure so compact hosts retain the
+/// existing Category row on screen while the same implicit replacement commits valid input.
+fn metadata_form(
+    ui: &mut egui::Ui,
+    part: &mut PartDefinition,
+    pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
+    error: &mut Option<String>,
+) {
+    controls::collapsing(ui, "part_metadata", "Search metadata", false, None, |ui| metadata_fields(ui, part, pending, applied, error));
+}
+
+/// Edit description, keywords and labeled links. Valid input reaches the draft immediately
+/// through the existing implicit replacement; invalid input stays in `pending` and visible
+/// in the field while publishing remains unavailable. Applied keys go to `applied` so the
+/// caller clears them only after the draft accepts the replacement.
+fn metadata_fields(
+    ui: &mut egui::Ui,
+    part: &mut PartDefinition,
+    pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
+    error: &mut Option<String>,
+) {
+    let mut description = pending.get(DESCRIPTION_KEY).cloned().unwrap_or_else(|| part.description.clone().unwrap_or_default());
+    let response = properties::text(ui, "Description", &mut description);
+    if response.changed() {
+        if description.trim().is_empty() {
+            part.description = None;
+            if description.is_empty() {
+                applied.push(DESCRIPTION_KEY.into());
+            } else {
+                pending.insert(DESCRIPTION_KEY.into(), description);
+                if !response.has_focus() {
+                    applied.push(DESCRIPTION_KEY.into());
+                }
+            }
+            *error = None;
+        } else {
+            match metadata_text("Description", &description, MAX_DESCRIPTION_CHARS) {
+                Ok(value) => {
+                    part.description = Some(value.clone());
+                    // Keep the raw text in `pending` until the bounded session accepts the draft:
+                    // a refused replacement must not discard what was typed. A buffer that already
+                    // normalizes to the stored value is an active edit (not unapplied input), and
+                    // is only queued for clearing once the field loses focus or needs no normalization.
+                    pending.insert(DESCRIPTION_KEY.into(), description.clone());
+                    if !response.has_focus() || description == value {
+                        applied.push(DESCRIPTION_KEY.into());
+                    }
+                    *error = None;
+                }
+                Err(reason) => {
+                    pending.insert(DESCRIPTION_KEY.into(), description);
+                    *error = Some(reason);
+                }
+            }
+        }
+    } else if !response.has_focus() && pending.get(DESCRIPTION_KEY).is_some_and(|raw| description_applied(raw, part.description.as_deref())) {
+        applied.push(DESCRIPTION_KEY.into());
+    }
+
+    let mut keywords = pending.get(KEYWORDS_KEY).cloned().unwrap_or_else(|| part.keywords.join("\n"));
+    let t = pcbcraft_chrome::Tokens::get();
+    let response = ui
+        .horizontal(|ui| {
+            let label = ui.add_sized(egui::vec2(72.0, t.control_height), egui::Label::new("Keywords").halign(egui::Align::Min));
+            ui.add(
+                egui::TextEdit::multiline(&mut keywords)
+                    .margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
+                    .min_size(egui::vec2(ui.available_width(), t.control_height * 3.0))
+                    .hint_text("One keyword per line"),
+            )
+            .labelled_by(label.id)
+        })
+        .inner;
+    pcbcraft_chrome::automation::publish(ui, &response, "field:Keywords");
+    if response.changed() {
+        let lines: Vec<_> = keyword_lines(&keywords).collect();
+        match metadata_keywords(&lines) {
+            Ok(value) => {
+                if !response.has_focus() || keywords == value.join("\n") {
+                    applied.push(KEYWORDS_KEY.into());
+                }
+                part.keywords = value;
+                *error = None;
+            }
+            Err(reason) => *error = Some(reason),
+        }
+        // Keep raw input across frames, including if Session::replace rejects it.
+        pending.insert(KEYWORDS_KEY.into(), keywords);
+    } else if !response.has_focus() && pending.get(KEYWORDS_KEY).is_some_and(|raw| keyword_applied(raw, &part.keywords)) {
+        applied.push(KEYWORDS_KEY.into());
+    }
+
+    properties::section(ui, "Links");
+    let rows = part.links.len().max(pending_link_rows(pending));
+    for index in 0..rows {
+        ui.push_id(("part_link", index), |ui| {
+            let label_key = link_key(index, "label");
+            let url_key = link_key(index, "url");
+            let ready_key = link_ready_key(index);
+            let mut label =
+                pending.get(&label_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.label.clone()));
+            let mut url = pending.get(&url_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.url.clone()));
+            let label_response = properties::text(ui, &format!("Link label {}", index + 1), &mut label);
+            let label_changed = label_response.changed();
+            let url_changed = properties::text(ui, &format!("Link URL {}", index + 1), &mut url).changed();
+            let remove = controls::button(ui, format!("Remove link {}", index + 1)).clicked();
+            if remove || (label_changed || url_changed) && label.trim().is_empty() && url.trim().is_empty() {
+                remove_link(part, pending, index);
+                *error = None;
+                return;
+            }
+            if label_changed || url_changed {
+                match metadata_link(index, &label, &url, part, pending, rows) {
+                    Ok(link) => {
+                        if index <= part.links.len() {
+                            let retain_label = label_response.has_focus() && label != link.label;
+                            // Every earlier row is authored: edit in place or insert at this
+                            // row's index, never append a link typed in a later row at index 0.
+                            if index < part.links.len() {
+                                part.links[index] = link;
+                            } else {
+                                part.links.insert(index, link);
+                            }
+                            // Keep the typed text in `pending` until the bounded session accepts
+                            // the draft; the caller removes these keys only when replace is Ok.
+                            pending.insert(label_key.clone(), label);
+                            pending.insert(url_key.clone(), url);
+                            applied.extend([url_key, ready_key]);
+                            if !retain_label {
+                                applied.push(label_key);
+                            }
+                            *error = None;
+                        } else {
+                            // Earlier rows are still blank or invalid. Stage the valid text so
+                            // it stays with this row until those rows are completed.
+                            pending.insert(label_key, label);
+                            pending.insert(url_key, url);
+                            pending.insert(ready_key, "1".into());
+                            *error = None;
+                        }
+                    }
+                    Err(reason) => {
+                        pending.insert(label_key, label);
+                        pending.insert(url_key, url);
+                        pending.remove(&ready_key);
+                        *error = Some(reason);
+                    }
+                }
+            } else if !label_response.has_focus()
+                && !pending.contains_key(&url_key)
+                && pending.get(&label_key).is_some_and(|raw| part.links.get(index).is_some_and(|link| raw.trim() == link.label))
+            {
+                applied.push(label_key);
+            }
+        });
+    }
+    flush_staged_links(part, pending, applied, rows, error);
+    // One unauthored row at a time keeps row indices aligned with the authored links.
+    if controls::enabled_button(ui, rows < MAX_LINKS && pending_link_rows(pending) <= part.links.len(), "Add link").clicked() {
+        pending.entry(link_key(rows, "label")).or_default();
+        pending.entry(link_key(rows, "url")).or_default();
+    }
+}
+
+/// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
+/// never a native value; errors leave the previous authored range untouched. Applied keys
+/// go to `applied` so the caller clears them only after the draft accepts the edit.
+/// Unavailable inputs expose a text-only discard even when the exact symbol no longer resolves.
+fn supply_ranges(
+    ui: &mut egui::Ui,
+    part: &mut PartDefinition,
+    symbol: Option<&pcbcraft_engine::schematic::SymbolDefinition>,
+    pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
+    error: &mut Option<String>,
+) {
+    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+    let power_input =
+        |id: &str| symbol.is_some_and(|symbol| symbol.pin_index(id).is_some_and(|index| symbol.pins()[index].electrical_type == PowerIn));
+    let mut unavailable = Vec::new();
+    for (key, text) in pending.iter() {
+        if let Some((terminal, bound)) = key.strip_prefix("supply/").and_then(|rest| rest.rsplit_once('/'))
+            && !power_input(terminal)
+        {
+            if unavailable.is_empty() {
+                properties::section(ui, "Unapplied supply ranges");
+            }
+            let label = if bound == "min" { "minimum" } else { "maximum" };
+            ui.label(format!("Terminal {terminal} {label}: {text:?}"));
+            unavailable.push(key.clone());
+        }
+    }
+    if !unavailable.is_empty() {
+        ui.label("The exact power input is unavailable. Restore it to apply these edits, or discard the unapplied text.");
+        if controls::button(ui, "Discard unavailable supply edits").clicked() {
+            for key in unavailable {
+                pending.remove(&key);
+            }
+        }
+    }
+    let pins = symbol.map_or(&[][..], |symbol| symbol.pins());
+    if part.terminal_ratings.is_empty() && !pins.iter().any(|pin| pin.electrical_type == PowerIn) {
+        return;
+    }
+    controls::collapsing(ui, "supply_ranges", "Device supply ranges", false, None, |ui| {
+        ui.label("Enter volts or SI-prefixed voltages. Leave either bound blank when unknown.");
+        for pin in pins.iter().filter(|pin| pin.electrical_type == PowerIn) {
+            let id = &pin.number;
+            ui.push_id(id, |ui| {
+                let name = pin.name.as_ref().map_or_else(|| id.clone(), |name| format!("{name} ({id})"));
+                ui.strong(name);
+                let range = part.supply_range(id);
+                let min = supply_input(ui, pending, id, "min", "Minimum (V)", range.and_then(|range| range.supply_min.as_ref()));
+                let max = supply_input(ui, pending, id, "max", "Maximum (V)", range.and_then(|range| range.supply_max.as_ref()));
+                if pending.contains_key(&min.0) || pending.contains_key(&max.0) {
+                    ui.horizontal(|ui| {
+                        if controls::button(ui, "Apply range").clicked() {
+                            match part.set_supply_range(id, &min.1, &max.1) {
+                                Ok(()) => {
+                                    applied.extend([min.0.clone(), max.0.clone()]);
+                                    *error = None;
+                                }
+                                Err(reason) => *error = Some(reason),
+                            }
+                        }
+                        if controls::button(ui, "Reset range").clicked() {
+                            pending.remove(&min.0);
+                            pending.remove(&max.0);
+                            *error = None;
+                        }
+                    });
+                }
+            });
+        }
+        // Authored ranges are independent of pending text and never removed on source loss.
+        let unavailable: Vec<_> = part.terminal_ratings.keys().filter(|id| !power_input(id)).cloned().collect();
+        for id in unavailable {
+            ui.push_id(&id, |ui| {
+                ui.label(format!("Exact power input {id} unavailable."));
+                if controls::button(ui, "Remove authored range").clicked() {
+                    *error = part.set_supply_range(&id, "", "").err();
+                }
+            });
+        }
+    });
+}
+
+/// Keep uncommitted bound text distinct from category field IDs and from a stored zero.
+fn supply_input(
+    ui: &mut egui::Ui,
+    pending: &mut BTreeMap<String, String>,
+    id: &str,
+    bound: &str,
+    label: &str,
+    current: Option<&TypedValue>,
+) -> (String, String) {
+    let key = format!("supply/{id}/{bound}");
+    let current = current.map(TypedValue::display).unwrap_or_default();
+    let mut text = pending.get(&key).cloned().unwrap_or_else(|| current.clone());
+    if properties::text(ui, label, &mut text).changed() {
+        if text == current {
+            pending.remove(&key);
+        } else {
+            pending.insert(key.clone(), text.clone());
+        }
+    }
+    (key, text)
+}
+
 /// The primary quantity is chosen only among the exact selected category's bounded fields.
 fn primary_value_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog) {
     if let Some(binding) = &mut part.category

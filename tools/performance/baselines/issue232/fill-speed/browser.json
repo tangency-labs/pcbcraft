@@ -1,0 +1,40 @@
+{
+  "browser": "156.0.8078.79",
+  "wasm": [
+    "pcbcraft-web-729487e5aa4cbf8b_bg.wasm"
+  ],
+  "source_revision": "105c0f4 plus prepared-operand cache",
+  "workers": {
+    "started": 2,
+    "completed": [
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      },
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      }
+    ]
+  },
+  "errors": [],
+  "pixel_oracle": {
+    "at": [
+      1200,
+      550
+    ],
+    "unfilled_rgb": [
+      0,
+      16,
+      32
+    ],
+    "repoured_rgb": [
+      82,
+      26,
+      37
+    ],
+    "pass": true
+  }
+}

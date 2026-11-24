@@ -314,8 +314,12 @@ folder/archive persistence. Fit and per-view visibility include these drawings,
 and technical edge layers work independently of copper setup. This slice does
 not validate closure across paths, edge clearance or manufacturing validity.
 Selection filters now occupy the lower-right card, with supported footprint and
-board-graphic categories and shared GUI/live-MCP handlers. Flip view and the
-broader layout ribbon remain future work.
+board-graphic categories and shared GUI/live-MCP handlers. Each PCB view can
+exclude locked footprints, tracks and vias without changing visibility or
+project inspection. New project views include locked objects by default; a view
+opened beside another copies its filters, and saved views without the setting
+include them.
+Flip view and the broader layout ribbon remain future work.
 
 A bounded transform slice now moves and rotates existing legacy and physical SMD
 placements through `pcb.set_footprint_transform`, with GUI drag/M/R/Shift+R,

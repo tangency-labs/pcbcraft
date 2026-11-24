@@ -735,6 +735,42 @@ fn check_text(field: &str, text: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Check that an HTTP(S) authority has a host and, if supplied, a numeric port in range.
+/// A bracketed host must be an IPv6 address, followed only by an optional port.
+fn http_authority_is_valid(authority: &str) -> bool {
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let Some((address, suffix)) = after_bracket.split_once(']') else { return false };
+        if address.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        let port = if suffix.is_empty() {
+            ""
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            port
+        } else {
+            return false;
+        };
+        (address, port)
+    } else {
+        host_port.split_once(':').unwrap_or((host_port, ""))
+    };
+    !host.is_empty()
+        && !host.contains(['[', ']', '\\'])
+        && (port.is_empty() || (port.bytes().all(|digit| digit.is_ascii_digit()) && port.parse::<u16>().is_ok()))
+}
+
+/// Check a bounded HTTP(S) reference with a host, validated IPv6 literals and port numbers, and
+/// no whitespace. Reading a native record never fetches the URL.
+pub(crate) fn check_http_url(field: &str, url: &str, limit: usize) -> Result<(), String> {
+    check_text(field, url, limit)?;
+    let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if !http_authority_is_valid(authority) || url.chars().any(char::is_whitespace) {
+        return Err(format!("{field} must be an HTTP(S) URL; loading performs no fetch."));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +914,40 @@ mod tests {
         let weak = Arc::downgrade(&copy);
         drop(copy);
         assert!(weak.upgrade().is_none(), "nothing keeps a copy alive once it is dropped");
+    }
+
+    /// HTTP(S) references need a nonempty host in the authority; userinfo, ports, IPv6 literals,
+    /// paths, queries and fragments are preserved, while malformed authorities are refused.
+    #[test]
+    fn http_url_validation_requires_a_nonempty_host() {
+        for url in [
+            "https://example.com:8443/a?b#c",
+            "http://user@example.com/path",
+            "http://user:pass@example.com:8443/a?b#c",
+            "https://[::1]:8443/a",
+            "https://example.com",
+        ] {
+            assert!(check_http_url("Link URL", url, 2048).is_ok(), "{url}");
+        }
+        for url in [
+            "https://:8080/x",
+            "https:///path",
+            "https://user@/x",
+            "https://[]/x",
+            "https://[bogus]/x",
+            "https://[::1]suffix/x",
+            "https://example.com:abc/x",
+            "https://example.com:65536/x",
+            "https://example.com/a b",
+            "https://exa mple.invalid",
+            "file:///tmp/x.pdf",
+            "ftp://example.invalid/x",
+            "//example.invalid/x",
+            "example.invalid/x",
+        ] {
+            let error = check_http_url("Link URL", url, 2048).unwrap_err();
+            assert!(error.contains("HTTP(S) URL"), "{url}: {error}");
+        }
     }
 
     /// Extreme coordinates report a file error without preventing later valid files from loading.
