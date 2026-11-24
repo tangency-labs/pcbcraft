@@ -195,6 +195,52 @@ fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing(
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
 }
 
+/// Reopen saved project bytes in a fresh session with the same library source, as a new host does.
+fn reopened(project: Arc<Project>, documents: &Documents) -> Session {
+    let mut session = Session::default();
+    session.open_snapshot(decode_documents(&encode_documents(project).unwrap()).unwrap());
+    load(&mut session, documents);
+    session
+}
+
+/// A review digest belongs to the accepted board state it previewed. Two saved versions with the
+/// same board, placement and candidate reopen with matching session counters; the review of one
+/// cannot apply to the other, whose accepted nets differ, and a fresh preview is required.
+#[test]
+fn footprint_revision_review_does_not_apply_to_another_accepted_board_state() {
+    let (mut session, documents, target) = package_fixture(|_| {}, false, true);
+    connect_another_part(&mut session);
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let connected = session.snapshot().unwrap();
+    let mut unconnected = connected.clone();
+    let board = Arc::make_mut(&mut Arc::make_mut(&mut unconnected).board);
+    let baseline = Arc::make_mut(board.baseline.as_mut().unwrap());
+    baseline.nets.clear();
+    baseline.validate().unwrap();
+    let mut earlier = reopened(unconnected, &documents);
+    let mut current = reopened(connected, &documents);
+    assert_eq!(earlier.revision(), current.revision());
+    assert_eq!(earlier.libraries().generation(), current.libraries().generation());
+    let memberships = |session: &Session| {
+        let project = session.snapshot().unwrap();
+        project.board.baseline.as_ref().unwrap().nets.iter().map(|net| net.terminals.clone()).collect::<Vec<_>>()
+    };
+    assert!(memberships(&earlier).is_empty());
+    assert_eq!(memberships(&current).len(), 1);
+    assert_eq!(memberships(&current)[0].len(), 2);
+    let mut stale = reviewed(&mut earlier, &target);
+    stale["mapping"] = json!({"1":"1","2":["2","9"]});
+    let placement = current.snapshot().unwrap().board.footprints()[0].clone();
+    assert_apply_refused_without_edit(&mut current, &stale, "Footprint preview is stale or does not match this target; preview again.");
+    assert_eq!(current.snapshot().unwrap().board.footprints()[0], placement);
+    let mut fresh = reviewed(&mut current, &target);
+    assert_ne!(fresh["acceptance"], stale["acceptance"]);
+    fresh["mapping"] = stale["mapping"].clone();
+    let revision = current.revision();
+    current.apply(APPLY_FOOTPRINT_REVISION, &fresh).unwrap();
+    assert_eq!(current.revision(), revision + 1);
+}
+
 /// Reopen a valid fixture using the current persistence code, without adding a format reader.
 fn reopen_with_baseline(session: &mut Session, update: impl FnOnce(&mut Baseline)) {
     let mut project = session.snapshot().unwrap();

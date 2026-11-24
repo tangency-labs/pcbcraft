@@ -84,7 +84,10 @@ struct FootprintUpdate<'a> {
 }
 
 impl FootprintUpdate<'_> {
-    /// Bind review to the exact target, project revision, catalog generation and candidate content.
+    /// Bind review to the exact target, accepted board state, project revision, catalog
+    /// generation and candidate content. Revision and generation are session-local counters, so
+    /// the accepted baseline is bound by content: reopening another saved version whose accepted
+    /// nets differ requires a fresh preview even when those counters match.
     fn acceptance(&self, project: &Project, catalog: &Catalog, revision: u64, delta: &footprint_delta::Delta<'_>) -> String {
         use sha2::{Digest, Sha256};
         let dependency_digest = self.native.map(|(part, _)| super::part_digest(part));
@@ -101,7 +104,8 @@ impl FootprintUpdate<'_> {
             self.latest,
             self.digest,
             dependency_digest,
-            delta
+            delta,
+            project.board.baseline.as_deref()
         ]);
         format!("{:x}", Sha256::digest(value.to_string()))
     }
