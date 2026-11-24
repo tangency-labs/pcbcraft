@@ -56,30 +56,41 @@ fn browser_requests_one_zip_and_propagates_failure() {
 #[test]
 fn completion_releases_the_export_slot_on_every_outcome() {
     let ctx = egui::Context::default();
+    let mut session = Session::default();
+    session.apply("project.new", &serde_json::json!({"name":"Outputs","create_board":true})).unwrap();
+    let source = Source { board: session.project().unwrap().board_target().unwrap(), opening: session.history_root_revision() };
+    let destination = Path::new("board.zip");
     let mut exports = Exports::default();
-    for result in [Ok(Outcome::Saved), Ok(Outcome::DownloadRequested), Ok(Outcome::Cancelled), Err("save failed".into())] {
-        exports.start(&ctx, "board.zip".into(), capture("archive").unwrap()).unwrap();
+    for result in [Ok(Outcome::Saved(destination.to_owned())), Ok(Outcome::DownloadRequested), Ok(Outcome::Cancelled), Err("save failed".into())] {
+        exports.start(&ctx, source, "board.zip".into(), capture("archive").unwrap(), None).unwrap();
         assert!(exports.busy());
         assert!(exports.poll().is_none());
-        assert_eq!(exports.start(&ctx, "overlap.zip".into(), capture("").unwrap()).unwrap_err(), "Finish the current fabrication export first.");
-        let saved = matches!(&result, Ok(Outcome::Saved));
+        assert_eq!(
+            exports.start(&ctx, source, "overlap.zip".into(), capture("").unwrap(), None).unwrap_err(),
+            "Finish the current fabrication export first."
+        );
+        let saved = matches!(&result, Ok(Outcome::Saved(_)));
         let cancelled = matches!(&result, Ok(Outcome::Cancelled));
         let requested = matches!(&result, Ok(Outcome::DownloadRequested));
         exports.complete_captured(result).unwrap();
         let completed = exports.poll().unwrap();
-        assert_eq!(matches!(&completed, Ok(Outcome::Saved)), saved);
+        assert_eq!(matches!(&completed, Ok(Outcome::Saved(_))), saved);
         assert_eq!(matches!(&completed, Ok(Outcome::Cancelled)), cancelled);
         assert_eq!(matches!(&completed, Ok(Outcome::DownloadRequested)), requested);
+        assert_eq!(exports.latest(&session), Some(destination));
         if !saved && !cancelled && !requested {
             assert_eq!(completed.unwrap_err(), "save failed");
         }
         assert!(!exports.busy());
         assert!(exports.poll().is_none());
     }
-    exports.start(&ctx, "board.zip".into(), capture("").unwrap()).unwrap();
+    exports.start(&ctx, source, "board.zip".into(), capture("").unwrap(), None).unwrap();
     drop(exports.completion.take());
     assert!(exports.poll().unwrap().unwrap_err().contains("stopped before reporting"));
     assert!(!exports.busy());
+    assert_eq!(exports.latest(&session), Some(destination));
+    session.open_snapshot(session.snapshot().unwrap());
+    assert_eq!(exports.latest(&session), None);
 }
 
 /// A directory-sync failure occurs after a complete replacement, is reported to the owner, and

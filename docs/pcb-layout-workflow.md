@@ -6,15 +6,9 @@ status updated November 14, 2026. Related work:
 [#57](https://github.com/tangency-labs/pcbcraft/issues/57) (copper zones), [#58](https://github.com/tangency-labs/pcbcraft/issues/58) (DRC), [#59](https://github.com/tangency-labs/pcbcraft/issues/59) (fabrication outputs),
 [#77](https://github.com/tangency-labs/pcbcraft/issues/77) (net classes and rules) and [#95](https://github.com/tangency-labs/pcbcraft/issues/95) (two-layer track and via editing).
 
-This page follows one board from placed footprints to fabrication files. It
-records what each step does today and what is still missing. For each gap it gives
-the behavior, model, commands and acceptance cases a bounded slice needs. It
-builds on the [PCB representation](pcb-representation.md),
-[net identity](net-identity.md) and [board workspace](board-workspace-plan.md)
-designs and does not restate them. Behavior references are the published KiCad
-[PCB Editor manual](https://docs.kicad.org/9.0/en/pcbnew/pcbnew.html) and Ucamco's
-public [Gerber format specification](https://www.ucamco.com/en/gerber). No KiCad
-implementation source or other GPL EDA source is an input.
+This guide follows a board from placed footprints to fabrication files.
+See the [PCB layout design plan](design/pcb-layout-gaps.md) for staged work
+and the [capability inventory](capabilities.md) for current limits.
 
 ## The workflow today
 
@@ -43,7 +37,7 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](manufacturing/drill-files.md#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 When items overlap, hover over them and press **Shift+Space** to cycle through
@@ -51,6 +45,12 @@ the selectable items at that point. A click on overlapping tracks starts with
 the active copper layer. Layer visibility and selection filters also apply when
 cycling. Tracks and vias in the gaps between footprint pads can be clicked
 directly.
+
+For closed Board Outline graphics, select an edge, then drag the edge to move
+that side parallel to itself. Drag inside the selected outline to move the whole
+shape or drag a corner to reshape it. Right-click a selected edge or corner to
+add or remove a vertex. The [zone editing guide](pcb/copper-zone-outlines.md#drawing-and-editing)
+describes the shared axis alignment and vertex controls.
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
@@ -62,343 +62,13 @@ it. A `pcb.check_design` request can override the fixed defaults for that run. S
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
-### Unroute one connection
+## PCB operations
 
-`pcb.unroute_connection` takes two pads on the same intended net. Choose `from`
-on the arm to remove and `to` on the side to keep. For a T-shaped route, this
-removes the chosen arm and leaves the trunk serving the other pads, including
-when the arm meets the interior of a track. Floating tracks and automatic vias
-severed by the cut are removed together, unless a locked or explicitly assigned
-via anchors the group. An explicitly assigned via on the arm itself is kept
-with the copper beyond it; the cut stops before it. Already isolated copper is
-unchanged.
-
-Use `dry_run` to preview the removal and its effect on ratsnest edges from
-authored copper without making an edit. After a commit, zone fill can reconnect
-those pads. Applying the removal is one Undo step and changes no storage format. If a locked object would have
-to be removed, or there is no exclusive arm that safely separates the pads,
-the command refuses the whole request. It also refuses when the pad to detach
-overlaps another pad, or when overlapping pads elsewhere would keep the two
-sides joined. This is a shared command available in
-headless and live MCP, not a canvas tool or a net-wide removal.
-
-## Set-pitch distribution
-
-In MCP, call `pcb.align_footprints` with `distribute_x` or `distribute_y`,
-`pitch_nm` (a positive integer number of nanometers), and at least two distinct
-placed footprint IDs. For example, use `pitch_nm: 5080000` for a 5.08 mm pitch.
-Pitch is measured between footprint origins, not pad centers or physical bounds.
-The smallest X (left) or Y (top) origin stays fixed, and the other origins are
-spaced in increasing coordinate order. Request order breaks ties. The other
-coordinate, rotation and board side do not change. The original span may grow or
-shrink. A locked footprint anywhere in the selection refuses the whole request
-and is named, even if it would be the fixed anchor. An out-of-range destination,
-a new short or a move that would change locked copper also refuses the request.
-A successful move and its attached track changes are one undo step; repeating
-an accepted pitch that already matches creates no history. In a live editor the
-copper checks are prepared before the edit is applied. If the board changes
-in the meantime, retry with the current revision.
-
-Omit `pitch_nm` for the existing equal-gap distribution: it requires at least
-three footprints, uses physical bounds and preserves the outer footprints and
-span. The Modify menu continues to use equal gaps.
-
-## Gaps, in recommended order
-
-Each slice below can land on its own. The order puts first what unblocks the
-most everyday work and needs the fewest format decisions.
-
-### 1. Footprint moves carry their copper
-
-**Status.** `pcb.set_footprint_transform` and `pcb.align_footprints` already carry
-attached track ends and run a scoped short check. The broader interior-contact,
-branch and fixed-via preservation cases below remain requirements to verify as
-routing develops; this section is not a claim that every case is implemented.
-
-**Behavior.** While a footprint moves, rotates or flips, each track end on one of
-its pads follows the pad, and the rest of that track stretches. Vias stay put.
-Preserve contacts where a pad touches the interior of a track, where a branch
-joins the interior of a stretched track, or where a pad overlaps a fixed via.
-Refuse the edit if it would break any of those contacts.
-The edit is refused, like a track edit, if the moved pads or stretched tracks
-would join two nets. One undo step covers the placement and the stretched
-tracks. If a flip changes a pad's copper layer, the attached track end is
-released rather than moved onto the other layer, and its airwire returns.
-
-**Model and commands.** No format change. The transform commands gain the
-stretch and the scoped short check, applied to the moved footprint's pads and
-the affected tracks. The placement preview shows the stretched tracks, the same
-way D segment drags show them now.
-
-**Acceptance.**
-- Move and rotate a footprint with one routed pad: the track stays attached.
-- Move a pad that touches the middle of a track: the contact is preserved, or the
-  edit is refused with the board unchanged.
-- Stretch a track with a branch attached between its endpoints: the branch
-  stays connected, or the edit is refused with the board unchanged.
-- Move a pad with a via in it and no track end on the pad: the fixed via stays
-  connected, or the edit is refused with the board unchanged.
-- Move a footprint onto another net's track: refused, with the board unchanged.
-- Flip a routed SMD footprint: the end detaches and the airwire returns.
-- Align three routed footprints: one undo step.
-- Undo and reopen leave identical documents.
-
-### 2. Board design rules and net classes
-
-The board-default half is implemented by #242; see [board-rules.md](board-rules.md)
-for the fields, precedence, provenance and format. **Analyze → Rules** edits hard
-clearance, track/via/drill, annular-ring and board-edge limits separately from
-preferred routing dimensions. DRC and captured clearance queries use the shared
-resolver. Omitted command dimensions and GUI routing sizes use those preferences;
-explicit local tool sizes remain a per-view choice. Changing rules invalidates
-previous checks and unfinished route authority without resizing existing copper.
-
-`pcb.set_rules` requires the board ID and revision and creates one undo step.
-Authored defaults have a stable rule UUID and require at least board format 19.
-Zone outlines require at least 20, a placement origin 21, assembly profile adoptions
-22, and the board setup's copper or board thickness fields 23. The format required
-by the remaining data takes precedence, including explicit via assignments (24),
-thermal or insulation material reports (25), circular copper arcs (26) and footprint
-locks (34); see the [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
-Removing the record restores built-in resolution and the format required by the
-remaining board data. Omitting rules does not itself require a new board format.
-Unchanged canonical codec bytes are stable; host Open and Save may apply the
-existing [storage migrations](native-project-storage.md). Request-local DRC
-limits may tighten authored constraints without modifying the saved record.
-
-[Class definitions and dimensional resolution](net-classes.md),
-[persistent assignments](net-class-assignments.md), and
-[class-aware routing, clearance queries and DRC](net-class-consumers.md) are
-implemented through shared commands and live/headless MCP (#300–#302). Classes
-bind to persistent net IDs rather than names and extend the same effective-rule
-resolver. Preferred values remain distinct from minimum/maximum constraints;
-clearance between classes takes the larger supported requirement. Assignments
-retain their origins through supported split/merge reconciliation, and conflicting
-limits remain explicit rather than being resolved by name or ordering.
-
-Routing uses effective class preferences when dimensions are omitted. Changed
-classified tracks must meet minimum width; changed classified vias must meet
-diameter, drill and annular-ring limits. Routing refuses shorts but does not yet
-enforce class clearance; that enforcement remains future work in section 3.
-Queries and DRC use per-object rules with provenance, including class clearance;
-existing copper is not resized. Editor forms remain under
-[#303](https://github.com/tangency-labs/pcbcraft/issues/303), while advanced
-electrical/manufacturing analyses and the other rule extensions remain under #77.
-
-### 3. Clearance while routing
-
-**Problem.** Routing refuses shorts but not near misses. Clearance problems show
-up only when DRC runs.
-
-**Behavior.**
-- While routing, the active segment shows a clearance halo at the resolved
-  clearance.
-- A segment that would violate clearance against other-net copper stops at the
-  last legal point. Clicking there commits the route up to that point.
-- A setting allows clearance violations while copper on different nets stays
-  physically separate. DRC reports those violations, and the router still
-  refuses shorts.
-
-[Exact circular copper records](circular-copper-records.md) are a storage-only
-extension. Boards containing arcs refuse these geometry operations rather than
-substituting straight chords; curved routing and consumers remain separate work.
-
-**Model and commands.** The clearance-query slice itself makes no format change.
-The engine exposes one clearance query
-for DRC, the router and later zone fill. The
-[snapshot query](copper-clearance-query.md) now shares the supported contours,
-separates conservative candidates from final predicates and retains source
-snapshot/revision/rule authority. Its simple sweep/linear scan and exhaustive
-reference precede the separately benchmarked spatial index in #244. Routing
-clearance enforcement and gesture integration remain later work.
-
-**Acceptance.**
-- A route toward another net's pad stops at exactly the clearance.
-- The same route in "allow" mode commits and DRC reports it.
-- The router and DRC agree on every finding.
-
-### 4. Copper zones
-
-This is #57.
-
-**Implemented authoring and fill.** [Copper zones](copper-zone-outlines.md)
-(#231/#232) draws and edits single-layer, net-addressed outlines and derives their
-conductive material. Automatic and explicit **Pour copper**, thermal connections,
-priority, island filtering, connectivity/ratsnest and zone DRC share that result.
-Fabrication output remains #233; advanced policy remains #304.
-
-**Behavior.**
-- Drawing a zone works like a Board Outline rectangle or polygon on a copper
-  layer, with a net chosen from the board's nets.
-- The fill clears other-net copper by the resolved clearance and stays inside the
-  Board Outline by the edge clearance.
-- The fill connects same-net pads with thermal spokes or a solid connection.
-  Islands smaller than a minimum area are dropped.
-- Overlapping zones fill by priority.
-- A refill runs after edits, or on demand with **Pour copper**. After **Remove
-  pours**, edits leave automatic refill suppressed until **Pour copper** resumes
-  it. A changed fill updates connectivity and the ratsnest.
-
-**Model and commands.**
-- **Authored record:** the zone (outline, layer, net, priority, clearance
-  override, thermal settings, minimum island area) goes in `board.json` under a
-  new board format.
-- **Derived fill:** the filled polygons are a revision-keyed result. They are not
-  authored data, so the rules design's "store intent, cache results" contract
-  applies. Outputs and DRC compute or reuse the fill for the current revision, so
-  a saved board never carries a stale pour.
-- **Net target:** a zone needs a persistent net target, because a pour has no
-  pads of its own to derive one from. The zone slice therefore promotes the
-  chosen net through the [net registry](net-identity.md) and stores the
-  registry ID. The registry must land first.
-
-**Decision needed: Gerber output.** There are two ways to write a pour:
-- **Contours:** write each fill as dark regions with holes already cut, as exact
-  polygon outlines. Every reader sees the same geometry, DRC checks the same
-  polygons the file contains, and the Gerber stays simple to verify.
-- **Clear polarity:** write the zone as one dark region followed by clear-polarity
-  clearances (the specification's LPC command). The fill code is simpler, but
-  every later dark object must be ordered after the clearances. The written
-  image then depends on object order, which is harder to check against DRC.
-
-The proposal is contours, computed by a qualified polygon-boolean library chosen
-under the dependency rules in `deny.toml`. The candidate needs its own source and
-license review before it is added.
-
-**Acceptance.**
-- A ground zone around two pads of another net leaves exact clearances.
-- Thermal spokes reach same-net pads.
-- An island below the minimum area is dropped.
-- Two zones fill by priority.
-- Refill after a track move changes the fill and the ratsnest.
-- Export contains only dark contour regions, and DRC of the exported fill
-  matches DRC of the board.
-- Save, undo and reopen keep the authored zone without saving the fill.
-
-### 5. Push-and-shove
-
-The interactive-routing part of #56, after #95's basic editing. It comes after clearance-aware routing because it
-needs the same clearance query and spatial index.
-
-- **Stage 1, walk around:** the route bends around other-net copper at
-  clearance, keeping 45° postures.
-- **Stage 2, shove:** the route pushes other-net tracks aside, which keep their
-  connections. If a pushed track can't move legally, the route stops.
-- **Stage 3, vias:** vias are shoved too, and D segment drags shove their
-  neighbors.
-
-Every stage commits as one undo step through the existing track commands, so it
-needs no format change. Acceptance for each stage compares the result against
-DRC: no new violations, and connectivity is unchanged except for the routed net.
-
-### 6. Later slices
-
-These need their own design before implementation. They are listed so the
-ribbon's planned entries and the editor guide have a stated destination.
-
-- **Differential pairs and length tuning** (Layout › Route › Pair, Layout › Route › Tune) need
-  net-registry pairs and length rules from slice 2. Pairs reference two net IDs,
-  never name suffixes.
-- **Circular tracks and teardrops:** native [circular track records](circular-copper-records.md)
-  and [straight via teardrop intents](teardrop-records.md) are available through
-  shared commands. Rendering and manufacturing support, DRC and automatic
-  teardrop regeneration remain separate work.
-- **Blind, buried and micro vias** need layer spans checked against the stackup
-  and drill pairs in the Excellon output.
-- **Board text** on copper and silkscreen needs independently
-  authored text records with physical font metrics from the silkscreen settings.
-- **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Existing footprint locks protect
-  direct placement edits as described below. To skip locked footprints, tracks
-  and vias when selecting, clear **Locked objects** in the view's **Selection
-  filters** card. It is checked by default. Clearing it also drops those objects
-  from the current selection, but leaves them visible and listed in project
-  inspection. Footprint lock authoring and locks for zones and board graphics
-  are not available yet.
-- **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
-  added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
-  sides.
-- **Pad-level selection:** selecting and cross-probing one pad and its net
-  between the schematic and the board.
-
-Copy and paste of board objects is in progress separately in #197 through #202.
-
-## Fabrication drill files
-
-**Manufacture › Fabrication › Outputs** and `pcb.export_fabrication` keep
-plated pad drills and through vias in `-PTH.drl`. If the board contains circular
-non-plated footprint holes, `-NPTH.drl` contains just those holes and the
-fabrication archive's manifest lists both files. A board without those holes
-has no `-NPTH.drl` member. Non-plated openings do not create copper, mask or
-paste features.
-
-Both files measure from the selected placement origin, with Y reversed from
-board coordinates and lengths written in millimeters to three decimal places.
-The non-plated tool size is the finished diameter, with no plating allowance.
-A non-plated diameter that rounds to zero stops export instead of writing a
-zero-size tool. This is a file precision limit, not a fabrication rule.
-
-## Placed-footprint locks
-
-Placed footprints retain an optional `locked` flag in native board format 34,
-35 when the board also contains arcs, or 37 when it contains straight-via
-teardrops. Inspection and typed board views report a boolean, defaulting to
-false for older files. Fresh canonical encoding omits
-false and preserves true; Native Save can reuse an unchanged board document
-verbatim, including explicit false. Without active locks the encoder chooses
-the format required by the remaining board data. Reports are optional in all
-three formats.
-
-A locked footprint remains selectable and inspectable. The shared move, rotate,
-flip, align/distribute and delete commands protect existing locks. A selection
-containing a locked footprint is refused as a whole, naming each locked placement,
-even if it would serve as a stationary alignment anchor. A single-footprint
-transform that explicitly leaves the pose unchanged remains a no-op. Applying a
-reviewed schematic-to-board update that would remove a locked footprint also
-refuses the whole update and names the locked placement. Removing a component’s
-last schematic unit, including through group Delete, Cut, or sheet deletion,
-is refused if it would immediately remove a locked footprint. An accepted
-placement stays on the board pending review. Refusals make no board
-or Undo/Redo changes. These locks do not govern package changes that retain the
-placement, reference-text edits or routing obstacles. There is no lock/unlock
-command or GUI toggle for footprints yet.
-
-Clipboard Copy, Cut, Duplicate and Paste still refuse active footprint locks. Diagnostic
-single-file storage also refuses the flag when true. Canonical clipboard
-fragments without active footprint locks keep their previous encoding. See
-[clipboard](clipboard.md#pcb-canvas) and
-[native storage](native-project-storage.md#placed-footprint-lock-metadata).
-
-## Fixed tracks and vias
-
-Select tracks and vias and set **Lock** in Properties to **Locked** or
-**Unlocked**. A mixed selection displays **Mixed**. Locked copper remains
-selectable and inspectable, while its size controls are read-only. The shared
-`pcb.set_copper_locked` command requires an explicit board UUID, expected revision,
-`locked` boolean and at least one track/via UUID. One atomic edit changes only
-lock flags; no-op requests leave revision/history unchanged.
-
-An edit fails as a whole if it would change or delete any existing locked track
-or via. This includes positions, track ends/layers/widths, via diameters/drills,
-segment drags that stretch a locked neighbor, footprint moves/rotations/alignment
-that carry locked track ends, and mixed-selection Delete or Cut. An unchanged
-locked object does not block independent unlocked edits or genuine no-ops.
-Lock flags preserve authored copper records; they do not freeze the board's
-setup, schematic net intent or footprint contacts when no copper record changes.
-In particular, an existing flip that releases a stationary track end keeps that
-track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
-
-Copy, duplicate and paste preserve lock flags while assigning new identities
-and the requested new positions to copies. Existing source objects remain
-protected. Cut refuses a selection containing locked copper. Native folder and
-archive saves preserve copper locks; board format 18 (or a later extension
-required by other content) and board-kind clipboard format 3 (or format 4 with
-explicit via assignments) carry them. Older readers refuse these extensions.
-Canonical boards and fragments without copper locks use the formats required by
-their other content. Clearing the last copper lock leaves those requirements in
-force. Inspection exposes
-an explicit `locked` boolean for every track and via, and typed board snapshots
-carry it for later walkaround/shove consumers. No routing solver is added here.
+- <a name="unroute-one-connection"></a>[Unroute one connection](pcb/unroute.md)
+- <a name="set-pitch-distribution"></a>[Set-pitch distribution](pcb/set-pitch-distribution.md)
+- <a name="placed-footprint-locks"></a>[Placed-footprint locks](pcb/locks.md#placed-footprint-locks) and
+  <a name="fixed-tracks-and-vias"></a>[fixed tracks and vias](pcb/locks.md#fixed-tracks-and-vias)
+- <a name="fabrication-drill-files"></a>[Fabrication drill files](manufacturing/drill-files.md)
 
 ## Format changes at a glance
 
@@ -410,8 +80,8 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 3. Clearance while routing | none | — |
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
-| Named layer groups | [board/41](native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
+| Placed-footprint lock metadata | [board/34](formats/native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
+| Named layer groups | [board/41](formats/native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
 
 These are selected layout formats, not a consecutive version list. Canonical
 saves use the highest supported format required by the authored data; compatible
@@ -420,5 +90,5 @@ Canonical no-op saves preserve encoding; accepted noncanonical input can be
 normalized, for example by omitting an explicit `locked: false`.
 
 Standalone vias can retain an explicit net through placement and Properties; see
-[via net assignments](via-net-assignments.md) for automatic inheritance, physical
+[via net assignments](pcb/via-net-assignments.md) for automatic inheritance, physical
 connectivity and unresolved-target behavior.
