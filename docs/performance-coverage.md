@@ -144,6 +144,14 @@ single observation. DRC and preparation have no standalone budget in #237.
 | Commit p95 < 100 ms | Existing validated track-edit proxy passes on the four 100-sample workloads. The exact board-limit smoke takes 1,448.516 ms and exposes a cost to investigate, but cannot establish a p95 or qualify future shove/walkaround commits. |
 | Responsive preparation, bounded queues | Current synchronous preparation/DRC costs are retained above. Future job/index queue and stale-result budgets are **unmeasured** until those features exist. |
 
+The [budget suite](performance-testing.md#budget-suite-for-large-boards)
+(`board_perf budgets`) reports open, save, DRC, connectivity, move-commit and
+routing-input p50/p95. Only move-commit and routing-input have a budget: the
+proposed #237 targets, assessed strictly on CPU proxies that certify neither the
+window input budget nor visible preview. Open, save, DRC and connectivity report
+quantiles with no target yet. No envelope-size measurements are recorded here yet;
+the suite's rows stay **unmeasured** until a run on named hardware is added.
+
 No budget is relaxed by this change. The reference process's observed peak sampled
 RSS is 28,499,968 bytes and sampled VmHWM is 28,794,880 bytes. The separate
 one-iteration Valgrind run reports 3,167,269 allocations, 3,159,113 frees and
@@ -222,3 +230,19 @@ broad replay. These short shared-host runs do not qualify statistical tails,
 native-window/browser rendered latency, allocation, large-class capacity or
 Wayland endurance. Headless dark/light GPU images verify the reused route halo;
 WASI correctness and browser compilation cover separate boundaries.
+
+## Zone-fill slice (#232)
+
+The [bounded #232 evidence](../tools/performance/baselines/issue232/README.md)
+retains the saved-project navigation pair, raw samples, source/artifact hashes
+and packaged-worker success/failure record. The navigation fixture lacks a closed
+outline and correctly has unavailable fill; it does not measure filled-material
+rendering or refill throughput. The final packaged demo exercises actual automatic
+fill, while native window/endurance and realistic-board capture costs remain open.
+
+The subsequent [supplied-demo fill calculation comparison](../tools/performance/baselines/issue232/fill-speed/README.md)
+records three original/optimized samples per build and a prepared-operand change.
+Optimized calculation median falls from 428.011 to 105.841 ms on that one board;
+the initial development build took about 5.9 seconds. This isolates headless fill
+calculation and does not qualify physical presentation, large-board throughput,
+retained-topology memory growth or a vendor comparison.

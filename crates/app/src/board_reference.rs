@@ -133,13 +133,13 @@ impl State {
         edit.set_units(unit);
         ui.strong("Silkscreen text");
         properties::field(ui, "Part", |ui| {
-            ui.label(footprint.reference);
+            ui.label(footprint.reference.as_ref());
             if ui
                 .add_enabled(enabled && !edit.dirty && edit.source == source, egui::Button::new("Rename…").small())
                 .on_hover_text("Rename the component in the schematic, PCB and outputs. Apply or reset pending silkscreen edits first.")
                 .clicked()
             {
-                edit.rename = Some(footprint.reference.to_owned());
+                edit.rename = Some(footprint.reference.to_string());
             }
         });
         if edit.source != source {
@@ -169,7 +169,7 @@ impl State {
                     ui,
                     edit,
                     &footprint.reference_appearance,
-                    footprint.reference,
+                    &footprint.reference,
                     footprint.pads.iter().any(|pad| pad.copper.is_some()),
                 );
                 egui::CollapsingHeader::new("Position").show(ui, |ui| {

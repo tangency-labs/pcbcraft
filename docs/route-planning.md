@@ -176,8 +176,13 @@ separates frame feedback from CPU service cost and physical presentation latency
 The solver plans one copper layer at a time. The editor retains its existing through-via
 and layer-change gesture, validating each proposed via with the entire path before
 changing layer. It does not search for a multilayer route or choose via locations.
-Arcs, zones, differential pairs, length tuning remain
-outside this solver. Routing on filled zones needs current fill integration from #232.
+On a board with [copper zones](copper-zone-outlines.md), routing checks authored
+copper and mechanical openings. A committed route invalidates the old pour and
+the fill job derives new clearance around the committed tracks. A preview uses
+the pre-edit board's pour and does not use the plane as a pickup target. Combined
+routing and fill obstacle integration remains tracked in
+[#248](https://github.com/tangency-labs/pcbcraft/issues/248). Differential pairs
+and length tuning are outside this solver.
 A board containing [circular copper records](circular-copper-records.md) refuses
 query capture and `pcb.plan_route` rather than planning against incomplete
 straight-only copper.

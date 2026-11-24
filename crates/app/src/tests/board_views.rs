@@ -1431,19 +1431,23 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     };
     let lands = copper_bounds(&h, Tokens::get().board_front);
     assert_eq!(lands.len(), 30, "surface and plated lands use their front copper layer color");
+    // Each plated label groups its foreground and its outline in one paint item.
     let labels: Vec<_> = h
         .output()
         .shapes
         .iter()
-        .filter_map(|shape| {
-            if shape.clip_rect == canvas
-                && let egui::Shape::Text(text) = &shape.shape
-                && text.galley.job.text.lines().next().is_some_and(|line| line.parse::<u8>().is_ok())
+        .filter(|shape| shape.clip_rect == canvas)
+        .flat_map(|shape| match &shape.shape {
+            egui::Shape::Vec(group) => group.as_slice(),
+            shape => std::slice::from_ref(shape),
+        })
+        .filter_map(|shape| match shape {
+            egui::Shape::Text(text)
+                if text.override_text_color.is_none() && text.galley.job.text.lines().next().is_some_and(|line| line.parse::<u8>().is_ok()) =>
             {
                 Some(text)
-            } else {
-                None
             }
+            _ => None,
         })
         .collect();
     assert_eq!(labels.len(), 30);

@@ -7,7 +7,7 @@ pub fn open_button(ui: &mut Ui, enabled: bool) -> egui::Response {
     ui.add_enabled(enabled, crate::catalog::button("Board setup…", false))
 }
 
-/// Reserve the setup action and compact visibility row before the layer list starts scrolling.
+/// Reserve the board setup and visibility controls before the layer list starts scrolling.
 pub fn layer_actions_height() -> f32 {
     Tokens::get().control_height * 2.
 }

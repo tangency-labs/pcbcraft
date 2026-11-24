@@ -109,8 +109,16 @@ impl Project {
     /// Alias a saved identity to accepted copper only under unique, complete continuation evidence.
     /// Pending splits/merges get distinct transient memberships until reviewed board acceptance.
     pub(crate) fn board_intent_memberships(&self) -> crate::board::via_nets::Memberships {
+        if !self.board.vias.iter().any(|v| v.net_assignment.is_some()) {
+            return crate::board::via_nets::Memberships::default();
+        }
+        self.accepted_net_memberships()
+    }
+
+    /// Resolve active persistent net identities even on boards without authored via assignments.
+    pub(crate) fn accepted_net_memberships(&self) -> crate::board::via_nets::Memberships {
         let mut result = crate::board::via_nets::Memberships::default();
-        if self.net_registry.records.is_empty() || !self.board.vias.iter().any(|v| v.net_assignment.is_some()) {
+        if self.net_registry.records.is_empty() {
             return result;
         }
         let Ok(graph) = Graph::build(self) else { return result };
