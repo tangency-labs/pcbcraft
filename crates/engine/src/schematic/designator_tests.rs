@@ -535,11 +535,15 @@ fn designator_locks_preserve_group_representations_and_assembly_profiles() {
                     let mut conflicting = locked.clone();
                     let path = snapshot.instances_document_path().unwrap_or_else(|| persistence::ENTRY_POINT.into());
                     let mut record: Value = serde_json::from_slice(&conflicting[&path]).unwrap();
+                    assert_eq!(entry["format"], "pcbcraft-project/68");
+                    if board {
+                        assert_eq!(record["format"], "pcbcraft-instances/12");
+                    }
                     let home = if board { &mut record } else { &mut record["schematic_instances"] };
                     home["part_group_memberships"] = serde_json::to_value(snapshot.part_group_memberships().iter().collect::<Vec<_>>()).unwrap();
                     conflicting.insert(path, serde_json::to_vec(&record).unwrap());
                     let error = persistence::decode_documents(&conflicting).unwrap_err();
-                    assert!(error.contains("exactly one membership encoding"), "{error}");
+                    assert_eq!(error, "part_group_memberships and compact_part_group_memberships cannot both be present.");
                 }
                 if profiles {
                     let mut downgraded = locked.clone();

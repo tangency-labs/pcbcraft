@@ -684,7 +684,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
                 let home = if board { &mut mixed } else { &mut mixed["schematic_instances"] };
                 home["part_group_memberships"] = json!(candidate.part_group_memberships().iter().collect::<Vec<_>>());
                 let error = decode_documents(&replaced(&docs, &path, &mixed)).unwrap_err();
-                assert!(error.contains("exactly one membership encoding"), "{error}");
+                assert_eq!(error, "part_group_memberships and compact_part_group_memberships cannot both be present.");
             }
             let without_pairs = |mut project: crate::Project| {
                 Arc::make_mut(&mut project.net_registry).pairs = Arc::default();

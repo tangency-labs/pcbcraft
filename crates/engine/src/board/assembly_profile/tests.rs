@@ -807,12 +807,15 @@ fn assembly_profiles_preserve_expanded_and_compact_group_memberships() {
         let mut wrong_header = instances.clone();
         wrong_header["format"] = json!("pcbcraft-instances/1");
         invalid.insert(instance_path.clone(), serde_json::to_vec(&wrong_header).unwrap());
-        refused_because(decode_documents(&invalid), if compact { "instances format 7" } else { "unsupported instances format" });
+        refused_because(
+            decode_documents(&invalid),
+            if compact { "compact_part_group_memberships is not allowed by this instance encoding." } else { "unsupported instances format" },
+        );
         if compact {
             let mut mixed = instances;
             mixed["part_group_memberships"] = json!(grouped.part_group_memberships().iter().collect::<Vec<_>>());
             invalid.insert(instance_path.clone(), serde_json::to_vec(&mixed).unwrap());
-            refused_because(decode_documents(&invalid), "exactly one membership encoding");
+            assert_eq!(decode_documents(&invalid).unwrap_err(), "part_group_memberships and compact_part_group_memberships cannot both be present.");
         }
 
         s.apply("edit.undo", &Value::Null).unwrap();
