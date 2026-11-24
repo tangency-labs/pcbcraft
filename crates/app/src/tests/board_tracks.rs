@@ -838,35 +838,54 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     assert_eq!(routed[0].width_nm, 500_000);
 }
 
-/// While a route or a copper line is being drawn, Backspace still removes its last vertex and
-/// leaves a board selection and everything else in place.
+/// While a route, a copper line or a zone outline is being drawn, Backspace still removes its
+/// last vertex and leaves a board selection and everything else in place.
 #[test]
 fn backspace_keeps_removing_the_last_vertex_while_items_are_selected() {
-    for draw in [false, true] {
+    for tool in ["route", "line", "zone"] {
         let mut h = routable();
         let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().id.clone();
         let count = h.state().session.project().unwrap().boards().next().unwrap().footprints().count();
-        if draw {
-            click(&mut h, "Draw");
-            click(&mut h, "Draw lines on active layer");
-        } else {
-            click(&mut h, "Layout");
-            click(&mut h, "Route tracks on the active copper layer");
+        let mut points = vec![(2_540_000, 2_540_000), (5_080_000, 2_540_000), (7_620_000, 2_540_000)];
+        match tool {
+            "route" => {
+                click(&mut h, "Layout");
+                click(&mut h, "Route tracks on the active copper layer");
+            }
+            "line" => {
+                click(&mut h, "Draw");
+                click(&mut h, "Draw lines on active layer");
+            }
+            _ => {
+                click(&mut h, "Layout");
+                click(&mut h, "Draw zone outlines");
+                h.get_by_role_and_label(egui::accesskit::Role::Button, "Draw").click();
+                h.run();
+                points = vec![(2_540_000, 2_540_000), (7_620_000, 2_540_000), (7_620_000, 7_620_000), (2_540_000, 7_620_000)];
+            }
         }
-        for x in [2_540_000, 5_080_000, 7_620_000] {
-            click_route(&mut h, Point { x_nm: x, y_nm: 2_540_000 });
+        for (x_nm, y_nm) in points {
+            click_route(&mut h, Point { x_nm, y_nm });
         }
         h.state_mut().views.active.board.selection.insert(footprint.clone());
         let revision = h.state().session.revision();
         h.key_press(Key::Backspace);
         h.run();
-        assert_eq!(h.state().session.revision(), revision, "draw={draw}: Backspace edits nothing");
-        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "draw={draw}");
+        assert_eq!(h.state().session.revision(), revision, "{tool}: Backspace edits nothing");
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "{tool}");
         h.key_press(Key::Enter);
         h.run();
-        let routed = tracks(&h);
-        assert_eq!(routed.len(), 1, "draw={draw}: Backspace removed the last vertex: {routed:?}");
-        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "draw={draw}");
+        assert_eq!(h.state().message, None, "{tool}");
+        if tool == "zone" {
+            let project = h.state().session.project().unwrap();
+            let zones = project.boards().next().unwrap().zones();
+            assert_eq!(zones.len(), 1, "{tool}");
+            assert_eq!(zones[0].points.len(), 3, "{tool}: Backspace removed the last vertex");
+        } else {
+            let routed = tracks(&h);
+            assert_eq!(routed.len(), 1, "{tool}: Backspace removed the last vertex: {routed:?}");
+        }
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "{tool}");
     }
 }
 
