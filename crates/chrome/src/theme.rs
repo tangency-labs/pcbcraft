@@ -101,6 +101,8 @@ pub struct Tokens {
     /// Visible grid marks against the near-black board canvas, shared by dots and lines.
     pub board_grid: Color32,
     pub board_highlight: Color32,
+    /// Existing copper that prevents the current router proposal from being placed.
+    pub route_collision: Color32,
     /// Copper colors for front, back, plated through-hole and internal board lands.
     pub board_front: Color32,
     pub board_back: Color32,
@@ -239,6 +241,7 @@ impl Tokens {
             stack_dielectric_weave: Color32::from_rgb(143, 176, 163),
             board_grid: Color32::from_rgb(96, 112, 128),
             board_highlight: Color32::from_rgb(245, 195, 91),
+            route_collision: Color32::from_rgb(83, 234, 153),
             board_front: Color32::from_rgb(255, 48, 48),
             board_back: Color32::from_rgb(64, 96, 255),
             board_through: Color32::from_rgb(224, 188, 50),

@@ -344,8 +344,8 @@ impl ParamKind {
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::RoutePosture => board::route::posture_schema(),
-            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias"]}),
-            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias"]}),
+            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias","walkaround","highlight"]}),
+            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias","highlight"]}),
             Self::RouteFixed => board::route::fixed_schema(),
             Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
@@ -601,17 +601,17 @@ impl ParamKind {
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
             Self::DragMode => {
-                if matches!(value.as_str(), Some("shove" | "shove_vias")) {
+                if matches!(value.as_str(), Some("shove" | "shove_vias" | "walkaround" | "highlight")) {
                     Ok(())
                 } else {
-                    Err("must be shove or shove_vias")
+                    Err("must be shove, shove_vias, walkaround or highlight")
                 }
             }
             Self::RouteMode => {
-                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias")) {
+                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias" | "highlight")) {
                     Ok(())
                 } else {
-                    Err("must be walkaround, shove or shove_vias")
+                    Err("must be walkaround, shove, shove_vias or highlight")
                 }
             }
             Self::RouteFixed => {
@@ -2355,7 +2355,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "Shove tracks or tracks and vias around a connected drag of up to 256 segments on a board without authored zones",
+                summary: "Use highlight, walkaround, shove or shove_vias for a connected drag of up to 256 segments on a board without authored zones",
                 kind: ParamKind::DragMode,
             },
             Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
@@ -2529,7 +2529,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "walkaround (default) detours around copper, shove moves unlocked tracks, and shove_vias also moves eligible through vias hit by the incoming path on boards without zones",
+                summary: "walkaround (default) detours, highlight shows a blocked path at collisions, shove moves eligible tracks, and shove_vias also moves eligible through vias on boards without zones",
                 kind: ParamKind::RouteMode,
             },
             Param {
@@ -2918,6 +2918,10 @@ pub fn command(id: &str) -> Option<&'static Command> {
 pub enum CommandError {
     Unknown(String),
     InvalidParams(String),
+    /// A proposed copper edit violates clearance or would join incompatible nets.
+    CopperCollision {
+        blockers: std::collections::BTreeSet<String>,
+    },
     /// The command is real, but can't run in this state, like undo with nothing to undo.
     Unavailable(String),
     /// The edit was prepared against a revision different from `current`.
@@ -2947,7 +2951,7 @@ impl CommandError {
         use error_codes::ErrorCode;
         match self {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
-            Self::InvalidParams(_) => ErrorCode::InvalidParams,
+            Self::InvalidParams(_) | Self::CopperCollision { .. } => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
             Self::StaleRevision { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -2964,6 +2968,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::CopperCollision { blockers } => json!({"blockers": blockers}),
             _ => json!({}),
         }
     }
@@ -2975,6 +2980,7 @@ impl std::fmt::Display for CommandError {
         match self {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
             Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
+            Self::CopperCollision { .. } => f.write_str("The compound route violates copper clearance or intended net membership."),
             Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
             Self::VersionMismatch { command, stated, current } => write!(
                 f,

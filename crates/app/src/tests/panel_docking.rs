@@ -126,7 +126,7 @@ fn contextual_card_menus_and_live_docking_preserve_document_state() {
         h.get_by_label("PCB canvas").rect(),
         h.state().browser.rect(),
         &h.state().views.active.panels,
-        [true, true, true],
+        [true, true, true, false],
         false,
     );
     assert!(slots[LAYERS].bottom() <= slots[PROPERTIES].top());

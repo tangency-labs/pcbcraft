@@ -166,3 +166,19 @@ Standalone via net intent uses `pcb.add_via` with optional `target`, or
 `pcb.set_via_net` with `vias` and either `target` or `automatic: true`. Both share
 revision-checked GUI transactions. See [via net assignments](../pcb/via-net-assignments.md)
 for target qualification, inspection and unresolved-state behavior.
+
+## Route planning and connected drags
+
+`pcb.plan_route` reads the current board and returns points, a planning outcome,
+and any proposed copper displacements. In `highlight` mode it tests the preferred
+path and returns blocked geometry for display. `shove` can move eligible tracks,
+and `shove_vias` can move eligible through vias with their attached track ends.
+Submit a reached plan's `replacements` and `via_moves` with the route and its
+captured revision.
+
+`pcb.reshape_tracks` accepts the same explicit modes and `expected_revision` for
+up to 256 directly dragged segments. Highlight validates the requested geometry,
+Walkaround can add detour legs, and Shove can also move eligible neighboring copper.
+When a board has an authored zone, `pcb.plan_route` keeps vias fixed and
+`pcb.reshape_tracks` refuses policy-driven drags. See the
+[route planning and drag contract](../pcb/route-planning.md#through-vias-and-connected-segment-drags).

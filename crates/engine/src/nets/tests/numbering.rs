@@ -97,7 +97,7 @@ fn legacy_unnumbered_identities_adopt_without_renumbering_other_nets() {
         sheet.connectivity = Arc::default();
     }
     let docs = encode_documents(Arc::new(legacy)).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/17");
+    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     session.open_snapshot(decode_documents(&docs).unwrap());
     let a = name_at(&session, &pins[1]);
     let b = name_at(&session, &pins[4]);
@@ -205,7 +205,7 @@ fn inspection_indexes_active_networks_without_retired_identities() {
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
-/// Format 23 combines optional project parameters with generated net numbers, for both
+/// Project parameters coexist with generated net numbers in both
 /// schematic-owned and board-owned registries, without changing format 22's parameter contract.
 #[test]
 fn numbered_nets_and_project_parameters_round_trip_together() {
@@ -216,7 +216,7 @@ fn numbered_nets_and_project_parameters_round_trip_together() {
         apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":"B"}));
         let docs = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/23");
+        assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(entry["parameters"], json!({"Revision":"B"}));
         let reopened = decode_documents(&docs).unwrap();
         assert_eq!(reopened.parameters().get("Revision").map(String::as_str), Some("B"));

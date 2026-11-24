@@ -1136,7 +1136,7 @@ impl PcbApp {
             area,
             self.browser.rect(),
             &slot_panels,
-            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open],
+            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open, false],
             true,
         );
         let properties_area = slots[crate::workspace_panels::PROPERTIES];
@@ -1178,12 +1178,12 @@ impl PcbApp {
             Rect::NOTHING
         };
         if board && let Some((panels, _)) = board_panel {
-            use crate::workspace_panels::{FILTERS, follow, on_side};
+            use crate::workspace_panels::{FILTERS, ROUTER, follow, on_side};
             use pcbcraft_chrome::workspace::panels::Position;
             // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
             let mut drc_area = area;
-            // `board_panels` returns the Browser, Layers and Properties cards in that order.
-            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + if compact { 0. } else { 8. });
+            let router = on_side(&self.views.active.panels, ROUTER, Position::Right, panels[3]);
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom().max(router.bottom()) + if compact { 0. } else { 8. });
             // In Compact it also follows a right-docked Selection filters card instead of overlapping it.
             let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
