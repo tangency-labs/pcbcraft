@@ -85,7 +85,7 @@ fn marker_storage_roundtrips_and_rejects_incompatible_headers() {
         assert!(persistence::encode(p.clone()).is_err());
         let docs = persistence::encode_documents(p.clone()).unwrap();
         let value: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
-        assert_eq!(value["format"], "pcbcraft-project/19");
+        assert_eq!(value["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         let reopened = persistence::decode_documents(&docs).unwrap();
         assert_eq!(docs, persistence::encode_documents(reopened).unwrap());
         let packed = persistence::encode_packed(p).unwrap();
@@ -152,7 +152,7 @@ fn no_connect_intent_follows_mirrors_and_reopens_with_its_placement() {
 
                 let docs = persistence::encode_documents(mirrored.clone()).unwrap();
                 let entry: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
-                assert_eq!(entry["format"], "pcbcraft-project/19");
+                assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
                 let sheet = docs.iter().find(|(path, _)| path.starts_with("sheets/")).unwrap().1;
                 let sheet: Value = serde_json::from_slice(sheet).unwrap();
                 assert_eq!(sheet["format"], "pcbcraft-sheet/9");

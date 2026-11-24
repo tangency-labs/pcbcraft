@@ -12,7 +12,7 @@ use pcbcraft_engine::{
     persistence::{Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, read_bytes},
 };
 
-use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for};
+use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for, has_current_entry_point, retain_unchanged_documents};
 use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
@@ -117,8 +117,8 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
     let packed = decode_packed(&bytes)?;
+    let needs_upgrade = packed.needs_manifest || !has_current_entry_point(&packed.documents) || snapshot_needs_layout_upgrade(&packed.project);
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
-    let needs_upgrade = needs_manifest || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
@@ -132,7 +132,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
 fn load_folder(root: &Path) -> Result<Saved, String> {
     let (documents, migrated_documents) = folder::load_with_upgrade(root)?;
     let snapshot = decode_documents(&documents)?;
-    let needs_upgrade = migrated_documents || snapshot_needs_layout_upgrade(&snapshot);
+    let needs_upgrade = migrated_documents || !has_current_entry_point(&documents) || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
@@ -239,7 +239,9 @@ fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Proje
 
 /// Keep exact source bytes for every logically unchanged document, including Save As conversion.
 fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
+    let current = original.is_some_and(has_current_entry_point);
     if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
+        && current
         && let Some(original) = original
     {
         return Ok(original.clone());
@@ -247,16 +249,13 @@ fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, o
     let mut documents = encode_documents(snapshot.clone())?;
     if let (Some(old), Some(original)) = (previous, original) {
         let canonical = encode_documents(old.clone())?;
-        let old_board = old.board_document_path();
-        let new_board = snapshot.board_document_path();
-        for (path, bytes) in &mut documents {
-            let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
-            if canonical.get(source) == Some(bytes)
-                && let Some(original) = original.get(source)
-            {
-                bytes.clone_from(original);
-            }
-        }
+        retain_unchanged_documents(
+            &mut documents,
+            &canonical,
+            original,
+            old.board_document_path().as_deref(),
+            snapshot.board_document_path().as_deref(),
+        )?;
     }
     Ok(documents)
 }
@@ -276,7 +275,7 @@ fn save_target(
         folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), target.documents.as_deref())?;
     let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
     if target.encoding == Encoding::Zip {
-        let bytes = if unchanged && !target.needs_manifest {
+        let bytes = if unchanged && !target.needs_upgrade {
             target.bytes.clone()
         } else {
             let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;

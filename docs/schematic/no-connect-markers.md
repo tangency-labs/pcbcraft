@@ -69,11 +69,9 @@ check implementation.
 
 ## Native format review
 
-The split codec extension is `pcbcraft-project/19`, adding a nonempty
-`no_connects` list to each affected component record. Each item contains a
-terminal token and its captured electrical type, sorted by terminal. Project/18
-is already proposed by open PR #294 for named variants, so this work does not
-reuse that version. Other document paths and the container version are unchanged.
+Project/19 introduced a nonempty `no_connects` list on affected component
+records. The current project format keeps that vocabulary. Each item contains
+a terminal token and its captured electrical type, sorted by terminal.
 The first marker adopts the existing board-folder and single-use occurrence
 metadata, following the net registry's transaction precedent. Project/19 can
 carry either existing instance vocabulary, depending on whether a net registry
@@ -89,7 +87,7 @@ encoder must refuse to drop it. Explicit null, empty or duplicate records,
 malformed tokens and unknown fields are invalid. Retained records whose terminal
 is missing or has changed type remain inspectable as unresolved intent rather
 than silently retargeting. Folder and archive readers use the same native codec;
-projects without markers retain their supported low-level no-op encoding.
+projects without markers omit the field and keep the current project format.
 
 ## Checks and presentation
 
@@ -149,10 +147,10 @@ Exercise a multi-pin device, both shared and distinct multi-unit terminals,
 add/remove/no-op, invalid and stale edits, direct and named connections, missing
 unit appearances, incompatible retained intent, moves/rotations, duplication,
 flat/hierarchical clipboard and undo/redo. Check exact folder/archive reopen and
-unchanged legacy bytes, including projects with a net registry. Use real UI
+stable bytes after migration, including projects with a net registry. Use real UI
 input and rendered wide/narrow views in both themes. Mirror regressions cover
 both axes at every quarter turn, marker drawing and picking, undo/redo and exact
-folder/archive reopen with project/19 and sheet/6 together.
+folder/archive reopen with pin intent and mirrored placements.
 
 Wire-end regressions additionally exercise nearby GUI picks, every rotated and
 mirrored pin lead, report Show/Remove, invalid interior clicks, native Save/Open

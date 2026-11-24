@@ -292,7 +292,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         let mut session = fixture(board);
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
         let primary: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-        assert_eq!(primary["format"], "pcbcraft-project/48");
+        assert_eq!(primary["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert!(primary["components"][0].get("pin_functions").is_none());
         assert_eq!(before, encode_documents(decode_documents(&before).unwrap()).unwrap());
         let choice = params(&session, json!("ADC_IN"));
@@ -300,7 +300,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         let selected = session.snapshot().unwrap();
         let docs = encode_documents(selected.clone()).unwrap();
         let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/48");
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         for (path, bytes) in &before {
             if path != ENTRY_POINT {
@@ -357,7 +357,7 @@ fn pin_function_symbol_placement_requires_current_project_storage() {
     blank.apply("project.new", &json!({"create_board":false})).unwrap();
     let mut flat = Project::clone(&crate::persistence::diagnostic_snapshot(blank.snapshot().unwrap()));
     flat.layout = None;
-    let documents = encode_documents(Arc::new(flat)).unwrap();
+    let documents = crate::persistence::historical_documents(Arc::new(flat), "pcbcraft-project/9");
     session.open_snapshot(decode_documents(&documents).unwrap());
     let before = session.snapshot().unwrap();
     assert!(before.layout.is_none());
@@ -371,7 +371,7 @@ fn pin_function_symbol_placement_requires_current_project_storage() {
     let after = session.snapshot().unwrap();
     assert!(Arc::ptr_eq(&before, &after));
     assert_eq!(session.revision(), revision);
-    assert_eq!(encode_documents(after).unwrap(), documents);
+    assert_eq!(crate::persistence::historical_documents(after, "pcbcraft-project/9"), documents);
 }
 
 /// Preview and apply both refuse missing current storage without modifying the project.
@@ -417,7 +417,7 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             let original = session.snapshot().unwrap();
             let before = encode_documents(original.clone()).unwrap();
             let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], "pcbcraft-project/48");
+            assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             assert_eq!(entry.get("assembly_profiles").is_some(), profile);
             let path = original.instances_document_path();
             let membership_home: Value = match &path {
@@ -430,7 +430,7 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             session.apply(SET, &choice).unwrap();
             let docs = encode_documents(session.snapshot().unwrap()).unwrap();
             let selected: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-            assert_eq!(selected["format"], "pcbcraft-project/48");
+            assert_eq!(selected["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             if let Some(path) = path {
                 assert_eq!(docs[&path], before[&path]);
             } else {
@@ -469,10 +469,10 @@ fn pin_function_storage_preserves_differential_pairs() {
         Arc::make_mut(&mut project.net_registry).pairs = Arc::new(vec![Arc::new(pair.clone())]);
         session.change(project).unwrap();
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
         let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         if let Some(path) = session.project().unwrap().instances_document_path() {
             assert_eq!(docs[&path], before[&path]);
             assert_eq!(serde_json::from_slice::<Value>(&docs[&path]).unwrap()["format"], "pcbcraft-instances/8");
@@ -485,10 +485,10 @@ fn pin_function_storage_preserves_differential_pairs() {
     }
 }
 
-/// A pin function choice and a designator lock on the same project select project/56,
+/// A pin function choice and a designator lock coexist under the current project header,
 /// and both survive a save and reopen through the folder and packed codecs.
 #[test]
-fn pin_function_storage_with_designator_lock_writes_project_56() {
+fn pin_function_storage_with_designator_lock_keeps_the_current_header() {
     for board in [false, true] {
         let mut session = fixture(board);
         session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
@@ -500,7 +500,7 @@ fn pin_function_storage_with_designator_lock_writes_project_56() {
         let saved = session.snapshot().unwrap();
         let docs = encode_documents(saved.clone()).unwrap();
         let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/56");
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         assert_eq!(stored["components"][0]["designator_locked"], true);
         let reopened = decode_documents(&docs).unwrap();
