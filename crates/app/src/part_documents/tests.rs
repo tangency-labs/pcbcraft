@@ -952,15 +952,18 @@ fn metadata_rejects_oversized_text_and_bad_urls_without_publishing() {
     h.run();
     h.get_by_label("Link URL 1").click();
     h.run();
-    h.get_by_label("Link URL 1").type_text("ftp://example.com/ds");
-    h.run();
-    let doc = &h.state().library_editors.parts[&id];
-    assert_eq!(doc.pending.get("metadata/link/0/url").map(String::as_str), Some("ftp://example.com/ds"));
-    assert_eq!(doc.pending.get("metadata/link/0/label").map(String::as_str), Some("Datasheet"));
-    let Record::Part(part) = doc.session.record() else { panic!() };
-    assert!(part.links.is_empty());
-    assert!(doc.error.as_deref().is_some_and(|error| error.contains("HTTP(S)")), "{:?}", doc.error);
-    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    for bad_url in ["ftp://example.com/ds", "https://example.com:abc/datasheet"] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Link URL 1").type_text(bad_url);
+        h.run();
+        let doc = &h.state().library_editors.parts[&id];
+        assert_eq!(doc.pending.get("metadata/link/0/url").map(String::as_str), Some(bad_url));
+        assert_eq!(doc.pending.get("metadata/link/0/label").map(String::as_str), Some("Datasheet"));
+        let Record::Part(part) = doc.session.record() else { panic!() };
+        assert!(part.links.is_empty());
+        assert!(doc.error.as_deref().is_some_and(|error| error.contains("HTTP(S)")), "{:?}", doc.error);
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    }
 
     h.get_by_label("Link URL 1").click();
     h.run();

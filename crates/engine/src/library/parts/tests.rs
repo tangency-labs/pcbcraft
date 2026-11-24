@@ -579,6 +579,9 @@ fn part_link_urls_reject_every_malformed_form_but_accept_bounded_https() {
         json!("http://"),
         json!("https://?x"),
         json!("https://#x"),
+        json!("https://example.invalid:abc/datasheet"),
+        json!("https://example.invalid:65536/datasheet"),
+        json!("https://[bogus]/datasheet"),
         json!("https://example.invalid/a b"),
         json!("https://exa mple.invalid"),
         json!("https://example.invalid/\t"),
@@ -595,7 +598,7 @@ fn part_link_urls_reject_every_malformed_form_but_accept_bounded_https() {
     edge["links"] = json!([{"label":"Datasheet","url":format!("https://e.invalid/{}", "a".repeat(MAX_LINK_URL_CHARS - 18))}]);
     let part = read_json(&edge).unwrap();
     assert_eq!(part.links[0].url.chars().count(), MAX_LINK_URL_CHARS);
-    for url in ["http://example.invalid", "https://example.invalid/a?b=1#c"] {
+    for url in ["http://example.invalid", "https://example.invalid/a?b=1#c", "https://example.invalid:8443/datasheet", "https://[::1]:443/x"] {
         let mut changed = valid.clone();
         changed["links"] = json!([{"label":"Datasheet","url":url}]);
         assert!(read_json(&changed).is_ok(), "{url}");

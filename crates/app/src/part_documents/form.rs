@@ -1,8 +1,8 @@
 //! Native part relationships are edited here; geometry remains in the drawing editors.
 use super::*;
 use pcbcraft_engine::library::parts::{
-    Category, FieldType, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINK_URL_CHARS, MAX_LINKS, PartDefinition,
-    PartLink, Value as TypedValue,
+    Category, FieldType, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINKS, PartDefinition, PartLink,
+    Value as TypedValue,
 };
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -339,16 +339,6 @@ fn metadata_text(field: &str, text: &str, limit: usize) -> Result<String, String
     }
 }
 
-/// Accept only bounded HTTP(S) references with a host, matching the native part validator.
-fn metadata_url(text: &str) -> Result<String, String> {
-    let url = metadata_text("Link URL", text, MAX_LINK_URL_CHARS)?;
-    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
-    if host.is_empty() || url.chars().any(char::is_whitespace) {
-        return Err("Link URL must be an HTTP(S) URL; loading performs no fetch.".into());
-    }
-    Ok(url)
-}
-
 /// Validate the one-keyword-per-line draft before it replaces the authored list.
 fn metadata_keywords(lines: &[&str]) -> Result<Vec<String>, String> {
     if lines.len() > MAX_KEYWORDS {
@@ -377,7 +367,8 @@ fn metadata_link(
     rows: usize,
 ) -> Result<PartLink, String> {
     let label = metadata_text("Link label", label, MAX_LINK_LABEL_CHARS)?;
-    let url = metadata_url(url)?;
+    let url = url.trim();
+    PartLink::validate_url(url)?;
     let duplicate = (0..rows).filter(|other| *other != index).any(|other| {
         let other = pending
             .get(&link_key(other, "label"))
@@ -388,7 +379,7 @@ fn metadata_link(
     if duplicate {
         return Err(format!("Duplicate link label {label:?} after trimming and case folding."));
     }
-    Ok(PartLink { label, url })
+    Ok(PartLink { label, url: url.to_owned() })
 }
 
 /// Commit rows that were typed ahead of an unauthored row, in row order. A ready row keeps its

@@ -735,29 +735,37 @@ fn check_text(field: &str, text: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Extract the host from an HTTP(S) authority, ignoring userinfo and any port.
-///
-/// Userinfo ends at the last `@`. The host keeps IPv6 brackets and ends at the closing `]`, or,
-/// for other hosts, at the first `:`. An authority with no host (`:8080`, `user@`, `[]`, `""`)
-/// yields an empty string so the caller can reject it.
-fn http_authority_host(authority: &str) -> &str {
+/// Check that an HTTP(S) authority has a host and, if supplied, a numeric port in range.
+/// A bracketed host must be an IPv6 address, followed only by an optional port.
+fn http_authority_is_valid(authority: &str) -> bool {
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
-    if let Some(after_bracket) = host_port.strip_prefix('[') {
-        return match after_bracket.split_once(']') {
-            Some((address, _)) if !address.is_empty() => &host_port[..address.len() + 2],
-            _ => "",
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let Some((address, suffix)) = after_bracket.split_once(']') else { return false };
+        if address.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        let port = if suffix.is_empty() {
+            ""
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            port
+        } else {
+            return false;
         };
-    }
-    host_port.split_once(':').map_or(host_port, |(host, _)| host)
+        (address, port)
+    } else {
+        host_port.split_once(':').unwrap_or((host_port, ""))
+    };
+    !host.is_empty()
+        && !host.contains(['[', ']', '\\'])
+        && (port.is_empty() || (port.bytes().all(|digit| digit.is_ascii_digit()) && port.parse::<u16>().is_ok()))
 }
 
-/// Check a bounded HTTP(S) reference: an `http://` or `https://` URL with a nonempty host in its
-/// authority, optional userinfo and port, and no whitespace anywhere. Reading a native record
-/// never fetches the URL.
+/// Check a bounded HTTP(S) reference with a host, validated IPv6 literals and port numbers, and
+/// no whitespace. Reading a native record never fetches the URL.
 pub(crate) fn check_http_url(field: &str, url: &str, limit: usize) -> Result<(), String> {
     check_text(field, url, limit)?;
     let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
-    if http_authority_host(authority).is_empty() || url.chars().any(char::is_whitespace) {
+    if !http_authority_is_valid(authority) || url.chars().any(char::is_whitespace) {
         return Err(format!("{field} must be an HTTP(S) URL; loading performs no fetch."));
     }
     Ok(())
@@ -926,6 +934,10 @@ mod tests {
             "https:///path",
             "https://user@/x",
             "https://[]/x",
+            "https://[bogus]/x",
+            "https://[::1]suffix/x",
+            "https://example.com:abc/x",
+            "https://example.com:65536/x",
             "https://example.com/a b",
             "https://exa mple.invalid",
             "file:///tmp/x.pdf",

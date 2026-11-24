@@ -20,6 +20,13 @@ pub struct PartLink {
     /// HTTP(S) reference, 1 to [`MAX_LINK_URL_CHARS`] characters, never fetched on load.
     pub url: String,
 }
+
+impl PartLink {
+    /// Validate a trimmed link URL before it is stored. No URL is fetched.
+    pub fn validate_url(url: &str) -> Result<(), String> {
+        crate::library::check_http_url("Link URL", url, MAX_LINK_URL_CHARS)
+    }
+}
 /// A reusable generic part contains no drawings, manufacturer identity, stock or prices.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -342,7 +349,7 @@ fn validate_links(links: &[PartLink]) -> Result<(), String> {
         if !seen.insert(link.label.to_lowercase()) {
             return Err(format!("Duplicate link label {:?} after trimming and case folding.", link.label));
         }
-        crate::library::check_http_url("Link URL", &link.url, MAX_LINK_URL_CHARS)?;
+        PartLink::validate_url(&link.url)?;
     }
     Ok(())
 }
