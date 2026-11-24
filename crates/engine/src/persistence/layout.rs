@@ -210,7 +210,7 @@ mod migration_tests {
         let board = project.board_target().unwrap();
         Arc::make_mut(&mut Arc::make_mut(&mut project).sheets)[0].sheet_id = board.board;
         let project = decode(&encode(project).unwrap()).unwrap();
-        let before = encode_documents(project).unwrap();
+        let before = crate::persistence::historical_documents(project, "pcbcraft-project/6");
         let after = migrate_board_layout(before.clone(), ".").unwrap();
         let loaded = decode_documents(&after).unwrap();
         assert_eq!(loaded.board_target(), Some(board));
@@ -271,7 +271,7 @@ mod migration_tests {
             for sheet in Arc::make_mut(&mut Arc::make_mut(&mut historical).sheets) {
                 sheet.occurrence_id = None;
             }
-            let before = encode_documents(historical.clone()).unwrap();
+            let before = crate::persistence::historical_documents(historical.clone(), &format!("pcbcraft-project/{version}"));
             let header: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
             assert_eq!(header["format"], format!("pcbcraft-project/{version}"));
             let after = migrate_board_layout(before.clone(), ".").unwrap();
@@ -302,7 +302,14 @@ mod migration_tests {
             let mut session = Session::default();
             session.open_snapshot(project.clone());
             assert_eq!(session.inspect()["project"]["boards"][0]["file"], path);
-            assert!(encode_documents(project).unwrap().contains_key(&path));
+            let docs = encode_documents(project).unwrap();
+            let stored_path = crate::persistence::project_board_path(&docs[ENTRY_POINT]).unwrap().unwrap();
+            assert!(docs.contains_key(&stored_path));
+            if root.is_some() {
+                assert_eq!(stored_path, path);
+            } else {
+                assert_eq!(path, "board.json");
+            }
         }
     }
 

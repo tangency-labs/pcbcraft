@@ -189,6 +189,27 @@ straight-only copper.
 
 ## Track shove
 
+Open **Layout › Route › Router Settings** to choose the policy for new routes,
+holding and dragging a track, or pressing **D** over a track. The setting belongs
+to the current PCB pane and takes effect as soon as it changes. Router Settings
+can stay open while working on the board. Use its position menu to float it or
+dock it on either side. Finish or cancel a captured edit before changing policy.
+
+- **Highlight collisions** marks existing tracks, pads and vias that block the
+  proposal. The proposed trace keeps its layer color. A conflicted proposal
+  cannot be placed.
+- **Walkaround** detours the proposed copper around fixed obstacles. For a drag,
+  it can replace a dragged leg with a path between the same proposed endpoints.
+- **Shove** displaces eligible unlocked tracks. **Shove through vias** also lets
+  the gesture displace eligible through vias and carry their attached ends.
+
+A held drag starts from the pressed segment and stretches connected ends. Hold
+until the preview is ready, then release on the canvas to publish that exact
+proposal in one undo step. Esc cancels. **M** and dragging a multi-item selection
+still translate the entire selection. Boards with authored zones keep vias fixed
+during route creation and refuse policy-driven segment drags while filled-copper
+planning is pending.
+
 The routing context menu offers **Shove tracks** alongside **Walk around
 obstacles**. Shove searches on a disposable overlay, displacing unlocked tracks
 while pads, vias and locked tracks stay fixed. Uniform-width, same-layer and
@@ -329,7 +350,7 @@ For MCP, use `pcb.plan_route` with `mode: "shove_vias"`. Pass both the returned
 `replacements` and `via_moves` to `pcb.add_tracks` with the captured
 `expected_revision`. Each via move names the existing `via` UUID and its new
 `at` point. The replacement paths include the tracks that follow the via.
-`pcb.reshape_tracks` accepts `mode: "shove"` or `"shove_vias"` and requires
+`pcb.reshape_tracks` accepts `mode: "highlight"`, `"walkaround"`, `"shove"`, or `"shove_vias"` and requires
 `expected_revision` in either mode. Supply the new ends of the connected
 segments being dragged in `tracks`, starting with the selected segment.
 The command plans the neighboring displacements during its normal copper

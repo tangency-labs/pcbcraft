@@ -272,8 +272,8 @@ fn gesture_geometry(query: &ClearanceQuery, request: &Request, points: &[Point])
     Ok(route)
 }
 
-/// Place the requested D-drag segments on the gesture overlay and feed their collisions to
-/// the existing track cascade. The final reshape command checks the old contacts independently.
+/// Plan a connected drag against captured copper. The final reshape command validates all
+/// original contacts and the exact geometry it will publish, independently of the planner.
 pub(in crate::board::route) async fn drag(
     query: &ClearanceQuery,
     ends: Vec<Ends>,
@@ -287,7 +287,7 @@ pub(in crate::board::route) async fn drag(
     }
     // Bound the directly supplied geometry by the existing placement gesture budget.
     if ends.len() > crate::board::track::MAX_PATH_POINTS {
-        return Err(CommandError::InvalidParams("A shove drag supports at most 256 directly moved tracks.".into()));
+        return Err(CommandError::InvalidParams("A routing drag supports at most 256 directly moved tracks.".into()));
     }
     let first = ends.first().ok_or_else(|| CommandError::InvalidParams("Empty drag.".into()))?;
     let tracks = view.tracks();
@@ -313,20 +313,33 @@ pub(in crate::board::route) async fn drag(
     }
     let mut items = Vec::new();
     let mut membership = None;
+    let mut originals = BTreeMap::new();
     for object in query.objects() {
         super::super::search::yield_unit().await;
-        if Uuid::parse_str(&object.name).is_ok_and(|id| moved.contains_key(&id)) {
+        if let Ok(id) = Uuid::parse_str(&object.name)
+            && moved.contains_key(&id)
+        {
+            if mode == Mode::Walkaround {
+                originals.insert(id, object);
+            }
             let intent = (object.island, object.intended_nets.clone());
             if membership.replace(intent.clone()).is_some_and(|old| old != intent) {
-                return Err(CommandError::InvalidParams("Shove-drag tracks must belong to one connected island.".into()));
+                return Err(CommandError::InvalidParams("Dragged tracks must belong to one connected island.".into()));
             }
         } else {
             items.push(object.clone());
         }
     }
     let (island, nets) = membership.ok_or_else(|| CommandError::InvalidParams("Missing drag source.".into()))?;
+    if mode == Mode::Highlight {
+        // The compound validator tests the exact requested legs against fixed obstacles.
+        return Ok(fixed_drag_plan(Vec::new(), 0));
+    }
     let origin = items.iter().position(|o| !o.mechanical && o.island == island);
     let projected = query.with_objects(items)?;
+    if mode == Mode::Walkaround {
+        return walk_drag(query, &projected, &ends, &originals, budget, progress).await;
+    }
     let chains = chains::capture(&projected).await?;
     let request = Request {
         head: first.start,
@@ -359,4 +372,81 @@ pub(in crate::board::route) async fn drag(
         motion.finish(&mut plan);
     }
     Ok(plan)
+}
+
+/// Route each reshaped leg around fixed obstacles, retaining its source membership and
+/// endpoints. Compound validation checks the resulting paths and all mutual contacts.
+async fn walk_drag(
+    query: &ClearanceQuery,
+    projected: &ClearanceQuery,
+    ends: &[Ends],
+    originals: &BTreeMap<Uuid, &Object>,
+    budget: usize,
+    progress: Arc<AtomicUsize>,
+) -> Result<Plan, CommandError> {
+    use super::super::walkaround::{Stop, Walker};
+    let mut paths = Vec::new();
+    for row in ends {
+        let old = originals.get(&row.track).ok_or_else(|| CommandError::InvalidParams("Missing drag source track.".into()))?;
+        let mut contacts = BTreeSet::new();
+        for index in query.candidates(&old.contour, &old.layers)? {
+            super::super::search::yield_unit().await;
+            let other = &query.objects()[index];
+            if old.contour.touches(&other.contour) {
+                contacts.insert(other.name.clone());
+            }
+        }
+        let request = Request {
+            head: row.start,
+            target: row.end,
+            width_nm: (old.contour.radius * 2.) as i64,
+            layer: old.layers[0],
+            origin: None,
+            fixed: Vec::new(),
+            merge_same_net: false,
+            mode: Mode::Walkaround,
+            posture: Posture::Diagonal,
+            flipped: false,
+            previous: Vec::new(),
+        };
+        let mut walker = Walker::new(projected, &request, budget, progress.clone())?;
+        walker.inherit(old, Some(contacts));
+        let result = async {
+            if walker.clear_drag_leg(row.start, row.end).await? {
+                return Ok(None);
+            }
+            walker.run(&request).await.map(Some)
+        }
+        .await;
+        match result {
+            Ok(None) => {}
+            Ok(Some(plan)) if plan.outcome == Outcome::Reached => {
+                let clearance = query.membership_clearance(&old.intended_nets, &old.intended_nets) as f64;
+                if !chains::legal_stroke(&plan.points, old.contour.radius * 2. + clearance).await {
+                    return Err(CommandError::InvalidParams("Segment drag detour overlaps or returns too close to itself.".into()));
+                }
+                paths.push(Replacement { track: row.track, points: plan.points });
+            }
+            Err(Stop::Failed(error)) => return Err(error),
+            Err(Stop::Exhausted) => return Err(CommandError::InvalidParams("Segment drag ran out of walkaround work.".into())),
+            Ok(Some(_)) => return Err(CommandError::InvalidParams("Segment drag could not walk around the fixed copper.".into())),
+        }
+    }
+    Ok(fixed_drag_plan(paths, progress.load(Ordering::Relaxed)))
+}
+
+/// A fixed-obstacle drag reports only replacement paths for tracks being reshaped.
+fn fixed_drag_plan(replacements: Vec<Replacement>, probes: usize) -> Plan {
+    Plan {
+        adjusted_target: None,
+        start_blocked: false,
+        replacements,
+        via_moves: Vec::new(),
+        shove: None,
+        points: Vec::new(),
+        outcome: Outcome::Reached,
+        blocker: None,
+        collisions: Default::default(),
+        probes,
+    }
 }

@@ -292,7 +292,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         let mut session = fixture(board);
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
         let primary: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-        assert_eq!(primary["format"], "pcbcraft-project/48");
+        assert_eq!(primary["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert!(primary["components"][0].get("pin_functions").is_none());
         assert_eq!(before, encode_documents(decode_documents(&before).unwrap()).unwrap());
         let choice = params(&session, json!("ADC_IN"));
@@ -300,7 +300,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         let selected = session.snapshot().unwrap();
         let docs = encode_documents(selected.clone()).unwrap();
         let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/48");
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         for (path, bytes) in &before {
             if path != ENTRY_POINT {
@@ -357,7 +357,7 @@ fn pin_function_symbol_placement_requires_current_project_storage() {
     blank.apply("project.new", &json!({"create_board":false})).unwrap();
     let mut flat = Project::clone(&crate::persistence::diagnostic_snapshot(blank.snapshot().unwrap()));
     flat.layout = None;
-    let documents = encode_documents(Arc::new(flat)).unwrap();
+    let documents = crate::persistence::historical_documents(Arc::new(flat), "pcbcraft-project/9");
     session.open_snapshot(decode_documents(&documents).unwrap());
     let before = session.snapshot().unwrap();
     assert!(before.layout.is_none());
@@ -371,7 +371,7 @@ fn pin_function_symbol_placement_requires_current_project_storage() {
     let after = session.snapshot().unwrap();
     assert!(Arc::ptr_eq(&before, &after));
     assert_eq!(session.revision(), revision);
-    assert_eq!(encode_documents(after).unwrap(), documents);
+    assert_eq!(crate::persistence::historical_documents(after, "pcbcraft-project/9"), documents);
 }
 
 /// Preview and apply both refuse missing current storage without modifying the project.
@@ -417,7 +417,7 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             let original = session.snapshot().unwrap();
             let before = encode_documents(original.clone()).unwrap();
             let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], "pcbcraft-project/48");
+            assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             assert_eq!(entry.get("assembly_profiles").is_some(), profile);
             let path = original.instances_document_path();
             let membership_home: Value = match &path {
@@ -430,7 +430,7 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             session.apply(SET, &choice).unwrap();
             let docs = encode_documents(session.snapshot().unwrap()).unwrap();
             let selected: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-            assert_eq!(selected["format"], "pcbcraft-project/48");
+            assert_eq!(selected["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             if let Some(path) = path {
                 assert_eq!(docs[&path], before[&path]);
             } else {
@@ -469,10 +469,10 @@ fn pin_function_storage_preserves_differential_pairs() {
         Arc::make_mut(&mut project.net_registry).pairs = Arc::new(vec![Arc::new(pair.clone())]);
         session.change(project).unwrap();
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
         let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         if let Some(path) = session.project().unwrap().instances_document_path() {
             assert_eq!(docs[&path], before[&path]);
             assert_eq!(serde_json::from_slice::<Value>(&docs[&path]).unwrap()["format"], "pcbcraft-instances/8");
@@ -485,10 +485,10 @@ fn pin_function_storage_preserves_differential_pairs() {
     }
 }
 
-/// A pin function choice and a designator lock on the same project select project/56,
+/// A pin function choice and a designator lock coexist under the current project header,
 /// and both survive a save and reopen through the folder and packed codecs.
 #[test]
-fn pin_function_storage_with_designator_lock_writes_project_56() {
+fn pin_function_storage_with_designator_lock_keeps_the_current_header() {
     for board in [false, true] {
         let mut session = fixture(board);
         session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
@@ -500,7 +500,7 @@ fn pin_function_storage_with_designator_lock_writes_project_56() {
         let saved = session.snapshot().unwrap();
         let docs = encode_documents(saved.clone()).unwrap();
         let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/56");
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         assert_eq!(stored["components"][0]["designator_locked"], true);
         let reopened = decode_documents(&docs).unwrap();
@@ -511,11 +511,11 @@ fn pin_function_storage_with_designator_lock_writes_project_56() {
     }
 }
 
-/// Output recipes with a pin function choice use project/60, with or without a designator
-/// lock. Both codecs reopen it byte-identically, the older single-feature headers refuse the
-/// other feature, and removing the recipes returns to project/56.
+/// Output recipes with a pin function choice keep the current project header, with or without
+/// a designator lock. Both codecs reopen it byte-identically, the older pin-function headers
+/// refuse recipes, and removing the recipes or the choice keeps the current header.
 #[test]
-fn pin_function_storage_with_output_recipes_writes_project_60() {
+fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
     let recipe = uuid::Uuid::from_u128(0x123);
     let mut session = fixture(true);
     let board = session.project().unwrap().boards().next().unwrap();
@@ -545,7 +545,7 @@ fn pin_function_storage_with_output_recipes_writes_project_60() {
         let saved = session.snapshot().unwrap();
         let docs = encode_documents(saved.clone()).unwrap();
         let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/60");
+        assert_eq!(stored["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
         assert_eq!(stored["components"][0].get("designator_locked").is_some(), locked);
         let reopened = decode_documents(&docs).unwrap();
@@ -554,22 +554,30 @@ fn pin_function_storage_with_output_recipes_writes_project_60() {
         assert_eq!(reopened.components().next().unwrap().designator_locked(), locked);
         assert_eq!(encode_documents(reopened).unwrap(), docs);
         assert_eq!(encode_documents(decode_packed(&encode_packed(saved).unwrap()).unwrap().project).unwrap(), docs);
-        // Recipe headers refuse the pin function choice; pin-function headers refuse recipes.
-        let older = if locked { ["pcbcraft-project/57", "pcbcraft-project/56"] } else { ["pcbcraft-project/47", "pcbcraft-project/48"] };
-        let error = decode_documents(&with_format(&docs, older[0])).err().unwrap();
-        assert!(error.contains("Alternate pin functions require project format 48, 56 or 60"), "{error}");
-        let error = decode_documents(&with_format(&docs, older[1])).err().unwrap();
-        assert!(error.contains("output_recipes"), "{error}");
+        // The older pin-function headers refuse recipes.
+        for older in ["pcbcraft-project/48", "pcbcraft-project/56"] {
+            let error = decode_documents(&with_format(&docs, older)).err().unwrap();
+            assert!(error.contains("output_recipes requires project format 47, 57, 60 or 61"), "{error}");
+        }
+        // A file saved earlier as project/60 still opens, and the next save writes the current format.
+        let reopened = decode_documents(&with_format(&docs, "pcbcraft-project/60")).unwrap();
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert_eq!(reopened.components().next().unwrap().designator_locked(), locked);
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        // The older recipe envelopes without pin functions refuse the choice.
+        let older = if locked { "pcbcraft-project/57" } else { "pcbcraft-project/47" };
+        let error = decode_documents(&with_format(&docs, older)).err().unwrap();
+        assert!(error.contains("Alternate pin functions require"), "{error}");
     }
 
-    // Removing the recipes writes the lower envelope that still holds the locked choice.
+    // Removing the recipes keeps the current header with the locked choice.
     set_recipe(&mut session, &Value::Null);
-    assert_eq!(format(&encode_documents(session.snapshot().unwrap()).unwrap()), "pcbcraft-project/56");
+    assert_eq!(format(&encode_documents(session.snapshot().unwrap()).unwrap()), crate::persistence::CURRENT_PROJECT_FORMAT);
     session.apply("edit.undo", &Value::Null).unwrap();
-    // Clearing the choice keeps the alternate-capable symbol, which still needs project/60.
+    // Clearing the choice keeps the alternate-capable symbol and the current header.
     session.apply(SET, &params(&session, Value::Null)).unwrap();
     let cleared = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(format(&cleared), "pcbcraft-project/60");
+    assert_eq!(format(&cleared), crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(encode_documents(decode_documents(&cleared).unwrap()).unwrap(), cleared);
 }
 

@@ -38,6 +38,8 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
     let empty_archive = encode_packed(original).unwrap();
     assert_eq!(encode_documents(decode_documents(&empty).unwrap()).unwrap(), empty);
     assert!(session.inspect()["project"].get("output_recipes").is_none());
+    let format = |documents: &Documents| serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"].clone();
+    assert_eq!(format(&empty), crate::persistence::CURRENT_PROJECT_FORMAT);
 
     let revision = set(&mut session, ID, &content).unwrap();
     assert_eq!(set(&mut session, ID, &content).unwrap(), revision);
@@ -50,7 +52,7 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
         }
     }
     let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/47");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(entry["output_recipes"], json!([{"id":ID,"content":content}]));
     assert_eq!(session.inspect()["project"]["output_recipes"], entry["output_recipes"]);
     let reopened = decode_documents(&saved).unwrap();
@@ -63,7 +65,10 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
 
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(session.project().unwrap().output_recipes().is_empty());
-    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), empty);
+    let undone = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(format(&undone), crate::persistence::CURRENT_PROJECT_FORMAT);
+    assert_eq!(undone, empty);
+    assert!(decode_documents(&undone).unwrap().output_recipes().is_empty());
     assert_eq!(encode_packed(session.snapshot().unwrap()).unwrap(), empty_archive);
     session.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
@@ -74,30 +79,29 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
     set(&mut session, ID, &Value::Null).unwrap();
-    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), empty);
+    let removed = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(removed, empty);
+    assert!(decode_documents(&removed).unwrap().output_recipes().is_empty());
 }
 
-/// Old headers refuse the new field; the new header requires a nonempty, typed recipe array.
+/// Older headers refuse the field; the current header keeps it optional, nonempty and typed.
 #[test]
 fn recipe_reader_refuses_wrong_header_and_invalid_records() {
     let (mut session, content) = fixture();
-    let original = encode_documents(session.snapshot().unwrap()).unwrap();
-    let old_header: Value = serde_json::from_slice::<Value>(&original[ENTRY_POINT]).unwrap()["format"].clone();
     set(&mut session, ID, &content).unwrap();
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    for header in [old_header, json!("pcbcraft-project/36"), json!("pcbcraft-project/39"), json!("pcbcraft-project/45"), json!("pcbcraft-project/46")]
-    {
-        let invalid = replace_entry(&saved, |entry| entry["format"] = header);
-        assert!(decode_documents(&invalid).err().unwrap().contains("earlier formats do not allow"));
+    for header in ["pcbcraft-project/36", "pcbcraft-project/39", "pcbcraft-project/45", "pcbcraft-project/51", "pcbcraft-project/56"] {
+        let invalid = replace_entry(&saved, |entry| entry["format"] = json!(header));
+        assert!(decode_documents(&invalid).err().unwrap().contains("output_recipes requires project format 47, 57, 60 or 61"), "{header}");
     }
     let missing = replace_entry(&saved, |entry| {
         entry.as_object_mut().unwrap().remove("output_recipes");
     });
-    assert!(decode_documents(&missing).err().unwrap().contains("requires a nonempty output_recipes array"));
+    assert!(decode_documents(&missing).unwrap().output_recipes().is_empty());
     let duplicate = json!([{"id":ID,"content":content},{"id":ID,"content":content}]);
     for (recipes, expected) in [
         (Value::Null, "invalid type: null"),
-        (json!([]), "requires a nonempty output_recipes array"),
+        (json!([]), "and a nonempty array"),
         (duplicate, "distinct non-nil IDs"),
         (json!([{"id":Uuid::nil(),"content":content}]), "distinct non-nil IDs"),
     ] {
@@ -185,10 +189,10 @@ fn invalid_or_stale_command_does_not_change_history() {
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
-/// Recipes and a designator lock together use project/57 and survive save/reopen in both
-/// codecs. The writer is lazy: removing either feature returns to /51 or /47 exactly.
+/// Recipes and a designator lock are optional records of the current format and survive
+/// save/reopen in both codecs. Removing either feature keeps the format and restores the bytes.
 #[test]
-fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
+fn recipe_and_designator_lock_share_the_current_format() {
     let (mut session, content) = fixture();
     session.apply(crate::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let symbol = session.project().unwrap().symbols()[0].id();
@@ -203,32 +207,48 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
     let format = |documents: &Documents| serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"].clone();
     set(&mut session, ID, &content).unwrap();
     let recipes_only = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(format(&recipes_only), "pcbcraft-project/47");
+    assert_eq!(format(&recipes_only), crate::persistence::CURRENT_PROJECT_FORMAT);
 
     lock(&mut session, true);
     let project = session.snapshot().unwrap();
     let both = encode_documents(project.clone()).unwrap();
-    assert_eq!(format(&both), "pcbcraft-project/57");
+    assert_eq!(format(&both), crate::persistence::CURRENT_PROJECT_FORMAT);
     let reopened = decode_documents(&both).unwrap();
     assert_eq!(reopened.output_recipes(), project.output_recipes());
     assert!(reopened.components().any(|part| part.designator_locked()));
     assert_eq!(encode_documents(reopened).unwrap(), both);
-    let packed = decode_packed(&encode_packed(project).unwrap()).unwrap();
+    let packed = decode_packed(&encode_packed(project.clone()).unwrap()).unwrap();
     assert!(packed.project.components().any(|part| part.designator_locked()));
     assert_eq!(packed.project.output_recipes().len(), 1);
     assert_eq!(packed.documents, both);
 
-    // Each single-feature header refuses the other feature; /57 requires both.
-    let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/51"));
-    assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes"));
-    let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/47"));
-    assert!(decode_documents(&downgraded).err().unwrap().contains("Designator locks require project format 51, 56, 57 or 60"));
+    // The older lock headers refuse recipes.
+    for header in ["pcbcraft-project/51", "pcbcraft-project/56"] {
+        let downgraded = replace_entry(&both, |entry| entry["format"] = json!(header));
+        assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes requires project format 47, 57, 60 or 61"), "{header}");
+    }
+    // Files saved earlier as project/47 (recipes) or /57 (recipes and a lock) still open, and the
+    // next save writes the current format with the same records.
+    for (header, current) in [("pcbcraft-project/47", &recipes_only), ("pcbcraft-project/57", &both)] {
+        let old = replace_entry(current, |entry| entry["format"] = json!(header));
+        let reopened = decode_documents(&old).unwrap();
+        assert_eq!(reopened.output_recipes(), project.output_recipes(), "{header}");
+        assert_eq!(&encode_documents(reopened).unwrap(), current, "{header}");
+    }
+    // Those envelopes keep their own rules: recipes are required, /47 refuses locks and /57 requires one.
+    let missing = replace_entry(&both, |entry| {
+        entry["format"] = json!("pcbcraft-project/57");
+        entry.as_object_mut().unwrap().remove("output_recipes");
+    });
+    assert!(decode_documents(&missing).err().unwrap().contains("formats 47, 57 and 60 require it"));
+    let locked = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/47"));
+    assert!(decode_documents(&locked).err().unwrap().contains("Designator locks require"));
     let unlocked = replace_entry(&recipes_only, |entry| entry["format"] = json!("pcbcraft-project/57"));
     assert!(decode_documents(&unlocked).err().unwrap().contains("at least one true"));
 
     set(&mut session, ID, &Value::Null).unwrap();
     let locks_only = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(format(&locks_only), "pcbcraft-project/51");
+    assert_eq!(format(&locks_only), crate::persistence::CURRENT_PROJECT_FORMAT);
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), both);
     lock(&mut session, false);

@@ -255,9 +255,13 @@ the active layer. Copper shapes are conductive linework; technical-layer graphic
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
 For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
-The route preview walks around fixed copper, keeping its starting net through
-vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
-blocked or incomplete searches keep the last legal preview and refuse that target.
+The router defaults to Walkaround and keeps its starting net through vertices
+and vias. Open **Layout → Route → Router Settings** to choose Walkaround, Shove,
+or Highlight collisions for new routes, **D**, and held drags on a single track.
+The settings card can float or dock through its **⋯** menu while you work. In
+Highlight collisions, existing blockers turn green and placement waits for a
+clear path. Release a held drag on the validated preview to commit one undoable
+edit. [Router policies and limitations](pcb/route-planning.md#track-shove)
 
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB

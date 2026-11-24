@@ -76,18 +76,12 @@ bindings, origins and identities.
 
 ## Storage and consumer boundary
 
-Without generated numbers, nonempty bindings select `pcbcraft-project/21`, retaining the required nonempty
-class catalog. Schematic-only bindings remain under
-`schematic_instances.net_registry`; board-owned bindings use
-`pcbcraft-instances/3` in the existing board folder. Numbered registries instead
-use project/23 and board-owned instances/4, with bindings optional in that envelope.
-Active [designator locks](native-project-storage.md#designator-locks) select
-project/51 while retaining this registry home and its content-selected instance
-format. See [part groups](part-groups.md#storage) for project header precedence
-when memberships are present. Board-owned expanded and compact memberships use
-instances/5 and instances/7 respectively, unless differential pairs require
-instances/8. A catalog without memberships retains the header its other records
-require. First-board creation moves
+The current project format stores bindings with a nonempty class catalog.
+Schematic-only bindings remain under `schematic_instances.net_registry`.
+Board-owned bindings use `pcbcraft-instances/3`, or instances/4 for a numbered
+registry. Expanded and compact memberships use instances/5 and /7 respectively,
+unless differential pairs require instances/8. A catalog without memberships
+keeps the instance format required by the other records. First-board creation moves
 the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and
 pending board updates remain independent of classification edits.
