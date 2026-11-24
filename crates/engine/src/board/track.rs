@@ -40,16 +40,33 @@ pub use unroute::UNROUTE_CONNECTION;
 pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
+/// Merge addressed collinear and stacked duplicate track segments in one undo step.
+pub const MERGE_TRACKS: &str = "pcb.merge_tracks";
+/// Largest encoded `merge_tracks` report, checked before anything is published. It leaves
+/// 1 MiB of the 16 MiB live editor reply limit for the reply wrapper and the revision.
+pub const MERGE_REPORT_MAX_BYTES: usize = 15 << 20;
 
 pub(crate) mod chains;
 mod locks;
+mod merge;
 pub mod preparation;
 pub mod replacements;
+/// A directly dragged segment retains its source UUID, layer and width.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Ends {
+    pub(crate) track: Uuid,
+    pub(crate) start: Point,
+    pub(crate) end: Point,
+}
+
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod capacity_tests;
 #[cfg(test)]
 mod lock_tests;
+#[cfg(test)]
+mod merge_tests;
 
 /// The width the PCB route tool starts with, 0.25 mm.
 pub const DEFAULT_WIDTH_NM: i64 = 250_000;
@@ -226,6 +243,14 @@ pub struct Copper {
     pub vias: BTreeMap<Uuid, usize>,
 }
 
+/// Physical copper and its unambiguous intended nets for one presentation snapshot.
+pub struct CopperPresentation {
+    pub copper: Copper,
+    pub names: BTreeMap<Uuid, String>,
+    /// Active persistent net per physical island. Unresolved or conflicting islands have no ID.
+    pub net_ids: Vec<Option<Uuid>>,
+}
+
 /// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
 #[derive(Clone)]
 pub(super) struct Land {
@@ -264,6 +289,9 @@ impl<'a> BoardView<'a> {
     /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
     pub fn copper(self) -> Result<Copper, String> {
         self.require_linear_copper()?;
+        if let Some(Ok(fill)) = self.filled_zones() {
+            return Ok(fill.copper.clone());
+        }
         Ok(islands(&lands(self), self.tracks(), self.vias()).0)
     }
 
@@ -295,12 +323,22 @@ impl<'a> BoardView<'a> {
     /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
     /// Circular copper returns an error before any partial geometry is resolved.
     pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
+        let projected = self.copper_presentation(false)?;
+        Ok((projected.copper, projected.names))
+    }
+
+    /// Resolve optional persistent colors in the same contact pass as the existing display names.
+    /// When IDs are omitted, no additional registry reconciliation is performed.
+    pub fn copper_presentation(self, include_ids: bool) -> Result<CopperPresentation, String> {
         self.require_linear_copper()?;
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
+        let (copper, members) = match self.filled_zones() {
+            Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
+            _ => islands(&lands, tracks, vias),
+        };
         let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
-        let intent = self.project().board_intent_memberships();
+        let intent = if include_ids { self.project().accepted_net_memberships() } else { self.project().board_intent_memberships() };
         let intrinsic = super::via_nets::node_membership(self.project(), &lands, tracks.len(), vias, &intent);
         let island_net: Vec<_> = members
             .iter()
@@ -313,11 +351,18 @@ impl<'a> BoardView<'a> {
                 if unresolved || ids.len() != 1 {
                     return None;
                 }
-                intent.names.get(ids.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
+                ids.first().copied()
             })
             .collect();
+        let net_ids = if include_ids {
+            let ids: BTreeMap<_, _> = intent.ids.iter().map(|(&id, &member)| (member, id)).collect();
+            island_net.iter().map(|member| member.and_then(|index| ids.get(&index).copied())).collect()
+        } else {
+            Vec::new()
+        };
         let mut nets = BTreeMap::new();
-        for (nodes, name) in members.iter().zip(island_net) {
+        for (nodes, member) in members.iter().zip(island_net) {
+            let name = member.and_then(|member| intent.names.get(&member).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone())));
             let Some(name) = name else { continue };
             for node in nodes {
                 if let Some(index) = node.checked_sub(lands.len()) {
@@ -328,7 +373,7 @@ impl<'a> BoardView<'a> {
                 }
             }
         }
-        Ok((copper, nets))
+        Ok(CopperPresentation { copper, names: nets, net_ids })
     }
 }
 
@@ -1096,7 +1141,7 @@ fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, Co
 /// Edit a private candidate without publishing. Refuse inevitable count overflow before
 /// resolving source-contact defaults (which may build connectivity) or allocating identities.
 /// Preparation validates final membership and explicit hard limits before publication.
-fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<CandidateEdit, CommandError> {
+fn edit_candidate(project: &Project, command: &str, params: &Value, changes: Option<&replacements::Changes>) -> Result<CandidateEdit, CommandError> {
     let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
     let via_at = if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -1244,13 +1289,6 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<Ca
         }
         added.extend(moved_tracks.into_iter().chain(moved_vias));
     } else if command == RESHAPE_TRACKS {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Ends {
-            track: Uuid,
-            start: Point,
-            end: Point,
-        }
         let ends: Vec<Ends> = param(params, "tracks")?;
         let unique: BTreeSet<_> = ends.iter().map(|ends| ends.track).collect();
         if ends.is_empty() || unique.len() != ends.len() {
@@ -1291,8 +1329,20 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<Ca
         tracks.retain(|track| !gone_tracks.contains(&track.id));
         vias.retain(|via| !gone_vias.contains(&via.id));
     }
-    let replacements = if command == ADD_TRACKS {
-        params.get("replacements").map(|value| replacements::apply(&mut tracks, value, &mut added)).transpose()?
+    let replacements = if let Some(changes) = changes {
+        for movement in &changes.vias {
+            let index = project
+                .board
+                .vias
+                .binary_search_by_key(&movement.via, |v| v.id)
+                .map_err(|_| CommandError::InvalidParams("Unknown source via.".into()))?;
+            if vias[index].locked || vias[index].at == movement.at {
+                return Err(CommandError::InvalidParams("A via displacement must move an unlocked source via.".into()));
+            }
+            vias[index].at = movement.at;
+            added.insert(movement.via);
+        }
+        Some(replacements::apply(&mut tracks, &changes.tracks, &mut added)?)
     } else {
         None
     };

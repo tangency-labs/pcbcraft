@@ -98,7 +98,7 @@ fn board_update_refuses_locked_removal_atomically() {
     let bytes = encode_documents(snapshot.clone()).unwrap();
     let revision = session.revision();
     let history = |session: &Session| {
-        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.project().map(Arc::as_ptr)).collect::<Vec<_>>())
     };
     let before_history = history(&session);
     assert!(before_history.iter().all(|entries| !entries.is_empty()));
@@ -196,7 +196,11 @@ fn excluded_desired_choices_survive_review_roundtrip_reset_and_unexclude() {
     assign(&mut session, id, "capacitor-0603");
     assert_eq!(session.project().unwrap().board.assignments[&id].inspect(session.project().unwrap())["pending_update"], false);
     let before_reset = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&before_reset[&crate::persistence::test_board_path(&before_reset)]).unwrap().contains("pcbcraft-board/10"));
+    assert!(
+        std::str::from_utf8(&before_reset[&crate::persistence::test_board_path(&before_reset)])
+            .unwrap()
+            .contains(crate::persistence::CURRENT_BOARD_FORMAT)
+    );
     assert_eq!(encode_documents(decode_documents(&before_reset).unwrap()).unwrap(), before_reset);
     let mut malformed = before_reset.clone();
     let mut board: Value = serde_json::from_slice(&malformed[&crate::persistence::test_board_path(&malformed)]).unwrap();
@@ -234,7 +238,9 @@ fn excluded_desired_choices_survive_review_roundtrip_reset_and_unexclude() {
     flag(&mut session, id, "exclude_from_board", false);
     assert!(session.project().unwrap().board.has_pending_package_intent(session.project().unwrap()));
     let pending = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&pending[&crate::persistence::test_board_path(&pending)]).unwrap().contains("pcbcraft-board/11"));
+    assert!(
+        std::str::from_utf8(&pending[&crate::persistence::test_board_path(&pending)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT)
+    );
     let report = plan(&mut session);
     assert!(session.cached_board_update().unwrap().changes.components.contains(&ComponentChange::Added { component: id }));
     edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));

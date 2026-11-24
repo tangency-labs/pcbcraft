@@ -654,21 +654,45 @@ fn wire_surface_color(paper: impl Fn(&mut crate::preferences::Preferences)) -> e
     super::super::surface_at(project, midpoint, app.preferences.paper())
 }
 
-/// The contrast check considers both resolved surfaces, not just the surface under the midpoint:
-/// a wire crossing from the canvas onto custom paper of the same colour must still get the cue on
-/// the paper portion even when its midpoint sits on the canvas.
+/// A wire crossing onto custom paper with the same colour as its ink and the light-theme text
+/// needs a visible underlay. Its midpoint is on the canvas and would miss the matching fill.
 #[test]
 fn wire_crossing_canvas_and_matching_custom_paper_keeps_a_cue() {
-    let paper_color = egui::Color32::from_rgb(0x12, 0x34, 0x56);
-    let canvas = egui::Color32::from_rgb(0x2E, 0x34, 0x40);
-    let custom = pcbcraft_chrome::paper::Appearance { canvas, paper: Some(paper_color) };
-    assert_ne!(custom.canvas, custom.fill(), "custom paper must differ from the canvas for this case");
-    // The midpoint's surface is the canvas, which does not match the saved colour; the paper fill
-    // does, and the crossing route paints over both surfaces.
-    assert!(!super::matches_any_surface(paper_color, pcbcraft_chrome::paper::Appearance { canvas, paper: None }));
-    assert!(super::matches_any_surface(paper_color, custom), "a crossing wire must match the paper fill");
-    assert!(super::matches_any_surface(canvas, custom), "a wire matching the canvas must still match");
-    assert!(!super::matches_any_surface(egui::Color32::WHITE, custom), "an unrelated colour needs no cue");
+    use crate::preferences::{PaperBackground, ThemeChoice};
+
+    let rgb = [0x26, 0x2A, 0x32];
+    let color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+    let mut h = styled_harness_with_paper(color, |preferences| {
+        preferences.theme = ThemeChoice::Light;
+        preferences.schematic_paper_background = PaperBackground::Custom;
+        preferences.schematic_paper_color_light = Some(rgb);
+    });
+    let project = h.state().session.project().unwrap();
+    let route = project.wire_path(&project.wires()[0]);
+    let [from, to] = route.as_slice() else { panic!("expected a straight route, got {route:?}") };
+    assert!(from.x_nm < to.x_nm);
+    let midpoint = Point { x_nm: from.x_nm + (to.x_nm - from.x_nm) / 2, y_nm: from.y_nm };
+    let paper_at = Point { x_nm: midpoint.x_nm + (to.x_nm - midpoint.x_nm) / 2, y_nm: midpoint.y_nm - 5_000_000 };
+    let sheet = project.sheet_target().id();
+    let expected_revision = h.state().session.revision();
+    h.state_mut()
+        .session
+        .apply("sheet.set_page", &json!({"sheet":sheet,"paper":"a4","orientation":"landscape","at":paper_at,"expected_revision":expected_revision}))
+        .unwrap();
+    h.run();
+
+    let app = h.state();
+    let project = app.session.project().unwrap();
+    let paper = app.preferences.paper();
+    assert_eq!(pcbcraft_chrome::Tokens::get().text, color);
+    assert_ne!(paper.canvas, color);
+    assert_eq!(super::super::surface_at(project, *from, paper), paper.canvas);
+    assert_eq!(super::super::surface_at(project, midpoint, paper), paper.canvas);
+    assert_eq!(super::super::surface_at(project, *to, paper), color);
+    let points: Vec<_> = route.iter().map(|point| screen(&h, *point)).collect();
+    let width = f32::from(pcbcraft_engine::nets::MAX_WIDTH_CP) / 100.0;
+    assert!(painted_stroke(&h, &points, width, color));
+    assert!(painted_stroke(&h, &points, width + 2.0 * super::EMPHASIS_HALO, egui::Color32::WHITE));
 }
 
 /// On the default dark, uniform background the whole sheet is painted with `tokens.canvas`

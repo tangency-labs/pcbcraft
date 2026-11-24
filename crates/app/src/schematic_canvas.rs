@@ -27,7 +27,7 @@ mod tests;
 pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
-use crate::preferences::Navigation;
+use crate::{canvas_camera::pointer_release, preferences::Navigation};
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
@@ -283,7 +283,8 @@ pub(crate) enum SymbolAction {
 /// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
 /// opts out of handles and reshaping for explicit whole-route movement. G over a wire starts
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
-/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
+/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. A box commits on
+/// release even over a floating panel; Escape, focus loss or disabled input cancel it. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
 /// primary click; Escape, right-click or focus loss cancels that preview.
@@ -651,13 +652,15 @@ pub(crate) fn show(
         if lost_focus {
             return Some(Click::SelectItems(drag.base.clone()));
         }
-        let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        // A box that started here clamps to the canvas and commits even when released over a floating panel.
+        let release = pointer_release(&response, drag.button);
+        let pointer = release.or_else(|| response.interact_pointer_pos()).or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
+            let pointer = rect.clamp(pointer);
             let hits = selection::boxed(ui, project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
-            if ui.input(|i| i.pointer.button_released(drag.button)) {
-                let valid = input_enabled && response.contains_pointer();
-                return Some(Click::SelectItems(if valid { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
+            if release.is_some() {
+                return Some(Click::SelectItems(if input_enabled { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
             }
         }
         return None;

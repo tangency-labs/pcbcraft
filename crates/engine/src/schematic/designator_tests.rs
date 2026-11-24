@@ -56,7 +56,7 @@ fn designator_lock_roundtrip_eligibility_and_one_step_undo() {
             [persistence::ENTRY_POINT]
         );
         let entry: Value = serde_json::from_slice(&locked[persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/51");
+        assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(entry["components"][0]["designator_locked"], true);
         assert!(entry["components"][1].get("designator_locked").is_none());
         let reopened = persistence::decode_documents(&locked).unwrap();
@@ -422,11 +422,15 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             }
             let variants = persistence::encode_documents(Arc::new(historical)).unwrap();
             let entry: Value = serde_json::from_slice(&variants[persistence::ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], "pcbcraft-project/51");
+            assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             let decoded = persistence::decode_documents(&variants).unwrap();
             if let Some(path) = decoded.instances_document_path() {
-                let instance: Value = serde_json::from_slice(&variants[&path]).unwrap();
-                assert_eq!(instance["format"], format!("pcbcraft-instances/{version}"));
+                let mut instance: Value = serde_json::from_slice(&variants[&path]).unwrap();
+                assert_eq!(instance["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
+                let mut legacy = variants.clone();
+                instance["format"] = json!(format!("pcbcraft-instances/{version}"));
+                legacy.insert(path, serde_json::to_vec(&instance).unwrap());
+                assert_eq!(persistence::encode_documents(persistence::decode_documents(&legacy).unwrap()).unwrap(), variants);
             }
             assert_eq!(decoded.net_registry.records.is_empty(), version == 1);
             assert_eq!(decoded.net_registry.records.iter().any(|record| !record.class_bindings.is_empty()), version >= 3);
@@ -502,20 +506,11 @@ fn designator_locks_preserve_group_representations_and_assembly_profiles() {
                 let before = documents(&session);
                 let snapshot = session.snapshot().unwrap();
                 let original: Value = serde_json::from_slice(&before[persistence::ENTRY_POINT]).unwrap();
-                if profiles || group_mode != 0 {
-                    let expected = if profiles {
-                        36
-                    } else if group_mode == 3 {
-                        39
-                    } else {
-                        24
-                    };
-                    assert_eq!(original["format"], format!("pcbcraft-project/{expected}"));
-                }
+                assert_eq!(original["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
                 lock(&mut session, true);
                 let locked = documents(&session);
                 let entry: Value = serde_json::from_slice(&locked[persistence::ENTRY_POINT]).unwrap();
-                assert_eq!(entry["format"], "pcbcraft-project/51");
+                assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
                 for field in ["part_groups", "assembly_profiles", "schematic_instances"] {
                     assert_eq!(entry.get(field), original.get(field), "{field}");
                 }
@@ -606,7 +601,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     historical.layout = None;
     historical.numeric_id_high_water = None;
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
-    let historical_documents = persistence::encode_documents(Arc::new(historical)).unwrap();
+    let historical_documents = persistence::historical_documents(Arc::new(historical), "pcbcraft-project/6");
     let entry: Value = serde_json::from_slice(&historical_documents[persistence::ENTRY_POINT]).unwrap();
     assert_eq!(entry["format"], "pcbcraft-project/6");
     for field in ["layout_root", "numeric_id_high_water", "schematic_instances"] {
@@ -614,12 +609,12 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     }
     session = Session { libraries: session.libraries.clone(), ..Default::default() };
     session.open_snapshot(persistence::decode_documents(&historical_documents).unwrap());
-    assert_eq!(documents(&session), historical_documents);
+    assert_eq!(persistence::historical_documents(session.snapshot().unwrap(), "pcbcraft-project/6"), historical_documents);
     let before = session.snapshot().unwrap();
     assert!(before.layout.is_none() && before.numeric_id_high_water.is_none() && !before.has_sheet_occurrences());
     lock(&mut session, true);
     let locked = documents(&session);
-    assert_eq!(serde_json::from_slice::<Value>(&locked[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/51");
+    assert_eq!(serde_json::from_slice::<Value>(&locked[persistence::ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     let watermark = session.project().unwrap().numeric_id_high_water.unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&locked).unwrap()).unwrap(), locked);
     edit(&mut session, "edit.undo", Value::Null);
@@ -629,7 +624,10 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     assert!(restored.components().all(|part| !part.designator_locked()));
     crate::assert_same_content(&before, &restored);
     let restored_documents = documents(&session);
-    assert_eq!(serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/7");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"],
+        crate::persistence::CURRENT_PROJECT_FORMAT
+    );
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&restored_documents).unwrap()).unwrap(), restored_documents);
     edit(&mut session, "edit.redo", Value::Null);
     assert_eq!(documents(&session), locked);
@@ -701,12 +699,12 @@ fn designator_lock_composes_with_net_appearance() {
             lock(&mut session, true);
             let saved = documents(&session);
             let entry: Value = serde_json::from_slice(&saved[persistence::ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], "pcbcraft-project/52");
+            assert_eq!(entry["format"], persistence::CURRENT_PROJECT_FORMAT);
             assert_eq!(entry["components"][0]["designator_locked"], true);
             assert!(entry.get("assembly_profiles").is_some());
             if let Some(path) = session.project().unwrap().instances_document_path() {
                 let instance: Value = serde_json::from_slice(&saved[&path]).unwrap();
-                assert_eq!(instance["format"], "pcbcraft-instances/9");
+                assert_eq!(instance["format"], persistence::CURRENT_INSTANCES_FORMAT);
             }
             let reopened = persistence::decode_documents(&saved).unwrap();
             assert!(reopened.components().next().unwrap().designator_locked());

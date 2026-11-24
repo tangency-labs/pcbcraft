@@ -5,7 +5,7 @@ use crate::{
     authoring::{Action, Item, Kind, Primitive},
     board::{
         clipboard::{BoardFragment, BoardSelection, COPY, PASTE},
-        definition::{CopperBinding, PadShape},
+        definition::{CURRENT_FORMAT, CopperBinding, PadShape, read_saved},
         drc::{Kind as Finding, Rules, tests::outline},
         track::tests::view,
     },
@@ -195,10 +195,9 @@ fn a_slot_connects_copper_through_the_stack() {
     assert_ne!(copper.pads[&key], copper.pads[&(key.0.clone(), "SH2".into())]);
 }
 
-/// The editable and published versions are selected lazily, and malformed slot edits
-/// refuse the complete replacement without adding undo history.
+/// Malformed slot edits are atomic, and removing the last slot keeps the native export current.
 #[test]
-fn slot_authoring_keeps_versions_lazy_and_refuses_breakout_atomically() {
+fn slot_authoring_keeps_current_export_and_refuses_breakout_atomically() {
     let mut editor = editor();
     let snapshot = editor.snapshot();
     let bytes = snapshot.encode().unwrap();
@@ -217,28 +216,45 @@ fn slot_authoring_keeps_versions_lazy_and_refuses_breakout_atomically() {
     assert_eq!(editor.revision(), unchanged);
     assert_eq!(editor.snapshot(), snapshot);
     editor.execute(unchanged, Action::Delete { objects: vec![4, 5, 6, 7] }).unwrap();
-    assert_eq!(editor.snapshot().export_native().unwrap()["format"], "pcbcraft-footprint/1");
+    assert_eq!(editor.snapshot().export_native().unwrap()["format"], CURRENT_FORMAT);
     assert_eq!(serde_json::to_value(editor.snapshot().as_ref()).unwrap()["format"], "pcbcraft-library-item/1");
     editor.execute(editor.revision(), Action::Undo).unwrap();
-    assert_eq!(editor.snapshot().export_native().unwrap()["format"], "pcbcraft-footprint/5");
+    assert_eq!(editor.snapshot().export_native().unwrap()["format"], CURRENT_FORMAT);
 }
 
-/// Combined drafts and definitions prefer the slot versions, without dropping circular NPTH
-/// when the last slot is removed or the published footprint is opened for editing.
+/// A native definition with every supported hole type retains its geometry and format
+/// through export, native reopen, and removing the last slots and mechanical hole.
 #[test]
-fn mixed_footprint_preserves_both_hole_types_and_downgrades_lazily() {
+fn mixed_footprint_keeps_current_format_through_hole_removal() {
     let mut editor = editor();
+    let Primitive::Pad { mut pad } = editor.snapshot().objects[&2].clone() else { panic!("expected signal pad") };
+    pad.number = "01".into();
+    pad.center = Point { x_nm: 0, y_nm: 6_000_000 };
+    pad.width_nm = 1_000_000;
+    pad.height_nm = 1_000_000;
+    pad.copper = CopperBinding::AllCopper;
+    pad.drill_nm = Some(500_000);
+    editor.execute(editor.revision(), Action::Insert { primitive: Primitive::Pad { pad } }).unwrap();
     let hole = crate::board::definition::CircularNpth { center: Point { x_nm: -6_000_000, y_nm: 0 }, diameter_nm: 500_000 };
     editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
-    let item = editor.snapshot();
-    let footprint = item.footprint().unwrap();
-    assert_eq!(footprint.format, "pcbcraft-footprint/5");
-    assert_eq!(footprint.non_plated_holes, [hole]);
-    let reopened = Item::edit_footprint(&footprint).unwrap();
-    assert_eq!(serde_json::to_value(&reopened).unwrap()["format"], "pcbcraft-library-item/4");
-    assert_eq!(reopened.footprint().unwrap().pads, footprint.pads);
-    editor.execute(editor.revision(), Action::Delete { objects: vec![4, 5, 6, 7] }).unwrap();
-    assert_eq!(editor.snapshot().footprint().unwrap().format, "pcbcraft-footprint/4");
-    assert_eq!(serde_json::to_value(editor.snapshot().as_ref()).unwrap()["format"], "pcbcraft-library-item/3");
-    assert_eq!(editor.snapshot().footprint().unwrap().non_plated_holes, [hole]);
+    let npth = *editor.snapshot().objects.last_key_value().unwrap().0;
+
+    for (remove, slotted, mechanical) in [(vec![], true, true), (vec![4, 5, 6, 7], false, true), (vec![npth], false, false)] {
+        if !remove.is_empty() {
+            editor.execute(editor.revision(), Action::Delete { objects: remove }).unwrap();
+        }
+        let item = Item::decode(&editor.snapshot().encode().unwrap()).unwrap();
+        let footprint = item.footprint().unwrap();
+        let mut native = item.export_native().unwrap();
+        let reopened = read_saved(&serde_json::to_vec(&native).unwrap()).unwrap();
+        native["format"] = json!("pcbcraft-footprint/5");
+        assert_eq!(read_saved(&serde_json::to_vec(&native).unwrap()).is_ok(), slotted);
+        assert_eq!(reopened.format, CURRENT_FORMAT);
+        assert_eq!(*reopened, footprint);
+        assert_eq!(reopened.has_plated_slots(), slotted);
+        assert_eq!(reopened.non_plated_holes.as_slice(), if mechanical { std::slice::from_ref(&hole) } else { &[] });
+        assert!(reopened.pads.iter().any(|pad| pad.number == "01" && pad.drill_nm == Some(500_000)));
+        assert!(reopened.pads.iter().any(|pad| pad.number == "2" && pad.copper == CopperBinding::ComponentSide));
+        assert_eq!(Item::edit_footprint(&reopened).unwrap().footprint().unwrap().pads, footprint.pads);
+    }
 }

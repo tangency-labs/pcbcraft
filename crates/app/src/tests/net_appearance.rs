@@ -50,7 +50,10 @@ fn wire_properties_author_net_appearance_through_one_form() {
         Some(&nets::Appearance { color: Some([theme_color.r(), theme_color.g(), theme_color.b()]), width_cp: None })
     );
     let saved = pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[pcbcraft_engine::persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[pcbcraft_engine::persistence::ENTRY_POINT]).unwrap()["format"],
+        pcbcraft_engine::persistence::CURRENT_PROJECT_FORMAT
+    );
 }
 
 /// Save both channels through the form, which makes both checkboxes start checked next time.

@@ -340,12 +340,12 @@ pub(super) fn paint_handles(
 }
 
 /// Effective screen-space strokes for emphasized wire ink, as `(width, color)` pairs painted in
-/// order: a contrasting underlay wider than the ink, then the ink itself. The underlay uses the
-/// theme's text ink, which contrasts with both schematic papers and with the accent in either
-/// palette, so a custom net color equal to the selection accent still shows a visible outline.
-/// Keeping this pure lets headless tests assert the cue without a graphical session.
+/// order: a wider underlay, then the ink itself. A wire matching its background must use an
+/// underlay that differs from its ink, even when both match the theme's text color.
 fn emphasis_strokes(color: Color32, width: f32) -> [(f32, Color32); 2] {
-    [(width + 2.0 * EMPHASIS_HALO, Tokens::get().text), (width, color)]
+    let text = Tokens::get().text;
+    let outline = if text == color { if egui::Rgba::from(color).intensity() < 0.18 { Color32::WHITE } else { Color32::BLACK } } else { text };
+    [(width + 2.0 * EMPHASIS_HALO, outline), (width, color)]
 }
 
 /// Whether `color` equals either surface a schematic wire can be drawn on. A route may cross the

@@ -47,7 +47,7 @@ fn printed_words_and_style_are_local_and_reset_restores_inheritance() {
     let schematic = session.inspect()["project"]["schematic"].clone();
     let footprint = view(&session).footprints().next().unwrap();
     let id = footprint.id.clone();
-    let reference = footprint.reference.to_owned();
+    let reference = footprint.reference.into_owned();
     let pads = footprint.pads;
     let origin = footprint.position;
     set(&mut session, &id, json!({"text":"Power input","font":"pcbcraft-technical-1","size":{"height_nm":1_500_000,"stroke_width_nm":150_000},"rotation":90,"align":"start","visible":true})).unwrap();
@@ -67,7 +67,10 @@ fn printed_words_and_style_are_local_and_reset_restores_inheritance() {
     assert_eq!(changed_files.len(), 1);
     assert!(changed_files[0].ends_with("-Silkscreen_Top.gbr"));
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[&crate::persistence::test_board_path(&saved)]).unwrap()["format"], "pcbcraft-board/15");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[&crate::persistence::test_board_path(&saved)]).unwrap()["format"],
+        crate::persistence::CURRENT_BOARD_FORMAT
+    );
     assert_eq!(
         saved.iter().filter(|(path, bytes)| original.get(*path) != Some(*bytes)).map(|(path, _)| path.as_str()).collect::<Vec<_>>(),
         [crate::persistence::test_board_path(&saved)]
@@ -90,7 +93,7 @@ fn literal_print_text_and_component_rename_have_independent_ownership() {
     let mut session = routed_fixture();
     let footprint = view(&session).footprints().next().unwrap();
     let id = footprint.id.clone();
-    let literal = footprint.reference.to_owned();
+    let literal = footprint.reference.into_owned();
     let value = footprint.value.clone().into_owned();
     let component = session.project().unwrap().board.footprints()[0].component;
     let symbol = session.project().unwrap().all_symbols().find(|symbol| symbol.component == component).unwrap().id();
@@ -101,7 +104,7 @@ fn literal_print_text_and_component_rename_have_independent_ownership() {
     let changed = view(&session).footprints().find(|f| f.id == id).unwrap();
     assert_eq!(changed.reference, "R99");
     assert_eq!(changed.reference_appearance.text, literal);
-    let duplicate = view(&session).footprints().find(|f| f.id != id).unwrap().reference.to_owned();
+    let duplicate = view(&session).footprints().find(|f| f.id != id).unwrap().reference.into_owned();
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
     let revision = session.revision();
     assert!(
@@ -177,7 +180,7 @@ fn fontless_footprints_keep_editor_labels_until_local_ink_is_enabled() {
     let initial = view(&session).footprints().next().unwrap();
     let id = initial.id.clone();
     let pads = initial.pads.clone();
-    let reference = initial.reference.to_owned();
+    let reference = initial.reference.into_owned();
     assert!(!initial.physical_reference);
     for appearance in [
         json!({"text":"Local words"}),

@@ -16,7 +16,7 @@ mod folder;
 pub mod layout;
 pub mod library;
 pub mod recovery;
-pub use folder::{load, save};
+pub use folder::{load, load_with_upgrade, save};
 
 /// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
 /// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
@@ -170,6 +170,44 @@ mod tests {
         let redone = encode_documents(prepared).unwrap();
         save(&root, Some(&undone), &redone, &mut |_| Ok(())).unwrap();
         assert_eq!(load(&root).unwrap(), created);
+    }
+
+    /// Native folder Save/Open retains recipes, and Undo writes the exact original managed bytes.
+    #[test]
+    fn output_recipe_folder_save_reopen_and_undo() {
+        use pcbcraft_engine::SET_OUTPUT_RECIPE;
+        use serde_json::{Value, json};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("recipe-board");
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name":"Recipe board","create_board":true})).unwrap();
+        let empty = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, None, &empty, &mut |_| Ok(())).unwrap();
+        let board = session.project().unwrap().board_target().unwrap().board;
+        let id = "00000000-0000-0000-0000-000000000123";
+        session
+            .apply(
+                SET_OUTPUT_RECIPE,
+                &json!({"recipe":id,"expected_revision":session.revision(),"content":{
+                    "name":"Drill","board":board,"units":"mm","file_stem":"drill","gerber_layers":[],"drill":true
+                }}),
+            )
+            .unwrap();
+        let authored = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, Some(&empty), &authored, &mut |_| Ok(())).unwrap();
+        let reopened = open(&root.join(ENTRY_POINT)).unwrap();
+        assert_eq!(reopened.output_recipes(), session.project().unwrap().output_recipes());
+        assert_eq!(encode_documents(reopened).unwrap(), authored);
+
+        session.apply("edit.undo", &Value::Null).unwrap();
+        let undone = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, Some(&authored), &undone, &mut |_| Ok(())).unwrap();
+        assert!(open(&root).unwrap().output_recipes().is_empty());
+        assert_eq!(load(&root).unwrap(), empty);
+        session.apply("edit.redo", &Value::Null).unwrap();
+        let redone = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, Some(&undone), &redone, &mut |_| Ok(())).unwrap();
+        assert_eq!(load(&root).unwrap(), authored);
     }
 
     /// Capture every name and file byte so previews cannot silently create locks or recover data.

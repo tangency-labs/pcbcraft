@@ -23,7 +23,7 @@ fn copper_and_board_integer_tokens_keep_the_native_reader_restriction_on_each_pa
     base["stackup"]["finished_thickness_tolerance_nm"] = json!(0);
     base["stackup"]["declared_minimum_thickness_nm"] = json!(1);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":base}));
-    let documents = saved_board(&s, "pcbcraft-board/23");
+    let documents = saved_board(&s);
     let board_path = persistence::test_board_path(&documents);
     let board: Value = serde_json::from_slice(&documents[&board_path]).unwrap();
     let profile = SetupProfile::new("Copper example".into(), s.project().unwrap().board_setup().unwrap().clone(), Settings::default()).unwrap();
@@ -84,7 +84,7 @@ fn copper_and_board_integer_tokens_keep_the_native_reader_restriction_on_each_pa
             *expected.pointer_mut(pointer).unwrap() = json!(integer);
             apply(&mut s, SET_BOARD_SETUP, json!({"setup":expected}));
             assert_eq!(setup(&s), expected);
-            saved_board(&s, "pcbcraft-board/23");
+            saved_board(&s);
             let mut changed = documents.clone();
             changed.insert(board_path.clone(), spelled(&board, &format!("/setup{pointer}"), &integer.to_string()));
             let opened = persistence::decode_documents(&changed).unwrap();

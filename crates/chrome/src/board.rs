@@ -77,9 +77,15 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>,
         }));
     }
     if selected {
-        for point in points {
-            p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);
-        }
+        drawing_vertices(p, points);
+    }
+}
+
+/// Draw the shared handles for an editable canvas path.
+pub fn drawing_vertices(p: &Painter, points: impl IntoIterator<Item = Pos2>) {
+    let accent = Tokens::get().accent;
+    for point in points {
+        p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, accent);
     }
 }
 
@@ -128,10 +134,20 @@ pub fn non_plated_hole(p: &Painter, center: Pos2, radius: f32, selected: bool) {
 /// over selection, matching pads; the placement preview retains its separate ghost color.
 pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool, emphasized: Option<bool>) {
     let t = Tokens::get();
-    let radius = radius.max(2.);
     let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized.or_else(|| selected.then_some(true))) };
+    via_land(p, center, radius, drill_radius, fill);
+}
+
+/// Mark a blocking via's copper while preserving its physical drill opening.
+pub fn collision_via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32) {
+    via_land(p, center, radius, drill_radius, Tokens::get().route_collision);
+}
+
+/// Draw a filled annulus around the actual via drill.
+fn via_land(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, fill: Color32) {
+    let radius = radius.max(2.);
     p.circle_filled(center, radius, fill);
-    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
+    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), Tokens::get().board_canvas);
 }
 
 /// Draw a measuring ruler: a dashed accent line with end ticks and a label near its middle.
@@ -168,6 +184,14 @@ pub fn drc_marker(p: &Painter, at: Pos2, focused: bool) {
 /// Distinguish the snapped drawing target from authored vertices without changing its position.
 pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));
+}
+
+/// Indicate the reference for a snapped outline axis using the canvas selection accent.
+pub fn drawing_alignment(p: &Painter, points: [Pos2; 2]) {
+    let extension = (points[1] - points[0]).normalized() * 16.;
+    let stroke = Stroke::new(1., Tokens::get().accent.gamma_multiply(0.7));
+    p.extend(egui::Shape::dashed_line(&[points[0] - extension, points[1] + extension], stroke, 4., 3.));
+    drawing_target(p, points[0]);
 }
 
 /// Return the shared palette's copper colors; `None` denotes an internal layer.
@@ -269,7 +293,8 @@ pub fn pad_contour(pad: &PadDrawing) -> Vec<Pos2> {
 
 /// Size and orient pad labels within the land. Snapshot-local net labels appear only when both
 /// lines fit; zooming out removes text before it obscures copper or protrudes into a gap.
-/// Bright copper uses dark labels so personal color choices do not erase pad annotations.
+/// Solid lands use their copper for contrast. Plated openings use a fine halo to keep the
+/// annotation readable across the drill opening and the surrounding copper.
 fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32) {
     let mut axis = corners[1] - corners[0];
     let mut width = axis.length();
@@ -316,11 +341,13 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32)
     if angle < -std::f32::consts::FRAC_PI_2 {
         angle += std::f32::consts::PI;
     }
-    let [r, g, b, _] = copper.to_normalized_gamma_f32();
-    let label_ink = if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE };
+    let opening = pad.drill_radius.is_some() || pad.plated_slot.is_some();
+    let canvas = Tokens::get().board_canvas;
+    let label_ink = copper_label_ink(if opening { canvas } else { copper });
     let galley = crate::canvas_text::layout(p, text, FontId::monospace(size), label_ink, egui::Align::Center);
     let pos = pad.center - galley.rect.center().to_vec2();
-    p.add(egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+    let text = egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER);
+    p.add(if opening { outlined_copper_label(text, canvas) } else { egui::Shape::Text(text) });
 }
 
 /// The physical purpose of a projected technical rectangle, independent of copper color.
@@ -413,7 +440,7 @@ pub fn footprint(
     reference_shift: egui::Vec2,
 ) {
     let bounds = footprint_bounds(pads, graphics, center);
-    footprint_in_bounds(p, pads, graphics, reference, center, copper, selected, highlighted, copper_focused, reference_shift, bounds, None);
+    footprint_in_bounds(p, pads, graphics, reference, center, copper, selected, highlighted, copper_focused, reference_shift, bounds, None, None);
 }
 
 /// A plated slot opening with its pad label and styling as resolved by its own footprint pass,
@@ -447,12 +474,13 @@ pub fn footprint_in_bounds(
     copper_focused: bool,
     reference_shift: egui::Vec2,
     bounds: Rect,
+    reference_overview: Option<egui::Shape>,
     mut slots: Option<&mut Vec<SlotOpening>>,
 ) {
     let t = Tokens::get();
     let ink = copper_emphasis(pads.first().and_then(|pad| pad.color).unwrap_or(copper), (selected || highlighted).then_some(true));
     let context = context_painter(p, copper_focused);
-    for graphic in graphics {
+    for graphic in graphics.iter().filter(|graphic| !graphic.reference || reference_overview.is_none()) {
         let width = match graphic.style {
             GraphicStyle::Fabrication => 0.8,
             GraphicStyle::Silkscreen => 1.2,
@@ -471,6 +499,9 @@ pub fn footprint_in_bounds(
                 context.circle_filled(*point, width / 2., color);
             }
         }
+    }
+    if let Some(label) = reference_overview {
+        context.add(label);
     }
     if selected || highlighted {
         context.rect_stroke(bounds, t.radius_sm, Stroke::new(1.5, ink), egui::StrokeKind::Inside);
@@ -539,9 +570,17 @@ pub enum LayerColorAction {
 
 /// Use the existing modal surface and egui color picker for an opaque copper color draft.
 /// Hex edits stay pending until Apply; Cancel never changes any layer appearance.
-pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], hex: &mut String, error: Option<&str>) -> LayerColorAction {
+pub fn color_dialog(
+    ctx: &egui::Context,
+    title: &str,
+    name: &str,
+    reset: &str,
+    rgb: &mut [u8; 3],
+    hex: &mut String,
+    error: Option<&str>,
+) -> LayerColorAction {
     let mut action = LayerColorAction::None;
-    let closing = crate::shell::scrolling_dialog(ctx, "layer_color", "Layer Color", |ui| {
+    let closing = crate::shell::scrolling_dialog(ctx, "board_color", title, |ui| {
         ui.label(name);
         let mut color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
         let changed = ui
@@ -567,7 +606,7 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
             if crate::controls::button(ui, "Apply color").clicked() {
                 action = LayerColorAction::Apply;
             }
-            if crate::controls::button(ui, "Reset to default").clicked() {
+            if crate::controls::button(ui, reset).clicked() {
                 action = LayerColorAction::Reset;
             }
             if crate::controls::button(ui, "Cancel").clicked() {
@@ -734,11 +773,17 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
     let mut text = egui::epaint::TextShape::new(Pos2::ZERO, galley, ink);
     text.transform(egui::emath::TSTransform::from_scaling(scale));
     text.pos = center - text.galley.mesh_bounds.center().to_vec2();
-    let offset = 0.75;
-    let bounds = text.visual_bounding_rect().expand(offset);
-    if !p.clip_rect().contains_rect(bounds) {
+    if !p.clip_rect().contains_rect(text.visual_bounding_rect().expand(COPPER_LABEL_HALO)) {
         return None;
     }
+    Some(outlined_copper_label(text, halo))
+}
+
+const COPPER_LABEL_HALO: f32 = 0.75;
+
+/// Outline an annotation for contrast where it crosses both a plated opening and its copper.
+fn outlined_copper_label(text: egui::epaint::TextShape, halo: Color32) -> egui::Shape {
+    let offset = COPPER_LABEL_HALO;
     let mut shapes = Vec::with_capacity(5);
     for shift in [vec2(-offset, 0.), vec2(offset, 0.), vec2(0., -offset), vec2(0., offset)] {
         let mut outline = text.clone().with_override_text_color(halo);
@@ -746,7 +791,7 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
         shapes.push(egui::Shape::Text(outline));
     }
     shapes.push(egui::Shape::Text(text));
-    Some(egui::Shape::Vec(shapes))
+    egui::Shape::Vec(shapes)
 }
 
 #[cfg(test)]

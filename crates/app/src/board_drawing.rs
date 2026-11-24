@@ -1,5 +1,9 @@
 //! Active-layer drawing gestures. Previews are view-local; every completed edit is an engine command.
-use crate::{canvas_camera::Camera, editor_view::ViewInput};
+use crate::{
+    canvas_camera::Camera,
+    editor_view::ViewInput,
+    path_edit::{Canvas, Drag, Handle, Path, Snap, VertexAction},
+};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use pcbcraft_engine::{
     board::{drawing::Drawing, setup::LayerPurpose, view::BoardView},
@@ -27,10 +31,37 @@ struct Draft {
 struct Edit {
     source: ViewInput,
     drawing: Drawing,
-    original: Vec<Point>,
-    vertex: Option<usize>,
-    anchor: Point,
-    drag: bool,
+    drag: Drag,
+    held: bool,
+}
+
+/// A context action bound to the view and geometry that were under the pointer when it opened.
+#[derive(Debug)]
+pub(super) struct VertexMenu {
+    source: ViewInput,
+    zone: bool,
+    drawing: Drawing,
+    action: VertexAction,
+}
+
+impl VertexMenu {
+    /// Append the vertex action to the shared canvas context menu if its selection is current.
+    pub(super) fn show(&self, ui: &mut Ui, source: ViewInput, state: &State, hidden: &BTreeSet<String>, selectable: bool) -> Option<Command> {
+        if self.source != source
+            || !selectable
+            || state.selected.as_deref() != Some(self.drawing.id.to_string().as_str())
+            || hidden.contains(&self.drawing.layer.to_string())
+        {
+            return None;
+        }
+        let mut drawing = self.drawing.clone();
+        drawing.points = self.action.show(ui)?;
+        Some(update_path(source, self.zone, &drawing))
+    }
+
+    pub(super) fn zone(&self) -> bool {
+        self.zone
+    }
 }
 
 /// Independent selection/tool/gesture state for one board view, never stored in project files.
@@ -151,30 +182,76 @@ pub(super) fn can_draw(view: BoardView<'_>, active: Option<&str>, hidden: &BTree
     view.layers().iter().any(|layer| active == Some(layer.id.to_string().as_str()) && !hidden.contains(&layer.id.to_string()))
 }
 
-/// Prefer exact existing edge vertices within the pointer target, then use this view's snap grid.
-fn snapped(pointer: Pos2, camera: &Camera, rect: Rect, drawings: &[Drawing]) -> Point {
-    drawings
-        .iter()
-        .flat_map(|drawing| &drawing.points)
-        .filter_map(|point| {
-            let distance = camera.screen(*point, rect).distance(pointer);
-            (distance <= 8.).then_some((distance, *point))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map_or_else(|| camera.snap(pointer, rect), |(_, point)| point)
+/// The board adapter passes geometry and width, leaving document records in the board editor.
+fn path(drawing: &Drawing) -> Path<'_> {
+    Path { points: &drawing.points, closed: drawing.closed, stroke_nm: drawing.stroke_nm }
 }
 
-/// Find a segment by screen distance, allowing vertical/diagonal edges and degenerate projections.
 fn hit(pointer: Pos2, camera: &Camera, rect: Rect, drawing: &Drawing) -> bool {
-    let points: Vec<_> = drawing.points.iter().map(|point| camera.screen(*point, rect)).collect();
-    points.iter().copied().zip(points.iter().copied().cycle().skip(1)).take(points.len().saturating_sub(usize::from(!drawing.closed))).any(
-        |(a, b)| {
-            let delta = b - a;
-            let t = if delta.length_sq() > 0. { ((pointer - a).dot(delta) / delta.length_sq()).clamp(0., 1.) } else { 0. };
-            pointer.distance(a + t * delta)
-                <= drawing.stroke_nm.map_or(6., |width| (width as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32 / 2.).max(6.))
-        },
-    )
+    Canvas { camera, rect }.hit_edge(pointer, path(drawing))
+}
+
+/// Prefer selected handles, then another edge. A selected closed path can be moved by its
+/// interior when no edge is hit. Open-path edge drags continue to translate the whole path.
+fn drag_target<'a>(
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+    selected: Option<&'a Drawing>,
+    drawings: &'a [Drawing],
+) -> Option<(&'a Drawing, Option<Handle>)> {
+    let canvas = Canvas { camera, rect };
+    let handle = |drawing: &'a Drawing| Some((drawing, Some(canvas.handle(pointer, path(drawing))?)));
+    selected
+        .and_then(handle)
+        .or_else(|| drawings.iter().rev().find_map(handle))
+        .or_else(|| selected.filter(|drawing| canvas.hit_body(pointer, path(drawing))).map(|drawing| (drawing, None)))
+}
+
+/// Describe an insertion or removal on the selected path. The cursor position is captured
+/// with the candidate so moving into the popup cannot change the addressed edge.
+pub(super) fn vertex_menu(
+    state: &State,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+    source: ViewInput,
+) -> Option<VertexMenu> {
+    let drawing = state
+        .geometry(view)
+        .into_iter()
+        .find(|drawing| state.selected.as_deref() == Some(drawing.id.to_string().as_str()) && !hidden.contains(&drawing.layer.to_string()))?;
+    let action = VertexAction::at(Canvas { camera, rect }, pointer, path(&drawing), pcbcraft_engine::board::zones::MAX_POINTS, |points| {
+        !state.zone || pcbcraft_engine::board::zones::validate_outline(points).is_ok()
+    })?;
+    Some(VertexMenu { source, zone: state.zone, drawing, action })
+}
+
+/// Use one placement rule for the provisional segment and its eventual click.
+fn draft_snap(pointer: Pos2, camera: &Camera, rect: Rect, drawings: &[Drawing], state: &State, bypass: bool) -> Snap {
+    let canvas = Canvas { camera, rect };
+    let contact = canvas.nearby_vertex(pointer, drawings.iter().flat_map(|drawing| drawing.points.iter().copied()));
+    let previous = state.draft.as_ref().and_then(|draft| draft.points.last().copied()).filter(|_| state.tool == Some(Tool::Lines));
+    canvas.snap(pointer, previous, contact, bypass)
+}
+
+/// Gather selectable edges for overlap cycling with the same hit tolerance as a click.
+pub(super) fn edge_choices(
+    state: &State,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+) -> impl Iterator<Item = uuid::Uuid> {
+    state
+        .geometry(view)
+        .into_iter()
+        .rev()
+        .filter(move |drawing| !hidden.contains(&drawing.layer.to_string()) && hit(pointer, camera, rect, drawing))
+        .map(|drawing| drawing.id)
 }
 
 /// Construct a rectangle from two clicked opposite corners, preserving arbitrary draw direction.
@@ -186,6 +263,15 @@ fn rectangle(a: Point, b: Point) -> Option<Vec<Point>> {
 fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
     params["expected_revision"] = json!(source.revision);
     Command::new(source, id, params)
+}
+
+/// Replace existing authored geometry through the same transaction used by command clients.
+fn update_path(source: ViewInput, zone: bool, drawing: &Drawing) -> Command {
+    if zone {
+        command(source, pcbcraft_engine::board::zones::SET_ZONE, json!({"zone":drawing.id,"points":drawing.points}))
+    } else {
+        command(source, pcbcraft_engine::SET_DRAWING, json!({"drawing":drawing.id,"points":drawing.points,"closed":drawing.closed}))
+    }
 }
 
 /// Choose the existing typed command for the active material. Copper paths become atomic
@@ -277,7 +363,8 @@ pub(super) fn interact(
     if response.contains_pointer()
         && ui.input(|input| input.pointer.primary_pressed())
         && (state.tool.is_some()
-            || ui.input(|input| input.pointer.press_origin()).is_some_and(|at| drawings.iter().any(|drawing| hit(at, camera, rect, drawing))))
+            || selectable
+                && ui.input(|input| input.pointer.press_origin()).is_some_and(|at| drag_target(at, camera, rect, selected, &drawings).is_some()))
     {
         state.press = Some(source);
     }
@@ -330,7 +417,7 @@ pub(super) fn interact(
             return out;
         }
         let Some(pointer) = pointer.filter(|point| rect.contains(*point)) else { return out };
-        let at = snapped(pointer, camera, rect, &drawings);
+        let at = draft_snap(pointer, camera, rect, &drawings, state, ui.input(|input| input.modifiers.alt)).point;
         if response.clicked() {
             if let Some(draft) = &mut state.draft {
                 if tool == Tool::Rectangle {
@@ -372,59 +459,40 @@ pub(super) fn interact(
         } else {
             ui.input(|input| input.pointer.press_origin())
         };
-        if let Some(origin) = origin {
-            let drawing = selected
-                .filter(|drawing| move_requested || hit(origin, camera, rect, drawing))
-                .or_else(|| drawings.iter().rev().find(|drawing| hit(origin, camera, rect, drawing)));
-            if let Some(drawing) = drawing {
-                let vertex =
-                    (!move_requested).then(|| drawing.points.iter().position(|point| camera.screen(*point, rect).distance(origin) <= 8.)).flatten();
-                state.select(Some(drawing.id.to_string()));
-                state.edit = Some(Edit {
-                    source,
-                    drawing: drawing.clone(),
-                    original: drawing.points.clone(),
-                    vertex,
-                    anchor: camera.snap(origin, rect),
-                    drag: !move_requested,
-                });
-            }
+        if let Some(origin) = origin
+            && let Some((drawing, handle)) =
+                if move_requested { selected.map(|drawing| (drawing, None)) } else { drag_target(origin, camera, rect, selected, &drawings) }
+        {
+            state.select(Some(drawing.id.to_string()));
+            state.edit = Some(Edit {
+                source,
+                drawing: drawing.clone(),
+                drag: Drag::new(Canvas { camera, rect }, path(drawing), origin, handle),
+                held: !move_requested,
+            });
         }
     }
     if let Some(edit) = &mut state.edit {
         out.consumed = true;
         if let Some(pointer) = pointer {
-            let at = snapped(pointer, camera, rect, &drawings.iter().filter(|drawing| drawing.id != edit.drawing.id).cloned().collect::<Vec<_>>());
-            if let Some(index) = edit.vertex {
-                edit.drawing.points[index] = at;
-            } else {
-                let dx = at.x_nm - edit.anchor.x_nm;
-                let dy = at.y_nm - edit.anchor.y_nm;
-                edit.drawing.points =
-                    edit.original.iter().map(|point| Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) }).collect();
-            }
+            let canvas = Canvas { camera, rect };
+            let external = drawings.iter().filter(|drawing| drawing.id != edit.drawing.id).flat_map(|drawing| drawing.points.iter().copied());
+            edit.drag.update(canvas, pointer, external, modifiers.alt);
         }
-        let completed = if edit.drag { response.drag_stopped_by(PointerButton::Primary) } else { response.clicked() && !move_requested };
+        let completed = if edit.held { response.drag_stopped_by(PointerButton::Primary) } else { response.clicked() && !move_requested };
         if completed {
             if response.contains_pointer() {
                 let mut candidate = edit.drawing.clone();
+                candidate.points.clone_from(&edit.drag.points);
                 if !candidate.closed && candidate.points.len() > 3 && candidate.points.first() == candidate.points.last() {
                     candidate.points.pop();
                     candidate.closed = true;
                 }
-                out.command = Some(command(
-                    edit.source,
-                    if state.zone { pcbcraft_engine::board::zones::SET_ZONE } else { pcbcraft_engine::SET_DRAWING },
-                    if state.zone {
-                        json!({"zone":candidate.id,"points":candidate.points})
-                    } else {
-                        json!({"drawing":candidate.id,"points":candidate.points,"closed":candidate.closed})
-                    },
-                ));
+                out.command = Some(update_path(edit.source, state.zone, &candidate));
                 state.committed = Some(candidate);
             }
             state.edit = None;
-        } else if edit.drag && !ui.input(|input| input.pointer.primary_down()) {
+        } else if edit.held && !ui.input(|input| input.pointer.primary_down()) {
             state.edit = None;
         }
     } else if response.clicked() {
@@ -459,21 +527,27 @@ pub(super) fn paint(
     width_nm: i64,
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
+    palette: Option<&std::collections::BTreeMap<uuid::Uuid, egui::Color32>>,
 ) {
     for mut drawing in state.geometry(view).into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
-            drawing = edit.drawing.clone();
+            drawing.points.clone_from(&edit.drag.points);
         } else if let Some(committed) = state.committed.as_ref().filter(|committed| committed.id == drawing.id) {
             drawing = committed.clone();
         }
         let selected = state.selected.as_ref() == Some(&drawing.id.to_string()) || state.selected_many.contains(&drawing.id);
+        let net_color = palette.and_then(|palette| {
+            let zone = view.zones().iter().find(|zone| zone.id == drawing.id)?;
+            (view.zone_net_state(zone.net) == "active").then(|| palette.get(&zone.net)).flatten().copied()
+        });
+        let color = net_color.unwrap_or_else(|| {
+            view.layers()
+                .iter()
+                .find(|layer| layer.id == drawing.layer)
+                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer))
+        });
         if state.zone {
             let points: Vec<_> = drawing.points.iter().map(|point| camera.screen(*point, rect)).collect();
-            let color = view
-                .layers()
-                .iter()
-                .find(|l| l.id == drawing.layer)
-                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer));
             pcbcraft_chrome::board::zone_hatch(painter, &points, color);
         }
         pcbcraft_chrome::board::drawing(
@@ -483,17 +557,18 @@ pub(super) fn paint(
             drawing.stroke_nm.map(|width| width as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32),
             selected,
             false,
-            view.layers()
-                .iter()
-                .find(|layer| layer.id == drawing.layer)
-                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
+            color,
         );
+    }
+    if let Some(snap) = state.edit.as_ref().and_then(|edit| edit.drag.alignment) {
+        (Canvas { camera, rect }).paint_guides(painter, snap);
     }
     if let Some(draft) = &state.draft
         && let Some(pointer) = painter.ctx().input(|input| input.pointer.hover_pos())
     {
         let visible: Vec<_> = state.geometry(view).into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
-        let at = snapped(pointer, camera, rect, &visible);
+        let snap = draft_snap(pointer, camera, rect, &visible, state, painter.ctx().input(|input| input.modifiers.alt));
+        let at = snap.point;
         let points = if state.tool == Some(Tool::Rectangle) {
             rectangle(draft.points[0], at).unwrap_or_else(|| vec![draft.points[0], at])
         } else {
@@ -513,6 +588,7 @@ pub(super) fn paint(
                 .find(|layer| layer.id.to_string() == draft.layer)
                 .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
         );
+        (Canvas { camera, rect }).paint_guides(painter, snap);
         pcbcraft_chrome::board::drawing_target(painter, camera.screen(at, rect));
     }
 }

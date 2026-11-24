@@ -19,12 +19,14 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub(crate) use documents::check_board_document_size;
+#[cfg(test)]
+pub(crate) use documents::historical_documents;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
-    project_registered_board_id,
+    CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, DocumentsEncoder, ENTRY_POINT,
+    MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents, encode_documents, is_document_path,
+    migrate_board_layout, project_board_path, project_instances_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
 mod power_migration;
@@ -47,7 +49,7 @@ pub fn prepare_opened(project: Arc<Project>) -> Result<Arc<Project>, String> {
     Ok(adopt_paper(migrate_bundled_libraries(project)?))
 }
 
-/// Give every sheet without paper (decoded from before sheet/9) the smallest paper around its
+/// Give every sheet without paper the smallest paper around its
 /// drawing, centered on it. Nothing moves and no history is recorded. Returns the input `Arc`
 /// when every sheet already has paper.
 pub fn adopt_paper(project: Arc<Project>) -> Arc<Project> {
@@ -364,7 +366,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
 
 /// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
 }
 
@@ -537,6 +539,9 @@ impl Encoder {
         }
         if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
+        }
+        if !project.output_recipes().is_empty() {
+            return Err("legacy single-file encoding cannot represent output recipes; use split documents or a packed archive".into());
         }
         if !project.schematic_packages.assignments.is_empty()
             || !project.board.assignments.is_empty()
@@ -1085,6 +1090,7 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from,
         layout: None,
         circuit_use: None,
@@ -1092,6 +1098,7 @@ fn validate_with_hierarchy(
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: false,

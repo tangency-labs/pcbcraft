@@ -115,6 +115,14 @@ fn live_project_window_and_ui_commands_check_the_same_api_version() {
         ran: Vec<String>,
     }
     impl Editor for OpenEditor {
+        fn zone_refill(&mut self, _params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+            self.ran.push(pcbcraft_engine::REFILL_ZONES.into());
+            Some(Ok(json!({"zone_fill":{"result":{"state":"pending"}}})))
+        }
+        fn zone_unfill(&mut self, _params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+            self.ran.push(pcbcraft_engine::UNFILL_ZONES.into());
+            Some(Err(pcbcraft_engine::CommandError::InvalidParams("invalid board".into())))
+        }
         fn session(&mut self) -> &mut Session {
             &mut self.session
         }
@@ -143,7 +151,7 @@ fn live_project_window_and_ui_commands_check_the_same_api_version() {
     let execute = |editor: &mut OpenEditor, id, version| {
         call_editor(editor, &json!({"method": "engine.execute", "params": {"command": id, "version": version}}))
     };
-    for id in ["project.new", "view.fit", "ui.inspect"] {
+    for id in ["project.new", "view.fit", "ui.inspect", pcbcraft_engine::REFILL_ZONES, pcbcraft_engine::UNFILL_ZONES] {
         assert_eq!(execute(&mut editor, id, COMMAND_API_VERSION + 1).unwrap_err().code(), "version_mismatch");
     }
     assert_eq!(execute(&mut editor, "view.nothing", COMMAND_API_VERSION + 1).unwrap_err().code(), "unknown_command");
@@ -158,7 +166,9 @@ fn live_project_window_and_ui_commands_check_the_same_api_version() {
     editor.blocked = false;
     assert!(execute(&mut editor, "view.fit", COMMAND_API_VERSION).is_ok());
     assert!(execute(&mut editor, "project.new", COMMAND_API_VERSION).is_ok());
-    assert_eq!(editor.ran, ["ui.inspect", "view.fit"]);
+    assert_eq!(execute(&mut editor, pcbcraft_engine::REFILL_ZONES, COMMAND_API_VERSION).unwrap()["zone_fill"]["result"]["state"], "pending");
+    assert_eq!(execute(&mut editor, pcbcraft_engine::UNFILL_ZONES, COMMAND_API_VERSION).unwrap_err().code(), "invalid_params");
+    assert_eq!(editor.ran, ["ui.inspect", "view.fit", pcbcraft_engine::REFILL_ZONES, pcbcraft_engine::UNFILL_ZONES]);
 }
 
 /// Remote pins stay guarded across old peers, and metadata and warnings belong to the peer.

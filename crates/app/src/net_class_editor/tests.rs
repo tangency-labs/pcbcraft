@@ -178,6 +178,58 @@ fn selected_wire_assignments_share_inspection_and_history() {
     assert!(edit.original_classes.is_empty());
 }
 
+/// Personal color changes use the chosen net and never publish pending class assignments.
+#[test]
+fn net_color_returns_to_pending_rules_for_the_same_persistent_net() {
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    app.run(pcbcraft_engine::board::identity::CREATE_BOARD, &json!({"expected_revision":app.session.revision()}));
+    for x in [0, 25_400_000] {
+        app.run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
+    }
+    let symbols: Vec<_> = app.session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    app.run(
+        pcbcraft_engine::CONNECT_PINS,
+        &json!({"from":{"symbol":symbols[0],"terminal":"1"},"to":{"symbol":symbols[1],"terminal":"1"},"expected_revision":app.session.revision()}),
+    );
+    app.run(net_classes::CREATE, &json!({"name":"Signal class","rules":{},"expected_revision":app.session.revision()}));
+    let project = app.session.snapshot().unwrap();
+    let board = project.board_target().unwrap();
+    let class = project.net_classes().definitions[0].id;
+    let wire = project.wires()[0].id();
+    app.begin_net_rules();
+    h.run();
+    let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+    assert!(edit.target.is_none());
+    assert!(h.query_by_label("Net color…").is_none());
+    click(&mut h, "Cancel");
+    assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+
+    let app = h.state_mut();
+    app.views.active.schematic.selection.wires.insert(wire);
+    let before = app.session.snapshot().unwrap();
+    app.begin_net_rules();
+    h.run();
+    let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+    let Some(ClassTarget::Persistent { net, .. }) = edit.target else { panic!("persistent net") };
+    let source = edit.source();
+    h.get_by_role_and_label(egui::Role::CheckBox, "Signal class").click();
+    h.run();
+    for (finish, color) in [("Cancel", None), ("Apply color", Some(egui::Color32::from_rgb(0x28, 0x91, 0xA1)))] {
+        click(&mut h, "Net color…");
+        assert!(matches!(&h.state().dialog, Dialog::BoardColor(_)));
+        assert_eq!(h.state().rule_dialog_source(), Some(source));
+        replace(&mut h, "Hex", "#2891A1");
+        click(&mut h, finish);
+        let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+        assert!(matches!(edit.target, Some(ClassTarget::Persistent { net: selected, .. }) if selected == net));
+        assert_eq!(edit.classes, BTreeSet::from([class]));
+        assert!(edit.original_classes.is_empty());
+        assert_eq!(h.state().board_appearance.net_palette(board, true).and_then(|palette| palette.get(&net)).copied(), color);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// Changed revision or original view authority disables publication without discarding the draft.
 #[test]
 fn class_form_stale_revision_and_live_mcp_refusal_preserve_state() {
