@@ -1,8 +1,9 @@
 """Cross-platform performance regression gate tests without wall-clock timing assertions.
 
 The fixtures follow the report `board_perf budgets` writes: the action table is read from
-`BUDGETS` in `crates/app/src/performance/budget.rs`, so a renamed action or boundary there
-fails these tests instead of leaving them on a shape the suite no longer produces.
+`BUDGETS` in `crates/app/src/performance/budget.rs`. A renamed or reordered action there fails
+these tests; a renamed boundary is followed by the fixture, so only the boundary names the tests
+spell out (`encode.packed`, `drc.synchronous`, `command.move_tracks`) fail when renamed.
 """
 import copy
 import importlib.util
