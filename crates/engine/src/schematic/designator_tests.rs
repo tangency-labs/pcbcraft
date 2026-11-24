@@ -425,8 +425,12 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             let decoded = persistence::decode_documents(&variants).unwrap();
             if let Some(path) = decoded.instances_document_path() {
-                let instance: Value = serde_json::from_slice(&variants[&path]).unwrap();
-                assert_eq!(instance["format"], format!("pcbcraft-instances/{version}"));
+                let mut instance: Value = serde_json::from_slice(&variants[&path]).unwrap();
+                assert_eq!(instance["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
+                let mut legacy = variants.clone();
+                instance["format"] = json!(format!("pcbcraft-instances/{version}"));
+                legacy.insert(path, serde_json::to_vec(&instance).unwrap());
+                assert_eq!(persistence::encode_documents(persistence::decode_documents(&legacy).unwrap()).unwrap(), variants);
             }
             assert_eq!(decoded.net_registry.records.is_empty(), version == 1);
             assert_eq!(decoded.net_registry.records.iter().any(|record| !record.class_bindings.is_empty()), version >= 3);

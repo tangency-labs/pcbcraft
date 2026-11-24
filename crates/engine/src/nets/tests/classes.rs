@@ -256,7 +256,10 @@ fn first_board_and_consumers_preserve_identity_and_intent() {
     let board = p.board_target().unwrap();
     let scope = p.net_scope();
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[&p.instances_document_path().unwrap()]).unwrap()["format"], "pcbcraft-instances/4");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&docs[&p.instances_document_path().unwrap()]).unwrap()["format"],
+        crate::persistence::CURRENT_INSTANCES_FORMAT
+    );
     round_trip(&s);
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope: schematic, net: id }).is_err());
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope, net: id }).is_ok());
