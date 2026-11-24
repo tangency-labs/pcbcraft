@@ -94,7 +94,18 @@ pub(super) fn properties(
         state.zone_choices = Some((view.target, revision, choices));
     }
     let choices = &state.zone_choices.as_ref()?.2;
-    properties::identity(ui, "Zone outline", "No copper fill");
+    let fill = view.filled_zones();
+    let fill_status = if !view.zone_fill_enabled() {
+        "Unfilled"
+    } else {
+        match &fill {
+            Some(Ok(result)) if result.zones.iter().any(|z| z.id == zone.id) => "Filled copper",
+            Some(Ok(_)) => "Net unavailable",
+            Some(Err(_)) => "Fill unavailable",
+            None => "Fill pending",
+        }
+    };
+    properties::identity(ui, "Zone", fill_status);
     let status = view.zone_net_state(zone.net);
     let current = choices.iter().find(|c| c.id == Some(zone.net)).map_or_else(|| zone.net.to_string(), |c| c.label.clone());
     let mut net = "current".to_owned();

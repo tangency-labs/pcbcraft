@@ -51,6 +51,8 @@ pub(crate) enum Tool {
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
+        /// Follow a snapped pin until a new label's rotation is chosen explicitly.
+        orient_to_pin: bool,
         /// Pointer-to-anchor offset for a held drag; keyboard pickup finishes on a click.
         drag: Option<Vec2>,
     },
@@ -144,7 +146,7 @@ pub(crate) enum Click {
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
-    NetLabelRotate,
+    NetLabelRotate(u16),
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -215,7 +217,7 @@ pub(crate) fn paint_preview_transformed(
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     paint_symbol(
         painter,
-        definition.default_unit(),
+        definition.default_unit().graphics(),
         center,
         step,
         0,
@@ -414,23 +416,32 @@ pub(crate) fn show(
     } else {
         None
     };
-    let label_position = if let Some(Tool::NetLabel { label, revision, drag }) = &tool {
-        ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)).map(|pointer| {
-            wires::label_position(
-                project,
-                camera,
-                rect,
-                pointer + drag.unwrap_or(Vec2::ZERO),
-                draft,
-                *revision,
-                (label.id != 0).then_some(pcbcraft_engine::schematic::WireEndpoint::NetLabel(label.id)),
-            )
-        })
+    let label_placement_at = |pointer| {
+        use pcbcraft_engine::schematic::WireEndpoint;
+        let Some(Tool::NetLabel { label, revision, drag, orient_to_pin }) = &tool else {
+            return None;
+        };
+        let pointer = pointer + drag.unwrap_or(Vec2::ZERO);
+        let ignore = (label.id != 0).then_some(WireEndpoint::NetLabel(label.id));
+        let anchor = wires::label_anchor(project, camera, rect, pointer, draft, *revision, ignore);
+        let at = anchor.position(project).unwrap_or_else(|| camera.snap(pointer, rect));
+        let rotation = match anchor {
+            Anchor::Existing(WireEndpoint::Terminal(pin)) if *orient_to_pin => {
+                project.terminal_symbol(pin).and_then(|symbol| symbol.pin_outward_rotation(pin.number())).unwrap_or(label.rotation)
+            }
+            _ => label.rotation,
+        };
+        Some(crate::net_labels::Placement { at, rotation })
+    };
+    let label_placement = if matches!(&tool, Some(Tool::NetLabel { .. })) {
+        ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)).and_then(label_placement_at)
     } else {
         None
     };
-    let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(at)) = (&tool, label_position) {
-        project.dragged_net_label(label.id, at, label.rotation, revision, auto_heal).ok()
+    let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(pose)) = (&tool, label_placement)
+        && label.id != 0
+    {
+        project.dragged_net_label(label.id, pose.at, pose.rotation, revision, auto_heal).ok()
     } else {
         None
     };
@@ -479,7 +490,7 @@ pub(crate) fn show(
     {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
-        if visible.contains(center) {
+        if let Some(graphics) = visible_symbol_graphics(project, symbol, center, visible) {
             let color = if selected.symbols.contains(&symbol.id()) {
                 tokens.accent
             } else if highlighted.symbols.contains(&symbol.id()) {
@@ -489,7 +500,7 @@ pub(crate) fn show(
             };
             paint_symbol(
                 &painter,
-                symbol.unit_definition(),
+                graphics,
                 center,
                 unit_step,
                 symbol.turns(),
@@ -504,7 +515,7 @@ pub(crate) fn show(
     crate::inspection_selection::paint_pins(&painter, camera, rect, project, inspection);
     overlap_index.paint(ui, response.id, project, camera, rect);
     crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_placement, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -528,9 +539,18 @@ pub(crate) fn show(
 
     if tool_menu::supports(tool.as_ref())
         && (input_enabled || response.context_menu_opened())
-        && let Some(popup) = menu::context(&response, |ui| tool_menu::active(ui, tool.as_ref(), repeat))
+        && let Some(popup) = menu::context(&response, |ui| {
+            let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+            (anchor, tool_menu::active(ui, tool.as_ref(), repeat))
+        })
     {
-        let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+        let (anchor, action) = popup.inner;
+        if matches!(action, Some(ToolAction::Rotate))
+            && let Some(Tool::NetLabel { label, .. }) = &tool
+        {
+            let rotation = anchor.and_then(label_placement_at).map_or(label.rotation, |pose| pose.rotation);
+            return Some(Click::NetLabelRotate(rotation));
+        }
         if let (Some(Tool::PlaceSymbol { definition, unit, value, turns, .. }), Some(at)) = (&tool, anchor)
             && let Some(drawing) = definition.unit(unit)
         {
@@ -545,11 +565,11 @@ pub(crate) fn show(
         }
         if let Some(Tool::Wire { start, .. }) = tool {
             wires::preview(&painter, rect, project, camera, start, draft, anchor, auto_heal, revision);
-            if matches!(popup.inner, Some(ToolAction::Cancel)) {
+            if matches!(action, Some(ToolAction::Cancel)) {
                 return Some(Click::CancelWire);
             }
         }
-        return popup.inner.map(|action| Click::ToolAction(action, ui.ctx().clone()));
+        return action.map(|action| Click::ToolAction(action, ui.ctx().clone()));
     }
 
     // A part dragged from the browser previews under the pointer and places where it's released.
@@ -594,7 +614,7 @@ pub(crate) fn show(
     }
 
     if let Some(click) =
-        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected, label_position, filters)
+        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected, label_placement, filters)
     {
         return click;
     }
@@ -1274,7 +1294,7 @@ fn paint_unit_template(
 ) {
     paint_symbol(
         painter,
-        symbol.unit_definition(),
+        symbol.unit_definition().graphics(),
         center,
         step,
         symbol.turns(),
@@ -1455,7 +1475,7 @@ fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored
 #[allow(clippy::too_many_arguments)]
 fn paint_symbol(
     painter: &Painter,
-    definition: &pcbcraft_engine::schematic::SymbolUnit,
+    graphics: Vec<Shape>,
     center: Pos2,
     step: f32,
     turns: u8,
@@ -1469,7 +1489,7 @@ fn paint_symbol(
         let (x, y) = turn(x, y, turns, mirrored);
         pos2(center.x + x * step, center.y + y * step)
     };
-    for shape in &definition.graphics() {
+    for shape in &graphics {
         match shape {
             Shape::Graphic(graphic) => {
                 if matches!(graphic.geometry, pcbcraft_engine::library_graphics::Geometry::Text { .. }) {
@@ -1510,6 +1530,11 @@ fn paint_symbol(
     }
 }
 
+/// Project current pin labels only when this placement passes the canvas's normal culling.
+pub(super) fn visible_symbol_graphics(project: &Project, symbol: &SymbolPlacement, center: Pos2, visible: Rect) -> Option<Vec<Shape>> {
+    visible.contains(center).then(|| project.symbol_graphics(symbol))
+}
+
 /// A part's correspondence preview uses the native symbol painter and the exact selected unit.
 /// Highlighting never infers a logical terminal from display text or coordinates.
 pub(crate) fn paint_part_preview(
@@ -1525,7 +1550,7 @@ pub(crate) fn paint_part_preview(
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     let t = pcbcraft_chrome::Tokens::get();
-    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
+    paint_symbol(painter, unit.graphics(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
     if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
         let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
         painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));

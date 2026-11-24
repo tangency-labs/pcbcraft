@@ -5,7 +5,10 @@ use crate::{
     ADD_TRACKS, ADD_VIA, INITIALIZE_BOARD_SETUP,
     board::{
         clearance::Results,
-        drc::{Kind, tests::outline},
+        drc::{
+            Kind,
+            tests::{outline, outline_square},
+        },
         geometry::Contour,
         track::{SET_COPPER_LOCKED, tests::copper_layers, tests::routed_fixture, tests::view},
     },
@@ -316,6 +319,64 @@ fn the_board_edge_stops_a_route_at_its_edge_clearance() {
     assert_eq!(plan.blocker, None);
     let layer = copper_layers(&s)[0];
     commit_and_agree(&mut s, &plan, layer, WIDTH);
+}
+
+/// A closed contour inside the board is a cut-out. Its edge stops a route at the edge
+/// clearance, as the outer board edge does, so no route passes through it; and a route that
+/// would start inside the cut-out is blocked where it starts, because that is off the board.
+#[test]
+fn a_board_cut_out_stops_routes_and_cannot_start_one() {
+    let mut s = board();
+    outline_square(&mut s, 5, 15, 10);
+    let across = plan(&s, &request(&s, p(2_000_000, 20_000_000), p(18_000_000, 20_000_000)));
+    let Outcome::Blocked { last_legal } = across.outcome else { panic!("{across:?}") };
+    let edge = 5_000_000 - 300_000 - WIDTH / 2;
+    assert_eq!(last_legal.y_nm, 20_000_000, "{across:?}");
+    assert!((edge - 10..=edge).contains(&last_legal.x_nm), "{across:?}");
+    assert_eq!(across.blocker, None);
+    let layer = copper_layers(&s)[0];
+    let head = p(10_000_000, 20_000_000);
+    let inside = plan(&s, &request(&s, head, p(2_000_000, 20_000_000)));
+    assert_eq!(inside.outcome, Outcome::Blocked { last_legal: head }, "{inside:?}");
+    assert_eq!(inside.points, vec![head]);
+    commit_and_agree(&mut s, &across, layer, WIDTH);
+}
+
+/// Overlapping closed outlines are one board without cut-outs: a route in the area two of them
+/// share is on the board and reaches its target, as it did before cut-outs existed.
+#[test]
+fn a_route_in_overlapping_outlines_is_on_the_board() {
+    let mut s = board();
+    outline_square(&mut s, 20, 10, 15);
+    let layer = copper_layers(&s)[0];
+    let shared = plan(&s, &request(&s, p(21_000_000, 15_000_000), p(24_000_000, 15_000_000)));
+    assert_eq!(shared.outcome, Outcome::Reached, "{shared:?}");
+    commit_and_agree(&mut s, &shared, layer, WIDTH);
+}
+
+/// A disjoint cut-out still blocks routing containment even when two other closed Board Outlines
+/// overlap elsewhere on the board: routes cannot start inside or cross the cut-out, while routes
+/// in the overlapping board area remain legal.
+#[test]
+fn a_cut_out_away_from_overlapping_outlines_still_blocks_routes() {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, 5, 15, 10);
+    outline_square(&mut s, 25, -5, 20);
+
+    let head = p(8_000_000, 20_000_000);
+    let inside = plan(&s, &request(&s, head, p(12_000_000, 20_000_000)));
+    assert_eq!(inside.outcome, Outcome::Blocked { last_legal: head }, "{inside:?}");
+    assert_eq!(inside.points, vec![head]);
+
+    let across = plan(&s, &request(&s, p(2_000_000, 20_000_000), p(18_000_000, 20_000_000)));
+    let Outcome::Blocked { last_legal } = across.outcome else { panic!("{across:?}") };
+    let edge = 5_000_000 - 300_000 - WIDTH / 2;
+    assert_eq!(last_legal.y_nm, 20_000_000, "{across:?}");
+    assert!((edge - 10..=edge).contains(&last_legal.x_nm), "{across:?}");
+
+    let shared = plan(&s, &request(&s, p(28_000_000, 10_000_000), p(32_000_000, 10_000_000)));
+    assert_eq!(shared.outcome, Outcome::Reached, "{shared:?}");
 }
 
 /// Locked copper is an obstacle like any other: planning edits nothing, the route goes round,

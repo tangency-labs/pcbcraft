@@ -1,4 +1,5 @@
-//! The crate on `wasm32` without the `wasm-kernel` feature, which has no kernel: run by CI with
+//! The 3D and STEP boundary on wasm32 without the optional `wasm-kernel` feature.
+//! Run by CI with
 //! `cargo test -p pcbcraft-geometry --target wasm32-wasip1 --lib`.
 
 use super::*;
@@ -10,7 +11,7 @@ fn every_operation_that_reaches_the_kernel_is_kernel_unavailable() {
     let unavailable = |result: Result<()>, what: &str| {
         let error = result.unwrap_err();
         assert_eq!(error.code(), ErrorCode::KernelUnavailable, "{error}");
-        assert_eq!(error.message(), format!("{what}: this build has no geometry kernel"));
+        assert_eq!(error.message(), format!("{what}: this build has no 3D/STEP kernel"));
     };
     unavailable(Body::cuboid("Block", [0; 3], [1_000_000; 3]).map(|_| ()), "cuboid");
     let text = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n";

@@ -143,7 +143,11 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
         .map(|pad| board::PadDrawing {
             number: pad.number.clone(),
             center: at(pad.center),
-            copper: Some(corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)),
+            copper: Some(if pad.plated_slot.is_some() {
+                pad.local_corners().map(at)
+            } else {
+                corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)
+            }),
             color: Some(if pad.copper == CopperBinding::AllCopper {
                 pcbcraft_chrome::Tokens::get().board_through
             } else {
@@ -156,6 +160,10 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
                 PadShape::RoundedRectangle => board::PadContour::RoundedRectangle { radius: pad.corner_radius_nm as f32 * scale },
             },
             drill_radius: pad.drill_nm.map(|d| d as f32 * scale / 2.0),
+            plated_slot: pad
+                .plated_slot
+                .and_then(|slot| slot.resolve(pad.center, 0, false))
+                .map(|slot| (slot.cap_centres().map(at), slot.width_nm() as f32 * scale / 2.0)),
             through_hole: pad.copper == CopperBinding::AllCopper,
             net: None,
         })

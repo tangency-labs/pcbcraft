@@ -18,6 +18,7 @@ pub mod definition;
 pub mod drawing;
 pub mod drc;
 pub mod fabrication;
+pub mod fill;
 pub(crate) mod footprint_delta;
 pub mod geometry;
 pub mod identity;
@@ -43,6 +44,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
@@ -298,6 +300,13 @@ impl Footprint {
                 }
                 if let Some(physical) = physical {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
+                    if let Some(slot) = physical.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 record
             }).collect::<Vec<_>>()});
@@ -446,10 +455,25 @@ impl Board {
 
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format 3 and later also retain the last visible typed quantity; older history
-    /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
+        self.retain_component_display(component, display);
+        if self.retains_retired_component(component) {
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+            return;
+        }
+        if self.by_component.remove(&component).is_some() || assigned {
+            self.footprints.retain(|f| f.component != component);
+            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+        }
+    }
+
+    /// Preserve the last visible fields for pending removal without accepting other changes.
+    /// Format 3 and later retain the typed quantity; older history stays text-only.
+    pub(crate) fn retain_component_display(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
@@ -468,17 +492,6 @@ impl Board {
             historical.reference = part.reference().into();
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
-        }
-        if self.retains_retired_component(component) {
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
-            return;
-        }
-        if self.by_component.remove(&component).is_some() || assigned {
-            self.footprints.retain(|f| f.component != component);
-            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
         }
     }
 

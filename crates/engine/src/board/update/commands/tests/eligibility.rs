@@ -98,7 +98,7 @@ fn board_update_refuses_locked_removal_atomically() {
     let bytes = encode_documents(snapshot.clone()).unwrap();
     let revision = session.revision();
     let history = |session: &Session| {
-        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.project().map(Arc::as_ptr)).collect::<Vec<_>>())
     };
     let before_history = history(&session);
     assert!(before_history.iter().all(|entries| !entries.is_empty()));

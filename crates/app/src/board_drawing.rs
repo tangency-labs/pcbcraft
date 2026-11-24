@@ -177,6 +177,23 @@ fn hit(pointer: Pos2, camera: &Camera, rect: Rect, drawing: &Drawing) -> bool {
     )
 }
 
+/// Gather selectable edges for overlap cycling with the same hit tolerance as a click.
+pub(super) fn edge_choices(
+    state: &State,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+) -> impl Iterator<Item = uuid::Uuid> {
+    state
+        .geometry(view)
+        .into_iter()
+        .rev()
+        .filter(move |drawing| !hidden.contains(&drawing.layer.to_string()) && hit(pointer, camera, rect, drawing))
+        .map(|drawing| drawing.id)
+}
+
 /// Construct a rectangle from two clicked opposite corners, preserving arbitrary draw direction.
 fn rectangle(a: Point, b: Point) -> Option<Vec<Point>> {
     (a.x_nm != b.x_nm && a.y_nm != b.y_nm).then(|| vec![a, Point { x_nm: b.x_nm, y_nm: a.y_nm }, b, Point { x_nm: a.x_nm, y_nm: b.y_nm }])
@@ -459,6 +476,7 @@ pub(super) fn paint(
     width_nm: i64,
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
+    palette: Option<&std::collections::BTreeMap<uuid::Uuid, egui::Color32>>,
 ) {
     for mut drawing in state.geometry(view).into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
@@ -467,13 +485,18 @@ pub(super) fn paint(
             drawing = committed.clone();
         }
         let selected = state.selected.as_ref() == Some(&drawing.id.to_string()) || state.selected_many.contains(&drawing.id);
+        let net_color = palette.and_then(|palette| {
+            let zone = view.zones().iter().find(|zone| zone.id == drawing.id)?;
+            (view.zone_net_state(zone.net) == "active").then(|| palette.get(&zone.net)).flatten().copied()
+        });
+        let color = net_color.unwrap_or_else(|| {
+            view.layers()
+                .iter()
+                .find(|layer| layer.id == drawing.layer)
+                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer))
+        });
         if state.zone {
             let points: Vec<_> = drawing.points.iter().map(|point| camera.screen(*point, rect)).collect();
-            let color = view
-                .layers()
-                .iter()
-                .find(|l| l.id == drawing.layer)
-                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer));
             pcbcraft_chrome::board::zone_hatch(painter, &points, color);
         }
         pcbcraft_chrome::board::drawing(
@@ -483,10 +506,7 @@ pub(super) fn paint(
             drawing.stroke_nm.map(|width| width as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32),
             selected,
             false,
-            view.layers()
-                .iter()
-                .find(|layer| layer.id == drawing.layer)
-                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
+            color,
         );
     }
     if let Some(draft) = &state.draft
