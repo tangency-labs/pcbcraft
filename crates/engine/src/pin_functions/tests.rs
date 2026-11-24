@@ -572,7 +572,7 @@ fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
         // The older pin-function headers refuse recipes.
         for older in ["pcbcraft-project/48", "pcbcraft-project/56"] {
             let error = decode_documents(&with_format(&docs, older)).err().unwrap();
-            assert!(error.contains("output_recipes requires project format 47, 57, 60 or 62"), "{error}");
+            assert!(error.contains("output_recipes requires project format 47, 57, 60, 62 or 63"), "{error}");
         }
         // A file saved earlier as project/60 still opens, and the next save writes the current format.
         let reopened = decode_documents(&with_format(&docs, "pcbcraft-project/60")).unwrap();
@@ -643,4 +643,51 @@ fn alternate_definition_validates_and_keeps_current_formats() {
         editor.execute(editor.revision(), Action::Undo).unwrap();
     }
     assert_eq!(editor.snapshot().native().unwrap()["format"], library::SYMBOL_FORMAT_V5);
+}
+
+/// One native round trip keeps net wire appearance, an alternate pin function and an active
+/// designator lock together. Project/52 is the superset that carries all three vocabularies.
+#[test]
+fn native_round_trip_keeps_appearance_pin_functions_and_designator_lock() {
+    let mut session = fixture(false);
+    session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+
+    let alternate = session.project().unwrap().symbols()[0].id();
+    session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":25_400_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let resistor = session.project().unwrap().symbols().iter().find(|placed| placed.id() != alternate).unwrap().id();
+    session
+        .apply(
+            crate::CONNECT_PINS,
+            &json!({"from":{"symbol":alternate,"terminal":"1"},"to":{"symbol":resistor,"terminal":"1"},"expected_revision":session.revision()}),
+        )
+        .unwrap();
+
+    let project = session.project().unwrap();
+    let target = project.net_class_target_for_endpoint(project.sheet_target(), project.wires()[0].endpoints()[0]).unwrap().unwrap();
+    let paint = crate::nets::Appearance { color: Some([21, 42, 63]), width_cp: Some(320) };
+    session
+        .apply(
+            crate::nets::SET_APPEARANCE,
+            &json!({"target":serde_json::to_value(target).unwrap(),"appearance":serde_json::to_value(paint).unwrap(),"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    session
+        .apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":alternate,"reference":"U1","value":"MCU","designator_locked":true,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+
+    let packed = encode_packed(session.snapshot().unwrap()).unwrap();
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT, "appearance is the superset format");
+
+    let reopened = decode_packed(&packed).unwrap().project;
+    let painted = reopened.wire_appearances().unwrap();
+    assert_eq!(painted.len(), 1, "appearance survives the round trip: {painted:?}");
+    assert_eq!(painted.values().next(), Some(&paint));
+    let part = reopened.component(&reopened.symbols()[0]).unwrap();
+    assert_eq!(reopened.pin_function(part, "1"), Some("ADC_IN"), "alternate pin function survives");
+    assert!(reopened.components.values().any(|part| part.designator_locked), "active designator lock survives");
 }

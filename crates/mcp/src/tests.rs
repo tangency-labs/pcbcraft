@@ -999,6 +999,38 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
 }
 
+/// Net appearance commands are backward-compatible catalog additions: discovery keeps API version
+/// 1, publishes their full patch schema, and the catalog revision still changes when they are absent.
+#[test]
+fn net_appearance_commands_are_version_one_catalog_additions() {
+    use pcbcraft_engine::command_api::{COMMAND_API_VERSION, catalog_revision};
+    use pcbcraft_engine::nets::{INSPECT_APPEARANCE, MAX_PROPERTY_TARGETS, SET_APPEARANCE, SET_PROPERTIES};
+
+    assert_eq!(COMMAND_API_VERSION, 1);
+    let mut s = server();
+    let listed = call(&mut s, "list_commands", json!({}));
+    assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
+    let commands = body(&listed);
+    let commands = commands.as_array().unwrap();
+    let found = |id: &str| commands.iter().find(|command| command["id"] == id).cloned().unwrap();
+    let inspect = found(INSPECT_APPEARANCE);
+    let set = found(SET_APPEARANCE);
+    let batch = found(SET_PROPERTIES);
+    assert_eq!(batch["params"]["properties"]["targets"]["maxItems"], json!(MAX_PROPERTY_TARGETS));
+    assert_eq!(inspect["id"], json!(INSPECT_APPEARANCE));
+    assert_eq!(set["id"], json!(SET_APPEARANCE));
+    let clear = &set["params"]["properties"]["appearance"]["oneOf"][1]["properties"]["clear"];
+    assert_eq!(clear["items"]["enum"], json!(["color", "width_cp"]));
+
+    let without: Vec<Value> = commands
+        .iter()
+        .filter(|command| ![INSPECT_APPEARANCE, SET_APPEARANCE, SET_PROPERTIES].iter().any(|id| command["id"] == *id))
+        .cloned()
+        .collect();
+    assert_eq!(commands.len(), without.len() + 3);
+    assert_ne!(catalog_revision(&without), catalog_revision(commands));
+}
+
 /// Discovery and inspection expose the same immutable scope. Both return modes refuse the
 /// edit as a coded tool failure, and the same connection remains able to read afterwards.
 #[test]

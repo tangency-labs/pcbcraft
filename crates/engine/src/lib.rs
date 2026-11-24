@@ -202,6 +202,12 @@ enum ParamKind {
     ClassSet,
     ClassId,
     ClassTarget,
+    /// Sparse schematic wire appearance patch, or null to reset to theme defaults.
+    NetAppearance,
+    /// Distinct scoped nets in one batch edit.
+    NetPropertyTargets,
+    /// Sparse wire appearance and class membership changes for a batch.
+    NetPropertyChanges,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -341,6 +347,9 @@ impl ParamKind {
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
+            Self::NetAppearance => nets::appearance_param_schema(),
+            Self::NetPropertyTargets => nets::property_targets_schema(),
+            Self::NetPropertyChanges => nets::property_changes_schema(),
             Self::ClassId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
@@ -704,6 +713,9 @@ impl ParamKind {
             Self::ClassTarget => nets::ClassTarget::parse(value)
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
+            Self::NetAppearance => nets::validate_appearance_patch(value),
+            Self::NetPropertyTargets => nets::validate_property_targets(value),
+            Self::NetPropertyChanges => nets::validate_property_changes(value),
             Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
                 .ok()
                 .filter(|id| !id.is_nil())
@@ -1059,6 +1071,12 @@ pub const MOVE_ITEMS: &str = "schematic.move_items";
 pub const DELETE_ITEMS: &str = "schematic.delete_items";
 const ITEMS: Param = Param { required: true, name: "items", summary: "Symbol and wire IDs from project inspection", kind: ParamKind::Selection };
 
+const APPEARANCE: Param = Param {
+    required: true,
+    name: "appearance",
+    summary: "Sparse drawing patch: omit a channel to keep its saved value, set color RGB and/or width_cp in hundredths of a point, or remove one channel with {\"clear\":[\"color\"]} or {\"clear\":[\"width_cp\"]}; null or {} resets to theme defaults",
+    kind: ParamKind::NetAppearance,
+};
 const WIRE: Param = Param { required: true, name: "wire", summary: "Wire ID from inspection", kind: ParamKind::WireId };
 const SYMBOL: Param = Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId };
 const SYMBOL_X: Param =
@@ -2851,6 +2869,47 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: nets::SET_APPEARANCE,
+        title: "Set Net Appearance",
+        summary: "Set one net's schematic wire color and drawn stroke width with stable identity, promotion, revision check and one undo step. Connectivity and PCB rules are unchanged.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "target",
+                kind: ParamKind::ClassTarget,
+                required: true,
+                summary: "Scoped persistent or revision-derived target from net inspection",
+            },
+            APPEARANCE,
+        ],
+    },
+    Command {
+        id: nets::SET_PROPERTIES,
+        title: "Set Selected Net Properties",
+        summary: "Apply the same sparse wire appearance and class membership changes to several logical nets in one undo step.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "targets", kind: ParamKind::NetPropertyTargets, required: true, summary: "Distinct scoped net targets" },
+            Param {
+                name: "changes",
+                kind: ParamKind::NetPropertyChanges,
+                required: true,
+                summary: "Appearance and class assignments to change. Omitted fields keep their values on each net.",
+            },
+        ],
+    },
+    Command {
+        id: nets::INSPECT_APPEARANCE,
+        title: "Inspect Net Appearance",
+        summary: "Inspect a net's effective schematic drawing override without promoting identities or editing the project.",
+        params: &[Param {
+            name: "target",
+            kind: ParamKind::ClassTarget,
+            required: true,
+            summary: "Scoped persistent or revision-derived target from net inspection",
+        }],
+    },
+    Command {
         id: part_groups::CREATE,
         title: "Create Part Group",
         summary: "Create a project-wide part group without assigning part instances or allocating a board.",
@@ -3601,6 +3660,9 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | nets::SET_APPEARANCE
+            | nets::SET_PROPERTIES
+            | nets::INSPECT_APPEARANCE
             | part_groups::CREATE
             | part_groups::UPDATE
             | part_groups::REMOVE
@@ -3872,6 +3934,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if id == nets::INSPECT_APPEARANCE {
+            self.validate_project_command(id, params)?;
+            return self.inspect_net_appearance(params);
+        }
         if id == board::class_rules::ROUTE_RULES {
             self.validate_project_command(id, params)?;
             return self.route_rule_query(params);
@@ -4130,6 +4196,9 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | nets::SET_APPEARANCE
+                | nets::SET_PROPERTIES
+                | nets::INSPECT_APPEARANCE
                 | part_groups::CREATE
                 | part_groups::UPDATE
                 | part_groups::REMOVE
@@ -4250,6 +4319,11 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            nets::SET_APPEARANCE => self.set_net_appearance(params)?,
+            nets::SET_PROPERTIES => self.set_net_properties(params)?,
+            nets::INSPECT_APPEARANCE => {
+                self.inspect_net_appearance(params)?;
             }
             part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
             part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,

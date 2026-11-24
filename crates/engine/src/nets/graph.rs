@@ -37,6 +37,7 @@ impl Network {
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
             class_bindings: Vec::new(),
+            appearance: None,
             state: State::Active {},
         })
     }
@@ -53,6 +54,7 @@ impl Network {
                 generated_number: record.generated_number,
                 lineage: record.lineage.clone(),
                 class_bindings: record.class_bindings.clone(),
+                appearance: record.appearance,
                 ..next
             })
         }

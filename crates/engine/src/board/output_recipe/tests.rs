@@ -50,7 +50,11 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
     assert!(session.inspect()["project"].get("output_recipes").is_none());
     let format = |documents: &Documents| serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"].clone();
     assert_eq!(format(&empty), crate::persistence::CURRENT_PROJECT_FORMAT);
-    let before_recipes = replace_entry(&empty, |entry| entry["format"] = json!("pcbcraft-project/61"));
+    let mut before_recipes = replace_entry(&empty, |entry| entry["format"] = json!("pcbcraft-project/61"));
+    let path = crate::persistence::project_instances_path(&before_recipes[ENTRY_POINT]).unwrap().unwrap();
+    let mut previous_instances: Value = serde_json::from_slice(&before_recipes[&path]).unwrap();
+    previous_instances["format"] = json!("pcbcraft-instances/9");
+    before_recipes.insert(path.clone(), serde_json::to_vec(&previous_instances).unwrap());
     assert_eq!(encode_documents(decode_documents(&before_recipes).unwrap()).unwrap(), empty);
 
     let revision = set(&mut session, ID, &content).unwrap();
@@ -70,6 +74,9 @@ fn recipe_round_trips_and_undo_restores_recipe_free_bytes() {
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(reopened.output_recipes(), project.output_recipes());
     assert_eq!(encode_documents(reopened).unwrap(), saved);
+    let mut previous_recipe_format = replace_entry(&saved, |entry| entry["format"] = json!("pcbcraft-project/62"));
+    previous_recipe_format.insert(path, serde_json::to_vec(&previous_instances).unwrap());
+    assert_eq!(encode_documents(decode_documents(&previous_recipe_format).unwrap()).unwrap(), saved);
     let packed = decode_packed(&encode_packed(project.clone()).unwrap()).unwrap();
     assert_eq!(packed.project.output_recipes(), project.output_recipes());
     assert_eq!(packed.documents, saved);
@@ -106,7 +113,7 @@ fn recipe_reader_refuses_wrong_header_and_invalid_records() {
         ["pcbcraft-project/36", "pcbcraft-project/39", "pcbcraft-project/45", "pcbcraft-project/51", "pcbcraft-project/56", "pcbcraft-project/61"]
     {
         let invalid = replace_entry(&saved, |entry| entry["format"] = json!(header));
-        assert!(decode_documents(&invalid).err().unwrap().contains("output_recipes requires project format 47, 57, 60 or 62"), "{header}");
+        assert!(decode_documents(&invalid).err().unwrap().contains("output_recipes requires project format 47, 57, 60, 62 or 63"), "{header}");
     }
     let missing = replace_entry(&saved, |entry| {
         entry.as_object_mut().unwrap().remove("output_recipes");
@@ -239,7 +246,7 @@ fn recipe_and_designator_lock_share_the_current_format() {
     // The older lock headers refuse recipes.
     for header in ["pcbcraft-project/51", "pcbcraft-project/56"] {
         let downgraded = replace_entry(&both, |entry| entry["format"] = json!(header));
-        assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes requires project format 47, 57, 60 or 62"), "{header}");
+        assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes requires project format 47, 57, 60, 62 or 63"), "{header}");
     }
     // Files saved earlier as project/47 (recipes) or /57 (recipes and a lock) still open, and the
     // next save writes the current format with the same records.

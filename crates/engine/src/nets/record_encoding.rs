@@ -21,7 +21,7 @@ impl RecordEncoding {
     pub(crate) fn step(&mut self, out: &mut impl Write, row: &Record) -> Result<bool, String> {
         // Exhaustively destructure `Record` so adding a persisted field fails to compile
         // until both the incremental encoder and its parity test account for it.
-        let Record { id, generated_number, primary, fallbacks, lineage, state, class_bindings } = row;
+        let Record { id, generated_number, primary, fallbacks, lineage, state, class_bindings, appearance } = row;
         let successors = match state {
             State::Active {} => 0,
             State::Ambiguous { branches, .. } => branches.len(),
@@ -92,7 +92,7 @@ impl RecordEncoding {
             }
             3 => {
                 if class_bindings.is_empty() {
-                    emit(out, b"}")?;
+                    close(out, appearance)?;
                     *self = Self::default();
                     return Ok(true);
                 }
@@ -105,7 +105,8 @@ impl RecordEncoding {
                     array_item(out, self.item, binding)?;
                     self.item += 1;
                 } else {
-                    emit(out, b"]}")?;
+                    emit(out, b"]")?;
+                    close(out, appearance)?;
                     *self = Self::default();
                     return Ok(true);
                 }
@@ -114,6 +115,15 @@ impl RecordEncoding {
         }
         Ok(false)
     }
+}
+
+/// End a large row: the small optional wire appearance follows `class_bindings`, as in Serde.
+fn close(out: &mut impl Write, appearance: &Option<super::Appearance>) -> Result<(), String> {
+    if let Some(appearance) = appearance {
+        emit(out, b",\"appearance\":")?;
+        json(out, appearance)?;
+    }
+    emit(out, b"}")
 }
 
 fn emit(out: &mut impl Write, bytes: &[u8]) -> Result<(), String> {
@@ -136,7 +146,7 @@ fn array_item(out: &mut impl Write, index: usize, value: &impl Serialize) -> Res
 mod tests {
     use super::*;
     use crate::board::update::SourceCapture;
-    use crate::nets::{Anchor, AnchorKind, ClassBinding, Lineage, Retirement, Scope, ScopeKind};
+    use crate::nets::{Anchor, AnchorKind, Appearance, ClassBinding, Lineage, MIN_WIDTH_CP, Retirement, Scope, ScopeKind};
     use uuid::Uuid;
 
     /// Large net records with every optional field populated must match `serde_json::to_vec`
@@ -158,6 +168,7 @@ mod tests {
             lineage: ids.iter().map(|&id| Lineage { snapshot: snapshot.clone(), net: Some(id), anchor: primary.clone() }).collect(),
             state: State::Active {},
             class_bindings: vec![ClassBinding { class: Uuid::from_u128(5), origin: record_id }],
+            appearance: Some(Appearance { color: Some([1, 2, 3]), width_cp: Some(MIN_WIDTH_CP) }),
         };
         for state in [
             State::Active {},
@@ -196,6 +207,7 @@ mod tests {
             lineage: Vec::new(),
             state: State::Active {},
             class_bindings: bindings,
+            appearance: None,
         };
         let mut cursor = RecordEncoding::default();
         let mut out = Vec::new();
@@ -238,6 +250,7 @@ mod tests {
             lineage: (10..22).map(|n| Lineage { snapshot: snapshot.clone(), net: Some(Uuid::from_u128(n)), anchor: primary.clone() }).collect(),
             state: State::Active {},
             class_bindings: Vec::new(),
+            appearance: Some(Appearance { color: None, width_cp: Some(MIN_WIDTH_CP) }),
         };
         let mut cursor = RecordEncoding::default();
         let mut out = Vec::new();
