@@ -116,7 +116,7 @@ fn a_breaking_change_needs_a_raised_api_version() {
     };
     assert_eq!(changes, ["compatible: `edit.undo` params.properties.note: added"]);
     assert_eq!(check_snapshot(&snapshot_of(&optional, 1), "commands", &optional, 1), Ok(()));
-    assert!(section.contains("\"edit.undo\": {\"params\":"));
+    assert!(section.contains("\n    \"edit.undo\": {\n      \"params\": {\n"));
 
     let mut required = optional.clone();
     let undo = required.iter_mut().find(|command| command["id"] == "edit.undo").unwrap();
@@ -392,7 +392,7 @@ fn breaking_changes_are_labelled_breaking() {
     assert_eq!(changes, [Change { breaking: true, what: "`window.synthetic` scope: changed from \"window\" to \"pane\"".to_owned() }]);
 }
 
-/// Every row of the rule table in `compare`'s documentation (and docs/mcp.md), tried at the
+/// Every row of the rule table in `compare`'s documentation (and docs/automation/command-api.md), tried at the
 /// parameter root and the nested positions listed below. Local labels hold in positive positions;
 /// `oneOf`, negation, conditionals and `allOf` make changes breaking, as does the conservative
 /// whole-parameter guard for references or unevaluated keywords.
