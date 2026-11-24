@@ -27,6 +27,8 @@ while **Edit copy** authors a separate library definition.
 
 | Record | Format | Machine-readable schema |
 | --- | --- | --- |
+| Part definition with descriptive metadata, with or without device supply ranges | `pcbcraft-part/5` | [part-v5.schema.json](schemas/part-v5.schema.json) |
+| Part definition with device supply ranges only | `pcbcraft-part/4` | [part-v4.schema.json](schemas/part-v4.schema.json) |
 | Part definition | `pcbcraft-part/2` | [part-v2.schema.json](schemas/part-v2.schema.json) |
 | Retained electrical part definition | `pcbcraft-part/1` | [part-v1.schema.json](schemas/part-v1.schema.json) |
 | Manufacturer part | `pcbcraft-manufacturer-part/1` | [manufacturer-part-v1.schema.json](schemas/manufacturer-part-v1.schema.json) |
@@ -81,9 +83,10 @@ command does not provide that path. Library validity does not imply availability
 in every placement surface.
 
 Existing format-1 records remain readable and retain their symbol requirement,
-format marker, stable ordering and encoding. New authoring starts with format 2;
-removing a symbol from a retained format-1 definition upgrades the new authored
-revision to format 2. Existing published revisions and project-pinned copies are
+format marker, stable ordering and encoding. New authoring starts with format 2
+and selects format 5 as soon as descriptive metadata is added; removing a symbol
+from a retained format-1 definition upgrades the new authored revision to format 2.
+Existing published revisions and project-pinned copies are
 not rewritten. Project selection and manufacturer formats remain unchanged.
 
 ## Exact references
@@ -108,10 +111,17 @@ Adding/removing/refreshing a source invalidates dependency-resolution caches.
 | --- | --- |
 | Common identity fields | `format`, `library`, `id`, `revision`, `name`, `license` |
 | `source` | Required provenance `kind`, `reference`, `locator`; descriptive metadata, never fetched on load |
-| `symbol` | Optional exact symbol reference in format 2; required in format 1. Omit when absent; null and placeholder references are invalid. |
+| `symbol` | Optional exact symbol reference in format 2; required in format 1, in format 4 and in format 5 when ratings are present. Omit when absent; null and placeholder references are invalid. |
 | `category` | Optional exact category `definition` and optional `primary_value` field binding |
 | `fixed_parameters` | Optional nonempty map of namespaced field IDs to known typed fixed values; requires `category` |
 | `packages` | Required map of stable variant IDs to package records; an empty map is valid for library and schematic work |
+| `terminal_ratings` | Optional nonempty map in formats 4 and 5; keys are exact logical terminal IDs of the device's symbol, which a rated part must declare. |
+| `description` | Optional one-line summary in format 5 only; 1–512 characters, stored trimmed. |
+| `keywords` | Optional nonempty list in format 5 only; 1–16 tags of 1–64 characters each. |
+| `links` | Optional nonempty list in format 5 only; 1–8 labeled HTTP(S) references, never fetched on load. |
+
+The exact bounds, duplicate rules, format transitions and search behavior of
+the format-5 fields are specified in [descriptive metadata](#descriptive-metadata-and-search).
 
 No manufacturer, MPN, stock, price, drawing, terminal geometry or pad geometry
 belongs in this record. The part links the independently versioned definitions.
@@ -120,6 +130,74 @@ requirement of every instance using the definition; it is not an editable
 instance default. An omitted fixed value imposes no fixed requirement. Unknown
 or unsupported manufacturer specifications are not represented as fixed values,
 zero or guessed defaults.
+
+## Descriptive metadata and search
+
+`pcbcraft-part/5` adds three optional human-facing fields to a reusable part: a
+one-line `description`, a `keywords` list and a `links` list of labeled HTTP(S)
+references. They help people and catalog search find the definition; they are
+never identity, electrical, geometry or fabrication data. Both the JSON schema
+and the engine enforce these stored bounds:
+
+| Field | Stored form and bounds |
+| --- | --- |
+| `description` | One trimmed, control-free line of 1–512 characters; omit for no summary. |
+| `keywords` | 1–16 tags, each a trimmed, control-free line of 1–64 characters. |
+| `links` | 1–8 entries, each with `label` (trimmed, control-free, 1–64 characters) and `url` (1–2048 characters). |
+
+An explicit `null` is not an omitted field: `description: null`, `keywords: null`
+and `links: null` are rejected, as are empty `keywords: []` and `links: []`
+arrays and an empty or whitespace-only description. Serialization omits absent
+fields instead of writing `null` or empty arrays, so leaving a form field blank
+leaves no key in the native record. A link URL must begin with `http://` or
+`https://`, have a nonempty host and contain no whitespace anywhere. Labels and
+URLs are stored as text; **loading a native record never fetches a URL**.
+
+Keyword tags and link labels are stored trimmed, then compared after Unicode
+lowercasing: a second keyword or link label that matches an earlier one after
+trimming and case folding is rejected as a duplicate, so `Precision` and
+` precision ` cannot both be authored. URLs are not deduplicated against labels
+or each other; only labels form link identities.
+
+The declared `format` is authoritative on read; a draft uses this state machine,
+also applied when a publication is prepared:
+
+| Draft content | Chosen format |
+| --- | --- |
+| No ratings, no metadata, no symbol | `pcbcraft-part/2` |
+| No ratings, no metadata, symbol retained from a format-1 record | `pcbcraft-part/1` |
+| At least one terminal rating, no metadata | `pcbcraft-part/4` |
+| At least one of `description`, `keywords`, `links`, with or without ratings | `pcbcraft-part/5` |
+
+A retained format-1 record keeps its encoding only while it is still valid: it
+must have a symbol and carry neither ratings nor metadata. Adding ratings or
+metadata upgrades it, and there is no downgrade back to format 1. Adding any
+metadata to a format-2 or format-4 draft selects format 5; removing all metadata
+deselects it. Removing the last rating from a format-4 draft returns to format
+2, while a format-5 draft with metadata stays format 5. On read, the engine
+enforces the declared header: metadata in formats 1, 2 or 4 is refused, a
+format-5 record with no metadata is refused, ratings in formats 1 or 2 are
+refused, and format 4 needs at least one rating. A rated definition needs an
+exact symbol in either format 4 or 5, with real `power_in` terminals at that
+revision. A format-5 record may therefore carry ratings as well as metadata;
+format 4 stays ratings-only.
+
+`PartDefinition::search_text()` lowercases the description and keywords and
+joins them with spaces. Catalog search trims and lowercases the query and tests
+it as a substring of that text as well as of name, ID, library, manufacturer/MPN
+and symbol-prefix fields. **Link labels and URLs are not searched**: they are
+references, not searchable metadata. Presentation surfaces use the same
+`search_text()` helper, so UI and MCP search match the same content. A part
+carrying only descriptive metadata is still a library item; schematic placement
+continues to require an exact symbol.
+
+The complete definition, including its metadata, is pinned at placement and
+survives source removal and folder/archive reopen through its canonical
+encoding. Metadata is part of the dependency digest: changing a description,
+keyword or link at the same address changes the digest, and a placement captured
+against the earlier digest is refused. The digest also covers symbol, category
+and package dependencies, as described in [the source
+guide](native-library-sources.md#part-definitions-and-categories).
 
 A package has `name`, an exact `footprint`, a `mapping` and optional
 `unconnected_pads`. When a symbol is present, the mapping's keys are its terminal
@@ -169,6 +247,50 @@ fields and satisfy their types, units, bounds and permitted choices. A unit
 error reports the category field ID when preparing a part or manufacturer
 record, applying an instance requirement, or editing an explicitly bound
 primary Value. This uses the category's existing field IDs and units.
+
+### Device supply range
+
+A reusable device can declare an inclusive `supply_min`, `supply_max`, or both
+on any logical `power_in` terminal of its exact symbol revision. The key is the
+terminal ID (the same key used in a package map), not its displayed pin name,
+its graphical occurrence, or a pad number. Devices that share a symbol can
+have different ranges. An orderable inherits its generic device's ranges; the
+symbol, orderable and project instance do not store overrides.
+
+```json
+"terminal_ratings": {
+  "1": {
+    "supply_min": {"type": "quantity", "value": "4.5", "unit": "V"},
+    "supply_max": {"type": "quantity", "value": "36", "unit": "V"}
+  }
+}
+```
+
+A bound is a canonical decimal voltage in `V`. Omit an unknown bound rather
+than storing `null` or zero; omit the terminal if both bounds are unknown. The
+map holds at most 128 entries. Validation rejects an empty range, a non-voltage
+quantity, an unknown or non-`power_in` terminal and a minimum above the maximum
+using exact decimal order. Negative bounds and equal endpoints are allowed.
+
+In a generic part document, open **Device supply ranges** and apply both bounds
+on a pin together; blank inputs remove the corresponding bounds. Changing to
+an unrelated symbol removes the old ranges in the same undoable edit. To change
+revisions of the same symbol, first remove the existing ranges from the draft,
+choose the new revision, then re-enter the bounds on the correct inputs. Terminal
+numbers can be reassigned between revisions, so they do not establish
+correspondence. If the exact power input becomes unavailable, the form still shows
+unapplied bound text so it can be discarded without changing saved bounds.
+The schematic's **Pin functions**
+shows the device's pinned limits read-only. `library.resolve_part` returns the
+map under `part.terminal_ratings`; placed-part inspection reads it under the
+pinned `part.definition`. This does not yet run an electrical rule check.
+
+Only a part with a nonempty map uses `pcbcraft-part/4`, or `pcbcraft-part/5`
+when it also carries descriptive metadata; either envelope requires the exact
+symbol that owns those terminals. Unrated files without metadata keep formats 1
+or 2. Removing the last range from a format-4 draft returns to format 2; a
+format-5 draft keeps its metadata envelope. Earlier readers refuse formats 4
+and 5 rather than opening a part whose content they cannot represent.
 
 ## Canonical quantities
 
@@ -241,6 +363,7 @@ quantities merely because they were entered or displayed at different scales.
 
 JSON Schema enforces record structure, field ownership, scalar bounds and
 canonical encodings. The engine additionally rejects duplicate map identities,
+duplicate keywords and duplicate link labels after trimming and case folding,
 invalid trimming, unordered integer bounds, duplicate pad use across entries,
 unknown referenced terminals/pads, category type/field conflicts and unresolved
 exact dependencies. A structurally valid record can therefore still be
@@ -261,6 +384,10 @@ cargo test --locked -p pcbcraft-engine library::parts
 Formats and content revisions remain independent. Future authored fields or
 changed meanings require an explicit schema version and compatibility tests;
 unchanged project/symbol/footprint records retain their existing encodings.
+Format 5 is a new envelope for descriptive metadata rather than a change to
+format 2, so existing formats 1, 2 and 4 records and their project pins keep
+their bytes; readers that predate format 5 refuse it rather than dropping the
+metadata.
 
 ## Manufacturer parts and design requirements
 

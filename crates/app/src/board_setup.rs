@@ -9,7 +9,7 @@ pub(crate) mod profile_io;
 mod profiles;
 use pcbcraft_chrome::{properties, units};
 use pcbcraft_engine::board::{
-    setup::{BoardSetup, LayerPurpose, Side, Stratum},
+    setup::{BoardSetup, CopperRole, LayerPurpose, Side, Stratum, groups::UserLayerGroup},
     view::BoardTarget,
 };
 use serde_json::json;
@@ -64,6 +64,8 @@ struct Candidate {
     material_labels: Vec<String>,
     enabled: Vec<bool>,
     constructions: Vec<Option<Construction>>,
+    roles: Vec<Option<CopperRole>>,
+    groups: Vec<UserLayerGroup>,
     tolerance: Vec<Length>,
     materials: Vec<Material>,
     plies: std::collections::BTreeMap<String, PlyFields>,
@@ -104,7 +106,9 @@ impl Candidate {
             .flatten()
             .map(|ply| (ply.id.to_string(), PlyFields::new(ply, unit)))
             .collect();
-        Self { setup, names, thickness, material_labels, enabled, constructions, tolerance, materials, plies }
+        let roles = setup.stackup().strata.iter().map(|s| if let Stratum::Copper { role, .. } = s { *role } else { None }).collect();
+        let groups = setup.stackup().layer_groups.clone();
+        Self { setup, names, thickness, material_labels, enabled, constructions, roles, groups, tolerance, materials, plies }
     }
     /// Build and validate the complete candidate, preserving layer identities, pinned materials,
     /// construction, tolerances and fields not edited by this first graphical form.
@@ -121,6 +125,7 @@ impl Candidate {
             keep
         });
         value["materials"] = json!(self.materials);
+        value["stackup"]["layer_groups"] = json!(self.groups);
         for (i, length) in self.thickness.iter().enumerate() {
             let entry = value["stackup"]["strata"][i].as_object_mut().ok_or("Invalid stackup draft")?;
             match length.value(unit)? {
@@ -129,6 +134,13 @@ impl Candidate {
                 }
                 None => {
                     entry.remove("thickness_nm");
+                }
+            }
+            if matches!(self.setup.stackup().strata[i], Stratum::Copper { .. }) {
+                if let Some(role) = self.roles[i] {
+                    entry.insert("role".into(), json!(role));
+                } else {
+                    entry.remove("role");
                 }
             }
             if matches!(self.setup.stackup().strata[i], Stratum::Dielectric { .. }) {
@@ -229,12 +241,13 @@ fn purpose_name(purpose: LayerPurpose) -> &'static str {
 mod pages;
 
 impl PcbApp {
-    /// Rule/setup dialogs stay in the window containing their captured source view.
+    /// Rule, setup and color dialogs stay in the window containing their captured source view.
     pub(super) fn rule_dialog_source(&self) -> Option<ViewInput> {
         match &self.dialog {
             Dialog::BoardSetup(edit) => Some(edit.source()),
             Dialog::BoardRules(edit) => Some(edit.source()),
             Dialog::Rules(edit) => Some(edit.source()),
+            Dialog::BoardColor(edit) => Some(edit.source()),
             _ => None,
         }
     }
@@ -395,7 +408,7 @@ impl PcbApp {
                             }
                         }
                         if let Some(classes) = &mut edit.classes {
-                            class_actions = Some(classes.show(ui, valid));
+                            class_actions = Some(classes.show(ui, valid, None));
                         }
                     }
                 }
@@ -465,8 +478,11 @@ impl PcbApp {
             };
             let result = edit.candidate.value(edit.unit).and_then(|setup| {
                 let silkscreen = edit.silk_style()?;
-                let setup = serde_json::to_value(setup).map_err(|e| e.to_string())?;
-                Ok(json!({"setup":setup,"silkscreen":silkscreen}))
+                let mut value = serde_json::to_value(&setup).map_err(|e| e.to_string())?;
+                if command == pcbcraft_engine::SET_BOARD_SETUP && setup.stackup().layer_groups.is_empty() {
+                    value["stackup"]["layer_groups"] = json!([]);
+                }
+                Ok(json!({"setup":value,"silkscreen":silkscreen}))
             });
             match result {
                 Ok(mut params) => {

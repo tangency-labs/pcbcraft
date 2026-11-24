@@ -31,6 +31,13 @@ pub(super) struct EditorWindows {
 /// The application name in native window titles, shown alone or after the window's document.
 pub const APP_TITLE: &str = "PCBCraft";
 
+/// The smallest client size of the main native window, in logical points.
+pub const MAIN_WINDOW_MIN_SIZE: [f32; 2] = [640.0, 400.0];
+
+/// The smallest client size of a detached editor window, in logical points.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const DETACHED_WINDOW_MIN_SIZE: [f32; 2] = [480.0, 400.0];
+
 /// The native title for a window showing `document`, the same for the main and detached
 /// windows. An empty document (Home, or no project open) gives the application name alone.
 #[cfg(not(target_arch = "wasm32"))]
@@ -531,8 +538,10 @@ impl PcbApp {
             let title = window_title(&self.view_title(id));
             let integrated_titlebar = self.integrated_titlebar;
             let panels = self.windows.panels.entry(host).or_default();
-            let mut builder =
-                egui::ViewportBuilder::default().with_title(title).with_decorations(!integrated_titlebar).with_min_inner_size([480.0, 400.0]);
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title(title)
+                .with_decorations(!integrated_titlebar)
+                .with_min_inner_size(DETACHED_WINDOW_MIN_SIZE);
             if !panels.placed {
                 builder = builder.with_inner_size([1100.0, 760.0]);
                 if let Some(position) = self.windows.spawn_positions.remove(&host) {

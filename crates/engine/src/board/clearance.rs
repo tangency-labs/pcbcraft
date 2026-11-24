@@ -40,6 +40,7 @@ impl std::fmt::Debug for Cached {
 #[derive(Clone, Debug)]
 pub struct Authority {
     snapshot: Arc<Project>,
+    fill_authority: Arc<()>,
     session: Arc<()>,
     target: BoardTarget,
     opening: u64,
@@ -76,10 +77,11 @@ impl Authority {
     pub(crate) fn view(&self) -> Option<BoardView<'_>> {
         self.snapshot.board_view(self.target)
     }
-    /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
+    /// Reject another session, reopen, Undo/Redo, authored edits or explicit pour changes.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {
-        Arc::ptr_eq(&self.session, &session.clearance_identity)
+        Arc::ptr_eq(&self.fill_authority, &self.snapshot.fill_authority())
+            && Arc::ptr_eq(&self.session, &session.clearance_identity)
             && self.opening == session.history_root_revision()
             && self.revision == session.revision()
             && session.snapshot().is_some_and(|current| Arc::ptr_eq(&self.snapshot, &current))
@@ -182,6 +184,7 @@ impl Session {
         });
         ClearanceQuery::from_geometry(
             &super::work::Source {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 target,
@@ -207,6 +210,7 @@ impl ClearanceQuery {
         Ok(Self {
             authority: Authority {
                 snapshot: source.snapshot.clone(),
+                fill_authority: source.fill_authority.clone(),
                 session: source.session.clone(),
                 target: source.target,
                 opening: source.opening,
@@ -228,6 +232,7 @@ impl ClearanceQuery {
     pub(super) fn with_objects(&self, items: Vec<Object>) -> Result<Self, CommandError> {
         let source = super::work::Source {
             snapshot: self.authority.snapshot.clone(),
+            fill_authority: self.authority.fill_authority.clone(),
             session: self.authority.session.clone(),
             target: self.authority.target,
             opening: self.authority.opening,
@@ -282,6 +287,33 @@ impl ClearanceQuery {
                 }
             }
         }
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
+    }
+    /// Exhaustively evaluate all shared-layer pairs involving the supplied object indices,
+    /// retaining only contact or clearance findings. Bounds memory for large boards where
+    /// `exhaustive_pairs` would materialize O(n^2) non-violating decisions.
+    pub fn exhaustive_findings_for(&self, indices: &[usize]) -> Results {
+        let mut selected = BTreeSet::new();
+        for &index in indices {
+            if index < self.geometry.items.len() {
+                selected.insert(index);
+            }
+        }
+        let mut decisions = Vec::new();
+        for &index in &selected {
+            for other in 0..self.geometry.items.len() {
+                if other == index || (other < index && selected.contains(&other)) {
+                    continue;
+                }
+                let (first, second) = if index < other { (index, other) } else { (other, index) };
+                if let Some(decision) = self.geometry.evaluate(first, second, self.pair_clearance(first, second))
+                    && (decision.touches || decision.clearance_violation)
+                {
+                    decisions.push(decision);
+                }
+            }
+        }
+        decisions.sort_by_key(|d| (d.first, d.second));
         Results { authority: self.authority.clone(), decisions, probe_rules: None }
     }
     /// Use independent object requirements for the narrow phase, retaining baseline behavior

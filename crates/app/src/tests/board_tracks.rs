@@ -898,6 +898,75 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "clicking empty space clears the track selection");
 }
 
+/// A click selects the active track, and cycling visits only visible tracks and wraps.
+#[test]
+fn overlap_cycle_selects_tracks_across_visible_layers() {
+    let mut h = routable();
+    let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    let path = [Point { x_nm: 0, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 }];
+    for layer in [&top, &bottom] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":path,"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+    }
+    let copper = tracks(&h);
+    let id = |layer: &str| copper.iter().find(|track| track.layer.to_string() == layer).unwrap().id;
+    let (front, back) = (id(&top), id(&bottom));
+    let revision = h.state().session.revision();
+    h.state_mut().views.active.board.set_layer(&bottom, true, None);
+    h.run();
+    let middle = at(&h, Point { x_nm: 3_810_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([back]));
+    h.hover_at(middle);
+    h.run();
+    for expected in [front, back] {
+        h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+        h.run();
+        assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([expected]));
+    }
+    h.state_mut().views.active.board.set_layer(&top, false, Some(false));
+    h.run();
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([back]));
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// A visible via in the gap between actual copper pads can be selected and cycled with its owner footprint.
+#[test]
+fn overlap_cycle_selects_via_inside_footprint_envelope() {
+    let mut h = routable_with("header-1x02-254");
+    let (footprint_id, gap) = {
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        let footprint = board.footprints().next().unwrap();
+        let [a, b] = footprint.pads.as_slice() else { panic!("expected two physical pads") };
+        let gap = Point { x_nm: (a.center.x_nm + b.center.x_nm) / 2, y_nm: (a.center.y_nm + b.center.y_nm) / 2 };
+        assert!(footprint.pads.iter().all(|pad| !pad.contains_point(gap)));
+        (footprint.id.clone(), gap)
+    };
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":gap,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let via = vias(&h)[0].id;
+    let point = at(&h, gap);
+    click_canvas_at(&mut h, point);
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([via]));
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.hover_at(point);
+    h.run();
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    assert_eq!(h.state().views.active.board.selection, BTreeSet::from([footprint_id]));
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, BTreeSet::from([via]));
+    assert!(h.state().views.active.board.selection.is_empty());
+    assert_eq!(h.state().session.revision(), revision + 1);
+}
+
 /// An unsupported-copper frame discards a queued Delete instead of replaying it once arcs are removed.
 #[test]
 fn unsupported_copper_discards_pending_track_delete() {
@@ -1151,6 +1220,59 @@ fn box_selection_picks_tracks_and_vias() {
     h.run();
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via]));
     assert!(h.state().views.active.board.selection.is_empty(), "footprints outside the box stay unselected");
+}
+
+/// Copper boxes keep unlocked objects and inspection still reports the locked track and via.
+#[test]
+fn copper_box_excludes_locked_without_hiding_inspection() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let unlocked = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 1_270_000 }, Point { x_nm: 7_620_000, y_nm: 1_270_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":5_080_000,"y_nm":-1_270_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let via = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let target = h.state().views.active.board.target.unwrap().board;
+    h.state_mut()
+        .run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let box_copper = |h: &mut Harness<'_, PcbApp>| {
+        let from = at(h, Point { x_nm: 1_524_000, y_nm: -2_540_000 });
+        let to = at(h, Point { x_nm: 8_636_000, y_nm: 3_810_000 });
+        h.hover_at(from);
+        h.run();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+    };
+    let inspection = h.state().session.inspect();
+    let board = &inspection["project"]["boards"][0];
+    assert!(board["tracks"].as_array().unwrap().iter().any(|item| item["id"] == json!(track) && item["locked"] == true));
+    assert!(board["vias"].as_array().unwrap().iter().any(|item| item["id"] == json!(via) && item["locked"] == true));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via, unlocked]));
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    let locked_at = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, locked_at);
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.state_mut().select_all_board();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    assert_eq!(h.state().session.inspect(), inspection);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "newly locked copper leaves the filtered view's selection");
 }
 
 /// U selects every track joined to the hovered one, and nothing else.
@@ -1446,7 +1568,7 @@ fn outputs_export_one_archive_of_fabrication_files() {
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
     assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
     assert!(h.state().fabrication_exports.busy());
-    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved(name.into()))).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     let writes_notice = "Saved fabrication ZIP";
@@ -2085,7 +2207,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
         let source = h.state().views.active.input(&h.state().session);
         let project = h.state().session.snapshot().unwrap();
         let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-        h.state_mut().views.active.board.copper_connectivity(board, source).unwrap()
+        h.state_mut().views.active.board.copper_connectivity(board, source, false).unwrap()
     }
     let mut h = routable();
     let line = airwires(&h)[0].clone();
@@ -2121,8 +2243,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
 
     let project = h.state().session.snapshot().unwrap();
     let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
-    let another = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
+    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None, false).unwrap();
+    let another = h.state_mut().views.active.board.copper_connectivity(board, None, false).unwrap();
     assert_eq!(uncached, first);
     assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
     let before_open = cached(&mut h);
@@ -2287,6 +2409,17 @@ fn vias_filter_separately_from_tracks() {
     h.run();
     click_canvas_at(&mut h, on_via);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via]));
+    h.hover_at(on_track);
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(
+        h.state().views.active.board.tracks.selected,
+        std::collections::BTreeSet::from([via]),
+        "connected selection keeps only the enabled kind"
+    );
+    click_canvas_at(&mut h, on_track);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "a track-only hit is ignored when tracks are disabled");
 }
 
 /// Saved filter settings from before the Vias row keep existing choices and enable vias.
