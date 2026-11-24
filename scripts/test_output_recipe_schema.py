@@ -55,6 +55,7 @@ class OutputRecipeSchemaTests(unittest.TestCase):
         cls.name_schema = properties["name"]
         cls.stem_schema = properties["file_stem"]
         cls.layers_schema = properties["gerber_layers"]
+        cls.content_validator = Draft202012Validator(content)
         cls.name_validator = Draft202012Validator(cls.name_schema)
         cls.stem_validator = Draft202012Validator(cls.stem_schema)
         cls.layers_validator = Draft202012Validator(cls.layers_schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
@@ -89,6 +90,26 @@ class OutputRecipeSchemaTests(unittest.TestCase):
         for layer in REJECTED_LAYERS:
             with self.subTest(rejected=layer):
                 self.assertFalse(self.layers_validator.is_valid([layer]))
+
+    def test_published_integer_fields_accept_integer_valued_numbers(self):
+        """The origin point and profile revision accept 2.0 like 2 and reject 2.5, as the command does."""
+        recipe = {
+            "name": "Prototype",
+            "board": "01234567-89ab-4cde-8fab-0123456789ab",
+            "units": "mm",
+            "file_stem": "prototype",
+            "gerber_layers": [],
+            "drill": True,
+            "origin": {"kind": "point", "x_nm": 100, "y_nm": -200},
+            "assembly_profile": {"profile": "01234567-89ab-4cde-8fab-0123456789ac", "revision": 2},
+        }
+        self.assertTrue(self.content_validator.is_valid(recipe))
+        for field, path in [("origin.x_nm", ("origin", "x_nm")), ("assembly_profile.revision", ("assembly_profile", "revision"))]:
+            for number, expected in [(2.0, True), (2.5, False)]:
+                with self.subTest(field=field, number=number):
+                    content = json.loads(json.dumps(recipe))
+                    content[path[0]][path[1]] = number
+                    self.assertEqual(self.content_validator.is_valid(content), expected)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is needed for the JavaScript pattern check")
     def test_published_patterns_match_ecmascript_regex(self):

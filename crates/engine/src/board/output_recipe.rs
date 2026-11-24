@@ -1,6 +1,9 @@
 //! Authored fabrication selections. A recipe is not an export run or a destination.
 
-use super::{assembly_profile::Adoption, origin::Anchor};
+use super::{
+    assembly_profile::{Adoption, normalize_number},
+    origin::Anchor,
+};
 use crate::{
     CommandError, Project, Session,
     persistence::layout::{RESERVED_PORTABLE_SEGMENTS, portable_segment},
@@ -183,11 +186,26 @@ pub(crate) fn schema() -> Value {
 }
 
 /// Decode the same content type used in native documents and apply its intrinsic bounds.
+/// Integer-valued JSON numbers in the origin point and profile revision are accepted, as the
+/// published integer schema allows them; native documents keep their exact integer syntax.
 fn parse(value: &Value) -> Result<Option<Content>, String> {
     if !canonical_layer_ids(value) {
         return Err("Gerber layer UUIDs must use the lowercase hyphenated spelling.".into());
     }
-    let content = serde_json::from_value::<Option<Keyed<Content>>>(value.clone()).map_err(|error| error.to_string())?.map(|Keyed(content)| content);
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        if let Some(origin) = object.get_mut("origin").and_then(Value::as_object_mut) {
+            for axis in ["x_nm", "y_nm"] {
+                if let Some(number) = origin.get_mut(axis) {
+                    normalize_number(number);
+                }
+            }
+        }
+        if let Some(revision) = object.get_mut("assembly_profile").and_then(Value::as_object_mut).and_then(|profile| profile.get_mut("revision")) {
+            normalize_number(revision);
+        }
+    }
+    let content = serde_json::from_value::<Option<Keyed<Content>>>(value).map_err(|error| error.to_string())?.map(|Keyed(content)| content);
     if let Some(content) = &content {
         content.validate()?;
     }

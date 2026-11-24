@@ -483,6 +483,59 @@ fn recipe_layer_ids_have_one_spelling_in_schema_and_runtime() {
     assert_eq!(session.project().unwrap().output_recipes()[0].content.gerber_layers[0].to_string(), layer);
 }
 
+/// The published integer fields accept integer-valued JSON numbers such as `2.0`, as JSON Schema
+/// does, and the command stores them as integers; fractional values are refused on both sides.
+/// `scripts/test_output_recipe_schema.py` checks the same values against the published contract.
+#[test]
+fn recipe_integer_fields_accept_integer_valued_numbers_like_schema() {
+    let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();
+    let properties = &described["params"]["properties"]["content"]["oneOf"][1]["properties"];
+    let point = properties["origin"]["oneOf"].as_array().unwrap().iter().find(|item| item["properties"]["kind"]["const"] == "point").unwrap();
+    let revision = &properties["assembly_profile"]["properties"]["revision"];
+    // A JSON Schema integer is any number with a zero fractional part.
+    let schema_integer = |value: &Value| value.as_f64().is_some_and(|number| number.fract() == 0.0);
+    for (field, field_schema) in [("origin.x_nm", &point["properties"]["x_nm"]), ("assembly_profile.revision", revision)] {
+        assert_eq!(field_schema["type"], "integer", "{field}");
+        assert!(schema_integer(&json!(2.0)), "{field} schema should accept 2.0");
+        assert!(!schema_integer(&json!(2.5)), "{field} schema should reject 2.5");
+    }
+
+    let (mut session, content) = fixture();
+    let revision = session.revision();
+    let initial = session.snapshot().unwrap();
+    let edits: [(&str, fn(&mut Value, Value)); 2] = [
+        ("origin.x_nm", |content, number| content["origin"]["x_nm"] = number),
+        ("assembly_profile.revision", |content, number| content["assembly_profile"]["revision"] = number),
+    ];
+    for (field, edit) in edits {
+        let mut fractional = content.clone();
+        edit(&mut fractional, json!(2.5));
+        let refused = set(&mut session, ID, &fractional);
+        assert!(
+            matches!(&refused, Err(CommandError::InvalidParams(msg)) if msg.contains("must be valid output recipe content")),
+            "{field}: {refused:?}"
+        );
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&initial, &session.snapshot().unwrap()));
+    }
+
+    let mut integer_valued = content.clone();
+    for (_, edit) in edits {
+        edit(&mut integer_valued, json!(2.0));
+    }
+    set(&mut session, ID, &integer_valued).unwrap();
+    let stored = &session.project().unwrap().output_recipes()[0].content;
+    assert_eq!(stored.origin, Some(Anchor::Point { x_nm: 2, y_nm: -200 }));
+    assert_eq!(stored.assembly_profile, Some(Adoption { profile: Uuid::from_u128(12), revision: 2 }));
+    let accepted = session.revision();
+    let mut exact = content;
+    for (_, edit) in edits {
+        edit(&mut exact, json!(2));
+    }
+    set(&mut session, ID, &exact).unwrap();
+    assert_eq!(session.revision(), accepted, "the same integers written exactly are a no-op");
+}
+
 /// Verify set, replace and remove each succeed and round-trip through native persistence while a
 /// board geometry command remains refused with the expected unsupported-feature error.
 fn assert_recipe_edits_and_geometry_refusal(session: &mut Session, content: &Value, board: Uuid, layer: Uuid, expected_error: &str) {
