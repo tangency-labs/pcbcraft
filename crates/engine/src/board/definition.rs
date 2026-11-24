@@ -5,13 +5,14 @@ use std::{collections::BTreeSet, sync::Arc};
 
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
-pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
+pub(crate) const MAX_OFFSET_NM: i64 = 100_000_000;
 /// Most pads in one footprint: a full 32 x 32 ball grid array.
 pub(crate) const MAX_PADS: usize = 1024;
 /// Most parameterized artwork objects in one footprint.
 pub(crate) const MAX_ARTWORK: usize = 256;
 const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
 const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
+const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -55,7 +56,7 @@ const BASIC_COMPONENTS: [&str; 18] = [
 ];
 
 /// A physical land relative to its footprint origin. Surface lands bind to the component
-/// side; plated through-hole lands explicitly bind to all copper and carry a circular drill.
+/// side; plated through-hole lands bind to all copper and carry one circular or obround hole.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RectPad {
@@ -72,6 +73,14 @@ pub struct RectPad {
     /// Diameter of a circular plated drill; present only for all-copper through-hole lands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drill_nm: Option<i64>,
+    /// Finished plated obround hole, anchored at the pad centre and independent of the land.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_slot")]
+    pub plated_slot: Option<super::slot::PlatedSlot>,
+}
+
+/// A slot field must contain actual slot geometry; omit the field for other pad types.
+fn present_slot<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<super::slot::PlatedSlot>, D::Error> {
+    super::slot::PlatedSlot::deserialize(deserializer).map(Some)
 }
 
 /// Keep the original rectangle-only JSON encoding when no physical rounding is requested.
@@ -219,7 +228,7 @@ fn rectangle(center: Point, width: i64, height: i64, rotation: u16) -> bool {
 }
 
 impl RectPad {
-    /// Require a supported land contour and a smaller, positive plated drill for all-copper lands.
+    /// Require a supported land and exactly one enclosed hole on each plated through-hole pad.
     fn valid(&self) -> bool {
         rectangle(self.center, self.width_nm, self.height_nm, self.rotation)
             && match self.shape {
@@ -228,11 +237,30 @@ impl RectPad {
                 PadShape::Oval => self.corner_radius_nm == 0,
                 PadShape::Circle => self.width_nm == self.height_nm && self.corner_radius_nm == 0,
             }
-            && match (self.copper, self.drill_nm) {
-                (CopperBinding::ComponentSide, None) => true,
-                (CopperBinding::AllCopper, Some(diameter)) => diameter > 0 && diameter < self.width_nm.min(self.height_nm),
+            && match (self.copper, self.drill_nm, self.plated_slot) {
+                (CopperBinding::ComponentSide, None, None) => true,
+                (CopperBinding::AllCopper, Some(diameter), None) => diameter > 0 && diameter < self.width_nm.min(self.height_nm),
+                (CopperBinding::AllCopper, None, Some(slot)) => self.encloses_slot(slot),
                 _ => false,
             }
+    }
+
+    /// Copper must enclose the complete opening, not only its width. Positive but small
+    /// rings are permitted here and reported by the board's annular-ring rule.
+    fn encloses_slot(&self, slot: super::slot::PlatedSlot) -> bool {
+        let land =
+            super::geometry::Contour::pad(self.center, self.local_corners(), self.shape, self.corner_radius_nm, (self.width_nm, self.height_nm));
+        slot.resolve(self.center, 0, false).is_some_and(|hole| hole.annular_ring_nm(&land) > 0.)
+    }
+
+    /// Resolve the land's bounding corners in footprint coordinates. Use on validated pads.
+    pub fn local_corners(&self) -> [Point; 4] {
+        let (left, top) = (-self.width_nm / 2, -self.height_nm / 2);
+        let (right, bottom) = (left + self.width_nm, top + self.height_nm);
+        [(left, top), (right, top), (right, bottom), (left, bottom)].map(|(x, y)| {
+            let (x_nm, y_nm) = super::rotate(x, y, self.rotation);
+            Point { x_nm: x_nm + self.center.x_nm, y_nm: y_nm + self.center.y_nm }
+        })
     }
 }
 
@@ -290,16 +318,27 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
-    /// Select the native format from authored features, leaving untouched legacy footprints unchanged.
-    pub(crate) fn format_for(has_npth: bool) -> &'static str {
-        if has_npth { NPTH_FORMAT } else { LEGACY_FORMAT }
+    /// Select the narrowest native format that retains every authored hole.
+    pub(crate) fn format_for(has_npth: bool, pads: &[RectPad]) -> &'static str {
+        if pads.iter().any(|pad| pad.plated_slot.is_some()) {
+            SLOT_FORMAT
+        } else if has_npth {
+            NPTH_FORMAT
+        } else {
+            LEGACY_FORMAT
+        }
     }
 
-    /// Refuse unknown versions and mixed feature/version pairs before writing or accepting a definition.
+    /// Report presence of an authored slot in a validated, versioned footprint.
+    pub(crate) fn has_plated_slots(&self) -> bool {
+        self.format == SLOT_FORMAT
+    }
+
+    /// Refuse unknown versions and mismatched feature/version pairs before writing or accepting a definition.
     fn validate_format(&self) -> Result<(), String> {
         match self.format.as_str() {
-            LEGACY_FORMAT | NPTH_FORMAT if self.format == Self::format_for(!self.non_plated_holes.is_empty()) => Ok(()),
-            LEGACY_FORMAT | NPTH_FORMAT => Err("footprint format does not match its non-plated hole content".into()),
+            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT if self.format == Self::format_for(!self.non_plated_holes.is_empty(), &self.pads) => Ok(()),
+            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT => Err("footprint format does not match its authored hole content".into()),
             _ => Err(format!("unsupported footprint format {}", self.format)),
         }
     }

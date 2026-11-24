@@ -23,6 +23,10 @@ and net identities determine the target. Select the complete set of classes and
 choose **Assign classes**. Clearing all boxes removes the assignment. A previously
 derived net is promoted only when a nonempty assignment is saved.
 
+In the standalone Rules window, **Net color…** edits the board's personal
+color for a selected net with an active persistent ID. The color picker
+returns to **Effective net rules** and retains any pending class choices.
+
 The page shows **Effective value** and **Active source**, with conflicts above the
 dimension rows. Changed checkboxes show an **Unsaved assignment preview** with
 preview column headings until **Assign classes** succeeds.

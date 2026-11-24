@@ -194,6 +194,12 @@ edit and an inactive tool at completion. Missed canvas input fails the run inste
 of producing misleading fast samples. Shared edits exercise session revision
 invalidation, not concurrent transport or worker completion ordering.
 
+`route-reverse-capacity-cancel-edit-v1` replays the same steps for `envelope-v1`
+only, where the board is already at the track and via capacity limits. Instead of
+requiring a layer change, PgDn must be refused with the track/via capacity
+message and the active layer must stay unchanged, while the cancellation,
+shared-edit invalidation and inactive final-tool checks remain in force.
+
 ## Record native evidence
 
 Create environment metadata using observed facts. For example:
@@ -232,6 +238,47 @@ between comparable native runs. Use runtime for the runtime version/mode. Native
 and browser reports are separate baselines and cannot be compared as one series.
 If a feature needs a new boundary, apply the same measurement-only instrumentation
 to both revisions and document that patch; do not silently compare different code.
+
+## Budget suite for large boards
+
+`board_perf budgets` runs the same CPU workloads as `run` on one saved artifact,
+also times a packed save of that project, and reports each action's nearest-rank
+p50/p95 next to its p95 budget when one has been proposed:
+
+```sh
+target/release/examples/board_perf generate envelope-v1 "$(git rev-parse HEAD)" /tmp/envelope-v1.json
+target/release/examples/board_perf budgets /tmp/envelope-v1.json /tmp/native-env.json 20 /tmp/envelope-budgets.json
+```
+
+| Action | Boundary | p95 budget |
+| --- | --- | --- |
+| `open` | `decode.cold` | no target yet |
+| `save` | `encode.packed` | no target yet |
+| `drc` | `drc.synchronous` | no target yet |
+| `connectivity` | `electrical_connectivity.first` | no target yet |
+| `move_commit` | `command.move_tracks` | below 100 ms (proposed #237 commit target; track-edit proxy) |
+| `routing_input` | validated active-route reversal `aggregate.route_reversal.ui` samples | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
+
+Open, save, DRC and connectivity have no agreed target, so the suite reports their
+quantiles with the verdict **no budget**. The two budgeted rows use the proposed
+#237 gates (see [Agent acceptance instructions](#agent-acceptance-instructions))
+and are strict: each action gets **measured pass** (p95 below
+budget), **measured miss** (p95 at or above budget), **unmeasured** (its boundary
+recorded no samples) or **no budget**. A missing boundary never counts as a pass.
+Each row carries a `budget_basis` saying where its target comes from and what its
+boundary can certify. `routing_input` is the CPU service-cost proxy described
+there, so a pass certifies neither the window's routing-input budget nor either
+visible-preview budget (p95 < 16.7 ms / p99 < 33 ms); `move_commit` times a
+validated track edit and does not qualify walkaround or shove commits. The report
+lists the window routing-input budget, the visible-preview budget, process memory,
+a 10,000-object agent change and multi-core speedup as unmeasured. The timed save must reopen with equivalent project contents and a valid manifest,
+while the report retains the original input archive hash; that check runs outside
+the timed boundary.
+`open` covers unpacking, decoding and validating the archive, not process startup
+or the file dialog. A verdict describes one machine and build; like other timings
+here, it does not gate CI. The first iteration checks clearance pairs against the
+exhaustive reference, so envelope-size runs take much longer than the timed
+boundaries alone.
 
 ## Property-edit service-time diagnostic
 
@@ -299,12 +346,13 @@ available native and browser targets. Preserve the saved artifacts for the PR.
 Run the same suite afterward and explain both improvements and regressions.
 Correctness assertions are mandatory even when timing gets better: compare query
 findings with the exhaustive reference, reject stale authority and retain the
-feature's own cancellation/rollback tests. The harness checks current query
-contact/violation completeness against all pairs outside the timed boundary on
-the first iteration. Every disposable probe also compares contact, clearance and
-conflicting-membership findings against an exhaustive shared-layer contour and
-membership reference outside its timed boundary. These guards do not replace a
-feature's exhaustive correctness suite.
+feature's own cancellation/rollback tests. The harness checks current query contact/violation completeness against all pairs
+outside the timed boundary on the first iteration for boards up to 8,192 objects;
+above 8,192 objects, it compares the findings touching a deterministic 128-object
+strided sample against an exhaustive per-object reference. Every disposable probe
+also compares contact, clearance and conflicting-membership findings against an
+exhaustive shared-layer contour and membership reference outside its timed
+boundary. These guards do not replace a feature's exhaustive correctness suite.
 
 The proposed #237 targets are routing-input p95 < 4 ms, input-to-valid-visible-preview
 p95 < 16.7 ms / p99 < 33 ms, cancellation by the next rendered frame and commit
@@ -453,6 +501,7 @@ The following original command-generated recipes extend the existing artifacts:
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
 | `bga-v1` | The `reference-v1` board plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits, loaded as a native library and placed with all eight symbol units and the full terminal map. After all fixed-artifact samples, a separate pass times library load, part, unit and footprint placement, baseline capture, packed encode and decode, and the design check of a fresh project holding only the array (`bga.*` metrics). The fresh BGA-only subcase has no routing; the retained reference-plus-BGA artifact has the reference tracks and standard replay |
+| `envelope-v1` | Board at the current 65,536-track, 16,384-via and 1,024-pad BGA limits built through shared commands: 65,536 tracks, 16,384 vias, 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits) and a closed board outline, staying within the 16 MiB document and 64 MiB packed archive limits; uses `route-reverse-capacity-cancel-edit-v1`, seeded geometry and counts, generated on demand rather than checked in |
 
 Generate with `board_perf generate RECIPE REVISION ARTIFACT`, retain the exact
 artifact, then reuse it across runs. The `bga.*` diagnostics are generated from

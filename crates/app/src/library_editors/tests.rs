@@ -1340,6 +1340,85 @@ fn library_command_chords_use_the_pressed_event_modifiers() {
     }
 }
 
+/// Tool letters and R's direction read the pressed event's own modifiers too: a
+/// command released before batch end cannot leak a chord into a tool start, a
+/// command arriving after the letter cannot suppress it, and a shift released
+/// before batch end cannot flip the rotation direction.
+#[test]
+fn library_tool_keys_and_rotate_use_the_pressed_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [egui::Key::P, egui::Key::L, egui::Key::T] {
+            for (command_at_press, command_at_end, focused, starts) in
+                [(false, false, true, true), (true, false, true, false), (false, true, true, true), (false, false, false, false)]
+            {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                let modifiers = |command| egui::Modifiers { ctrl: command, command, ..Default::default() };
+                h.input_mut().focused = focused;
+                h.input_mut().events.extend([
+                    egui::Event::ModifiersChanged(modifiers(command_at_press)),
+                    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::ModifiersChanged(modifiers(command_at_end)),
+                ]);
+                h.run();
+                assert_eq!(
+                    matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { .. }),
+                    starts,
+                    "{kind:?}: {key:?} tool start must follow the press (press={command_at_press}, end={command_at_end}, focus={focused})"
+                );
+            }
+        }
+        // The selection rotates around the first object's anchor, so the last
+        // object's anchor lands in a different place for +90 and -90 turns.
+        let anchor_after = |shift_at_press: bool, shift_at_end: bool, focused: bool| {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let all: Vec<u64> = h.state().library_editors.documents[&id].session.snapshot().objects.keys().copied().collect();
+            let last = *all.last().unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = all.into_iter().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            let modifiers = |shift| egui::Modifiers { shift, ..Default::default() };
+            h.input_mut().focused = focused;
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(shift_at_press)),
+                egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: Some(egui::Key::R),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: modifiers(shift_at_press),
+                },
+                egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: Some(egui::Key::R),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: modifiers(shift_at_press),
+                },
+                egui::Event::ModifiersChanged(modifiers(shift_at_end)),
+            ]);
+            h.run();
+            h.state().library_editors.documents[&id].session.snapshot().objects[&last].anchor()
+        };
+        assert_eq!(anchor_after(true, false, true), anchor_after(true, true, true), "{kind:?}: Shift+R direction must follow the press event");
+        assert_eq!(anchor_after(false, true, true), anchor_after(false, false, true), "{kind:?}: R must ignore a shift arriving after the letter");
+        assert_ne!(anchor_after(true, true, true), anchor_after(false, false, true), "{kind:?}: +90 and -90 quarter turns must land differently");
+        assert_ne!(anchor_after(true, false, false), anchor_after(true, true, true), "{kind:?}: a focus-loss batch must not rotate");
+    }
+}
+
 /// Native keyboard→clipboard translation drives the library paste op for every OS
 /// clipboard state: `egui-winit` emits `Paste("")` on an empty or unsupported read
 /// and `PasteImage` on an image-only read. Both arm the same internal preview —

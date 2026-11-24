@@ -2,6 +2,11 @@
 use crate::schematic::{Point, TextAlign};
 use serde::{Deserialize, Serialize};
 
+/// Thinnest drawn stroke a library graphic may use: 1 nm.
+pub(crate) const MIN_STROKE_NM: i64 = 1;
+/// Widest drawn stroke a library graphic may use: 2 mm.
+pub(crate) const MAX_STROKE_NM: i64 = 2_000_000;
+
 /// A physical stroke or body fill; dimensions are nanometres and never screen pixels.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -167,7 +172,7 @@ impl Graphic {
                     && *rotation < 360
             }
         };
-        if !valid || !(1..=2_000_000).contains(&self.stroke_nm) || (self.fill != Fill::None && !self.closed()) {
+        if !valid || !(MIN_STROKE_NM..=MAX_STROKE_NM).contains(&self.stroke_nm) || (self.fill != Fill::None && !self.closed()) {
             return Err("Invalid drawing geometry, stroke or fill.".into());
         }
         if self.paths().iter().flatten().any(|p| !(-limit..=limit).contains(&p.x_nm) || !(-limit..=limit).contains(&p.y_nm)) {
