@@ -1,0 +1,15 @@
+{
+  "format": "pcbcraft-project/23",
+  "id": "fbbd78ab-5b6c-4625-b30f-f050d3e572a5",
+  "name": "Untitled",
+  "numeric_id_high_water": 15,
+  "layout_root": ".",
+  "boards": [{"id":"fc2ca1ff-e608-45d1-b626-965698f278e7","name":"Board","folder":"board-fc2ca1ffe608"}],
+  "sheets": [{"id":"8270969d-1c10-4350-a088-5c3c0a39b9db","name":"Main","file":"sheets/8270969d-1c10-4350-a088-5c3c0a39b9db.json"}],
+  "components": [
+    {"id":2,"library":"basic-components","definition":"resistor","definition_revision":3,"reference_number":1,"reference":"R1","value":"R"}
+
+    ,
+    {"id":3,"library":"basic-components","definition":"resistor","definition_revision":3,"reference_number":2,"reference":"R2","value":"R"}
+  ]
+}

@@ -18,6 +18,7 @@ pub mod definition;
 pub mod drawing;
 pub mod drc;
 pub mod fabrication;
+pub mod fill;
 pub(crate) mod footprint_delta;
 pub mod geometry;
 pub mod identity;

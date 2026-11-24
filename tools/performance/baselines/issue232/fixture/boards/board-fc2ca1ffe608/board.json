@@ -1,0 +1,116 @@
+{
+  "format": "pcbcraft-board/21",
+  "setup": {
+    "layers": [
+    {"id":"0e198277-4332-473c-979c-2de3478fa663","name":"Front mask","purpose":"mask","side":"front"}
+
+    ,
+    {"id":"10afb81e-a06c-4d1a-98a7-dd58241b7901","name":"Back silkscreen","purpose":"silkscreen","side":"back"}
+
+    ,
+    {"id":"1f0dd472-ad70-4736-b357-8962b2a7d154","name":"Back fabrication","purpose":"fabrication","side":"back"}
+
+    ,
+    {"id":"3316708e-f431-4ef3-a60d-5fe3856cd409","name":"Back mask","purpose":"mask","side":"back"}
+
+    ,
+    {"id":"4615b149-ff7f-4c39-b70c-113ec4d7cc90","name":"Board Outline","purpose":"outline"}
+
+    ,
+    {"id":"4dea5ffc-6e7a-4ec5-a6f9-e8175d12d6da","name":"Back courtyard","purpose":"courtyard","side":"back"}
+
+    ,
+    {"id":"6da42125-c89e-4a4e-9cce-7ea3eb1f7fd8","name":"Back paste","purpose":"paste","side":"back"}
+
+    ,
+    {"id":"81c07197-6bd4-404e-bb99-004133d5f679","name":"Bottom","purpose":"copper","side":"back"}
+
+    ,
+    {"id":"8310cab2-dff4-46d2-9956-332a7065b5e5","name":"Front silkscreen","purpose":"silkscreen","side":"front"}
+
+    ,
+    {"id":"a0831ddf-224d-4a7b-9524-e130310efa96","name":"Front courtyard","purpose":"courtyard","side":"front"}
+
+    ,
+    {"id":"bd2d53c3-984d-49de-8ac6-ce7044f92131","name":"Top","purpose":"copper","side":"front"}
+
+    ,
+    {"id":"d63fae48-01fa-4e38-87ce-96846109af78","name":"Front fabrication","purpose":"fabrication","side":"front"}
+
+    ,
+    {"id":"f47059d5-7445-40ed-b1a8-c70828251db2","name":"Front paste","purpose":"paste","side":"front"}
+    ],
+    "stackup": {
+      "id": "b71f7501-a185-4534-8973-d136007c2b14",
+      "strata": [
+    {"kind":"copper","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131"}
+
+    ,
+    {"kind":"dielectric","id":"3441b245-1fc0-409c-8deb-c515ce128d76"}
+
+    ,
+    {"kind":"copper","layer":"81c07197-6bd4-404e-bb99-004133d5f679"}
+      ]
+    }
+  },
+  "baseline": {
+    "format": "pcbcraft-board-baseline/4",
+    "project": "fbbd78ab-5b6c-4625-b30f-f050d3e572a5",
+    "board": "fc2ca1ff-e608-45d1-b626-965698f278e7",
+    "source": {"capture_id":"0f39b9e0-d20d-418c-955f-a13519a7df97","content_digest":"a82e7fa21fb731721d85d9b4a845415397f4f49faf1d57973a539ced41362276"},
+    "components": {
+      "2":{"library":"basic-components","definition":"resistor","revision":3,"reference":"R1","value":"R","terminals":["1","2"],"package":{"library":"basic-components","definition":"led-0402","revision":4,"mapping":{"1":"1","2":"2"}}}
+      ,
+      "3":{"library":"basic-components","definition":"resistor","revision":3,"reference":"R2","value":"R","terminals":["1","2"],"package":{"library":"basic-components","definition":"capacitor-0603","revision":4,"mapping":{"1":"1","2":"2"}}}
+    },
+    "nets": [
+      {"display_name":"Net-0001","terminals":[{"component":2,"terminal":"1"},{"component":3,"terminal":"1"}],"names":[]}
+    ]
+  },
+  "placement_origin": {"format":"pcbcraft-origin/1","id":"7e329b8c-5b39-403a-8534-c508a64dd8d6","anchor":{"kind":"point","x_nm":3000000,"y_nm":-4000000}},
+  "zones": [
+    {"id":"45ef02f8-2e05-4647-9cd8-a27db7cc1c88","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","net":"6f4f14b3-c368-4ead-b01d-9d8c8eabfc52","points":[{"x_nm":-3048000,"y_nm":3048000},{"x_nm":-5842000,"y_nm":3048000},{"x_nm":-5842000,"y_nm":-1016000},{"x_nm":-3048000,"y_nm":-1016000}],"options":{"priority":0,"thermal_gap_nm":300000,"spoke_width_nm":300000,"connection":"thermal","min_island_area_nm2":0}}
+
+    ,
+    {"id":"e8236e7e-d898-4328-9798-4bdf061760ae","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","net":"6f4f14b3-c368-4ead-b01d-9d8c8eabfc52","points":[{"x_nm":254000,"y_nm":-2540000},{"x_nm":10160000,"y_nm":-2540000},{"x_nm":10160000,"y_nm":7620000},{"x_nm":0,"y_nm":7620000}],"options":{"priority":0,"thermal_gap_nm":300000,"spoke_width_nm":300000,"connection":"thermal","min_island_area_nm2":0}}
+
+    ,
+    {"id":"ed449714-a305-4c13-8324-2bbffc9e1ab5","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","net":"6f4f14b3-c368-4ead-b01d-9d8c8eabfc52","points":[{"x_nm":-3810000,"y_nm":1016000},{"x_nm":-254000,"y_nm":1016000},{"x_nm":-1270000,"y_nm":6858000},{"x_nm":-3810000,"y_nm":6858000}],"options":{"priority":0,"thermal_gap_nm":300000,"spoke_width_nm":300000,"connection":"thermal","min_island_area_nm2":0}}
+  ],
+  "tracks": [
+    {"id":"209cbdf9-3ed2-4190-a731-734e2637d225","layer":"81c07197-6bd4-404e-bb99-004133d5f679","width_nm":250000,"start":{"x_nm":-6128600,"y_nm":-1726009},"end":{"x_nm":-6128600,"y_nm":1608279}}
+
+    ,
+    {"id":"5f278e9c-13cb-43da-9585-bd97b62eb7e6","layer":"81c07197-6bd4-404e-bb99-004133d5f679","width_nm":250000,"start":{"x_nm":-6128600,"y_nm":1608279},"end":{"x_nm":-6538534,"y_nm":2018213}}
+
+    ,
+    {"id":"8c94a9af-0122-4f0b-b6bb-6abf2e6a8155","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","width_nm":250000,"start":{"x_nm":-4902408,"y_nm":2354520},"end":{"x_nm":-4902408,"y_nm":939592}}
+
+    ,
+    {"id":"c9f1d4cd-863c-41d3-8bef-1f0eeec1b98b","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","width_nm":250000,"start":{"x_nm":-5238715,"y_nm":2018213},"end":{"x_nm":-4902408,"y_nm":2354520}}
+
+    ,
+    {"id":"d3691bd1-350f-453b-ad31-2331a48b9f83","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","width_nm":250000,"start":{"x_nm":-4902408,"y_nm":939592},"end":{"x_nm":-5080000,"y_nm":762000}}
+
+    ,
+    {"id":"f1c50167-5e63-41fb-abe4-86caf6997aa9","layer":"bd2d53c3-984d-49de-8ac6-ce7044f92131","width_nm":250000,"start":{"x_nm":-6538534,"y_nm":2018213},"end":{"x_nm":-5238715,"y_nm":2018213}}
+  ],
+  "vias": [
+    {"id":"ce0ba35a-8189-48ee-8061-ca88b286298a","at":{"x_nm":-5080000,"y_nm":762000},"diameter_nm":600000,"drill_nm":300000}
+
+    ,
+    {"id":"feb02a6d-7bc3-49e5-a5d9-648f57a43ea4","at":{"x_nm":-6538534,"y_nm":2018213},"diameter_nm":600000,"drill_nm":300000}
+  ],
+  "assignments": [
+    {"component":2,"library":"basic-components","definition":"led-0402","definition_revision":4,"mapping":{"1":"1","2":"2"}}
+
+    ,
+    {"component":3,"library":"basic-components","definition":"capacitor-0603","definition_revision":4,"mapping":{"1":"1","2":"2"}}
+  ],
+  "footprints": [
+    {"id":14,"component":2,"definition":"led-0402","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-6604000,"y_nm":-1778000}
+
+    ,
+    {"id":15,"component":3,"definition":"capacitor-0603","definition_revision":4,"library":"basic-components","mapping":{"1":"1","2":"2"},"x_nm":-1704000,"y_nm":-1778000}
+  ]
+}

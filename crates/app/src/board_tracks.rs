@@ -467,6 +467,11 @@ impl State {
     pub(super) fn committing(&self) -> bool {
         self.preparation.committing() || self.planning.committing()
     }
+    /// Whether either route planning or copper preparation has an active job to advance.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(crate) fn route_queue_busy(&self) -> bool {
+        self.planning.queue_busy() || self.preparation.queue_busy()
+    }
 
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
     fn shift(&self) -> Option<(i64, i64)> {
@@ -507,30 +512,85 @@ impl State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Kinds {
     pub(super) tracks: bool,
-    pub(super) vias: bool,
+    vias: bool,
+    include_locked: bool,
 }
 
 impl Kinds {
     /// Every kind, for lookups that are not selection, such as net highlighting.
-    pub(super) const ALL: Self = Self { tracks: true, vias: true };
+    pub(super) const ALL: Self = Self { tracks: true, vias: true, include_locked: true };
+
+    /// Copper kinds and lock states allowed by the addressed view.
+    pub(super) fn from(filters: crate::selection_filters::Filters) -> Self {
+        Self { tracks: filters.tracks, vias: filters.vias, include_locked: filters.include_locked }
+    }
+
+    /// Whether a track is selectable, independently of its layer visibility.
+    fn track(self, track: &Track) -> bool {
+        self.tracks && (self.include_locked || !track.locked)
+    }
+
+    /// Whether a via is selectable, independently of layer visibility.
+    fn via(self, via: &Via) -> bool {
+        self.vias && (self.include_locked || !via.locked)
+    }
 }
 
-/// The topmost visible via or track under a screen point, among the allowed kinds.
-pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
-    let via = view.vias().iter().rev().filter(|_| kinds.vias).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
-    via.or_else(|| {
+/// Check a selected ID in one ID-sorted kind. Disabled kinds need no record probes;
+/// only a matched record needs its visibility or lock state checked.
+fn selected_copper_is_selectable<T>(
+    id: &Uuid,
+    ordered: &[T],
+    enabled: bool,
+    id_of: impl FnMut(&T) -> Uuid,
+    allowed: impl FnOnce(&T) -> bool,
+) -> bool {
+    enabled && ordered.binary_search_by_key(id, id_of).is_ok_and(|i| ordered.get(i).is_some_and(allowed))
+}
+
+/// Visible copper at a point, using paint order within each group and the active track layer first.
+pub(super) fn copper_choices(
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    kinds: Kinds,
+    active: Option<&str>,
+) -> impl Iterator<Item = Uuid> {
+    let active = active.and_then(|id| Uuid::try_parse(id).ok());
+    let track_hits = move |on_active| {
         view.tracks()
             .iter()
             .rev()
-            .filter(|track| kinds.tracks && !hidden.contains(&track.layer.to_string()))
-            .find(|track| hit(pointer, camera, rect, track))
+            .filter(move |track| {
+                (Some(track.layer) == active) == on_active
+                    && kinds.track(track)
+                    && !hidden.contains(&track.layer.to_string())
+                    && hit(pointer, camera, rect, track)
+            })
             .map(|track| track.id)
-    })
+    };
+    view.vias()
+        .iter()
+        .rev()
+        .filter(move |via| kinds.via(via) && hit_via(pointer, camera, rect, via))
+        .map(|via| via.id)
+        .chain(track_hits(true))
+        .chain(track_hits(false))
 }
 
-/// Whether a press here would start a copper drag rather than a box selection.
-pub(super) fn copper_under(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> bool {
-    copper_at(pointer, camera, rect, view, hidden, kinds).is_some()
+/// Select the first visible copper candidate using the same order as keyboard cycling.
+pub(super) fn copper_at(
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    kinds: Kinds,
+    active: Option<&str>,
+) -> Option<Uuid> {
+    copper_choices(pointer, camera, rect, view, hidden, kinds, active).next()
 }
 
 /// Where `p` projects onto `track`, as a fraction from its start (0) to its end (1), and how far
@@ -827,7 +887,7 @@ fn menu_anchor(response: &Response) -> Option<Pos2> {
 /// via at the pointer and continues on the paired layer, reported through `switch_layer`.
 /// Release over chrome, stale input, disabled input or a hidden/changed layer never
 /// commits an unfinished route. Key requests (Delete, Enter, Backspace, `/`, V) are consumed every
-/// frame and ignored while input is disabled. `over_footprint` gives footprints priority for picks.
+/// frame and ignored while input is disabled. `over_pad` gives actual pad copper priority for picks.
 /// Selection and connected copper selection honor `kinds`; routing uses the full board geometry.
 /// The route popup owns input through dismissal and uses its opening point for via placement.
 #[allow(clippy::too_many_arguments)]
@@ -841,7 +901,7 @@ pub(super) fn interact(
     hidden: &BTreeSet<String>,
     source: Option<ViewInput>,
     enabled: bool,
-    over_footprint: bool,
+    over_pad: bool,
     kinds: Kinds,
 ) -> Interaction {
     state.sync_rules(view);
@@ -851,11 +911,18 @@ pub(super) fn interact(
         state.committed = None;
     }
     let rect = response.rect;
-    let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
+    let tracks = view.tracks();
     let vias = view.vias();
-    let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
+    let vias_visible =
+        kinds.vias && view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
     let selectable = |id: &Uuid| {
-        (kinds.tracks && visible.iter().any(|track| track.id == *id)) || (kinds.vias && vias_visible && vias.iter().any(|via| via.id == *id))
+        selected_copper_is_selectable(
+            id,
+            tracks,
+            kinds.tracks,
+            |track| track.id,
+            |track| kinds.track(track) && !hidden.contains(&track.layer.to_string()),
+        ) || selected_copper_is_selectable(id, vias, vias_visible, |via| via.id, |via| kinds.via(via))
     };
     state.selected.retain(selectable);
     let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);
@@ -1121,8 +1188,8 @@ pub(super) fn interact(
     }
     if select_connected {
         let seeds = pointer
-            .filter(|_| !over_footprint)
-            .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden, kinds))
+            .filter(|_| !over_pad)
+            .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden, kinds, active))
             .map_or_else(|| state.selected.clone(), |id| BTreeSet::from([id]));
         if !seeds.is_empty() {
             match connected(view, &seeds) {
@@ -1140,8 +1207,8 @@ pub(super) fn interact(
     if drag_segment
         && state.moving.is_none()
         && state.segment.is_none()
-        && let Some(pointer) = pointer.filter(|_| !over_footprint)
-        && let Some(track) = copper_at(pointer, camera, rect, view, hidden, Kinds { vias: false, ..kinds })
+        && let Some(pointer) = pointer.filter(|_| !over_pad)
+        && let Some(track) = copper_at(pointer, camera, rect, view, hidden, Kinds { vias: false, ..kinds }, active)
     {
         state.selected = BTreeSet::from([track]);
         state.segment = Some(SegmentDrag { source, track, anchor: camera.snap(pointer, rect), offset: (0, 0) });
@@ -1176,7 +1243,7 @@ pub(super) fn interact(
             vias.iter()
                 .find(|via| state.selected.contains(&via.id))
                 .map(|via| via.at)
-                .or_else(|| visible.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
+                .or_else(|| tracks.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
                 .unwrap_or(Point { x_nm: 0, y_nm: 0 })
         });
         state.moving = Some(MoveDraft { source, anchor, offset: (0, 0), drag: false });
@@ -1184,8 +1251,8 @@ pub(super) fn interact(
     if state.moving.is_none()
         && response.drag_started_by(PointerButton::Primary)
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
-        && !over_footprint
-        && let Some(id) = copper_at(origin, camera, rect, view, hidden, kinds)
+        && !over_pad
+        && let Some(id) = copper_at(origin, camera, rect, view, hidden, kinds, active)
     {
         if !state.selected.contains(&id) {
             state.selected = BTreeSet::from([id]);
@@ -1221,7 +1288,7 @@ pub(super) fn interact(
     if response.clicked()
         && let Some(pointer) = pointer
     {
-        let picked = (!over_footprint).then(|| copper_at(pointer, camera, rect, view, hidden, kinds)).flatten();
+        let picked = (!over_pad).then(|| copper_at(pointer, camera, rect, view, hidden, kinds, active)).flatten();
         let modifiers = ui.input(|input| input.modifiers);
         let extend = modifiers.shift || modifiers.ctrl || modifiers.command;
         if !extend {
@@ -1247,8 +1314,9 @@ fn layer_color(view: BoardView<'_>, appearance: &Appearance, layer: &str) -> egu
         .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |record| appearance.color(view, record))
 }
 
-/// Paint visible tracks with round ends at their physical width, inactive copper first so the
-/// active layer reads on top, then vias above all copper. A route committed this frame is
+/// Paint visible tracks with round ends at their physical width and draw the active layer above
+/// other layers. Selected segments rise above ordinary tracks so overlapping hits can be seen.
+/// Via rings remain above track copper. A route committed this frame is
 /// painted where it will land, and `carried` tracks (stretched by a footprint move preview)
 /// are painted at their carried ends. Net focus takes precedence over selection tinting,
 /// matching pads and avoiding a second brightening of selected copper. Optional names come
@@ -1267,17 +1335,19 @@ pub(super) fn paint(
     focus: Option<CopperFocus<'_>>,
     carried: &[Track],
     names: Option<&std::collections::BTreeMap<Uuid, String>>,
+    net_colors: Option<crate::board_appearance::NetColors<'_>>,
 ) -> pcbcraft_chrome::board::TrackLabels {
     let painter = ui.painter().with_clip_rect(rect);
     let mut labels = pcbcraft_chrome::board::TrackLabels::new(painter.clone());
     let mut tracks: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
-    tracks.sort_by_key(|track| active == Some(track.layer.to_string().as_str()));
-    let segment = |layer: &str, a: Point, b: Point, width_nm: i64, selected: bool, emphasized| {
+    let active_layer = active.and_then(|id| Uuid::try_parse(id).ok());
+    tracks.sort_by_key(|track| (state.selected.contains(&track.id), Some(track.layer) == active_layer));
+    let segment = |color, a: Point, b: Point, width_nm: i64, selected: bool, emphasized| {
         pcbcraft_chrome::board::track(
             &painter,
             [camera.screen(a, rect), camera.screen(b, rect)],
             width_px(camera, rect, width_nm),
-            pcbcraft_chrome::board::copper_emphasis(layer_color(view, appearance, layer), emphasized),
+            pcbcraft_chrome::board::copper_emphasis(color, emphasized),
             selected && emphasized.is_none(),
             false,
         );
@@ -1294,12 +1364,14 @@ pub(super) fn paint(
     let replacements = state.replacements();
     let replacements: std::collections::BTreeMap<_, _> = replacements.iter().map(|r| (r.track, r)).collect();
     for track in tracks {
+        let color =
+            net_colors.and_then(|palette| palette.track(&track.id)).unwrap_or_else(|| layer_color(view, appearance, &track.layer.to_string()));
         if let Some(replacement) = replacements.get(&track.id) {
             for leg in replacement.points.windows(2) {
                 let ends = [camera.screen(leg[0], rect), camera.screen(leg[1], rect)];
                 let width = width_px(camera, rect, track.width_nm);
                 labels.cover_track(ends, width);
-                pcbcraft_chrome::board::track(&painter, ends, width, layer_color(view, appearance, &track.layer.to_string()), false, true);
+                pcbcraft_chrome::board::track(&painter, ends, width, color, false, true);
             }
             continue;
         }
@@ -1311,9 +1383,9 @@ pub(super) fn paint(
         let ends = [camera.screen(start, rect), camera.screen(end, rect)];
         let width = width_px(camera, rect, track.width_nm);
         labels.cover_track(ends, width);
-        segment(&track.layer.to_string(), start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
+        segment(color, start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
         if let Some(name) = names.and_then(|names| names.get(&track.id)) {
-            labels.track(ends, width, name, layer_color(view, appearance, &track.layer.to_string()));
+            labels.track(ends, width, name, color);
         }
     }
     let via = |at: Point, diameter_nm: i64, drill_nm: i64, selected: bool, emphasized| {
@@ -1515,6 +1587,44 @@ pub(super) fn paint_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    /// The frame keeper must not probe a disabled kind or scan an enabled kind's sorted slice.
+    #[test]
+    fn frame_selection_probes_only_enabled_copper_by_id() {
+        let copper: Vec<_> = (1..=4096).map(Uuid::from_u128).collect();
+        let probes = Cell::new(0);
+        let permissions = Cell::new(0);
+        let keep = |id, enabled| {
+            probes.set(0);
+            permissions.set(0);
+            selected_copper_is_selectable(
+                &id,
+                copper.as_slice(),
+                enabled,
+                |item| {
+                    probes.set(probes.get() + 1);
+                    *item
+                },
+                |item| {
+                    permissions.set(permissions.get() + 1);
+                    *item != Uuid::from_u128(4095)
+                },
+            )
+        };
+
+        assert!(!keep(Uuid::from_u128(4096), false));
+        assert_eq!((probes.get(), permissions.get()), (0, 0), "a disabled kind must not be traversed");
+        assert!(keep(Uuid::from_u128(4096), true));
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4095), true), "an existing item can be disallowed");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4097), true), "an ID can belong to the other kind");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 0);
+    }
 
     /// The target stays latched in the release band and changes only beyond it or on a new layer.
     #[test]

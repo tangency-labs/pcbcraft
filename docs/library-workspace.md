@@ -12,7 +12,7 @@ type, colors, spacing and interaction states define the visual treatment.
 | Browser | Built-in and Libraries groups; source icon, name, count, read-only mark and exceptional status; four child rows: Symbols, Footprints, Generic parts and Orderable parts. Missing and failed registrations remain visible with diagnostics. |
 | Library list | Search and Type choice, selected source name/location/license, count, selectable rows, Type, Category, Packages, Orderable and revision columns. Generic parts expand to show their orderable parts and counts. Category records remain dependency metadata rather than a fifth tree row. |
 | Orderable list | Flat view of the same manufacturer records, with Manufacturer, Part number, Generic part, Package, Value, Datasheet and Rev columns. Search includes manufacturer and part number. |
-| Preview | Actual native symbol/footprint geometry or a record summary, identity and revision, license and provenance, category/units, packages and pin mappings, orderable parts/specifications, available revisions and exact dependencies. Missing dependencies and quarantined conflicts remain explicit. |
+| Preview | Actual native symbol/footprint geometry or a record summary, identity and revision, license and provenance, category/units, packages and pin mappings, orderable parts/specifications, the authored description, keywords and labeled links of `pcbcraft-part/5` records, available revisions and exact dependencies. Missing dependencies and quarantined conflicts remain explicit. |
 | Compact layout | Shared controls and surfaces, bounded scroll regions, accessible Browser/Items/Preview choices when three usable columns cannot fit. Long names/paths truncate with full text available. |
 | Desktop lifecycle | Remember folders, reload at startup, refresh/relocate, validate and install bundles into unused folders, reject fully redundant bundles before writing, forget registrations on Remove, and confirmed system-trash deletion of writable folders with no unpublished editor changes. |
 | Browser lifecycle | One-time folder or bundle reads under native limits; remember names without disk handles or contents; reload shows Needs reopening and supplies no items until reopened. Remove forgets the entry; Delete is unavailable. |
@@ -20,7 +20,12 @@ type, colors, spacing and interaction states define the visual treatment.
 
 The mockups also illustrate later work. New library, New symbol, New footprint,
 New generic part, Edit, Edit copy and the part form belong to #308/#309. Category/Package/Manufacturer/Value filtering and Compare to
-#311; update availability and adoption to #312; Links to #314. Git and remote
+#311; update availability and adoption to #312. Descriptive part metadata
+(#314) is implemented: `pcbcraft-part/5` records carry a description, keywords
+and labeled HTTP(S) links, the part form and Preview show them, and Parts
+Library search matches description and keyword text (not link text). See
+[descriptive metadata](part-schema.md#descriptive-metadata-and-search) for the
+contract. Git and remote
 source examples belong to #93/#94. Planned controls may remain visible with the shared disabled treatment, as requested by @travle1; they do not execute actions. Invented sample records do not enter the catalog. The Parts Catalog placement picker remains
 its existing workflow.
 
@@ -102,8 +107,9 @@ discarding the form. Choosing another source in Browser also returns to Browse.
 The mapping table and document controls compose the pinned Craft table, choices,
 fields and buttons through `crates/chrome`; correspondence highlights reuse
 original electronics geometry. This composition needs no new generic control or
-external asset. Package model bindings and descriptive fields remain with #86
-and #314 respectively. See the [part document workflow](native-library-sources.md#generic-and-orderable-part-documents)
+external asset. Package model bindings remain with #86; the descriptive fields
+of #314 are now part of the form and Preview, with the contract in
+[descriptive metadata](part-schema.md#descriptive-metadata-and-search). See the [part document workflow](native-library-sources.md#generic-and-orderable-part-documents)
 for publication, close protection and shared commands.
 
 Part association fields show their selected item and a Browse action. The chooser

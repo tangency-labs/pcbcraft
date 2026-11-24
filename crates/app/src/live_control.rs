@@ -415,10 +415,13 @@ impl PcbApp {
         }
     }
 
-    /// Recognize only existing copper commands; all policy and parameter checks remain shared.
+    /// Use the engine's prepared path where available. Parameter and policy checks remain shared.
     pub(super) fn defer_copper(&self, body: &Value) -> bool {
+        let call = &body["params"];
         body["method"] == "engine.execute"
-            && body["params"]["command"].as_str().is_some_and(pcbcraft_engine::board::track::preparation::is_copper_edit)
+            && call["command"]
+                .as_str()
+                .is_some_and(|command| pcbcraft_engine::board::track::preparation::can_prepare_copper_edit(command, &call["params"]))
     }
 
     /// Capture a read-only preparation job after policy checks, without executing a mutation.
@@ -725,12 +728,29 @@ pub(super) struct LiveEditor<'a> {
 }
 
 impl Editor for LiveEditor<'_> {
+    /// Removal revokes every addressed board-view worker through the shared command path.
+    fn zone_unfill(&mut self, params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+        let result = self.app.queue_zone_unfill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
+    /// Refill returns source-qualified pending state while the existing bounded worker runs.
+    fn zone_refill(&mut self, params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+        let result = self.app.queue_zone_refill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
     /// UI actions retain normal dialog and text-field interaction rather than bypassing them
     /// through project commands. The queue validates native focus and endpoint ownership.
     /// UI handler refusals read as unavailable, apart from parameters the catalog refuses.
     fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, Failure> {
         crate::ui_automation::check_command(id, params)?;
         self.app.automation_command(self.ctx, id, params).map_err(Failure::from)
+    }
+    /// Finish a local color Undo or Redo inside the request that moved the history cursor.
+    fn restore_local_history(&mut self) {
+        self.app.restore_local_history();
+        self.app.repaint_editors(self.ctx);
     }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session
@@ -1330,6 +1350,75 @@ mod copper_tests {
             assert!(app.remote_copper.request.is_none());
             assert_eq!(app.session.inspect(), before);
             assert_eq!(headless.call("project.inspect", Value::Null).unwrap(), before);
+        }
+    }
+
+    /// A two-footprint pitch edit on a routed board yields across bounded contact steps.
+    /// No revision or copper changes before completion; a concurrent edit invalidates the job.
+    #[test]
+    fn live_pitch_yields_on_a_large_routed_board_and_rejects_stale_completion() {
+        use pcbcraft_engine::{ADD_TRACKS, ALIGN_FOOTPRINTS, PLACE_FOOTPRINT, PLACE_RESISTOR};
+        let (mut app, ctx, base) = fixture();
+        let mut route = base["params"]["params"].clone();
+        // One command creates 255 segments away from the two placements.
+        route["points"] = json!((0..256).map(|i| json!({"x_nm":i * 1_000_000,"y_nm":30_000_000})).collect::<Vec<_>>());
+        app.session.apply(ADD_TRACKS, &route).unwrap();
+        for x in [0, 10_000_000] {
+            let revision = app.session.revision();
+            app.session.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
+            let symbol = app.session.project().unwrap().symbols().last().unwrap().id();
+            let revision = app.session.revision();
+            app.session.apply(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
+        }
+        let before = app.session.snapshot().unwrap();
+        let view = before.boards().next().unwrap();
+        assert_eq!(view.tracks().len(), 255);
+        let mut body = json!({"method":"engine.execute","params":{"command":ALIGN_FOOTPRINTS,"inspect":false,"params":{
+            "board":view.target.board,"footprints":view.footprint_ids().collect::<Vec<_>>(),"mode":"distribute_x","pitch_nm":5_080_000}}});
+        let mut legacy = body.clone();
+        legacy["params"]["params"].as_object_mut().unwrap().remove("pitch_nm");
+        assert!(!app.defer_copper(&legacy));
+        assert!(app.defer_copper(&body));
+        for stale in [false, true] {
+            let pending_snapshot = app.session.snapshot().unwrap();
+            let revision = app.session.revision();
+            body["params"]["params"]["expected_revision"] = json!(revision);
+            let (r, reply, _) = request(&app, body.clone());
+            app.start_remote_copper(&ctx, r, false);
+            assert!(app.remote_copper.queue.busy());
+            // At least one indexed contact batch must yield, not just the two setup phases.
+            for _ in 0..4 {
+                app.poll_remote_copper(&ctx);
+                assert!(matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)));
+                assert_eq!(app.session.revision(), revision);
+                assert!(Arc::ptr_eq(&app.session.snapshot().unwrap(), &pending_snapshot));
+            }
+            let concurrent_snapshot = if stale {
+                app.session.apply("project.rename", &json!({"name":"Stale pitch fixture"})).unwrap();
+                app.session.snapshot()
+            } else {
+                None
+            };
+            let completed = (0..300)
+                .find_map(|_| {
+                    app.poll_remote_copper(&ctx);
+                    reply.try_recv().ok()
+                })
+                .expect("copper preparation finishes within the bounded tick count");
+            let view = app.session.project().unwrap().boards().next().unwrap();
+            let expected_x = if stale { 10_000_000 } else { 5_080_000 };
+            assert_eq!(view.footprints().last().unwrap().position.x_nm, expected_x);
+            assert_eq!(view.tracks(), before.boards().next().unwrap().tracks());
+            assert_eq!(app.session.revision(), revision + 1);
+            if let Some(concurrent_snapshot) = concurrent_snapshot {
+                assert_eq!(completed["code"], "stale_revision", "{completed}");
+                assert!(Arc::ptr_eq(&app.session.snapshot().unwrap(), &concurrent_snapshot));
+            } else {
+                assert_eq!(completed["result"], json!({"revision":revision+1}));
+                app.session.apply("edit.undo", &Value::Null).unwrap();
+                // Undo may adopt an equivalent Arc after retaining its allocation watermark.
+                assert_eq!(app.session.project().unwrap().boards().next().unwrap().footprints().last().unwrap().position.x_nm, 10_000_000);
+            }
         }
     }
 

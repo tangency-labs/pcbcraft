@@ -296,6 +296,19 @@ require a higher format. Those formats accept the origin. Boards without an
 origin measure outputs from board zero and use the format required by the remaining
 authored data.
 
+### Named layer groups
+
+Board format `pcbcraft-board/41` is written only when `setup.stackup.layer_groups`
+contains at least one named group, and requires a board setup with at least one
+named group. It retains every earlier authored board field, including teardrops,
+circular copper, footprint locks and optional test-point marks. Within `setup.stackup`, `layer_groups` stores
+only authored named groups (group UUID, name and copper-layer UUIDs); derived
+groups are computed and never stored. Earlier headers reject `layer_groups`, even
+when empty. Removing the last named group restores the format required by the
+remaining authored data, and unchanged group-free boards keep their existing format
+and bytes across Save, Save As and browser Download. Formats 27–33, 36, 38 and 39
+remain unsupported.
+
 ### Straight-via teardrop intents
 
 Board format `pcbcraft-board/37` requires a copper board setup and a nonempty
@@ -450,7 +463,8 @@ missing `test_points` in format 40, and duplicate or unresolved targets are
 refused. A pad must be a land in the pinned footprint, including lands without
 assigned terminals. Legacy markers are not physical lands. Records are written
 in incremental batches: pads in placement ID and pad-number order, then vias in
-UUID order.
+UUID order. A marked board that also has named layer groups is written as
+format 41, which carries the same optional `test_points` array.
 
 Format 40 can carry every supported earlier board field while preserving
 existing feature-combination limits (stored circular copper `arcs` and stored
@@ -475,7 +489,7 @@ advance the footprint format.
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45` or `/51` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37` or `/40` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 40 adds test-point marks (selected only when marks are present) and can carry every earlier field; versions 27–33 remain unsupported |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37`, `/40` or `/41` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 40 adds test-point marks (selected only when marks are present) and can carry every earlier field; version 41 adds named copper-layer groups (written only when named groups exist), retains earlier extensions and also carries test-point marks; versions 27–33, 36, 38 and 39 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
 
@@ -1301,8 +1315,10 @@ The save transaction above protects saved files. `pcbcraft_storage::recovery`
 provides an API for recording unsaved edits, with a per-user recovery store
 as its default. Callers can choose another directory; the API does not check
 whether it is outside a project. Hosts should keep recovery separate from
-project files, the `.pcbcraft-save` transaction and the save lock. Desktop sessions do not yet attach a recorder; that integration is a
-follow-up, so recovery is not yet available in the app.
+project files, the `.pcbcraft-save` transaction and the save lock. The desktop
+attaches a recorder to its open project when Recovery snapshots is on (it is Off
+by default); the CLI and headless MCP do not yet
+attach one. Offering recovery entries on start is not implemented.
 The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
 `%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
 `$XDG_DATA_HOME/pcbcraft` (`~/.local/share/pcbcraft`). The browser has no store.
@@ -1316,6 +1332,7 @@ share it:
 | `<id>.pc` | Versioned recovery envelope around a packed project snapshot |
 | `<id>.journal` | Successfully recorded changes since that snapshot |
 | `<id>.lock` | Held locked by the writing session while it runs |
+| `.entries.lock` | Folder gate for opening and removing entry locks; kept after entries are deleted |
 
 [`Session::observe_edits`](../crates/engine/src/lib.rs) reports every edit
 committed through the shared command path, from the GUI, CLI or MCP, including
@@ -1391,9 +1408,78 @@ edits unrecorded until a snapshot succeeds; recovery returns the last recorded
 state. A recorder keeps the entry lock even if its first snapshot fails.
 
 Each recorded edit encodes the whole project and fingerprints the complete
-document set, on the writer thread. Nothing yet removes the entry of a session
-that has ended: its snapshot, journal and lock file stay in the store. Removing
-them belongs to the recovery offer on start, which is not built yet.
+document set, on the writer thread; the editor thread only queues the shared
+project. A recorder started with `RecorderOptions::coalesce_edits` encodes only
+the newest of a run of edits still queued when the writer gets to them, so the
+writer encodes at most one state per completed write however fast edits come.
+Replay is unchanged, since each record holds the documents it produces, but
+`Recovered::commands` then names only the last command of each coalesced run.
+No timing has been measured.
+
+With `RecorderOptions::retention`, the writer first prunes entries no running
+session holds: those last written longer ago than `max_age`, then all but the
+newest `max_entries`. Retention verifies each candidate's recovery format header
+before applying age or count limits, so ordinary `.pc` project archives and
+other non-recovery files in the directory are never counted or deleted. Held
+entries are never touched, at most 16,384 folder entries are examined, and
+folder-gate contention skips the prune without waiting. The desktop keeps 16
+such entries for up to 14 days and attempts to delete its own entry on a clean
+exit (below); cleanup failures are logged. `JournalRecorder::start` records
+every edit and prunes nothing.
+
+### Recovery snapshots and timed saves
+
+**Preferences → Saving → Recovery snapshots** (`autosave_minutes`) is Off (0)
+by default until the recovery offer on start exists. Off attaches no recorder
+and writes nothing; turning it Off retires the running recorder and attempts to
+delete its entry. Set to 1, 5 or 10 minutes, the desktop app records its open
+project when a recovery folder is available, journaling committed edits and
+taking a snapshot every interval after the first change since the last one.
+Encoding and I/O failures have the limits described above; the timer does not
+guarantee persistence. A successful recovery snapshot replaces `<id>.pc` with
+the current state and starts an empty journal. A snapshot waits until editing
+has paused for 2 seconds, but never more than a second interval. A synchronous
+GUI edit timed by `PcbApp::run` at 1.5 seconds or longer requests one on the
+next frame without waiting for the interval. A snapshot is skipped only when its
+journal is open and the state matches both the last snapshot and the last
+recorded state.
+Native timer logic does not require the window to paint. If recording fails,
+the status bar says why unsaved work isn't being kept and the editor retries a
+snapshot after five seconds, even with no new edits. Detected removal disables that entry until the project
+is replaced or reopened.
+
+Only an approved project close attempts to delete the current entry. An
+unexpected framework exit drains what it can and leaves the entry, as does
+Close without waiting while a save or open is still running. On a project
+replacement or reopen, the outgoing recorder does not receive the next project's
+state. At most one recorder is active or retiring; if retirement stalls, the
+replacement starts recording from its latest state once the old worker stops.
+Pending notifications are bounded; a burst beyond that bound is condensed into
+a fresh snapshot of the newest queued state.
+
+Quit waits up to two seconds for recovery. If drain or gate acquisition misses
+its deadline, deletion does not start and the entry stays. After deletion
+begins, filesystem calls cannot be cancelled; failures may leave partial files
+and are logged. The folder gate protects lock-path creation and close/unlink on
+Windows. Cleanup never removes an unowned entry and does not wait on gate
+contention. The empty `.entries.lock` gate file contains no project data.
+A crash can leave an entry for a future recovery offer; that offer is not built.
+
+**Save to project** (`save_to_project_minutes`) is Off (0) by default. Set to
+1, 5 or 10 minutes, it runs the ordinary Save on the same timer, once the
+project has unsaved changes and already has a current-format folder or `.pc`
+file. An Untitled project is never saved on its own, and timed saves are held
+back for legacy archives or split folders that would be upgraded on their first
+write until an explicit Save performs the upgrade. A timed save waits while a
+dialog or another file operation is open, or a project action is waiting to run. Like Save, it is
+refused when the project changed on disk; the project stays unsaved and the
+next try comes one interval later. Recovery encoding and disk I/O run on a
+separate worker rather than making Save wait for them. A
+timed save is an ordinary save, so **Save** is unavailable while it runs, as
+during any save. The Saving page activates its changes only on **Apply** or **OK**.
+Both settings are personal preferences, also set by `app.set_preferences`, and
+are never stored in the project ([live preferences](mcp.md#preferences-and-external-updates)).
+The CLI and headless MCP do not record unsaved work yet.
 
 ## Compatibility and fixtures
 
@@ -1402,7 +1488,11 @@ folders used a plain JSON `project.pc` entry point, and split archives used
 `.pc.zip` with container version 2. Older single-document projects could also
 use `.pc` for plain JSON or container version 1. Normal desktop, browser and
 headless opens accept the immediately previous split layouts without rewriting
-their source files. Previews are read-only too. On desktop, first Save upgrades
+their saved project documents. Closing without saving does not publish an upgrade.
+A settled archive needs no lock or journal on Open; a folder can acquire the
+persistent sibling lock described under [folder recovery](#folder-publication-and-recovery).
+Completing an interrupted folder save on Open is recovery, not a format upgrade.
+Previews are read-only too. On desktop, first Save upgrades
 a split folder in place: one journaled transaction installs `project.json`, removes
 `project.pc` and migrates any flat board payload. Desktop Save of a previous split
 archive replaces it with a verified container-v3 package at its existing path.
@@ -1481,7 +1571,13 @@ cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/new-fix
 
 The output directory must not already exist. The generator uses the production
 encoder; regression tests compare document boundaries, library-copy lifetimes,
-archive round trips and the compatibility boundary. See [release notes](../CHANGELOG.md).
+archive round trips and the compatibility boundary. The separate
+[frozen archive corpus](../crates/storage/tests/fixtures/native-open/README.md)
+checks that normal native Open still reads previously saved bytes and preserves
+logical connectivity and object counts. The two previous split archive forms
+are also checked after explicit conversion. When a release adds a format,
+append fixtures saved by that release rather than regenerating the existing
+corpus. See [release notes](../CHANGELOG.md).
 
 ## Design references
 

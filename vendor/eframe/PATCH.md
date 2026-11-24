@@ -92,3 +92,21 @@ The save-on-close listener uses the DOM event name `beforeunload`. Upstream's
 preventing both persistence and the local `Context::on_exit` lifecycle hook.
 Reassess this correction when updating eframe. Native system clipboard support
 is enabled through eframe's `clipboard` feature in the workspace manifest.
+
+## Logic-only native pass
+
+eframe 0.37 runs `App::logic` on native passes that have no `App::ui`, for
+example while the window is hidden, minimized or occluded, but gives the app no
+way to tell such a pass from one followed by a paint. The local
+`Frame::is_logic_only` (in `src/epi.rs`) reports it: `EpiIntegration`
+(`src/native/epi_integration.rs`) sets the flag only around the logic callback
+of a pass that will not call `App::ui`, and the frame starts with it clear.
+PCBcraft uses it to run its recovery snapshot and timed Save timers when no
+paint follows, so they keep time while the window is not drawn; on painted
+passes the timers run from the UI as before. Browser builds and ordinary
+eframe apps are unchanged, and nothing new is scheduled: the flag only
+describes the pass eframe was already running. Application tests call the
+timer entry point a logic-only pass uses; the flag itself has no native
+regression yet. Reassess this change when updating eframe,
+and remove it when upstream reports whether a logic pass is followed by a UI
+pass.

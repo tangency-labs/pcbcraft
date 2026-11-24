@@ -316,3 +316,42 @@ fn raw_text_test_points_reject_positional_arrays_and_unknown_fields() {
         assert!(error.contains(expected), "{replacement}: {error}");
     }
 }
+
+/// Named layer groups select format 41, which keeps the marks unchanged; removing the last group
+/// restores the format 40 bytes. Format 40 still refuses `layer_groups`, and format 41 may omit marks.
+#[test]
+fn marks_survive_in_the_named_layer_group_format() {
+    let (mut session, pad, via) = fixture();
+    set(&mut session, &pad, "assembly", json!("top")).unwrap();
+    set(&mut session, &via, "fabrication", json!("bottom")).unwrap();
+    let marked = save(&session);
+    let path = test_board_path(&marked);
+    let marked_board: Value = serde_json::from_slice(&marked[&path]).unwrap();
+    assert_eq!(marked_board["format"], "pcbcraft-board/40");
+    let setup = session.project().unwrap().board_setup().unwrap();
+    let copper: Vec<_> = setup.copper_stack().map(|facts| facts.layer).collect();
+    let mut grouped_setup = json!(setup);
+    grouped_setup["stackup"]["layer_groups"] = json!([{"id":crate::fresh_id().unwrap(),"name":"Probe sides","layers":copper}]);
+    session.apply(crate::SET_BOARD_SETUP, &json!({"setup":grouped_setup,"expected_revision":session.revision()})).unwrap();
+    let grouped = save(&session);
+    let board: Value = serde_json::from_slice(&grouped[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["test_points"], marked_board["test_points"]);
+    assert_eq!(encode_documents(decode_documents(&grouped).unwrap()).unwrap(), grouped);
+
+    let mut candidate = grouped.clone();
+    let mut wrong = board.clone();
+    wrong["format"] = json!("pcbcraft-board/40");
+    candidate.insert(path.clone(), serde_json::to_vec(&wrong).unwrap());
+    assert!(decode_documents(&candidate).unwrap_err().contains("layer_groups field requires board format 41"));
+    let mut unmarked = board.clone();
+    unmarked.as_object_mut().unwrap().remove("test_points");
+    candidate.insert(path.clone(), serde_json::to_vec(&unmarked).unwrap());
+    let reopened = decode_documents(&candidate).unwrap();
+    assert!(!reopened.board.has_test_points());
+
+    let mut ungrouped_setup = json!(session.project().unwrap().board_setup().unwrap());
+    ungrouped_setup["stackup"]["layer_groups"] = json!([]);
+    session.apply(crate::SET_BOARD_SETUP, &json!({"setup":ungrouped_setup,"expected_revision":session.revision()})).unwrap();
+    assert_eq!(save(&session), marked);
+}
