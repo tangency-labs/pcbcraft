@@ -19,10 +19,10 @@ project edits and reopened documents do not restore stale inspection selections.
 
 `pcb.set_test_point` marks individual placed pads and vias for assembly or
 bare-board fabrication testing. The two marks are independent, name the board
-face, and survive Undo/Redo and native save/reopen. Marked boards use board
-format 56, which also carries named layer groups (earlier releases refuse it); clearing the last mark restores the
-format required by the remaining board data, and unmarked boards keep their
-existing format and bytes. This change does not add reports.
+face, and survive Undo/Redo and native save/reopen. Saved boards now use board
+format 43: the format 42 records plus optional marks. Format 42 boards still
+open and refuse marks, and earlier releases refuse format 43. Clearing the last
+mark keeps format 43. This change does not add reports.
 
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the

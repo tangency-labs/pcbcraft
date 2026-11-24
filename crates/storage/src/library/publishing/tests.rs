@@ -115,6 +115,41 @@ fn publish_legacy_symbol_as_current_and_reopen_both_revisions() {
     assert_eq!(pins, [old, new]);
 }
 
+/// Republishing an older footprint retains its exact file and publishes matching land geometry.
+#[test]
+fn footprint_publication_keeps_legacy_revision_and_uses_current_format() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("library");
+    let manifest = new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();
+    create(&root, &manifest).unwrap();
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../libraries/basic-components/footprints/resistor-0402.json")).unwrap();
+    legacy["library"] = json!("workshop");
+    let bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+    let path = root.join("footprints/resistor-0402.json");
+    std::fs::create_dir(root.join("footprints")).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let source = super::super::load(&root).unwrap();
+    let old = source.items()[0].footprint().unwrap();
+    assert_eq!(old.format, "pcbcraft-footprint/1");
+
+    let mut item = Item::edit_footprint(&old).unwrap();
+    item.name = "Workshop resistor".into();
+    let prepared = prepare(Arc::new(item), &manifest, old.revision, Some(old.revision), false).unwrap();
+    publish(&root, &prepared).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+
+    let source = super::super::load(&root).unwrap();
+    assert!(source.problems().is_empty());
+    let mut catalog = pcbcraft_engine::library::sources::Catalog::default();
+    catalog.install("workshop", Arc::new(source)).unwrap();
+    let retained = catalog.footprint("workshop", &old.id, old.revision).unwrap();
+    let new = catalog.footprint("workshop", &old.id, prepared.item().revision).unwrap();
+    assert_eq!(retained, old);
+    assert_eq!(new.format, "pcbcraft-footprint/6");
+    assert_eq!(new.pads, old.pads);
+}
+
 /// A revision created after preparation is never overwritten, including after a second publisher races.
 #[test]
 fn raced_revision_and_replaced_manifest_preserve_draft_and_original() {

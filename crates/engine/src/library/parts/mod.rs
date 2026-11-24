@@ -21,12 +21,14 @@ pub use quantity::{Quantity, decimal, display_quantity};
 pub use reference::Reference;
 pub use supply_range::SupplyRange;
 pub use value::Value;
-/// Published reusable part record format.
+/// Historical reusable part format with optional drawings.
 pub const PART_FORMAT: &str = "pcbcraft-part/2";
 /// Native part envelope reserved for records with an authored terminal supply range.
 pub const RATED_PART_FORMAT: &str = "pcbcraft-part/4";
 /// Native part envelope for records carrying human-facing search metadata, with or without ratings.
 pub const METADATA_PART_FORMAT: &str = "pcbcraft-part/5";
+/// Current native format for newly authored parts, with optional ratings and metadata.
+pub const CURRENT_PART_FORMAT: &str = "pcbcraft-part/6";
 /// Maximum authored supply ranges per part, shared by draft editing, native decoding and the part/4 schema.
 pub const MAX_TERMINAL_RATINGS: usize = 128;
 /// Retained electrical-only records preserve their original encoding.

@@ -833,7 +833,7 @@ fn metadata_fields_commit_undo_redo_and_clear() {
     let doc = &h.state().library_editors.parts[&id];
     let Record::Part(part) = doc.session.record() else { panic!() };
     assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
-    assert_eq!(part.format, pcbcraft_engine::library::parts::METADATA_PART_FORMAT);
+    assert_eq!(part.format, pcbcraft_engine::library::parts::CURRENT_PART_FORMAT);
     assert_eq!(doc.session.revision(), revision + 1);
     assert!(doc.pending.is_empty(), "{:?}", doc.pending);
 
@@ -875,7 +875,7 @@ fn metadata_fields_commit_undo_redo_and_clear() {
     let Record::Part(part) = doc.session.record() else { panic!() };
     assert!(part.keywords.is_empty());
     assert!(doc.pending.is_empty(), "{:?}", doc.pending);
-    assert_eq!(part.format, pcbcraft_engine::library::parts::PART_FORMAT);
+    assert_eq!(part.format, pcbcraft_engine::library::parts::CURRENT_PART_FORMAT);
 }
 
 /// Rejected bounds and non-HTTP links stay visible as pending text without moving the

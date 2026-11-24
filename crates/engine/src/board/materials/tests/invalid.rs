@@ -171,6 +171,7 @@ fn unsupported_or_ambiguous_saved_materials_fail_before_open() {
         assert!(persistence::decode_documents(&bad).unwrap_err().contains("board.json"));
     }
     let mut b: Value = serde_json::from_slice(&legacy[&crate::persistence::test_board_path(&legacy)]).unwrap();
+    b["format"] = json!("pcbcraft-board/2");
     b["setup"]["materials"] = json!([]);
     let mut bad = legacy;
     bad.insert(crate::persistence::test_board_path(&bad), serde_json::to_vec(&b).unwrap());

@@ -175,10 +175,11 @@ refuses replacing an already open identity. A cancelled picker or failed write
 leaves documents intact. Browser downloads and native-definition exports do not
 confirm a durable editor save, so they retain the unsaved state.
 
-Export Native Definition writes a new standalone file. New symbol exports and
-published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) even after optional
-records are removed. Older published and project-pinned revisions keep their
-original formats and addresses. Keep the editor item for the symbol's license
+Export Native Definition writes a new standalone file. Exports and new
+published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) for symbols and
+[`pcbcraft-footprint/6`](footprint-schema.md) for footprints, including after
+optional records are removed. Older published and project-pinned revisions
+keep their original formats and addresses. Keep the editor item for the symbol's license
 and stable editor primitive IDs. If the license is unknown, record it before
 saving or exporting. Native source registration/search is available through
 the **Library** workspace (also reached through **Libraries → Sources**), as described in the [source guide](native-library-sources.md).

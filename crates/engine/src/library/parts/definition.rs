@@ -1,7 +1,8 @@
 //! Reusable generic parts link schematic, category and physical package definitions.
 use super::{
-    Category, CategoryBinding, LEGACY_PART_FORMAT, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINK_URL_CHARS,
-    MAX_LINKS, MAX_TERMINAL_RATINGS, METADATA_PART_FORMAT, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
+    CURRENT_PART_FORMAT, Category, CategoryBinding, LEGACY_PART_FORMAT, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS,
+    MAX_LINK_URL_CHARS, MAX_LINKS, MAX_TERMINAL_RATINGS, METADATA_PART_FORMAT, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange,
+    Value,
     codec::{decode, encode, header, unique_map},
     field_id,
 };
@@ -102,7 +103,7 @@ impl PartDefinition {
         text
     }
 
-    /// Whether this definition carries any format-5 metadata.
+    /// Whether this definition carries descriptive metadata.
     fn has_metadata(&self) -> bool {
         self.description.is_some() || !self.keywords.is_empty() || !self.links.is_empty()
     }
@@ -124,7 +125,11 @@ impl PartDefinition {
         if PinNumber::new(terminal).is_none() {
             return Err(format!("Invalid supply range terminal ID {terminal:?}."));
         }
-        if let Some(range) = SupplyRange::parse(terminal, min, max)? {
+        let range = SupplyRange::parse(terminal, min, max)?;
+        if self.terminal_ratings.get(terminal) == range.as_ref() {
+            return Ok(());
+        }
+        if let Some(range) = range {
             if !self.terminal_ratings.contains_key(terminal) && self.terminal_ratings.len() >= MAX_TERMINAL_RATINGS {
                 return Err(format!("A part supports at most {MAX_TERMINAL_RATINGS} terminal ratings."));
             }
@@ -132,26 +137,8 @@ impl PartDefinition {
         } else {
             self.terminal_ratings.remove(terminal);
         }
-        self.select_format();
+        self.format = CURRENT_PART_FORMAT.into();
         Ok(())
-    }
-
-    /// Choose the smallest native envelope that carries the draft's content. A retired format-1
-    /// record keeps its encoding only while it still has a symbol and no ratings or metadata;
-    /// ratings need /4, metadata needs /5, and downgrades return to /2 when the content is removed.
-    /// Only draft transitions use this; native readers always enforce the declared header.
-    pub(crate) fn select_format(&mut self) {
-        let retain_legacy = self.format == LEGACY_PART_FORMAT && !self.has_metadata() && self.terminal_ratings.is_empty() && self.symbol.is_some();
-        self.format = if retain_legacy {
-            LEGACY_PART_FORMAT
-        } else if self.has_metadata() {
-            METADATA_PART_FORMAT
-        } else if !self.terminal_ratings.is_empty() {
-            RATED_PART_FORMAT
-        } else {
-            PART_FORMAT
-        }
-        .into();
     }
 
     /// Check bounds and map size without resolving the symbol or requiring other draft fields.
@@ -198,6 +185,7 @@ impl PartDefinition {
             LEGACY_PART_FORMAT => LEGACY_PART_FORMAT,
             RATED_PART_FORMAT => RATED_PART_FORMAT,
             METADATA_PART_FORMAT => METADATA_PART_FORMAT,
+            CURRENT_PART_FORMAT => CURRENT_PART_FORMAT,
             _ => PART_FORMAT,
         };
         header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
@@ -206,9 +194,11 @@ impl PartDefinition {
         match self.format.as_str() {
             METADATA_PART_FORMAT if !metadata => return Err("pcbcraft-part/5 requires a description, keyword or link.".into()),
             LEGACY_PART_FORMAT | PART_FORMAT | RATED_PART_FORMAT if metadata => {
-                return Err("Part description, keywords and links require pcbcraft-part/5.".into());
+                return Err("Part description, keywords and links require pcbcraft-part/5 or pcbcraft-part/6.".into());
             }
-            LEGACY_PART_FORMAT | PART_FORMAT if rated => return Err("Terminal ratings require pcbcraft-part/4 or pcbcraft-part/5.".into()),
+            LEGACY_PART_FORMAT | PART_FORMAT if rated => {
+                return Err("Terminal ratings require pcbcraft-part/4, pcbcraft-part/5 or pcbcraft-part/6.".into());
+            }
             RATED_PART_FORMAT if !rated => return Err("pcbcraft-part/4 requires at least one terminal rating.".into()),
             _ => {}
         }

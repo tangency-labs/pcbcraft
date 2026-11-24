@@ -112,7 +112,8 @@ The [footprint format specification](footprint-schema.md) defines field ownershi
 reference defaults and overrides, coordinate transforms and compatibility, with
 machine-readable schemas for canonical definitions and physical placements.
 
-A `pcbcraft-footprint/1` document has `library`, `id`, positive `revision`, `name`,
+New exports and published revisions use `pcbcraft-footprint/6`, which supports
+all of the pad and hole types below. A native footprint document has `library`, `id`, positive `revision`, `name`,
 `license`, `source`, `pads` and `graphics`. `source` records `kind: "original"`,
 `reference` and `locator`; it describes provenance and is never fetched on load.
 Identity is the library/item/revision tuple, independently of the file's location.
@@ -132,8 +133,9 @@ on all copper layers when the footprint is rotated or moved to the back. The
 hole must fit inside the land; the design check reports the smallest copper
 margin around the opening. Non-plated slots and arbitrary pad stacks remain
 unsupported. Fabrication export refuses a board with a plated slot rather than
-omitting the machining operation. Formats 1 and 5 allow 1…1,024 distinct pads;
-format 4 allows 0…1,024. Each format allows up to 64 graphics. Graphics use the
+omitting the machining operation. Footprints allow up to 1,024 distinct pads,
+and formats 4 and 6 also support footprints made only of mechanical holes.
+Each format allows up to 64 graphics. Graphics use the
 same rectangular geometry and a `purpose` of
 `fabrication`, `silkscreen` or `courtyard`. Coordinates and dimensions are bounded
 by 100,000,000 nm; unknown fields and invalid geometry fail validation.
@@ -141,9 +143,8 @@ by 100,000,000 nm; unknown fields and invalid geometry fail validation.
 In the Footprint Editor, choose **Draw → Non-plated hole**, place the center,
 then edit its center and finished diameter in Properties. The shared editor
 accepts the same `non_plated_hole` primitive through `app.library_edit`. These
-holes belong to the footprint, not to any schematic terminal. A definition with
-holes uses `pcbcraft-footprint/4` without slots (and may have zero pads), or `pcbcraft-footprint/5` with slots. When placed, holes
-follow rotation, side changes and movement; board inspection lists their
+holes belong to the footprint and carry no schematic terminal mapping. When
+placed, holes follow rotation, side changes and movement. Board inspection lists their
 transformed centers and diameters, separately from pads. Routing and design
 checks treat the circle as a mechanical obstacle without adding a net.
 Fabrication sends these openings to a [separate non-plated drill file](../manufacturing/drill-files.md#fabrication-drill-files),
@@ -155,7 +156,7 @@ Optional `artwork` adds up to 256 parameterized drawing objects. Each carries a
 lines, rectangles, circles, arcs, polylines and stroke text as described in the
 [symbol format](symbol-library.md). Silkscreen paths are clipped against pad
 clearance by the board renderer. Absent artwork is omitted on save, preserving
-legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
+legacy definitions. These fields were introduced in `pcbcraft-footprint/1`. Old readers
 will reject unknown fields/shapes rather than silently dropping them.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object

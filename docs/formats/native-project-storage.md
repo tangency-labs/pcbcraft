@@ -82,7 +82,8 @@ does not confirm a durable write and does not clear the editor's dirty state.
 ### Native write policy
 
 Opening or inspecting a supported older project leaves its files untouched.
-Folder saves and packed exports write `pcbcraft-project/61` for `project.json`.
+Folder saves and packed exports write `pcbcraft-project/61` for `project.json`
+and `pcbcraft-board/43` for the registered `board.json`, when a board exists.
 Version 61 uses the version 56 record vocabulary with optional designator
 locks. Earlier formats remain readable. The first save adopts the existing
 folder and occurrence migrations if needed. Subsequent unchanged saves are
@@ -95,11 +96,12 @@ within that version. Preserve stable identities and deterministic ordering.
 Pinned library items retain their published format and revision. Changes to
 authored library items go through publication of a new revision.
 
-The project entry point and [native symbol authoring](../libraries/symbol-schema.md)
-use fixed current write formats. Placing a version-5 symbol in an older project
-adopts the folder and occurrence metadata in the placement edit. Board, sheet,
-instance, board setup profile, footprint and part writers have separate schemas
-and still select formats by the records present.
+The project entry point and native library authoring use fixed current write
+formats for [symbols](../libraries/symbol-schema.md),
+[footprints](../libraries/footprint-schema.md) and [parts](../libraries/part-schema.md).
+Placing a version-5 symbol in an older project adopts the folder and occurrence
+metadata in the placement edit. Sheet, instance and board setup profile writers
+still select formats by the records present.
 
 ## Bundled library address migration
 
@@ -243,10 +245,9 @@ conflicting dependencies reject opening before adoption. Native part selections
 also travel with schematic clipboard fragments; diagnostic single-document
 export refuses to discard them.
 [Device supply ranges](../libraries/part-schema.md#device-supply-range) live in the same
-pinned generic part closure, using `pcbcraft-part/4` only for records with a
-nonempty terminal rating map. Folders and packed projects carry the same bytes.
-Older readers refuse that unknown pinned record rather than dropping its data;
-no project, sheet, symbol, board, or accepted-baseline format changes.
+pinned generic part closure. Historical ratings use `pcbcraft-part/4` or
+`pcbcraft-part/5`, and current part revisions use `pcbcraft-part/6`. Folders
+and packed projects carry the same bytes.
 
 Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
 with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input
@@ -300,36 +301,49 @@ show their stored text, including when the part was already deleted; no type is
 inferred or reconstructed from free text. Folder and archive saves carry the
 same historical records.
 
+### Current board records
+
+All normal board saves and packed exports use `pcbcraft-board/43`, which is
+the format 42 record vocabulary plus optional [test-point marks](#test-point-records).
+Format 42 remains readable and refuses test-point marks. The
+`footprints` array is required and may be empty. Setup is optional, so a
+bare board or an older marker board can save without acquiring a stackup.
+Authored rules, zones, copper, locks, origin, profiles, groups and package
+records use their existing field vocabulary and prerequisites. Explicitly
+stored optional arrays that require content, such as tracks, vias, zones and
+named groups, remain nonempty. Clearing any of those records keeps the board
+header at version 43.
+
+The first Save, Save As or browser Download of an older board, including a
+format 42 board, writes version 43
+to its registered path. Pinned assets, accepted baselines, and object identities
+retain their original content. Subsequent no-op saves preserve the current
+bytes, including valid custom formatting. Explicit legacy layout conversion
+still moves the historical board bytes intact, as specified in the conversion
+contract above. The sections below describe the historical readers.
+
 Board format `pcbcraft-board/19` adds validated `pcbcraft-rules/1` board defaults
 with a stable UUID, hard limits and preferred routing dimensions. It supports the
 earlier physical fields, including format 18's track/via locks, and requires a
-rule record. Older headers reject rules. When rules are absent, the remaining
-authored data determines the format.
+rule record. Earlier historical headers reject rules.
 See [board-rules.md](../pcb/board-rules.md) for validation, resolution and reset behavior.
 
 Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin with a
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
-physical field, including optional zone outlines, and requires the origin record; older headers reject it. A board that
-also adopts assembly output profiles requires at least format 22; extended stack
-fields, via assignments, material reports, circular arcs and footprint locks can
-require a higher format. Those formats accept the origin. Boards without an
-origin measure outputs from board zero and use the format required by the remaining
-authored data.
+physical field, including optional zone outlines, and requires the origin record.
+Earlier historical headers reject it. Boards without an origin measure outputs
+from board zero.
 
 ### Named layer groups
 
-Board format `pcbcraft-board/41` is written only when `setup.stackup.layer_groups`
-contains at least one named group, and requires a board setup with at least one
-named group. It retains every earlier authored board field, including teardrops,
-circular copper and footprint locks, but not test-point marks: a grouped board with
-marks uses format 56, which carries the same `layer_groups`. Within `setup.stackup`, `layer_groups` stores
+Historical board format `pcbcraft-board/41` requires a board setup with at
+least one named group in `setup.stackup.layer_groups`. It retains every earlier authored board field, including teardrops,
+circular copper and footprint locks. Within `setup.stackup`, `layer_groups` stores
 only authored named groups (group UUID, name and copper-layer UUIDs); derived
 groups are computed and never stored. Earlier headers reject `layer_groups`, even
-when empty; format 56 also accepts them but refuses an empty array. Removing the last named group restores the format required by the
-remaining authored data, and unchanged group-free boards keep their existing format
-and bytes across Save, Save As and browser Download. Formats 27–33, 36 and 38–40
-remain unsupported.
+when empty. In formats 42 and 43 the field is optional and disappears when the last
+group is removed. Formats 27–33, 36 and 38–40 remain unsupported.
 
 ### Straight-via teardrop intents
 
@@ -340,7 +354,7 @@ parameters. Vertices, net membership and rule reports are never written to the
 board. Encoding orders the records by UUID; decoding rejects duplicate
 identities/sites, dangling attachments and unrepresentable parameters or shapes.
 Older board formats reject the new array. Format 37 does not permit circular
-tracks. Removing all teardrops restores the format selected by the remaining data.
+tracks. Formats 42 and 43 store teardrops as an optional array.
 See [straight via teardrops](../pcb/teardrop-records.md) for the command and current limits.
 
 ### Placed-footprint lock metadata
@@ -351,19 +365,15 @@ Repeated `locked` members, null and nonboolean `locked` values are refused.
 Format 34 works with or without setup when the other records allow it. For example,
 material reports, via assignments, stack fields, assembly profile adoptions,
 origin, rules, zones, silkscreen and copper retain their existing validation.
-Formats 34, 35, 37, 41 and 56 accept active locks; other headers refuse `true` but accept an
-explicit `false` on an otherwise valid placement. Fresh canonical encoding omits
-false. Native Save can retain an unchanged board document verbatim, including
-explicit false, which older readers may reject. Formats 27–33 remain unsupported.
-Removing the last active footprint lock restores the format required by the
-remaining data.
+Formats 34, 35, 37, 41, 42 and 43 accept active locks. Readers of other formats
+accept an explicit `false` on an otherwise valid placement. Fresh canonical
+encoding omits false. Native Save can retain an unchanged current board
+document verbatim, including explicit false.
 
-A board with [circular copper records](../pcb/circular-copper-records.md) but no active
-footprint locks uses format 26 (or format 56 when test-point marks are present). A board with active footprint locks but no arcs
-uses format 34 unless it contains straight-via teardrop intents (format 37) or test-point marks (format 56). Format 35 requires both arcs and active footprint locks without test-point marks, so readers that support only one
-of the earlier formats refuse the combined file instead of dropping records.
-Removing either feature selects the other feature's format; removing both
-selects the format required by the remaining content.
+Historical format 26 requires [circular copper records](../pcb/circular-copper-records.md)
+and rejects active footprint locks. Format 34 requires an active footprint lock
+and rejects arcs. Format 35 requires both features. Formats 42 and 43 allow them
+to be added or removed independently.
 
 The codecs store the flag alongside the existing placement ID, pose and pinned
 definition reference. Geometry and connectivity use the same resolution paths
@@ -401,8 +411,8 @@ identity-sorted `{profile, revision}` adoption records resolving exact pinned
 content. It supports optional origin, rules, zones and earlier fields. Extended
 stack fields, explicit via assignments, material reports, circular copper arcs
 and footprint locks require at least formats 23, 24, 25, 26 and 34, respectively.
-These higher formats accept adoptions; headers before 22 reject them. Removing
-the last adoption restores the format required by the remaining data.
+These higher formats accept adoptions, and headers before 22 reject them.
+Adoptions are optional in formats 42 and 43.
 
 The project retains at most 64 identities (including retired watermarks), 128
 content revisions and 4096 corrections across retained revisions. An edit retires
@@ -421,8 +431,8 @@ Board format `pcbcraft-board/23` adds the stack fields: copper-stratum roles, ba
 copper and the tolerance and basis of finished copper thickness, and the stackup's
 declared finished board thickness, tolerance and minimum. It accepts a placement
 origin, assembly profile adoptions, board rules and every earlier physical field, and requires at least one of
-the new fields. Older headers, including 21, reject them. In the absence of these
-fields, the other authored data determines the board format. Setup profiles use
+the new fields. Older headers, including 21, reject them. Formats 42 and 43 support
+these fields when present. Setup profiles use
 `pcbcraft-setup-profile/2` for stack extensions without material reports. With
 reports they use profile version 3, which can also carry the stack extensions. See
 [board-materials.md](../pcb/board-materials.md#copper-strata-and-board-thickness).
@@ -431,16 +441,16 @@ Board format `pcbcraft-board/24` adds optional scoped `net_assignment` objects t
 vias and requires at least one assignment. It accepts optional assembly profile
 adoptions, extended stack fields and earlier board fields; no derived membership
 is saved. Earlier headers, including assembly-profile board/22 and stack board/23,
-reject via intent. Clearing the last assignment restores the format required by
-the remaining authored data. Null/nil addresses are refused; historical unresolved
+reject via intent. Formats 42 and 43 omit the assignment in Automatic mode.
+Null and nil addresses are refused. Historical unresolved
 targets remain readable. See [via net assignments](../pcb/via-net-assignments.md).
 
 Board format `pcbcraft-board/25` adds thermal conductivity, thermal expansion,
 dielectric strength and CTI reports to embedded materials. It supports every earlier
 field, including stack fields, assigned via intent, assembly profiles, a placement origin and board rules, and
 requires at least one such report. Older headers reject them. Formats 26, 34 and
-35 can retain reports. Removing reports selects the format required by the
-remaining data. Setup profiles with these reports use `pcbcraft-setup-profile/3`.
+35 can retain reports. Reports are optional in formats 42 and 43.
+Setup profiles with these reports use `pcbcraft-setup-profile/3`.
 See [board-materials.md](../pcb/board-materials.md#thermal-and-insulation-reports).
 
 ### Zone outline records
@@ -449,9 +459,8 @@ Board format `pcbcraft-board/20` adds a required nonempty `zones` array and acce
 all board/19 fields, with board rules optional. A zone board with a placement
 origin uses at least format 21; assembly profiles, extended stack fields, assigned
 vias, material reports, circular copper arcs and footprint locks require at least
-formats 22, 23, 24, 25, 26 and 34, respectively. The encoder preserves every authored
-record in the format that covers those records. Removing a feature selects the
-format required by the remaining data. An absent array in board/20, an empty or
+historical formats 22, 23, 24, 25, 26 and 34, respectively. Formats 42 and 43 preserve
+all of these records when present. An absent array in board/20, an empty or
 null zone array in any supported format,
 or zones in a format below 20, is refused. Zones are
 UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
@@ -469,30 +478,27 @@ registry's retained identities.
 
 ### Test-point records
 
-Board format `pcbcraft-board/56` adds a required nonempty `test_points` array
-to the native board document when at least one placed pad or via carries a
-test-point mark. Each record has a `target` of the form
+The current board format `pcbcraft-board/43` adds an optional `test_points`
+array to the format 42 vocabulary. It is written only when at least one placed
+pad or via carries a test-point mark, and is never stored empty. Each record has
+a `target` of the form
 `{"kind":"pad","footprint":"footprint-7","pad":"1"}` or
 `{"kind":"via","via":"<via-uuid>"}` and `flags` with `assembly`, `fabrication`,
 or both. Each present flag is `top`, `bottom`, or `both`, relative to the board
 faces. Omission means unmarked. Empty or null lists, null or empty flags,
-missing `test_points` in format 56, and duplicate or unresolved targets are
-refused. A pad must be a land in the pinned footprint, including lands without
-assigned terminals. Legacy markers are not physical lands. Records are written
-in incremental batches: pads in placement ID and pad-number order, then vias in
-UUID order. Format 56 also carries named layer groups, so a marked board that has
-groups keeps both; format 41 refuses `test_points`.
+and duplicate or unresolved targets are refused. A pad must be a land in the
+pinned footprint, including lands without assigned terminals. Legacy markers are
+not physical lands. Records are written in incremental batches: pads in
+placement ID and pad-number order, then vias in UUID order.
 
-Format 56 can carry every supported earlier board field, including format 41 named layer groups, while preserving
-existing feature-combination limits (stored circular copper `arcs` and stored
-straight-via `teardrops` remain mutually incompatible in format 56). Clearing the last mark
-restores the format and bytes required by the remaining authored data; unmarked
-boards keep their existing format and canonical bytes. Older headers reject
-`test_points`, and older readers refuse format 56. The
-retired format 40 is unsupported. Clipboard fragments and
-footprint definitions carry no test-point flags. Cut refuses marked objects;
-Move retains their marks. The diagnostic single-file encoder refuses test-point
-marks rather than dropping them. See [Test-point marks](../automation/board-commands.md#test-point-marks).
+Marks combine with every other current board record, including named layer
+groups. Clearing the last mark keeps the board header at version 43 and drops
+the array. Every older header, including 41 and 42, refuses `test_points`, and
+readers that predate format 43 refuse it. The retired format 40 is unsupported.
+Clipboard fragments and footprint definitions carry no test-point flags. Cut
+refuses marked objects; Move retains their marks. The diagnostic single-file
+encoder refuses test-point marks rather than dropping them. See
+[Test-point marks](../automation/board-commands.md#test-point-marks).
 
 ## Document ownership
 
@@ -507,7 +513,7 @@ advance the footprint format.
 | `project.json` | `pcbcraft-project/61` | Project UUID, name, numeric allocation watermark, board registration, ordered sheets and components, and optional authored records. Earlier project formats /5–/7, /9, /11–/17, /19–/24, /36, /39, /45, /48, /51 and /56 remain readable. |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37`, `/41` or `/56` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; version 56 adds test-point marks (selected whenever marks are present) and can carry every earlier field, including named layer groups; versions 27–33, 36 and 38–40 remain unsupported |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37`, `/41`, `/42` or `/43` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; version 42 is the single current record vocabulary with optional records; version 43, the current write format, adds optional test-point marks to it; versions 27–33, 36 and 38–40 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](../libraries/footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
 
@@ -917,10 +923,9 @@ Omitted rotation means zero, and canonical records omit zero to preserve legacy
 bytes. A nonzero orientation requires `pcbcraft-board/4` or a later supported board version; earlier versions
 and legacy single-file encodings refuse it rather than lose orientation. Version
 4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
-material and mapping identities. Without rotation, versions 1–3 apply only if no
-other field requires a later format. Legacy single-file export refuses rotation.
-Moving an isolated footprint changes its placement record; any track ends carried
-with the footprint also change. Rotation can additionally change the board header. Every project has its sheet documents. A new schematic-only
+material and mapping identities. Legacy single-file export refuses rotation.
+Moving or rotating an isolated footprint changes its placement record. Any track
+ends carried with the footprint also change. Every project has its sheet documents. A new schematic-only
 project has no board document; an explicitly created PCB and legacy implicit-board
 projects have a physical board document even when no footprints are placed;
 its path follows the registration after folder adoption. The board registry
@@ -934,9 +939,8 @@ pad ID, together with its position and optional rotation. The complete
 its path identity. Missing, conflicting or unused definitions are refused; loading
 never substitutes a built-in definition. Version 5 allows absent setup or the
 version-3 setup vocabulary. Legacy marker instances can coexist with physical
-placements, and legacy single-file export refuses physical definitions. Existing
-canonical marker-only documents retain their bytes in a no-op codec round trip;
-marker placements are not upgraded to physical pads implicitly. Deleting the last placement using a physical definition removes its
+placements, and legacy single-file export refuses physical definitions. A header
+migration preserves marker placements and their existing geometry. Deleting the last placement using a physical definition removes its
 unused pinned copy on save.
 
 Pinned footprints hold up to 1,024 pads and 256 artwork objects, pinned symbols
@@ -947,9 +951,9 @@ Board format 6 requires a `silkscreen` object with `text_height_nm`,
 `stroke_width_nm` and `pad_clearance_nm`, as defined in the
 [footprint contract](../libraries/footprint-library.md#silkscreen-settings). It permits the
 same optional setup, placement orientation and pinned definitions as version 5.
-Versions 1–5 refuse this field; untouched older boards keep their bytes and use
-the stable default style for definitions that request physical silk. Editing the
-style changes only the board document. Legacy single-file export refuses these
+Versions 1–5 refuse this field. Missing settings use the stable default style
+for definitions that request physical silk. Editing the style changes only the
+board document. Legacy single-file export refuses these
 settings rather than discarding them.
 
 Board format 7 adds a nonempty `assignments` array before `footprints`. Each
@@ -960,8 +964,7 @@ incomplete/nonbijective mappings and disagreements with an existing placement
 are refused. Unplaced assignments retain their pinned files even with an empty
 `footprints` array. The incremental encoder writes one assignment per record
 budget and emits shared definition copies once. Setup and silkscreen remain
-optional under version 7, with their existing validation. Older boards retain
-their prior encoding until a package assignment is authored. Legacy single-file
+optional under version 7, with their existing validation. Legacy single-file
 export refuses independent assignments rather than losing them.
 
 Board format 10 is explicitly enabled by `pcb.initialize_update_baseline` and
@@ -972,8 +975,8 @@ defines the codec and current engine-only limitations; older readers refuse this
 format instead of dropping retained physical state.
 
 Board format 11 retains that baseline while allowing desired assignments to differ
-from accepted placements. It is required exactly when package intent is pending;
-Apply or resetting intent to accepted values removes that difference. Desired
+from accepted placements. Format 11 requires pending package intent.
+Formats 42 and 43 support both states. Apply or resetting intent removes the difference. Desired
 mappings validate against live logical terminals and pinned package pads, while
 accepted footprint mappings validate independently against historical terminals.
 
@@ -997,8 +1000,7 @@ The radius is derived from center/start, not stored. Each arc occupies one line
 in UUID order, at most 4,096 per board. End radial error is at most 1 nm inclusive;
 zero radius, zero sweep, full circles, invalid dimensions/layers and duplicate
 copper IDs are rejected with exact integer predicates. Formats 26 and 35 require
-nonempty `arcs`; other headers refuse the field. Readers without support for
-these formats refuse them. No data without arcs is upgraded to either format.
+nonempty `arcs`. Formats 41, 42 and 43 support arcs as an optional array.
 Native documents and archives round-trip the exact records; the diagnostic
 single-file writer refuses them. Geometry consumers refuse rather than flatten
 these records until circular conductive contours are implemented.
@@ -1019,9 +1021,8 @@ drill at least 50,000 and smaller than the pad and the pad at most 10,000,000. A
 spans every copper layer and needs a setup with at least two; a board holds at most
 16,384 (2,048 in earlier releases), within the native board document size limit.
 Format 13 requires at least one via, and its `tracks` array is optional. Either
-array is omitted when empty, and formats before 12 reject both fields. With no
-vias, tracks alone require format 12 unless other fields require a later format.
-Deleting the last track and via leaves the format required by the remaining data.
+array is omitted when empty, and formats before 12 reject both fields.
+Deleting the last track or via leaves the current header at format 43.
 Net membership is not stored; it is derived from copper geometry and the accepted nets.
 Legacy single-file export refuses tracks and vias.
 
@@ -1029,8 +1030,8 @@ Board format 14 marks bottom-side footprints with `"bottom": true` on their plac
 records and is otherwise format 13, so tracks and vias stay optional. It requires at
 least one bottom-side footprint, and earlier formats reject the field; top-side records
 omit it. A bottom footprint mirrors its local X before rotation, and its surface pads
-and technical graphics use the back layers. Flipping the last footprint back to the top
-returns the board to the format its other data requires, with the same bytes as before.
+and technical graphics use the back layers. Flipping the last footprint back
+to the top omits the flag, with the same format-43 bytes as before the flip.
 Legacy single-file export refuses bottom-side footprints.
 
 Board format 15 adds optional `reference_offset` and `reference_text` fields on a
@@ -1038,8 +1039,8 @@ footprint placement. The offset is measured in local nanometers before rotation
 or side mirroring. The sparse print object overrides words, font, paired text
 height/stroke, local rotation, alignment and visibility while retaining the
 component's identity and reference. Format 15 requires at least one nonzero
-offset or nonempty print override. Resetting the last of both restores the
-format required by the board's other data.
+offset or nonempty print override. Resetting both omits them from the next
+format-43 save.
 The [footprint format specification](../libraries/footprint-schema.md) defines its placement schema and coordinate contract.
 
 Board format 16 adds optional integer `stroke_nm` to layer graphics, bounded
@@ -1049,26 +1050,22 @@ explicit nulls are rejected. The format carries every field supported by format
 15, including reference-position and print overrides, and requires at least one
 stroked graphic. Older formats reject the new field. Graphics reference existing
 non-copper layer UUIDs; conductive copper linework uses the existing track records
-and their connectivity/DRC/export rules. Removing the last stroked graphic returns
-the board to the format required by its remaining data. Unchanged legacy boards
-retain their previous encoding and bytes.
+and their connectivity/DRC/export rules. Removing the last stroked graphic
+leaves the current header at format 43.
 
 Board format 18 adds optional `locked: true` on track and via records and
 requires at least one authored lock. It is a superset of format 17, including
 multi-pad mappings, physical graphics, accepted baselines and pending intent.
-Absent copper lock flags mean false; canonical saves omit false. Removing the
-last active copper lock leaves the format required by the remaining data; for
-example, a board with an active footprint lock uses format 34, 35 with arcs,
-37 with straight-via teardrops, or 56 with test-point marks. Headers below 18
+Absent copper lock flags mean false. Canonical saves omit false and use format
+43 regardless of active locks. Historical headers below 18
 refuse active copper locks, and older readers refuse format 18.
 Flags survive folder/archive reopen and undo/redo without changing object IDs,
 geometry or connectivity. The shared lock command and protection policy are in
 [the layout workflow](../pcb/locks.md#fixed-tracks-and-vias).
 
-The earlier local format 8 rectangle remains readable and byte-stable on no-op
-save. Its first actual geometry edit materializes a layer-addressed drawing in
-format 9. Canonical versions 1–7 keep their encoding on unchanged codec round
-trips. The current reader rejects incompatible newer data, but tolerates a
+The earlier local format 8 rectangle remains readable. Its first geometry
+edit materializes a layer-addressed drawing. Header migration alone preserves
+the rectangle record. The current reader rejects incompatible newer data, but tolerates a
 noncanonical `locked: false` as described in [footprint lock metadata](#placed-footprint-lock-metadata).
 Legacy single-file export refuses edge graphics. Board document additions do not introduce a broader
 multiboard migration; the entry point separately records explicit zero-or-one
@@ -1170,7 +1167,7 @@ the working documents.
 Moving or rotating a symbol changes only its sheet record. Editing a reference
 or value changes only its component record in `project.json`. Board geometry stays
 in `board.json`. Placing a new definition changes the project and sheet documents
-and adds its saved symbol file. After the first layout migration, a no-op save rewrites no project documents.
+and adds its saved symbol file. After layout and header migration, a no-op save rewrites no project documents.
 Even after another document changes, unaffected documents retain their original
 bytes, including valid custom formatting.
 
