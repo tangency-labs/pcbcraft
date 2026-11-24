@@ -1,0 +1,6 @@
+{
+  "crates/app/src/editor_view.rs": "4d7e2eef13b7c5584c0f31ec4be9fd92896268cd28b182851298f5951bce377b",
+  "crates/app/src/board_canvas.rs": "b84a07c1369c17300aeae113b9995d5ef0e4ff1165afdaf5172dfae76726cd6a",
+  "crates/engine/src/board/fill.rs": "475c20ecff623c652861777a93fc88ee6b5f4fbce7f035f4654e7ce73360f61f",
+  "crates/engine/src/board/fill/cache.rs": "4560ed18b8af2f63736519f86f786337e7554bd3350325139f9dfe7bf67b4cd6"
+}

@@ -14,6 +14,8 @@ mod tests;
 pub(super) const RATSNEST_KEY: &str = "ratsnest";
 /// Local overlay state stored beside physical layer visibility, never in project history.
 pub(super) const NET_NAMES_KEY: &str = "net_names";
+/// A view-local switch back to the physical layer palette.
+pub(super) const NET_COLORS_KEY: &str = "net_colors";
 
 /// Runtime view identity, independent of its document or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -171,6 +173,8 @@ pub(super) struct CopperConnectivityCache {
     source: ViewInput,
     target: BoardTarget,
     connectivity: Arc<crate::board_appearance::Connectivity>,
+    include_ids: bool,
+    fill: Option<Arc<pcbcraft_engine::board::fill::Fill>>,
 }
 
 /// Schematic interaction state is separate from board selection and input handling.
@@ -199,9 +203,11 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) fills: crate::board_fills::State,
+    pub(super) footprints: crate::board_canvas::FootprintCache,
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) movement: crate::board_move::State,
-    pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
+    pub(super) ratsnest_cache: Option<(ViewInput, Arc<pcbcraft_engine::board::ratsnest::Ratsnest>, Option<Arc<pcbcraft_engine::board::fill::Fill>>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
@@ -253,17 +259,21 @@ impl BoardState {
         &mut self,
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
+        include_ids: bool,
     ) -> Result<Arc<crate::board_appearance::Connectivity>, String> {
+        let fill = board.filled_zones().and_then(Result::ok);
         if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
+            && (!include_ids || cache.include_ids)
+            && cache.fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return Ok(cache.connectivity.clone());
         }
-        let (copper, nets) = board.copper_with_nets()?;
-        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
+        let pcbcraft_engine::board::track::CopperPresentation { copper, names, net_ids } = board.copper_presentation(include_ids)?;
+        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets: names, net_ids, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
-            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
+            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone(), include_ids, fill });
         Ok(connectivity)
     }
 
@@ -274,14 +284,16 @@ impl BoardState {
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
     ) -> Option<std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>> {
-        if let Some((previous, cached)) = &self.ratsnest_cache
+        let fill = board.filled_zones().and_then(Result::ok);
+        if let Some((previous, cached, previous_fill)) = &self.ratsnest_cache
             && Some(*previous) == source
             && cached.board == board.target
+            && previous_fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return Some(cached.clone());
         }
         let result = board.ratsnest().ok().map(std::sync::Arc::new);
-        self.ratsnest_cache = source.zip(result.clone());
+        self.ratsnest_cache = source.zip(result.clone()).map(|(input, ratsnest)| (input, ratsnest, fill));
         result
     }
 
@@ -303,6 +315,20 @@ impl BoardState {
         }
     }
 
+    /// Custom net colors are enabled by default, with per-view access to the layer palette.
+    pub(super) fn net_colors_visible(&self) -> bool {
+        !self.hidden_layers.contains(NET_COLORS_KEY)
+    }
+
+    /// Save the display toggle alongside the other per-view presentation settings.
+    pub(super) fn set_net_colors_visible(&mut self, visible: bool) {
+        if visible {
+            self.hidden_layers.remove(NET_COLORS_KEY);
+        } else {
+            self.hidden_layers.insert(NET_COLORS_KEY.into());
+        }
+    }
+
     /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
     /// Ratsnest visibility is independent of physical layer actions. Neither document revision
     /// nor saved files change, and unfinished drawing gestures expire.
@@ -310,7 +336,8 @@ impl BoardState {
         self.drawing.cancel();
         self.zones.cancel();
         self.tracks.cancel();
-        let overlays: Vec<_> = self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY)).cloned().collect();
+        let overlays: Vec<_> =
+            self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY | NET_COLORS_KEY)).cloned().collect();
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
         self.hidden_layers.extend(overlays);
     }
@@ -846,9 +873,8 @@ impl EditorView {
         {
             self.board.highlight_net = None;
         }
-        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
-            || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
-        {
+        let snapshot_changed = !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new));
+        if snapshot_changed || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet {
             self.sheet_snapshot = root.as_ref().and_then(|p| {
                 let target = self.sheet?;
                 if p.sheet_target() == target { Some(p.clone()) } else { p.for_sheet(target).map(std::sync::Arc::new) }
@@ -895,7 +921,14 @@ impl EditorView {
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();
             }
-            let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
+            let board = self.board.target.and_then(|target| project.board_view(target));
+            if snapshot_changed
+                && !self.filters.include_locked
+                && let Some(board) = board
+            {
+                self.filters.prune_locked_board_selection(board, &mut self.board);
+            }
+            let setup = board.and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board
                 .target
@@ -917,7 +950,7 @@ impl EditorView {
                 );
                 self.board.layer_defaults_applied = true;
             }
-            self.board.hidden_layers.retain(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY) || layers.contains(id));
+            self.board.hidden_layers.retain(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY | NET_COLORS_KEY) || layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup
                     .and_then(|setup| {

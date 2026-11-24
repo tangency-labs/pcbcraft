@@ -138,6 +138,7 @@ fn conflicting_pad_nets_use_the_rounded_contact_boundary_at_zero_clearance() {
                     )
                     .unwrap();
                 }
+                s.execute(crate::board::fill::REFILL_ZONES, &json!({})).unwrap();
                 for clearance_nm in [0, DEFAULT_CLEARANCE_NM] {
                     let report = view(&s).check_design(Rules { clearance_nm, ..Rules::default() });
                     assert_eq!(

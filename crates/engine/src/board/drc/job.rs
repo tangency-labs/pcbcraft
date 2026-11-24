@@ -29,6 +29,9 @@ pub struct CheckJob {
     found: Findings,
     courtyards: Vec<super::courtyard::Courtyard>,
     report: Option<Report>,
+    zone_worker: Option<super::super::fill::FillJob>,
+    zone_problems: Option<Vec<super::super::fill::Problem>>,
+    zone_fill: Option<std::sync::Arc<super::super::fill::Fill>>,
 }
 
 impl Session {
@@ -38,9 +41,11 @@ impl Session {
         self.validate_project_command(CHECK_DESIGN, params)?;
         let (view, effective) = self.design_check_inputs(params)?;
         let target = view.target;
+        let zone_worker = if view.zones().is_empty() || !view.zone_fill_enabled() { None } else { Some(self.prepare_zone_fill(target, false)?) };
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         Ok(CheckJob {
             source: CheckSource {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 opening: self.history_root_revision(),
@@ -61,11 +66,30 @@ impl Session {
             found: Findings::default(),
             courtyards: Vec::new(),
             report: None,
+            zone_worker,
+            zone_problems: None,
+            zone_fill: None,
         })
     }
 }
 
 impl CheckJob {
+    /// Capture analytic zone checking for an isolated browser worker. Remaining checker
+    /// phases continue incrementally after this result, without any foreground kernel call.
+    pub fn browser_zone_request(&mut self) -> Option<Result<String, String>> {
+        self.zone_worker.as_mut().map(|job| job.worker_request_with_diagnostics(Some(self.source.effective.values)))
+    }
+
+    /// Retain validated same-source material and diagnostics before resuming checking. A
+    /// calculation refusal becomes an unavailable-zone finding; malformed or stale input fails.
+    pub fn accept_browser_zones(&mut self, response: &str) -> Result<(), String> {
+        let job = self.zone_worker.as_mut().ok_or("No isolated checker zone work was requested.")?;
+        let (fill, problems) = job.accept_worker_diagnostics(response)?;
+        self.zone_fill = fill;
+        self.zone_problems = Some(problems);
+        Ok(())
+    }
+
     /// Captured source authority; a host must additionally validate its view/request generation.
     pub fn source(&self) -> &CheckSource {
         &self.source
@@ -162,7 +186,15 @@ impl CheckJob {
                 view.check_dimensions(rules, self.class_rules.as_ref(), &mut self.found);
                 if let Some(g) = &self.geometry {
                     view.check_slot_rings(&g.lands, rules, self.class_rules.as_ref(), &mut self.found);
-                    view.check_shorts(&g.lands, &g.members, &g.items, &mut self.found);
+                    if let Some(problems) = self.zone_problems.take() {
+                        BoardView::add_zone_problems(problems, &mut self.found);
+                    } else {
+                        let (fill, problems) = super::super::fill::diagnostics_with_fill(view, g, rules);
+                        self.zone_fill = fill;
+                        BoardView::add_zone_problems(problems, &mut self.found);
+                    }
+                    let members = self.zone_fill.as_ref().map_or(&g.members, |fill| &fill.members);
+                    view.check_shorts(&g.lands, members, &g.items, &mut self.found);
                 }
             }
             5 => {
@@ -195,7 +227,8 @@ impl CheckJob {
                 self.clearance_walk = None;
             }
             6 => {
-                if let Ok(r) = view.ratsnest_with_copper(&self.copper) {
+                let copper = self.zone_fill.as_ref().map_or(&self.copper, |fill| &fill.copper);
+                if let Ok(r) = view.ratsnest_with_copper(copper) {
                     for l in r.lines {
                         self.found.push(Violation {
                             kind: Kind::Unconnected,

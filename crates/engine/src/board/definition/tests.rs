@@ -280,7 +280,7 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     let board = original.board_view(target).unwrap();
     assert!(board.ratsnest().unwrap().lines.is_empty());
     assert_eq!(board.footprints().next().unwrap().pads.len(), 2);
-    assert!(board.fabrication_outputs().unwrap_err().contains("does not yet support non-plated holes"));
+    assert!(board.fabrication_outputs().unwrap_err().contains("Draw a closed Board Outline"));
     let query = s.clearance_query(target, 0).unwrap();
     let obstacles: Vec<_> = query.objects().iter().enumerate().filter(|(_, item)| item.mechanical).collect();
     assert_eq!(obstacles.len(), 2);
@@ -685,4 +685,44 @@ fn compound_replacement_rejects_zero_clearance_hole_tangency() {
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &before));
     s.apply(crate::ADD_TRACKS, &params(6_725_001)).unwrap();
     assert_eq!(s.revision(), revision + 1);
+}
+
+#[test]
+fn zone_fill_clears_non_plated_openings_without_electrical_contact() {
+    use crate::board::{
+        drc, fill,
+        track::tests::{copper_layers, view},
+        zones::Options,
+    };
+
+    let mut s = mounting_route_fixture(true);
+    drc::tests::outline(&mut s);
+    let v = view(&s);
+    let footprint = v.footprints().next().unwrap();
+    let hole = footprint.non_plated_holes[0];
+    let target = v.net_class_target_for_copper(&format!("{}:2", footprint.id)).unwrap().unwrap();
+    let bounds = [[-5_000_000, -5_000_000], [25_000_000, -5_000_000], [25_000_000, 35_000_000], [-5_000_000, 35_000_000]]
+        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
+    for layer in copper_layers(&s) {
+        s.apply(
+            crate::board::zones::ADD_ZONE,
+            &json!({"layer":layer,"target":target,"points":bounds,
+            "options":Options{connection:crate::board::zones::Connection::Solid,..Options::default()},
+            "expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    let v = view(&s);
+    let result = fill::compute(v).unwrap();
+    assert_eq!(result.zones.len(), 2);
+    let clearance = v.effective_rules().values.clearance_nm;
+    let edge = hole.center.x_nm + hole.diameter_nm / 2 + clearance;
+    let conductor_count = result.copper.pads.len() + result.copper.tracks.len() + result.copper.vias.len();
+    for zone in &result.zones {
+        assert_eq!(zone.islands.len(), 1);
+        let island = &zone.islands[0];
+        assert!(island.contacts.iter().all(|i| *i < conductor_count));
+        assert_eq!(island.region.contains([edge - 10_000, hole.center.y_nm]).unwrap(), Some(false));
+        assert_eq!(island.region.contains([edge + 10_000, hole.center.y_nm]).unwrap(), Some(true));
+    }
 }

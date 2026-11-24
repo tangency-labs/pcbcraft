@@ -4,6 +4,7 @@ use egui_kittest::{Harness, kittest::Queryable};
 
 #[cfg(target_os = "linux")]
 mod native;
+mod window_size;
 
 /// Use the ordinary resistor fixture and an explicitly enabled local endpoint.
 fn ready() -> Harness<'static, PcbApp> {

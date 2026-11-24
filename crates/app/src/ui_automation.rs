@@ -13,6 +13,7 @@ use crate::{PcbApp, ViewId, editor_layout::HostId, editor_windows::viewport};
 
 #[cfg(test)]
 mod tests;
+mod window;
 
 const SCHEMA: &str = "pcbcraft-ui/1";
 
@@ -64,6 +65,7 @@ struct Snapshot {
     canvases: Vec<Canvas>,
     /// Popup, menu, window and tooltip areas painted over the editor background.
     overlays: Vec<Rect>,
+    window: window::Measured,
 }
 
 /// The painted mapping and layers a coordinate press was admitted against.
@@ -113,7 +115,8 @@ pub(super) struct Automation {
     injected: Option<(egui::ViewportId, Vec<Event>, bool)>,
     /// Input already entered egui on this pass; cancel it after that pass, rather than clearing
     /// a gesture before the same pass can recreate it from its pending button press.
-    cancel_after_paint: bool,
+    cancel_after_paint: Option<&'static str>,
+    resizes: BTreeMap<HostId, window::Resize>,
 }
 
 #[derive(Deserialize)]
@@ -281,7 +284,7 @@ impl Automation {
 
     /// Retain a failure and schedule an off-window button release, which cannot activate a control.
     fn cancel(&mut self, reason: &str) {
-        self.cancel_after_paint = false;
+        self.cancel_after_paint = None;
         if let Some(job) = self.job.take() {
             self.release = Some((job.host, job.held.map(|(button, _)| button), job.restore));
             self.last = json!({"ticket":job.ticket,"state":"cancelled","reason":reason});
@@ -347,9 +350,24 @@ impl PcbApp {
     }
 
     /// Whether this host still matches its last snapshot: the same input destination and the
-    /// same canvas mappings. Navigation since the paint makes its coordinates stale.
+    /// same canvas mappings. Navigation or a pending resize makes its coordinates stale.
     fn automation_current(&self, host: HostId, snapshot: &Snapshot) -> bool {
-        self.automation_authority(host).as_ref() == Some(&snapshot.authority) && self.automation_canvases(host) == snapshot.canvases
+        self.automation_authority(host).as_ref() == Some(&snapshot.authority)
+            && self.automation_canvases(host) == snapshot.canvases
+            && !self.automation.resize_pending(host)
+    }
+
+    /// Cancel queued input now, or after the pass that already received its events.
+    fn automation_cancel(&mut self, reason: &'static str) {
+        if self.automation.job.as_ref().is_some_and(|job| job.issued) {
+            self.automation.cancel_after_paint = Some(reason);
+        } else {
+            let owned = self.automation.owns_pointer_gesture();
+            self.automation.cancel(reason);
+            if owned {
+                self.views.cancel_gestures();
+            }
+        }
     }
 
     /// Project a model point in an explicitly addressed view to window-local logical points
@@ -406,9 +424,11 @@ impl PcbApp {
         }
         let host = self.views.host;
         let released = self.automation.injected.as_ref().is_some_and(|(id, _, releasing)| *id == viewport(host) && *releasing);
-        if self.automation.cancel_after_paint && self.automation.job.as_ref().is_some_and(|job| job.host == host) {
+        if let Some(reason) = self.automation.cancel_after_paint
+            && self.automation.job.as_ref().is_some_and(|job| job.host == host)
+        {
             let owned = self.automation.owns_pointer_gesture();
-            self.automation.cancel("Cancelled by client after the in-flight UI pass");
+            self.automation.cancel(&format!("{reason} after the in-flight UI pass"));
             if owned {
                 self.views.cancel_gestures();
             }
@@ -430,6 +450,7 @@ impl PcbApp {
                 .filter_map(|layer| memory.area_rect(layer.id))
                 .collect()
         });
+        let window = self.automation_measure(ctx, host);
         let changed =
             self.automation.snapshots.get(&host).is_none_or(|s| {
                 s.rect != rect || s.targets != targets || s.authority != authority || s.canvases != canvases || s.overlays != overlays
@@ -450,6 +471,7 @@ impl PcbApp {
                 authority: authority.clone(),
                 canvases,
                 overlays,
+                window,
             },
         );
         if let Some(job) = &mut self.automation.job
@@ -486,15 +508,7 @@ impl PcbApp {
                 return Err(format!("{id} takes no parameters"));
             }
             if id == "ui.cancel" {
-                if self.automation.job.as_ref().is_some_and(|job| job.issued) {
-                    self.automation.cancel_after_paint = true;
-                } else {
-                    let owned = self.automation.owns_pointer_gesture();
-                    self.automation.cancel("Cancelled by client");
-                    if owned {
-                        self.views.cancel_gestures();
-                    }
-                }
+                self.automation_cancel("Cancelled by client");
             }
             self.repaint_editors(ctx);
             return Ok(
@@ -503,6 +517,9 @@ impl PcbApp {
         }
         if id == "ui.project" {
             return self.automation_project(ctx, params);
+        }
+        if matches!(id, "ui.window" | "ui.resize") {
+            return self.automation_window(ctx, id, params);
         }
         if matches!(id, "ui.handles" | "ui.at") {
             let allowed: &[&str] = if id == "ui.at" { &["window", "handle"] } else { &["window", "prefix"] };
@@ -852,6 +869,8 @@ pub(super) fn catalog() -> Vec<Value> {
         ("cancel","Cancel queued UI input",json!({}),vec![]),
         ("handles","List visible named controls in one window",json!({"window":{"type":"integer"},"prefix":{"type":"string"}}),vec!["window"]),
         ("at","Locate one unique enabled control",json!({"window":{"type":"integer"},"handle":{"type":"string"}}),vec!["window","handle"]),
+        ("window","Measure one native window",json!({"window":{"type":"integer"}}),vec!["window"]),
+        ("resize","Request a native window's client size",json!({"window":{"type":"integer"},"width":{"type":"number"},"height":{"type":"number"}}),vec!["window","width","height"]),
         ("project","Project a model point in a view to window coordinates",json!({"view":{"type":"integer"},"at":{"type":"object","properties":{"x_nm":coordinate,"y_nm":coordinate},"required":["x_nm","y_nm"],"additionalProperties":false}}),vec!["view","at"]),
         ("move","Move the pointer through ordinary UI input",json!({"target":point}),vec!["target"]),
         ("click","Click through ordinary UI input",json!({"target":point,"button":button,"modifiers":keys}),vec!["target"]),
@@ -860,7 +879,7 @@ pub(super) fn catalog() -> Vec<Value> {
         ("text","Type text into the focused field",json!({"text":{"type":"string","minLength":1,"maxLength":4096}}),vec!["text"]),
         ("scroll","Scroll at a named target or logical point",json!({"target":point,"delta_x":{"type":"number"},"delta_y":{"type":"number"},"modifiers":keys}),vec!["target","delta_x","delta_y"]),
     ].into_iter().map(|(name,title,mut properties,mut required)| {
-        if !matches!(name,"inspect"|"cancel"|"handles"|"at"|"project") { properties["window"]=json!({"type":"integer"});properties["layout"]=json!({"type":"integer"});required.push("window"); }
+        if matches!(name,"move"|"click"|"drag"|"key"|"text"|"scroll") { properties["window"]=json!({"type":"integer"});properties["layout"]=json!({"type":"integer"});required.push("window"); }
         json!({"id":format!("ui.{name}"),"title":title,"summary":format!("{title}. Native live editor only. Input returns a ticket; poll ui.inspect until completed before sending more input. Coordinates are window-local logical points."),
             "scope":"window","params":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()

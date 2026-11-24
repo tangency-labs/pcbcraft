@@ -7,7 +7,7 @@ use crate::{
     CommandError, Project, Session,
     board::{
         clearance::{BoardGeometry, ClearanceQuery, ObstacleId, Overlay},
-        drc::{self, Outline},
+        drc::Outline,
         geometry::Contour,
         view::{BoardTarget, BoardView},
         work::Source,
@@ -149,7 +149,7 @@ impl<'a> Evaluator<'a> {
         }
         let values = board.effective_rules().values;
         let required_nm = probe.probe_rules.as_ref().map_or(values, |rules| rules.hard_values(values)).edge_clearance_nm;
-        let outside = !drc::contains(&self.outline.polygons, &shape);
+        let outside = !self.outline.contains(&shape);
         let (drawing, actual_nm, crosses) = self
             .outline
             .blocking_edge(&shape, outside)

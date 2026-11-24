@@ -1087,6 +1087,7 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from,
         layout: None,
         circuit_use: None,
