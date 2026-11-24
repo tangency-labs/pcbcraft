@@ -16,7 +16,8 @@ zone markers and a title block. The title block shows parameter values such as
 ## Current state
 
 - Sheets have paper (PR 1): a size, orientation and top-left corner, stored as
-  sheet/9. The schematic range stays ±1 m around the origin (`MAX_CENTER_NM` in
+  the [native sheet document](../formats/native-project-storage.md#sheet-paper-records).
+  The schematic range stays ±1 m around the origin (`MAX_CENTER_NM` in
   `crates/engine/src/schematic.rs`), and paper must fit inside it.
 - Sheets have a frame (PR 3): the page record names a template by library, name
   and revision, or none for a plain border 5 mm inside the edge. New sheets and
@@ -104,8 +105,9 @@ the value, and **New** adds an empty parameter by name.
 ## Storage sketch
 
 The `page` record, including the `template` reference, and both `parameters`
-objects are final as of sheet/9 and project/22. The template document schema is
-final for bundled templates; project template copies are still a sketch.
+objects follow the [native storage contract](../formats/native-project-storage.md#parameter-records).
+The template document schema is final for bundled templates. Project template copies
+remain a proposal.
 Coordinates are in nanometres, like the rest of the format.
 
 ```jsonc

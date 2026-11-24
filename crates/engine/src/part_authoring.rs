@@ -3,7 +3,7 @@ use crate::{
     authoring::publishing::{self, Publication},
     board::definition::Source,
     library::{
-        parts::{ManufacturerPart, PartDefinition, Reference},
+        parts::{CURRENT_PART_FORMAT, ManufacturerPart, PartDefinition, Reference},
         sources::{Catalog, Documents, Kind, MAX_FILE_BYTES, NativeSource},
     },
 };
@@ -22,7 +22,7 @@ impl Record {
     /// Create a generic draft with an optional exact symbol; geometry can be associated later.
     pub fn new_part(symbol: impl Into<Option<Reference>>) -> Result<Self, String> {
         Ok(Self::Part(PartDefinition {
-            format: crate::library::parts::PART_FORMAT.into(),
+            format: CURRENT_PART_FORMAT.into(),
             library: "user".into(),
             id: format!("part-{}", new_identity()?),
             revision: 1,
@@ -105,10 +105,10 @@ impl Record {
         }
         Ok(())
     }
-    /// Keep session drafts and the publication preview on the same lazy native envelope.
-    fn select_format(&mut self) {
+    /// Use the current native format for newly authored generic parts.
+    fn use_current_format(&mut self) {
         if let Self::Part(part) = self {
-            part.select_format();
+            part.format = CURRENT_PART_FORMAT.into();
         }
     }
     /// A derivative retains the original record's licence and portable provenance.
@@ -117,6 +117,7 @@ impl Record {
         let reference = self.reference();
         let address = Reference { library: "user".into(), id: format!("part-{}", new_identity()?), revision: 1 };
         copy.rebind(&address);
+        copy.use_current_format();
         let source = match &mut copy {
             Self::Part(p) => &mut p.source,
             Self::Orderable(p) => &mut p.source,
@@ -175,7 +176,7 @@ impl Session {
     /// Admit a bounded draft or already published record without allocating a content revision.
     pub fn new(mut record: Record, published: bool) -> Result<Self, String> {
         if !published {
-            record.select_format();
+            record.use_current_format();
         }
         record.bounded()?;
         Ok(Self { saved: published.then(|| record.clone()), record, revision: 1, undo: Vec::new(), redo: Vec::new() })
@@ -211,7 +212,10 @@ impl Session {
             }
             require_supply_range_reentry(new)?;
         }
-        record.select_format();
+        if record == self.record {
+            return Ok(());
+        }
+        record.use_current_format();
         record.bounded()?;
         if record == self.record {
             return Ok(());
@@ -270,6 +274,7 @@ impl Session {
         };
         for record in self.undo.iter_mut().chain(self.redo.iter_mut()).chain(std::iter::once(&mut self.record)) {
             record.rebind(&address);
+            record.use_current_format();
             let source = match record {
                 Record::Part(p) => &mut p.source,
                 Record::Orderable(p) => &mut p.source,
@@ -348,7 +353,7 @@ pub fn prepare_record(
     let mut published = if copy { record.copy()? } else { record.clone() };
     let next = if copy { 1 } else { latest.checked_add(1).ok_or("Library revision limit reached.")? };
     published.rebind(&Reference { library, id: published.reference().id, revision: next });
-    published.select_format();
+    published.use_current_format();
     published.validate(catalog)?;
     let (directory, text) = match &published {
         Record::Part(p) => ("parts", p.encode()?),
@@ -394,6 +399,7 @@ impl Record {
         if !changed {
             return Err("The part does not reference this exact earlier definition.".into());
         }
+        part.format = CURRENT_PART_FORMAT.into();
         Ok(Self::Part(part))
     }
 }
@@ -494,7 +500,6 @@ impl Record {
                         package.unconnected_pads.clear();
                     }
                 }
-                p.select_format();
             }
             (Self::Part(p), ReferenceField::Category, r) => {
                 p.category = r.map(|definition| crate::library::parts::CategoryBinding { definition, primary_value: None });
@@ -525,6 +530,7 @@ impl Record {
             }
             _ => return Err("This reference field does not belong to the part document.".into()),
         }
+        candidate.use_current_format();
         candidate.bounded()?;
         Ok(candidate)
     }

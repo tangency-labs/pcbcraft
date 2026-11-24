@@ -213,7 +213,16 @@ fn authored_electrical_intent_reference_survives_first_board_adoption() {
 const CURRENT: &str = crate::persistence::CURRENT_PROJECT_FORMAT;
 
 /// The reader's refusal of intent records under an older project header.
-const INTENT_REFUSAL: &str = "Authored electrical intent requires pcbcraft-project/61";
+const INTENT_REFUSAL: &str = "Authored electrical intent requires";
+
+/// Change both headers together so the older board layout reaches the intent check.
+fn older_headers(docs: &Documents, instances_path: Option<&str>, project_format: &str, instances_format: &str) -> Documents {
+    let older = altered(docs, ENTRY_POINT, |v| v["format"] = json!(project_format));
+    match instances_path {
+        Some(path) => altered(&older, path, |v| v["format"] = json!(instances_format)),
+        None => older,
+    }
+}
 
 /// Read a production-encoded split document without manufacturing a fixture by hand.
 fn document(docs: &Documents, path: &str) -> Value {
@@ -262,11 +271,11 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         let net_only = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(document(&net_only, ENTRY_POINT)["format"], CURRENT);
         assert_eq!(document(&net_only, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/1");
-        let old_header = altered(&net_only, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/23"));
+        let old_header = older_headers(&net_only, board.then_some(path.as_str()), "pcbcraft-project/23", "pcbcraft-instances/4");
         refused(&old_header, INTENT_REFUSAL);
         if board {
             assert_eq!(document(&net_only, &path)["format"], document(&old, &path)["format"]);
-            refused(&altered(&net_only, &path, |v| v["format"] = json!("pcbcraft-instances/10")), "unsupported instances format");
+            refused(&altered(&net_only, &path, |v| v["format"] = json!("pcbcraft-instances/9")), "unsupported instances format");
         }
         assert_eq!(encode_documents(decode_documents(&net_only).unwrap()).unwrap(), net_only);
         let clear = request(&session, &net_target, &json!({}));
@@ -315,7 +324,7 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
             assert_eq!(class_only[&path], old[&path]);
         }
         assert_eq!(document(&class_only, ENTRY_POINT)["format"], CURRENT);
-        refused(&altered(&class_only, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/23")), INTENT_REFUSAL);
+        refused(&older_headers(&class_only, board.then_some(path.as_str()), "pcbcraft-project/23", "pcbcraft-instances/4"), INTENT_REFUSAL);
         assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
         let clear = request(&session, &class_target, &json!({}));
         session.apply(SET, &clear).unwrap();
@@ -417,8 +426,8 @@ fn authored_electrical_intent_composes_with_profiles_and_memberships() {
     }
 }
 
-/// Intent composes with stored differential pairs on the highest current instance header:
-/// net and class intent keep instances/8 and the pair list, the older pair-only project header
+/// Intent composes with stored differential pairs under the current instance header:
+/// net and class intent keep that header and the pair list, the older pair-only project header
 /// refuses the records, and clearing the last value restores the exact pair-envelope bytes.
 #[test]
 fn authored_electrical_intent_composes_with_differential_pairs() {
@@ -454,9 +463,9 @@ fn authored_electrical_intent_composes_with_differential_pairs() {
         assert_eq!(document(&changed, ENTRY_POINT)["format"], CURRENT);
         assert_eq!(pairs(&changed), pairs(&old));
         if let Some(path) = &path {
-            assert_eq!(document(&changed, path)["format"], "pcbcraft-instances/8");
+            assert_eq!(document(&changed, path)["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
         }
-        let pair_header = altered(&changed, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/45"));
+        let pair_header = older_headers(&changed, path.as_deref(), "pcbcraft-project/45", "pcbcraft-instances/8");
         refused(&pair_header, INTENT_REFUSAL);
         assert_eq!(encode_documents(decode_documents(&changed).unwrap()).unwrap(), changed);
         let clear = request(&session, &target, &json!({}));
@@ -473,7 +482,7 @@ fn authored_electrical_intent_composes_with_differential_pairs() {
         assert_eq!(pairs(&class_only), pairs(&old));
         if let Some(path) = &path {
             assert_eq!(class_only[path], old[path]);
-            assert_eq!(document(&class_only, path)["format"], "pcbcraft-instances/8");
+            assert_eq!(document(&class_only, path)["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
         }
         assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
     }
@@ -507,10 +516,11 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         let entry = document(&both, ENTRY_POINT);
         assert_eq!(entry["format"], CURRENT);
         assert_eq!(entry["components"][0]["designator_locked"], true);
-        if let Some(path) = session.project().unwrap().instances_document_path() {
-            assert_eq!(document(&both, &path)["format"], document(&locks_only, &path)["format"]);
+        let path = session.project().unwrap().instances_document_path();
+        if let Some(path) = &path {
+            assert_eq!(document(&both, path)["format"], document(&locks_only, path)["format"]);
         }
-        let lock_header = altered(&both, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/51"));
+        let lock_header = older_headers(&both, path.as_deref(), "pcbcraft-project/51", "pcbcraft-instances/4");
         refused(&lock_header, INTENT_REFUSAL);
 
         let reopened = decode_documents(&both).unwrap();

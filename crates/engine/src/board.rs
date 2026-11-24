@@ -35,6 +35,7 @@ pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+pub mod output_recipe;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
@@ -508,6 +509,7 @@ impl Board {
 
     /// Distinguish physically eligible desired intent from accepted packages;
     /// excluded live choices remain authored without requiring a physical update.
+    #[cfg(test)]
     pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
         self.baseline.as_ref().is_some_and(|baseline| {
             self.assignments

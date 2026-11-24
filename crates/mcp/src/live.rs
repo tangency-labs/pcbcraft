@@ -248,16 +248,17 @@ pub fn check_deferred_version(id: &str, params: &Value) -> Result<(), Failure> {
 /// Form the successful live reply; keep existing execution results intact and add warnings only
 /// when used. The legacy catalog array is also unchanged; its API metadata travels beside it.
 pub fn success_reply(request: &Value, result: Value) -> Value {
-    let mut reply = json!({"result": result});
+    let mut reply = serde_json::Map::with_capacity(2);
+    reply.insert("result".into(), result);
     if request["method"] == "engine.execute" {
         let warnings = execute_warnings(&request["params"], DEPRECATIONS);
         if !warnings.is_empty() {
-            reply["warnings"] = Value::Array(warnings);
+            reply.insert("warnings".into(), Value::Array(warnings));
         }
     } else if request["method"] == "engine.commands" {
-        reply["command_api"] = api_metadata(COMMAND_API_VERSION);
+        reply.insert("command_api".into(), api_metadata(COMMAND_API_VERSION));
     }
-    reply
+    Value::Object(reply)
 }
 
 /// Unknown commands keep the window or UI handler's own refusal.

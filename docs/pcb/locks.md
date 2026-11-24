@@ -2,14 +2,11 @@
 
 ## Placed-footprint locks
 
-Placed footprints retain an optional `locked` flag in native board format 34,
-35 when the board also contains arcs, or 37 when it contains straight-via
-teardrops. Inspection and typed board views report a boolean, defaulting to
-false for older files. Fresh canonical encoding omits
-false and preserves true; Native Save can reuse an unchanged board document
-verbatim, including explicit false. Without active locks the encoder chooses
-the format required by the remaining board data. Reports are optional in all
-three formats.
+Placed footprints use an optional `locked` flag in
+[board format 42](../formats/native-project-storage.md#current-board-records).
+Inspection and typed views report a boolean, defaulting to false when the flag
+is absent. Canonical saves omit false. Clearing the last lock leaves the same
+board header.
 
 A locked footprint remains selectable and inspectable. The shared move, rotate,
 flip, align/distribute and delete commands protect existing locks. A selection
@@ -53,11 +50,8 @@ track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
 Copy, duplicate and paste preserve lock flags while assigning new identities
 and the requested new positions to copies. Existing source objects remain
 protected. Cut refuses a selection containing locked copper. Native folder and
-archive saves preserve copper locks; board format 18 (or a later extension
-required by other content) and board-kind clipboard format 3 (or format 4 with
-explicit via assignments) carry them. Older readers refuse these extensions.
-Canonical boards and fragments without copper locks use the formats required by
-their other content. Clearing the last copper lock leaves those requirements in
-force. Inspection exposes
+archive saves preserve copper locks in board format 42. Board-kind clipboard
+format 3, or format 4 with explicit via assignments, also carries them.
+Clearing the last copper lock keeps the board format current. Inspection exposes
 an explicit `locked` boolean for every track and via, and typed board snapshots
 carry it for later walkaround/shove consumers. No routing solver is added here.

@@ -36,22 +36,41 @@ impl Project {
     /// current class target. Foreign/missing endpoints fail; bare pins and free wire groups
     /// return None. The read neither allocates identities nor changes history or saved bytes.
     pub fn net_class_target_for_endpoint(&self, sheet: SheetTarget, selected: WireEndpoint) -> Result<Option<ClassTarget>, CommandError> {
+        self.net_class_targets_for_endpoints(sheet, [selected]).map(|mut targets| targets.pop().flatten())
+    }
+
+    /// Resolve selected wire and label endpoints together using one graph for the entire sheet selection.
+    pub fn net_class_targets_for_endpoints(
+        &self,
+        sheet: SheetTarget,
+        selected: impl IntoIterator<Item = WireEndpoint>,
+    ) -> Result<Vec<Option<ClassTarget>>, CommandError> {
         let own = self.for_sheet(sheet).ok_or_else(|| CommandError::NotFound("Unknown selection sheet.".into()))?;
-        if own.endpoint_position(selected).is_none() {
-            return Err(CommandError::NotFound("Unknown or foreign selected endpoint.".into()));
-        }
         let graph = Graph::build(self).map_err(CommandError::InvalidParams)?;
-        if let Some(anchor) = graph.endpoint_anchor(sheet, selected) {
-            return target(&graph, graph.network(anchor).into_iter().collect());
-        }
-        let electrical = self.electrical_connectivity();
-        let Some(net) = electrical.net_index_for_endpoint(selected) else { return Ok(None) };
-        let indices = graph
-            .by_anchor
-            .iter()
-            .filter_map(|(anchor, index)| (electrical.net_index_for_endpoint(endpoint(self, anchor)?) == Some(net)).then_some(*index))
-            .collect();
-        target(&graph, indices)
+        let junctions = std::cell::OnceCell::new();
+        selected
+            .into_iter()
+            .map(|selected| {
+                if own.endpoint_position(selected).is_none() {
+                    return Err(CommandError::NotFound("Unknown or foreign selected endpoint.".into()));
+                }
+                if let Some(anchor) = graph.endpoint_anchor(sheet, selected) {
+                    return target(&graph, graph.network(anchor).into_iter().collect());
+                }
+                let (electrical, by_net) = junctions.get_or_init(|| {
+                    let electrical = self.electrical_connectivity();
+                    let mut by_net = BTreeMap::<_, BTreeSet<_>>::new();
+                    for (anchor, index) in &graph.by_anchor {
+                        if let Some(net) = endpoint(self, anchor).and_then(|endpoint| electrical.net_index_for_endpoint(endpoint)) {
+                            by_net.entry(net).or_default().insert(*index);
+                        }
+                    }
+                    (electrical, by_net)
+                });
+                let indices = electrical.net_index_for_endpoint(selected).and_then(|net| by_net.get(&net));
+                target(&graph, indices.cloned().unwrap_or_default())
+            })
+            .collect()
     }
 
     /// Convert one accepted physical membership into current logical authority. Pending splits

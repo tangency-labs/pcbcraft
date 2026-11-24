@@ -31,7 +31,9 @@ fn assignment_and_placement_are_independent_offline_transactions() {
     s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
     assert!(s.project().unwrap().board.footprints().is_empty());
     let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&assigned[&crate::persistence::test_board_path(&assigned)]).unwrap().contains("pcbcraft-board/7"));
+    assert!(
+        std::str::from_utf8(&assigned[&crate::persistence::test_board_path(&assigned)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT)
+    );
     assert_eq!(encode_documents(decode_documents(&assigned).unwrap()).unwrap(), assigned);
     let mut encoder = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
     let mut steps = 0;

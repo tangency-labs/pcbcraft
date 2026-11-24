@@ -134,10 +134,8 @@ edits rather than reusing the example's number.
 The current project format stores the catalog with optional bindings,
 parameters, generated numbers, part groups, profiles, pairs, locks and authored
 electrical intent.
-Board-owned bindings use
-instances/3, instances/4 with generated numbers, instances/5 or /7 with group
-memberships, or instances/8 with pairs. The nonempty `net_classes` record is stored in `project.json`,
-with definitions sorted by UUID
+Board-owned bindings use the [current instance format](native-project-storage.md#board-instance-records).
+The nonempty `net_classes` record is stored in `project.json`, with definitions sorted by UUID
 and one definition per line. It extends the existing folder/occurrence vocabulary
 and permits the supported optional no-connect and persistent-net records
 together. Physical board, sheet, archive and library formats are unchanged.
