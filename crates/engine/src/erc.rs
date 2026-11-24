@@ -113,7 +113,7 @@ pub enum Status {
 
 impl Report {
     /// Current only for the same project at the same revision. Session revisions never repeat,
-    /// so an edit, Undo or Redo after the run always makes it stale.
+    /// so a project edit, Undo or Redo after the run always makes it stale.
     pub fn status(&self, project: uuid::Uuid, revision: u64) -> Status {
         if self.project == project && self.revision == revision { Status::Current } else { Status::Stale }
     }
