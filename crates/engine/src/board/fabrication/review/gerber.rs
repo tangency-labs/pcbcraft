@@ -93,8 +93,11 @@ impl Plot {
                 let value = r.strip_prefix("%TF.SameCoordinates,").and_then(|s| s.strip_suffix("*%")).ok_or("Invalid Gerber coordinate frame")?;
                 self.frame = Some(CoordinateFrame::parse(value)?);
             }
-            "%TF.FilePolarity,Positive*%" => self.polarity = Some(true),
-            "%TF.FilePolarity,Negative*%" => self.polarity = Some(false),
+            "%TF.FilePolarity,Positive*%" | "%TF.FilePolarity,Negative*%" => {
+                if self.polarity.replace(record == "%TF.FilePolarity,Positive*%").is_some() {
+                    return Err("Duplicate Gerber file polarity".into());
+                }
+            }
             "G36*" if self.region.is_none() && self.ready() => self.region = Some(Vec::new()),
             "G37*" => {
                 let mut vertices = self.region.take().ok_or("No open region")?;
@@ -107,7 +110,11 @@ impl Plot {
                 }
             }
             r if r.starts_with("G04") && r.strip_suffix('*').is_some_and(|comment| !comment.contains('*')) => {}
-            r if r.starts_with("%TF.FileFunction,") => self.role = Some(role(r)?),
+            r if r.starts_with("%TF.FileFunction,") => {
+                if self.role.replace(role(r)?).is_some() {
+                    return Err("Duplicate Gerber file function".into());
+                }
+            }
             r if ["%TF.GenerationSoftware,", "%TA.", "%TO.", "%TD"].iter().any(|prefix| r.starts_with(prefix))
                 && r[1..].strip_suffix("*%").is_some_and(|attribute| !attribute.contains(['*', '%'])) => {}
             r if r.starts_with("%ADD") => {
@@ -268,8 +275,8 @@ fn turn(a: Point, b: Point, c: Point) -> i128 {
     i128::from(b.x_nm - a.x_nm) * i128::from(c.y_nm - a.y_nm) - i128::from(b.y_nm - a.y_nm) * i128::from(c.x_nm - a.x_nm)
 }
 
-/// Split short regions into convex triangles after removing duplicate and collinear vertices.
-/// Accept collinear collapsed pads, and reject non-collinear contours whose signed areas cancel.
+/// Clip short regions into convex triangles after checking their edges.
+/// Accept collinear collapsed pads, and reject crossings or non-collinear zero-area contours.
 fn triangulate(mut points: Vec<Point>) -> Result<Vec<[Point; 3]>, String> {
     let area: i128 = points.iter().zip(points.iter().cycle().skip(1)).map(|(&a, &b)| turn(point(0, 0), a, b)).sum();
     if area == 0 {
@@ -284,6 +291,9 @@ fn triangulate(mut points: Vec<Point>) -> Result<Vec<[Point; 3]>, String> {
         points.reverse();
     }
     points.dedup();
+    if crosses_itself(&points) {
+        return Err("Gerber region has crossing edges".into());
+    }
     let mut triangles = Vec::new();
     while points.len() >= 3 {
         let len = points.len();
@@ -309,4 +319,20 @@ fn triangulate(mut points: Vec<Point>) -> Result<Vec<[Point; 3]>, String> {
         points.remove(index);
     }
     Ok(triangles)
+}
+
+/// Compare each pair of nonconsecutive edges in a short closed contour.
+/// Strictly opposite turns on both edges detect crossings between their interiors.
+fn crosses_itself(points: &[Point]) -> bool {
+    let edges = points.iter().copied().zip(points.iter().copied().cycle().skip(1));
+    for (index, (a, b)) in edges.clone().enumerate() {
+        if edges
+            .clone()
+            .skip(index + 2)
+            .any(|(c, d)| turn(a, b, c).signum() * turn(a, b, d).signum() < 0 && turn(c, d, a).signum() * turn(c, d, b).signum() < 0)
+        {
+            return true;
+        }
+    }
+    false
 }

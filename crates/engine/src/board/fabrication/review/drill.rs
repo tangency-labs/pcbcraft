@@ -2,8 +2,8 @@ use super::{CoordinateFrame, Layer, LayerRole, Mark, Tool, add, decimal, xy};
 use std::collections::BTreeMap;
 
 /// Read the writer's absolute metric Excellon drill hits and tool declarations.
-/// Require one plating declaration and reject motion modes that could imply routing or slots.
-/// A legacy drill file has no coordinate frame identifier.
+/// Require one TYPE declaration and agreement with any XNC file function.
+/// Legacy files lack XNC attributes. Motion modes for routing or slots are unsupported.
 pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateFrame), String> {
     let mut lines = text.lines();
     if lines.next() != Some("M48") {
@@ -11,12 +11,19 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateF
     }
     let (mut role, mut format, mut metric) = (None, false, false);
     let mut frame = None;
+    let mut function = None;
     let mut tools = BTreeMap::<u32, Tool>::new();
     loop {
         let record = lines.next().ok_or("Incomplete Excellon header")?;
         if let Some(value) = record.strip_prefix("; #@! TF.SameCoordinates,") {
             if frame.replace(CoordinateFrame::parse(value)?).is_some() {
                 return Err("Duplicate drill coordinate frame declaration".into());
+            }
+            continue;
+        }
+        if let Some(value) = record.strip_prefix("; #@! TF.FileFunction,") {
+            if function.replace(file_function(value)?).is_some() {
+                return Err("Duplicate XNC drill file function".into());
             }
             continue;
         }
@@ -37,6 +44,10 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateF
                 }
             }
         }
+    }
+    let role = role.ok_or("Drill plating is unspecified")?;
+    if function.is_some_and(|function| function != role) {
+        return Err("XNC drill file function disagrees with the TYPE plating declaration".into());
     }
     if !format || !metric || lines.next() != Some("G90") || lines.next() != Some("G05") {
         return Err("Expected absolute metric coordinates in drill mode".into());
@@ -64,6 +75,22 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateF
     if lines.any(|line| !line.trim().is_empty()) {
         return Err("Unexpected records after Excellon end".into());
     }
-    let layer = Layer { name: String::new(), role: role.ok_or("Drill plating is unspecified")?, marks, tools: tools.into_values().collect() };
+    let layer = Layer { name: String::new(), role, marks, tools: tools.into_values().collect() };
     Ok((layer, frame.unwrap_or(CoordinateFrame::Legacy)))
+}
+
+/// Recognize the writer's round through-hole file functions, including the copper layer span.
+fn file_function(value: &str) -> Result<LayerRole, String> {
+    let fields: Vec<_> = value.splitn(5, ',').collect();
+    let [plating, "1", last, kind] = fields.as_slice() else {
+        return Err("Unsupported XNC drill file function".into());
+    };
+    if !last.parse::<u8>().is_ok_and(|layer| (1..=64).contains(&layer)) {
+        return Err("Invalid XNC drill file function layer span".into());
+    }
+    match (*plating, *kind) {
+        ("Plated", "PTH") => Ok(LayerRole::PlatedDrill),
+        ("NonPlated", "NPTH") => Ok(LayerRole::NonPlatedDrill),
+        _ => Err("Unsupported XNC drill file function".into()),
+    }
 }

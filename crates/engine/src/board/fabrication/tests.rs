@@ -1600,6 +1600,7 @@ fn tiny_and_composed_rotations_do_not_flash_rectangular_or_obround_apertures() {
             assert_eq!(axis_aligned_size(&corners), None);
         }
         let outputs = view(&s).fabrication_outputs().unwrap();
+        review::Package::read(Archive::new(&outputs).unwrap().bytes()).expect("Manufacturing opens the exported rotated and collapsed lands");
         for output in surface_files(bottom) {
             let read = read_gerber(&outputs, output);
             assert!(read.apertures.values().all(|a| a.kind == 'C' && a.width > 0 && a.height > 0));

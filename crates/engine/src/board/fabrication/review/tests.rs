@@ -101,6 +101,40 @@ fn fabrication_review_requires_one_drill_plating_declaration() {
     }
 }
 
+/// Historic TYPE comments and modern XNC file functions must identify the same plating.
+#[test]
+fn fabrication_review_checks_xnc_drill_plating() {
+    let drill =
+        |legacy_type: &str, xnc: &str| format!("M48\n; TYPE={legacy_type}\n{xnc}FMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX1.000Y2.000\nM30\n");
+    let plated = "; #@! TF.FileFunction,Plated,1,2,PTH\n";
+    let non_plated = "; #@! TF.FileFunction,NonPlated,1,2,NPTH\n";
+    for (legacy_type, xnc, role) in [("PLATED", "", LayerRole::PlatedDrill), ("NON_PLATED", non_plated, LayerRole::NonPlatedDrill)] {
+        let zip = package(&[("drill.drl", &drill(legacy_type, xnc))]);
+        let review = Package::read(zip.bytes()).unwrap();
+        assert_eq!(review.layers[0].role, role);
+        assert_eq!(review.layers[0].tools[0].hits, 1);
+    }
+    for (legacy_type, xnc) in [("PLATED", non_plated), ("NON_PLATED", plated)] {
+        let zip = package(&[("drill.drl", &drill(legacy_type, xnc))]);
+        assert!(Package::read(zip.bytes()).unwrap_err().contains("disagrees with the TYPE plating declaration"));
+    }
+    let duplicate = drill("PLATED", &format!("{plated}{plated}"));
+    assert!(Package::read(package(&[("drill.drl", &duplicate)]).bytes()).unwrap_err().contains("Duplicate XNC drill file function"));
+}
+
+/// A second file attribute cannot override the interpretation of the entire plot.
+#[test]
+fn fabrication_review_rejects_redeclared_gerber_file_attributes() {
+    for polarity in ["Positive", "Negative"] {
+        let plot = gerber("Copper,L1,Top", &format!("%TF.FilePolarity,{polarity}*%\n"));
+        assert!(Package::read(package(&[("copper.gbr", &plot)]).bytes()).unwrap_err().contains("Duplicate Gerber file polarity"));
+    }
+    for role in ["Copper,L1,Top", "Copper,L2,Bot"] {
+        let plot = gerber("Copper,L1,Top", &format!("%TF.FileFunction,{role}*%\n"));
+        assert!(Package::read(package(&[("copper.gbr", &plot)]).bytes()).unwrap_err().contains("Duplicate Gerber file function"));
+    }
+}
+
 /// A single circle is a valid dot aperture; an empty macro would silently lose that flash.
 #[test]
 fn fabrication_review_rejects_empty_rounded_pad_macros() {
@@ -120,4 +154,14 @@ fn fabrication_review_distinguishes_collapsed_pad_from_crossed_region() {
     let collapsed = gerber("Copper,L1,Top", "G36*\nX0Y0D02*\nX0Y50D01*\nX0Y100D01*\nX0Y0D01*\nG37*\n");
     let review = Package::read(package(&[("top.gbr", &collapsed)]).bytes()).unwrap();
     assert!(review.layers[0].marks.is_empty());
+}
+
+/// A crossing contour with nonzero area can otherwise pass ear clipping.
+#[test]
+fn fabrication_review_rejects_crossing_regions_with_nonzero_area() {
+    let crossed = gerber("Copper,L1,Top", "G36*\nX0Y0D02*\nX8Y-2D01*\nX4Y0D01*\nX6Y-4D01*\nX4Y4D01*\nX0Y0D01*\nG37*\n");
+    assert!(Package::read(package(&[("top.gbr", &crossed)]).bytes()).unwrap_err().contains("Gerber region has crossing edges"));
+    let simple = gerber("Copper,L1,Top", "G36*\nX0Y0D02*\nX6Y-4D01*\nX8Y-2D01*\nX4Y0D01*\nX4Y4D01*\nX0Y0D01*\nG37*\n");
+    let review = Package::read(package(&[("top.gbr", &simple)]).bytes()).unwrap();
+    assert_eq!(review.layers[0].marks.len(), 3);
 }

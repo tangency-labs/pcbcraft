@@ -625,7 +625,7 @@ impl BoardView<'_> {
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
     /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
-    /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
+    /// Returns an error if a plated or non-plated drill diameter rounds to zero at the output resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     /// X2 attributes describe pad, track and via functions and intended copper membership.
     /// Ambiguous routed copper does not acquire an arbitrary net name.
@@ -783,7 +783,8 @@ impl BoardView<'_> {
         Ok(Fabrication { origin, files })
     }
 
-    /// Group via and plated pad drill hits by diameter. Refuse tools that would round to zero.
+    /// Group via and plated pad drill hits by diameter.
+    /// A plated pad drill below half the output unit returns an error because its tool size would round to zero.
     fn plated_drill_hits(self) -> Result<BTreeMap<i64, Vec<Point>>, String> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
