@@ -7,41 +7,22 @@ use pcbcraft_engine::library::parts::{
 use std::{collections::BTreeSet, sync::Arc};
 
 impl Document {
-    /// Whether pending text still needs applying. A raw description buffer whose trimmed text
-    /// already matches the draft is an active edit, not unapplied input: the normalized value
-    /// has been committed, so publishing and history stay available while the field is focused.
+    /// Whether pending text still needs applying. Focused metadata fields can retain raw text
+    /// after the normalized value is committed, without blocking publication or history.
     pub(crate) fn has_unapplied(&self) -> bool {
-        let stored = match self.session.record() {
-            Record::Part(part) => part.description.as_deref(),
-            Record::Orderable(_) => None,
-        };
-        let keywords = match self.session.record() {
-            Record::Part(part) => part.keywords.as_slice(),
-            Record::Orderable(_) => &[][..],
+        let Record::Part(part) = self.session.record() else {
+            return !self.pending.is_empty();
         };
         self.pending.iter().any(|(key, text)| match key.as_str() {
-            DESCRIPTION_KEY => !description_applied(text, stored),
-            KEYWORDS_KEY => !keyword_applied(text, keywords),
-            _ => true,
+            DESCRIPTION_KEY => !description_applied(text, part.description.as_deref()),
+            KEYWORDS_KEY => !keyword_applied(text, &part.keywords),
+            _ => !key
+                .strip_prefix("metadata/link/")
+                .and_then(|key| key.strip_suffix("/label"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| part.links.get(index))
+                .is_some_and(|link| text.trim() == link.label),
         })
-    }
-
-    /// Whether the pending description is only an active editing buffer that already matches the
-    /// current draft. Such a buffer can be discarded after a successful record change, but must be
-    /// kept when the change is refused.
-    pub(crate) fn has_applied_description(&self) -> bool {
-        let stored = match self.session.record() {
-            Record::Part(part) => part.description.as_deref(),
-            Record::Orderable(_) => None,
-        };
-        self.pending.get(DESCRIPTION_KEY).is_some_and(|raw| description_applied(raw, stored))
-    }
-
-    /// Drop the applied description buffer after a successful record change.
-    pub(crate) fn discard_applied_description(&mut self) {
-        if self.has_applied_description() {
-            self.pending.remove(DESCRIPTION_KEY);
-        }
     }
 }
 
@@ -91,12 +72,7 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     for (label, redo) in [("Undo", false), ("Redo", true)] {
                         if controls::enabled_button(ui, !doc.has_unapplied(), label).clicked() {
-                            let discard_description = doc.has_applied_description();
-                            doc.error = doc.session.history(revision, redo).err();
-                            // Keep the active buffer when history refuses the change.
-                            if doc.error.is_none() && discard_description {
-                                doc.discard_applied_description();
-                            }
+                            doc.error = doc.change_history(revision, redo).err();
                             record = doc.session.record().clone();
                         }
                     }
@@ -171,12 +147,9 @@ impl PcbApp {
                 }
                 if let Some(field) = clear_field.take() {
                     if !doc.has_unapplied() {
-                        let discard_description = doc.has_applied_description();
                         match record.select_reference(&field, None, catalog) {
                             Ok(candidate) => {
-                                if discard_description {
-                                    doc.discard_applied_description();
-                                }
+                                applied.extend(doc.pending.keys().cloned());
                                 record = candidate;
                             }
                             Err(error) => doc.error = Some(error),
@@ -208,7 +181,7 @@ impl PcbApp {
                 }
             });
         });
-        // Applied supply, link and description text is cleared only once the draft accepts the
+        // Applied supply and metadata text is cleared only once the draft accepts the
         // edit, so a refused replacement (for example at the size limit) keeps what was typed.
         let accepted = record == *doc.session.record() || {
             let result = doc.session.replace(doc.session.revision(), record);
@@ -303,8 +276,12 @@ fn description_applied(raw: &str, stored: Option<&str>) -> bool {
 /// Whether a raw keywords buffer normalizes to the stored list, so it is an active edit rather
 /// than unapplied input (the normalized value has already reached the draft).
 fn keyword_applied(raw: &str, stored: &[String]) -> bool {
-    let lines: Vec<String> = raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
-    lines == stored
+    keyword_lines(raw).eq(stored.iter().map(String::as_str))
+}
+
+/// Omit blank lines from the stored keywords while leaving them in the focused editor.
+fn keyword_lines(raw: &str) -> impl Iterator<Item = &str> {
+    raw.lines().map(str::trim).filter(|line| !line.is_empty())
 }
 
 /// Number of displayed link rows, including pending rows that have no authored link yet.
@@ -373,7 +350,7 @@ fn metadata_url(text: &str) -> Result<String, String> {
 }
 
 /// Validate the one-keyword-per-line draft before it replaces the authored list.
-fn metadata_keywords(lines: &[String]) -> Result<Vec<String>, String> {
+fn metadata_keywords(lines: &[&str]) -> Result<Vec<String>, String> {
     if lines.len() > MAX_KEYWORDS {
         return Err(format!("A part supports at most {MAX_KEYWORDS} keywords, not {}.", lines.len()));
     }
@@ -522,27 +499,21 @@ fn metadata_fields(
         .inner;
     pcbcraft_chrome::automation::publish(ui, &response, "field:Keywords");
     if response.changed() {
-        let lines: Vec<String> = keywords.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
-        if lines.is_empty() {
-            part.keywords.clear();
-            pending.insert(KEYWORDS_KEY.into(), keywords);
-            applied.push(KEYWORDS_KEY.into());
-            *error = None;
-        } else {
-            match metadata_keywords(&lines) {
-                Ok(value) => {
-                    part.keywords = value;
-                    // As with links, keep the typed text until the bounded draft accepts it.
-                    pending.insert(KEYWORDS_KEY.into(), keywords);
+        let lines: Vec<_> = keyword_lines(&keywords).collect();
+        match metadata_keywords(&lines) {
+            Ok(value) => {
+                if !response.has_focus() || keywords == value.join("\n") {
                     applied.push(KEYWORDS_KEY.into());
-                    *error = None;
                 }
-                Err(reason) => {
-                    pending.insert(KEYWORDS_KEY.into(), keywords);
-                    *error = Some(reason);
-                }
+                part.keywords = value;
+                *error = None;
             }
+            Err(reason) => *error = Some(reason),
         }
+        // Keep raw input across frames, including if Session::replace rejects it.
+        pending.insert(KEYWORDS_KEY.into(), keywords);
+    } else if !response.has_focus() && pending.get(KEYWORDS_KEY).is_some_and(|raw| keyword_applied(raw, &part.keywords)) {
+        applied.push(KEYWORDS_KEY.into());
     }
 
     properties::section(ui, "Links");
@@ -555,7 +526,8 @@ fn metadata_fields(
             let mut label =
                 pending.get(&label_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.label.clone()));
             let mut url = pending.get(&url_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.url.clone()));
-            let label_changed = properties::text(ui, &format!("Link label {}", index + 1), &mut label).changed();
+            let label_response = properties::text(ui, &format!("Link label {}", index + 1), &mut label);
+            let label_changed = label_response.changed();
             let url_changed = properties::text(ui, &format!("Link URL {}", index + 1), &mut url).changed();
             let remove = controls::button(ui, format!("Remove link {}", index + 1)).clicked();
             if remove || (label_changed || url_changed) && label.trim().is_empty() && url.trim().is_empty() {
@@ -567,6 +539,7 @@ fn metadata_fields(
                 match metadata_link(index, &label, &url, part, pending, rows) {
                     Ok(link) => {
                         if index <= part.links.len() {
+                            let retain_label = label_response.has_focus() && label != link.label;
                             // Every earlier row is authored: edit in place or insert at this
                             // row's index, never append a link typed in a later row at index 0.
                             if index < part.links.len() {
@@ -578,7 +551,10 @@ fn metadata_fields(
                             // the draft; the caller removes these keys only when replace is Ok.
                             pending.insert(label_key.clone(), label);
                             pending.insert(url_key.clone(), url);
-                            applied.extend([label_key, url_key, ready_key]);
+                            applied.extend([url_key, ready_key]);
+                            if !retain_label {
+                                applied.push(label_key);
+                            }
                             *error = None;
                         } else {
                             // Earlier rows are still blank or invalid. Stage the valid text so
@@ -596,12 +572,17 @@ fn metadata_fields(
                         *error = Some(reason);
                     }
                 }
+            } else if !label_response.has_focus()
+                && !pending.contains_key(&url_key)
+                && pending.get(&label_key).is_some_and(|raw| part.links.get(index).is_some_and(|link| raw.trim() == link.label))
+            {
+                applied.push(label_key);
             }
         });
     }
     flush_staged_links(part, pending, applied, rows, error);
-    // One pending row at a time keeps row indices aligned with the authored links.
-    if controls::enabled_button(ui, rows < MAX_LINKS && pending_link_rows(pending) == 0, "Add link").clicked() {
+    // One unauthored row at a time keeps row indices aligned with the authored links.
+    if controls::enabled_button(ui, rows < MAX_LINKS && pending_link_rows(pending) <= part.links.len(), "Add link").clicked() {
         pending.entry(link_key(rows, "label")).or_default();
         pending.entry(link_key(rows, "url")).or_default();
     }

@@ -1172,6 +1172,92 @@ fn description_keeps_raw_buffer_while_editing_and_clears_it_on_focus_loss() {
     assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
 }
 
+/// Enter in Keywords and a separately typed space in a link label survive the next paint.
+#[test]
+fn incremental_keyword_and_link_label_edits_keep_separators() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _temp, id) = fixture();
+    let doc = &app.library_editors.parts[&id];
+    let mut record = doc.session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.links.push(pcbcraft_engine::library::parts::PartLink { label: "Data".into(), url: "https://example.com/datasheet".into() });
+    app.replace_part_document(id, doc.session.revision(), record).unwrap();
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.get_by_label("Keywords").type_text("precision");
+    h.run();
+    h.key_press(egui::Key::Enter);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/keywords").map(String::as_str), Some("precision\n"));
+    assert!(!doc.has_unapplied());
+    h.get_by_label("Keywords").type_text("rail");
+    h.run();
+
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.key_press(egui::Key::End);
+    h.get_by_label("Link label 1").type_text(" ");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/link/0/label").map(String::as_str), Some("Data "));
+    assert!(!doc.has_unapplied());
+    h.get_by_label("Link label 1").type_text("sheet");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.keywords, ["precision", "rail"]);
+    assert_eq!(part.links[0].label, "Data sheet");
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+}
+
+/// History and full record replacements discard applied buffers only on success.
+#[test]
+fn applied_metadata_buffers_do_not_hide_restored_records() {
+    let (mut app, _temp, id) = fixture();
+    let ctx = egui::Context::default();
+    let doc = &app.library_editors.parts[&id];
+    let before = doc.session.record().clone();
+    let mut edited = before.clone();
+    let Record::Part(part) = &mut edited else { panic!() };
+    part.description = Some("Precision part".into());
+    part.keywords = vec!["precision".into()];
+    app.replace_part_document(id, doc.session.revision(), edited).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let buffers = BTreeMap::from([("metadata/description".into(), "Precision part ".into()), ("metadata/keywords".into(), "precision\n".into())]);
+    doc.pending = buffers.clone();
+    let edited = doc.session.record().clone();
+    let revision = doc.session.revision();
+    assert!(!doc.has_unapplied());
+
+    let history = |app: &mut PcbApp, expected_revision, redo| {
+        app.part_document_command(&ctx, "app.part_history", &json!({"document":id,"expected_revision":expected_revision,"redo":redo}))
+    };
+    assert!(history(&mut app, revision - 1, false).is_err());
+    assert!(app.replace_part_document(id, revision - 1, before.clone()).is_err());
+    assert_eq!(app.library_editors.parts[&id].pending, buffers);
+    history(&mut app, revision, false).unwrap();
+    let doc = &app.library_editors.parts[&id];
+    assert_eq!(doc.session.record(), &before);
+    assert!(doc.pending.is_empty());
+    history(&mut app, revision + 1, true).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    assert_eq!(doc.session.record(), &edited);
+    doc.pending = buffers;
+    app.replace_part_document(id, revision + 2, before.clone()).unwrap();
+    let doc = &app.library_editors.parts[&id];
+    assert_eq!(doc.session.record(), &before);
+    assert!(doc.pending.is_empty());
+}
+
 /// A locally valid link stays pending when the bounded draft refuses the replacement, so a
 /// size-limit rejection does not discard the typed label and URL. Retrying after the draft fits
 /// applies the retained text in one revision.
