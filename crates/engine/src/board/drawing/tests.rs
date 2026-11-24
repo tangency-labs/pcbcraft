@@ -51,7 +51,7 @@ fn edge_geometry_is_layer_addressed_persistent_and_atomic() {
             assert_eq!(s.project().unwrap().boards().next().unwrap().setup().is_some(), configured);
             let after = encode_documents(s.snapshot().unwrap()).unwrap();
             let board: Value = serde_json::from_slice(&after[&crate::persistence::test_board_path(&after)]).unwrap();
-            assert_eq!(board["format"], "pcbcraft-board/9");
+            assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
             assert_eq!(board["assignments"], old["assignments"]);
             assert_eq!(board["footprints"], old["footprints"]);
             for (path, bytes) in &before {
@@ -143,7 +143,10 @@ fn physical_graphics_preserve_widths_reference_overrides_and_history() {
     )
     .unwrap();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&before[&crate::persistence::test_board_path(&before)]).unwrap()["format"], "pcbcraft-board/15");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&before[&crate::persistence::test_board_path(&before)]).unwrap()["format"],
+        crate::persistence::CURRENT_BOARD_FORMAT
+    );
     for width in [0, 9_999, 10_000_001] {
         assert!(
             s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":width,"expected_revision":s.revision()}))
@@ -153,7 +156,10 @@ fn physical_graphics_preserve_widths_reference_overrides_and_history() {
     }
     s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":250_000,"expected_revision":s.revision()})).unwrap();
     let after = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[&crate::persistence::test_board_path(&after)]).unwrap()["format"], "pcbcraft-board/16");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&after[&crate::persistence::test_board_path(&after)]).unwrap()["format"],
+        crate::persistence::CURRENT_BOARD_FORMAT
+    );
     assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
     let view = s.project().unwrap().boards().next().unwrap();
     let id = view.drawings()[0].id;
