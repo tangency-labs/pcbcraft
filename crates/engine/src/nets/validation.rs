@@ -8,8 +8,8 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Full record/graph validations on this thread, so tests can prove a path never rebuilds
-/// the graph.
+// Full record/graph validations on this thread, so tests can prove a path never rebuilds
+// the graph.
 #[cfg(test)]
 thread_local! {
     pub(super) static RECORD_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
