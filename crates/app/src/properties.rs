@@ -18,6 +18,7 @@ pub(super) struct State {
     draft: Option<Edit>,
     pub(super) collapsed: bool,
     pub(super) net_draft: Option<crate::net_labels::Edit>,
+    pub(super) wire_appearance: Option<crate::net_appearance::Inspector>,
     /// Drafts for the sheet's Parameters table, shown while nothing is selected.
     parameters: crate::sheet_parameters::Drafts,
     pub(super) rect: Rect,
@@ -25,7 +26,7 @@ pub(super) struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { draft: None, collapsed: false, net_draft: None, parameters: Default::default(), rect: Rect::NOTHING }
+        Self { draft: None, collapsed: false, net_draft: None, wire_appearance: None, parameters: Default::default(), rect: Rect::NOTHING }
     }
 }
 
@@ -178,6 +179,10 @@ impl PcbApp {
             self.views.active.schematic.properties.rect = Rect::NOTHING;
             return Rect::NOTHING;
         }
+        let nets_selected = crate::net_appearance::has_net_selection(&self.views.active.schematic.selection);
+        if !nets_selected {
+            self.views.active.schematic.properties.wire_appearance = None;
+        }
         if self.views.active.schematic.selection.single_net_label().is_some() {
             self.views.active.schematic.properties.draft = None;
             if let Some(rect) = self.net_label_inspector(ui, canvas, area) {
@@ -194,15 +199,20 @@ impl PcbApp {
             let count = self.views.active.schematic.selection.len() + self.views.active.inspection.len();
             let enabled = matches!(self.dialog, Dialog::None);
             let mut net_rules = false;
+            let mut net_appearance = None;
             let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
-            let wires = !self.views.active.schematic.selection.wires.is_empty();
+            if nets_selected && enabled && !self.views.active.schematic.properties.collapsed {
+                self.sync_wire_appearance();
+            }
+            let appearance_enabled = enabled && !self.files.busy() && !self.project_action_pending();
             let sheet = match self.views.active.target() {
                 Some(crate::editor_view::DocumentTarget::Sheet(sheet)) if count == 0 => Some(sheet),
                 _ => None,
             };
             let project = self.session.snapshot();
             let revision = self.session.revision();
-            let drafts = &mut self.views.active.schematic.properties.parameters;
+            let properties = &mut self.views.active.schematic.properties;
+            let bulk = properties.wire_appearance.as_ref().is_some_and(crate::net_appearance::Inspector::is_bulk);
             let mut parameter_change = None;
             let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
@@ -210,14 +220,14 @@ impl PcbApp {
                 "Properties",
                 canvas,
                 area,
-                self.views.active.schematic.properties.collapsed,
+                properties.collapsed,
                 width,
                 |ui| {
                     chrome::inspector_body(ui);
                     if let (Some(sheet), Some(project)) = (sheet, project.as_deref())
                         && enabled
                     {
-                        parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, drafts);
+                        parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, &mut properties.parameters);
                         return;
                     }
                     if let [label] = inspection_labels.as_slice() {
@@ -228,8 +238,12 @@ impl PcbApp {
                     if inspection_labels.is_empty() || count > inspection_labels.len() {
                         ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
                     }
-                    if wires {
-                        net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
+                    if nets_selected {
+                        let rules_label = if bulk { "Manage net classes…" } else { "Net rules…" };
+                        net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, rules_label)).inner.clicked();
+                        if enabled && let Some(inspector) = &mut properties.wire_appearance {
+                            net_appearance = ui.add_enabled_ui(appearance_enabled, |ui| inspector.show(ui)).inner;
+                        }
                     }
                 },
             );
@@ -238,7 +252,17 @@ impl PcbApp {
             }
             self.views.active.schematic.properties.rect = rect;
             if net_rules {
-                self.begin_net_rules();
+                if bulk {
+                    self.begin_rules();
+                } else {
+                    self.begin_net_rules();
+                }
+            }
+            if let Some((command, params)) = net_appearance {
+                self.run(command, &params);
+                if self.message.is_none() {
+                    self.views.active.schematic.properties.wire_appearance = None;
+                }
             }
             // A paper or frame pick takes the Browser's deferred path, so it is validated against
             // this view and revision exactly like the sheet's context menu.

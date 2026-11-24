@@ -75,19 +75,17 @@ grouped by snapshot-local net index. Those indices must not be used as saved bin
 | Slice | Stored formats | Stored |
 | --- | --- | --- |
 | 1. Footprint moves carry copper | none | — |
-| 2. Board rules (implemented) | board/19 | Board-scoped rule records |
+| 2. Board rules (implemented) | board/42 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
+| 4. Zones | board/42 | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/34](formats/native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
-| Named layer groups | [board/41](formats/native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
+| Placed-footprint lock metadata | [board/42](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
+| Named layer groups | [board/42](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
 
-These are selected layout formats, not a consecutive version list. Canonical
-saves use the highest supported format required by the authored data; compatible
-extensions keep their validation rules. Older readers refuse unsupported formats.
-Canonical no-op saves preserve encoding; accepted noncanonical input can be
-normalized, for example by omitting an explicit `locked: false`.
+Current saves use one board header for every supported combination of records.
+Historical boards adopt that header on Save. Subsequent no-op saves preserve
+current bytes. See the [native board format](formats/native-project-storage.md#current-board-records).
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](pcb/via-net-assignments.md) for automatic inheritance, physical

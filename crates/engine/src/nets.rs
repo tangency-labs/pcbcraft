@@ -1,8 +1,11 @@
 //! Persistent electrical identities and net-owned presentation numbers; the authored schematic remains the connectivity authority.
 
 mod anchor;
+mod appearance;
 mod classes;
 mod commands;
+pub use appearance::{Appearance, DEFAULT_WIDTH_CP, INSPECT_APPEARANCE, MAX_WIDTH_CP, MIN_WIDTH_CP, SET_APPEARANCE};
+pub(crate) use appearance::{appearance_param_schema, validate_appearance_patch};
 pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
 pub mod display;
@@ -12,12 +15,15 @@ mod overview;
 pub use overview::{CrossSheetNet, SHEET_OVERVIEW, SheetOverview, SheetOverviewBasis, SheetReach, Via};
 mod pairs;
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
+mod properties;
 mod reconcile;
 mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};
 pub use commands::{PROMOTE, RESOLVE_AMBIGUITY};
+pub use properties::{MAX_PROPERTY_TARGETS, PropertyValues, SET_PROPERTIES};
+pub(crate) use properties::{property_changes_schema, property_targets_schema, validate_property_changes, validate_property_targets};
 
 use crate::board::update::SourceCapture;
 use serde::{Deserialize, Serialize};
@@ -103,6 +109,9 @@ pub struct Record {
     /// Dimensional class intent and originating assigning nets, without saved endpoint membership.
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "classes::stored_bindings")]
     pub class_bindings: Vec<ClassBinding>,
+    /// Schematic wire drawing override, owned by the net identity rather than by a wire or name.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "appearance::stored_appearance")]
+    pub appearance: Option<Appearance>,
 }
 
 impl Record {

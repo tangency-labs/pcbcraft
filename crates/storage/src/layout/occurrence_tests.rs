@@ -10,6 +10,17 @@ fn project_fourteen() -> Arc<Project> {
     Arc::new(decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap())
 }
 
+/// Build a project/14 fixture with a registered board folder and no owned instance file.
+fn project_fourteen_documents(snapshot: Arc<Project>) -> Documents {
+    let mut documents = encode_documents(snapshot).unwrap();
+    let path = project_instances_path(&documents[ENTRY_POINT]).unwrap().unwrap();
+    documents.remove(&path).unwrap();
+    let mut entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+    entry["format"] = json!("pcbcraft-project/14");
+    documents.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
+    documents
+}
+
 /// Inject a process interruption at every journal checkpoint and reopen the complete old or
 /// new document set, including when the instance file and entry point are temporarily mixed.
 fn check_every_checkpoint(before: &Documents, after: &Documents) {
@@ -48,7 +59,7 @@ fn check_every_checkpoint(before: &Documents, after: &Documents) {
 #[test]
 fn project_fourteen_occurrence_migration_recovers_at_every_checkpoint() {
     let source = project_fourteen();
-    let before = encode_documents(source.clone()).unwrap();
+    let before = project_fourteen_documents(source.clone());
     let after_project = prepare(source.clone(), None, Some(&before)).unwrap();
     assert_eq!(source.board_document_path(), after_project.board_document_path());
     let after = encode_documents(after_project).unwrap();
@@ -77,7 +88,7 @@ fn first_board_instance_transfer_and_undo_recover_at_every_checkpoint() {
 fn occurrence_migration_never_overwrites_unregistered_instance_files() {
     for leaf in ["instances.json", "INSTANCES.JSON"] {
         let snapshot = project_fourteen();
-        let before = encode_documents(snapshot.clone()).unwrap();
+        let before = project_fourteen_documents(snapshot.clone());
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
         crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
@@ -98,7 +109,7 @@ fn occurrence_migration_never_overwrites_unregistered_instance_files() {
 #[test]
 fn occurrence_migration_rechecks_foreign_instance_files_after_staging() {
     let snapshot = project_fourteen();
-    let before = encode_documents(snapshot.clone()).unwrap();
+    let before = project_fourteen_documents(snapshot.clone());
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
@@ -121,7 +132,7 @@ fn occurrence_migration_rechecks_foreign_instance_files_after_staging() {
 #[test]
 fn occurrence_migration_keeps_registered_namespaces_and_user_notes() {
     let snapshot = Arc::new(project_fourteen().with_layout_root("pcbcraft-data-test").unwrap());
-    let before = encode_documents(snapshot.clone()).unwrap();
+    let before = project_fourteen_documents(snapshot.clone());
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
@@ -137,5 +148,5 @@ fn occurrence_migration_keeps_registered_namespaces_and_user_notes() {
     assert_eq!(after[&board], before[&board]);
     assert_eq!(crate::load(&root).unwrap(), after);
     assert!(!root.join("board.json").exists());
-    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
+    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], pcbcraft_engine::persistence::CURRENT_PROJECT_FORMAT);
 }

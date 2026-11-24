@@ -375,6 +375,53 @@ fn class_assignments_share_live_headless_targets_queries_and_rejection() {
     );
 }
 
+/// Wire appearance uses the same catalog, scoped targets, revision checks and blocked-editor
+/// refusal as other net edits; both hosts see the same read payload and one undoable change.
+#[test]
+fn net_appearance_shares_live_headless_commands_and_rejects_stale_requests() {
+    let mut setup = circuit(2);
+    apply(&mut setup, nets::PROMOTE, json!({"anchor":{"symbol":"symbol-2","terminal":"1"}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"derived","anchor":project.inspect_net_registry().unwrap()["nets"][0]["anchor"]});
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project.clone());
+    let mut live = OpenEditor { session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for id in [nets::SET_APPEARANCE, nets::INSPECT_APPEARANCE] {
+        assert!(catalog.as_array().unwrap().iter().any(|command| command["id"] == id));
+    }
+    let query = json!({"command":nets::INSPECT_APPEARANCE,"inspect":false,"params":{"target":target}});
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query.clone()})).unwrap();
+    assert_eq!(report, headless.call("engine.execute", query.clone()).unwrap());
+    assert_eq!(report["appearance"], Value::Null);
+    assert!(report.get("project").is_none());
+
+    let request = json!({"command":nets::SET_APPEARANCE,"inspect":false,"params":{
+        "target":target,"appearance":{"color":[200,10,30],"width_cp":300},"expected_revision":live.session.revision()}});
+    live.blocked = true;
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
+    live.blocked = false;
+    let result = call_editor(&mut live, &json!({"method":"engine.execute","params":request.clone()})).unwrap();
+    assert_eq!(result, headless.call("engine.execute", request.clone()).unwrap());
+    let changed = live.session.snapshot().unwrap();
+    assert!(headless.call("engine.execute", request.clone()).is_err());
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&changed, &live.session.snapshot().unwrap()));
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(report["appearance"]["color"], json!([200, 10, 30]));
+    assert_eq!(
+        report,
+        headless.call("engine.execute", json!({"command":nets::INSPECT_APPEARANCE,"inspect":false,"params":{"target":target}})).unwrap()
+    );
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(live.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(project).unwrap()
+    );
+}
+
 /// Read-only discovery supplies typed derived anchors before any persistent ID exists. Both
 /// hosts then promote and bind in one transaction, without a separate promotion history step.
 #[test]

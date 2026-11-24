@@ -14,29 +14,26 @@ and [occurrence codec](sheet-occurrence-storage.md) for the supported boundaries
 Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
-in the entry point; only projects with authored classes select that version.
-Active [designator locks](#designator-locks) select project/51, or project/56
-together with [alternate pin functions](#alternate-pin-function-records), retaining the
+in the entry point.
+[Designator locks](#designator-locks) were added in project/51 and combined in
+project/56 with [alternate pin functions](#alternate-pin-function-records), retaining the
 optional records and membership representations of the earlier envelopes.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
 Project/24 adds the [part-group catalog](part-groups.md); its expanded
-memberships live in the instance home and use instances/5 when board-owned.
-Project/39 and instances/7 carry the same memberships through a compact UUID
-dictionary when expanded membership exceeds the existing document-size limits;
-older files keep their representation while it still fits. Project/45 adds
+memberships live in the instance home. Historical instances/5 stored expanded
+memberships and instances/7 added the compact UUID dictionary. Project/45 added
 [explicit differential pair records](net-registry-storage.md#differential-pair-records)
-to the existing net registry. A board-owned pair list requires instances/8,
-which supports either part-group membership encoding. Byte-identical
-unchanged saves preserve canonical encoder output; accepted noncanonical input
-may normalize when saved.
+to the registry alongside either membership representation. The
+[current instance format](#board-instance-records) accepts these records
+together and keeps the same header when optional records are removed.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
-using instances/4 when board-owned. A stored record's positive `generated_number`
+using instances/4 in its historical board-owned form. A stored record's positive `generated_number`
 is unique across live and historical identities. This envelope can also carry
 class catalogs, assignments, project parameters and no-connect intent. Older
-envelopes reject the number field; older files retain their exact no-op encoding
-until an electrical transaction adopts the numbers. See
+envelopes reject the number field. Migrating the entry point alone does not
+assign numbers to legacy nets. See
 [net registry storage](net-registry-storage.md).
 
 ## File encodings and save behavior
@@ -79,6 +76,31 @@ phase also writes its bounded setup of at most 64 material revisions, 128 layers
 127 strata and 256 nested prepreg plies. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
 
+### Native write policy
+
+Opening or inspecting a supported older project leaves its files untouched.
+Folder saves and packed exports write `pcbcraft-project/63` for `project.json`,
+and `pcbcraft-sheet/10` for each schematic sheet. A registered board uses
+`pcbcraft-board/42` for `board.json` and `pcbcraft-instances/10` for `instances.json`.
+Version 63 adds optional net wire appearance to version 62. Version 62 added
+optional output recipes to version 61, which made designator locks optional. Earlier formats remain readable. The first save adopts the existing
+folder and occurrence migrations if needed. Subsequent unchanged saves are
+byte-stable, and clearing an optional record or undoing the edit that added it
+keeps the current format.
+
+Use one current write format per native document type. Add a version when the
+storage contract changes, and represent optional features as optional records
+within that version. Preserve stable identities and deterministic ordering.
+Pinned library items retain their published format and revision. Changes to
+authored library items go through publication of a new revision.
+
+The project entry point and native library authoring use fixed current write
+formats for [symbols](../libraries/symbol-schema.md),
+[footprints](../libraries/footprint-schema.md) and [parts](../libraries/part-schema.md).
+Placing a version-5 symbol in an older project adopts the folder and occurrence
+metadata in the placement edit. Portable board setup exports use
+[`pcbcraft-setup-profile/6`](../pcb/board-materials.md#silkscreen-and-portable-setup-profiles).
+
 ## Bundled library address migration
 
 Native desktop/browser opens and headless storage opens normalize recognized,
@@ -103,8 +125,8 @@ journal validation remain byte-preserving; hosts call the shared
 
 ## Sheet paper adoption
 
-Every sheet has paper (see [Sheet paper records](#sheet-paper-records)). A sheet
-saved before sheet/9 has none, so opening gives it the smallest ISO A paper
+New sheets have paper (see [Sheet paper records](#sheet-paper-records)). Opening
+a sheet with no saved paper gives it the smallest ISO A paper
 selected to fit its drawing with a 20 mm margin, and the Default frame.
 Landscape is tried before portrait at each size; a drawing larger than A0 gets
 A0 landscape. Paper is centered around the drawing, with its top-left corner
@@ -117,13 +139,15 @@ empty sheet gets the new-sheet paper. Nothing on the sheet moves.
 Like the library migration, this happens in memory when the desktop app, browser
 or headless storage opens a project. It adds no undo step and doesn't mark the
 project as changed; the open notice says the next Save (or Download) will add
-paper to older sheets. That save rewrites each older sheet document once, as
-sheet/9. `prepare_opened` runs both opening steps; `adopt_paper` runs this one.
+paper to sheets that lacked it. An ordinary save rewrites each older sheet
+document once as sheet/10, including sheet/9 documents that already had paper.
+`prepare_opened` runs both opening migrations. `adopt_paper` supplies missing paper.
 
 ## Board folders and first-save migration
 
-New projects use `pcbcraft-project/16`, extending project/14's `layout_root: "."` and required
-zero-or-one `boards` registry. Each registration contains its stable `id`, `name`
+The current project entry point uses the folder layout and occurrence records
+introduced in `pcbcraft-project/14` and `/16`, including `layout_root: "."` and a
+required zero-or-one `boards` registry. Each registration contains its stable `id`, `name`
 and portable `folder` segment instead of `file`. Physical data resolves to
 `join(layout_root, "boards", folder, "board.json")`, including single-board
 projects. The folder is a board-name slug plus 12 hexadecimal UUID characters;
@@ -151,17 +175,15 @@ Unnumbered legacy net records use `pcbcraft-project/17`. Board projects
 then use `pcbcraft-instances/2` with `net_registry` beside the occurrence records;
 schematic-only projects place it under `schematic_instances.net_registry` in the
 entry point. The header and registry presence must agree, and empty/null
-registries are refused. Existing projects without records retain their low-level
-encoding; Open and inspection never promote nets. Older readers must refuse
+registries are refused. Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
 
-When no other content requires a later project format, a nonempty class catalog
-selects project/20; saved [net-class bindings](net-class-assignments.md) select
-project/21. Parameters and generated numbers select project/22 and /23 unless
-other records require a later format. In precedence order, alternate pin
-functions with active designator locks select project/56, alternate pin functions
-/48, active designator locks /51, differential pairs /45, an assembly profile catalog /36,
-and part groups /39 with compact memberships or /24 otherwise. Board-owned
+Earlier project versions identified the records present. Version 20 added a
+nonempty class catalog, /21 [net-class bindings](net-class-assignments.md),
+/22 parameters, and /23 generated net numbers. Versions 24 and 39 added
+expanded and compact part-group memberships, /36 assembly profiles, /45
+differential pairs, /48 alternate pin functions, /51 active designator locks,
+and /56 both alternate pin functions and active designator locks. Board-owned
 bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
 with expanded or compact memberships, or instances/8 with pairs. Bindings
 remain inside the same logical registry and carry class and origin net UUIDs,
@@ -222,10 +244,9 @@ conflicting dependencies reject opening before adoption. Native part selections
 also travel with schematic clipboard fragments; diagnostic single-document
 export refuses to discard them.
 [Device supply ranges](../libraries/part-schema.md#device-supply-range) live in the same
-pinned generic part closure, using `pcbcraft-part/4` only for records with a
-nonempty terminal rating map. Folders and packed projects carry the same bytes.
-Older readers refuse that unknown pinned record rather than dropping its data;
-no project, sheet, symbol, board, or accepted-baseline format changes.
+pinned generic part closure. Historical ratings use `pcbcraft-part/4` or
+`pcbcraft-part/5`, and current part revisions use `pcbcraft-part/6`. Folders
+and packed projects carry the same bytes.
 
 Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
 with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input
@@ -279,35 +300,46 @@ show their stored text, including when the part was already deleted; no type is
 inferred or reconstructed from free text. Folder and archive saves carry the
 same historical records.
 
+### Current board records
+
+All normal board saves and packed exports use `pcbcraft-board/42`. The
+`footprints` array is required and may be empty. Setup is optional, so a
+bare board or an older marker board can save without acquiring a stackup.
+Authored rules, zones, copper, locks, origin, profiles, groups and package
+records use their existing field vocabulary and prerequisites. Explicitly
+stored optional arrays that require content, such as tracks, vias, zones and
+named groups, remain nonempty. Clearing any of those records keeps the board
+header at version 42.
+
+The first Save, Save As or browser Download of an older board writes version 42
+to its registered path. Pinned assets, accepted baselines, and object identities
+retain their original content. Subsequent no-op saves preserve the current
+bytes, including valid custom formatting. Explicit legacy layout conversion
+still moves the historical board bytes intact, as specified in the conversion
+contract above. The sections below describe the historical readers.
+
 Board format `pcbcraft-board/19` adds validated `pcbcraft-rules/1` board defaults
 with a stable UUID, hard limits and preferred routing dimensions. It supports the
 earlier physical fields, including format 18's track/via locks, and requires a
-rule record. Older headers reject rules. When rules are absent, the remaining
-authored data determines the format.
+rule record. Earlier historical headers reject rules.
 See [board-rules.md](../pcb/board-rules.md) for validation, resolution and reset behavior.
 
 Board format `pcbcraft-board/21` adds a `pcbcraft-origin/1` placement origin with a
 stable UUID and one anchor: `board_zero`, `outline_lower_left`, or a `point` with
 in-range `x_nm`/`y_nm` board coordinates. It accepts board rules and every earlier
-physical field, including optional zone outlines, and requires the origin record; older headers reject it. A board that
-also adopts assembly output profiles requires at least format 22; extended stack
-fields, via assignments, material reports, circular arcs and footprint locks can
-require a higher format. Those formats accept the origin. Boards without an
-origin measure outputs from board zero and use the format required by the remaining
-authored data.
+physical field, including optional zone outlines, and requires the origin record.
+Earlier historical headers reject it. Boards without an origin measure outputs
+from board zero.
 
 ### Named layer groups
 
-Board format `pcbcraft-board/41` is written only when `setup.stackup.layer_groups`
-contains at least one named group, and requires a board setup with at least one
-named group. It retains every earlier authored board field, including teardrops,
+Historical board format `pcbcraft-board/41` requires a board setup with at
+least one named group in `setup.stackup.layer_groups`. It retains every earlier authored board field, including teardrops,
 circular copper and footprint locks. Within `setup.stackup`, `layer_groups` stores
 only authored named groups (group UUID, name and copper-layer UUIDs); derived
 groups are computed and never stored. Earlier headers reject `layer_groups`, even
-when empty. Removing the last named group restores the format required by the
-remaining authored data, and unchanged group-free boards keep their existing format
-and bytes across Save, Save As and browser Download. Formats 27–33, 36 and 38–40
-remain unsupported.
+when empty. In format 42 the field is optional and disappears when the last
+group is removed. Formats 27–33, 36 and 38–40 remain unsupported.
 
 ### Straight-via teardrop intents
 
@@ -318,7 +350,7 @@ parameters. Vertices, net membership and rule reports are never written to the
 board. Encoding orders the records by UUID; decoding rejects duplicate
 identities/sites, dangling attachments and unrepresentable parameters or shapes.
 Older board formats reject the new array. Format 37 does not permit circular
-tracks. Removing all teardrops restores the format selected by the remaining data.
+tracks. Format 42 stores teardrops as an optional array.
 See [straight via teardrops](../pcb/teardrop-records.md) for the command and current limits.
 
 ### Placed-footprint lock metadata
@@ -329,19 +361,15 @@ Repeated `locked` members, null and nonboolean `locked` values are refused.
 Format 34 works with or without setup when the other records allow it. For example,
 material reports, via assignments, stack fields, assembly profile adoptions,
 origin, rules, zones, silkscreen and copper retain their existing validation.
-Formats 34, 35 and 37 accept active locks; other headers refuse `true` but accept an
-explicit `false` on an otherwise valid placement. Fresh canonical encoding omits
-false. Native Save can retain an unchanged board document verbatim, including
-explicit false, which older readers may reject. Formats 27–33 remain unsupported.
-Removing the last active footprint lock restores the format required by the
-remaining data.
+Formats 34, 35, 37, 41 and 42 accept active locks. Readers of other formats
+accept an explicit `false` on an otherwise valid placement. Fresh canonical
+encoding omits false. Native Save can retain an unchanged current board
+document verbatim, including explicit false.
 
-A board with [circular copper records](../pcb/circular-copper-records.md) but no active
-footprint locks uses format 26. A board with active footprint locks but no arcs
-uses format 34 unless it contains straight-via teardrop intents. Format 35 requires both features, so readers that support only one
-of the earlier formats refuse the combined file instead of dropping records.
-Removing either feature selects the other feature's format; removing both
-selects the format required by the remaining content.
+Historical format 26 requires [circular copper records](../pcb/circular-copper-records.md)
+and rejects active footprint locks. Format 34 requires an active footprint lock
+and rejects arcs. Format 35 requires both features. Format 42 allows them to
+be added or removed independently.
 
 The codecs store the flag alongside the existing placement ID, pose and pinned
 definition reference. Geometry and connectivity use the same resolution paths
@@ -352,6 +380,39 @@ See [the layout guide](../pcb/locks.md#placed-footprint-locks) for the
 placement commands that respect this flag. There is no footprint lock command or
 GUI toggle yet. Diagnostic single-file encoding and the board clipboard explicitly
 refuse active footprint locks rather than silently losing them.
+
+### Authored output recipes
+
+Output recipes are an optional record starting with `pcbcraft-project/62`. When present,
+`output_recipes` is a nonempty array of at most 32 records, and the project needs
+an explicit physical board registration. The entry point stores one
+`{id, content}` record per line in recipe UUID order. IDs must be unique and
+non-nil. Recipes compose with the other optional project records. Board-owned
+net records use the [current instance format](#board-instance-records).
+Projects saved by earlier recipe writers remain readable.
+`pcbcraft-project/47` (recipes, otherwise following project/36 without
+requiring profiles), `/57` (recipes with an active designator lock, otherwise
+following project/51) and `/60` (recipes with alternate pin functions, otherwise
+following project/56 with optional locks) each require a nonempty
+`output_recipes` array, and the next save writes project/63. Other earlier
+project formats do not accept `output_recipes`.
+The diagnostic single-file writer also refuses recipes rather than losing them.
+
+`content` requires `board` (the registered board UUID), `name` (1–80 trimmed,
+non-control characters), `units` (`mm` or `in`), `file_stem` (1–48 lowercase
+ASCII letters, digits or interior hyphens; no reserved device names),
+`gerber_layers` (up to 128 distinct non-nil layer UUIDs in authored order), and
+`drill` (boolean). Select at least one layer or drill. `origin` may specify a
+board-zero, outline-lower-left or bounded integer-nanometre point anchor; omitted
+means use the board origin. `assembly_profile` may name a non-nil profile UUID
+and positive `revision`. Layer and profile references record intent, not a
+resolved snapshot; changes to those records do not invalidate a native save.
+Unknown members and null values inside the record are refused.
+
+`pcb.set_output_recipe` creates, replaces or removes a recipe in one Undo step.
+With no recipes, a save omits the field and keeps project/63. The existing export
+command does not consume recipes yet; no export path, generated files or release
+records are part of this document.
 
 ### Assembly profiles and stack fields
 
@@ -379,8 +440,8 @@ identity-sorted `{profile, revision}` adoption records resolving exact pinned
 content. It supports optional origin, rules, zones and earlier fields. Extended
 stack fields, explicit via assignments, material reports, circular copper arcs
 and footprint locks require at least formats 23, 24, 25, 26 and 34, respectively.
-These higher formats accept adoptions; headers before 22 reject them. Removing
-the last adoption restores the format required by the remaining data.
+These higher formats accept adoptions, and headers before 22 reject them.
+Adoptions are optional in format 42.
 
 The project retains at most 64 identities (including retired watermarks), 128
 content revisions and 4096 corrections across retained revisions. An edit retires
@@ -388,43 +449,37 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-A retained catalog, even with only watermarks, uses project/56, /48 or /51 when
-alternate pin functions or an active designator lock select it, otherwise project/45 with differential pairs, otherwise
-project/36. The catalog takes precedence over the project/39 header for compact
-memberships but does not change their representation. All three formats apply
-the same validation rules and retain folder and occurrence metadata, even after
-the last unused payload is released. Opening another saved copy uses that copy’s
-own recorded lineage; no
-cross-file issuance registry is provided. Immutable revision payloads are shared
+Project/61 retains catalogs with issued watermarks even after the last unused
+payload is released. The catalog uses the same validation rules and leaves the
+membership representation, folder and occurrence metadata intact. Each saved
+copy uses its own recorded lineage. Immutable revision payloads are shared
 with Undo snapshots. No external file or network is needed after adoption.
-Projects without catalog identities use the format their other content requires.
 See the [shared commands](../automation/board-commands.md#assembly-output-profiles) for pin/preview/adopt behaviour.
 
 Board format `pcbcraft-board/23` adds the stack fields: copper-stratum roles, base
 copper and the tolerance and basis of finished copper thickness, and the stackup's
 declared finished board thickness, tolerance and minimum. It accepts a placement
 origin, assembly profile adoptions, board rules and every earlier physical field, and requires at least one of
-the new fields. Older headers, including 21, reject them. In the absence of these
-fields, the other authored data determines the board format. Setup profiles use
-`pcbcraft-setup-profile/2` for stack extensions without material reports. With
-reports they use profile version 3, which can also carry the stack extensions. See
-[board-materials.md](../pcb/board-materials.md#copper-strata-and-board-thickness).
+the new fields. Older headers, including 21, reject them. Format 42 supports
+these fields when present. The [current setup profile format](../pcb/board-materials.md#silkscreen-and-portable-setup-profiles)
+also supports them as optional records. Historical profile versions 2, 3 and 5
+retain their original validation rules.
 
 Board format `pcbcraft-board/24` adds optional scoped `net_assignment` objects to
 vias and requires at least one assignment. It accepts optional assembly profile
 adoptions, extended stack fields and earlier board fields; no derived membership
 is saved. Earlier headers, including assembly-profile board/22 and stack board/23,
-reject via intent. Clearing the last assignment restores the format required by
-the remaining authored data. Null/nil addresses are refused; historical unresolved
+reject via intent. Format 42 omits the assignment in Automatic mode.
+Null and nil addresses are refused. Historical unresolved
 targets remain readable. See [via net assignments](../pcb/via-net-assignments.md).
 
 Board format `pcbcraft-board/25` adds thermal conductivity, thermal expansion,
 dielectric strength and CTI reports to embedded materials. It supports every earlier
 field, including stack fields, assigned via intent, assembly profiles, a placement origin and board rules, and
 requires at least one such report. Older headers reject them. Formats 26, 34 and
-35 can retain reports. Removing reports selects the format required by the
-remaining data. Setup profiles with these reports use `pcbcraft-setup-profile/3`.
-See [board-materials.md](../pcb/board-materials.md#thermal-and-insulation-reports).
+35 can retain reports. Reports are optional in format 42.
+Historical setup profile version 3 requires at least one report. Current
+setup profiles make them optional. See [thermal and insulation reports](../pcb/board-materials.md#thermal-and-insulation-reports).
 
 ### Zone outline records
 
@@ -432,9 +487,8 @@ Board format `pcbcraft-board/20` adds a required nonempty `zones` array and acce
 all board/19 fields, with board rules optional. A zone board with a placement
 origin uses at least format 21; assembly profiles, extended stack fields, assigned
 vias, material reports, circular copper arcs and footprint locks require at least
-formats 22, 23, 24, 25, 26 and 34, respectively. The encoder preserves every authored
-record in the format that covers those records. Removing a feature selects the
-format required by the remaining data. An absent array in board/20, an empty or
+historical formats 22, 23, 24, 25, 26 and 34, respectively. Format 42 preserves
+all of these records when present. An absent array in board/20, an empty or
 null zone array in any supported format,
 or zones in a format below 20, is refused. Zones are
 UUID-sorted, one authored record per line, with `id`, `layer`, `net`, `points` and
@@ -460,9 +514,9 @@ advance the footprint format.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45` or `/51` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
+| `project.json` | `pcbcraft-project/63` | Project UUID, name, numeric allocation watermark, board registration, ordered sheets and components, and optional authored records. Earlier project formats /5–/7, /9, /11–/17, /19–/24, /36, /39, /45, /47, /48, /51, /52, /56, /57, /60, /61 and /62 remain readable. |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/10` | Board UUID, one circuit use and one occurrence per sheet, optional net registry and either membership representation. See [board instance records](#board-instance-records). |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/10` | Sheet UUID, hierarchy, named anchors, unit placements, junctions and wires, with optional appearance, intent and page records. Versions /1–/9 remain readable. See [current sheet records](#current-sheet-records). |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37` or `/41` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; versions 27–33, 36 and 38–40 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](../libraries/footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
@@ -492,14 +546,8 @@ version 11. New projects start at version 16 with no physical board, unless New 
 explicitly requests one. Supported flat and project/14 and /15 encodings upgrade to project/16 on Save. Component metadata with explicit zero-or-one ownership
 uses version 12, which retains the watermark and registry; version 11 keeps legacy
 implicit ownership and rejects a `boards` record. Version 9 rejects component
-metadata rather than interpreting version-12 fields. Sheet encodings remain
-sheet/1 for ordinary sheets, sheet/2 for
-sheets with hierarchy records, sheet/3 for sheets with named anchors, sheet/4 for
-field appearance, sheet/5 for net-name appearance, sheet/6 for mirrored
-placements and sheet/7 for persisted generated-leg provenance, retaining existing
-board encodings. The low-level codec preserves
-original version-5 document bytes until an entry-point change, while ordinary Save
-adopts project/16 and retains unchanged payload bytes. Subsequent sheet changes keep
+metadata rather than interpreting version-12 fields. Ordinary Save adopts the
+current schemas and supported folder layout. Subsequent sheet changes keep
 the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
 component metadata, field appearance, mirrored placements, live generated
@@ -525,6 +573,43 @@ legacy boards without a baseline refuse that exclusion. Package
 assignment can remain pinned for later inclusion. Other flags retain authored
 intent for their respective future output/simulation consumers.
 
+### Board instance records
+
+A registered board's `instances.json` uses `pcbcraft-instances/10` with
+`project.json` at project/63. Its `board` UUID must match the registration.
+The instance document requires one `circuit_uses` entry and a
+`sheet_occurrences` entry for each sheet. It may carry `net_registry`,
+including class bindings, generated numbers, differential pairs or wire appearance, and either
+`part_group_memberships` or `compact_part_group_memberships`. Absent records
+are omitted. Compact memberships use the same bounds and UUID checks as the
+historical compact format. Schematic-only projects keep the same records under
+`project.json.schematic_instances`.
+
+The reader retains the format checks for instances/1–5 and /7–/9. The first
+Save or Download rewrites these documents at the registered path. Later
+unchanged saves preserve their bytes. The writer keeps instances/10 when optional
+records are cleared or when expanded memberships exceed the byte bounds and the
+encoder retries with compact records.
+
+### Current sheet records
+
+The native writer uses sheet/10 for all sheets and retains the sheet UUID and
+registered path. Every sheet has `net_labels`, `labels`, `subsheets`,
+`symbols`, `junctions` and `wires` arrays, including empty arrays when
+appropriate. Optional fields include symbol field layout and mirroring,
+net-name appearance, generated contact legs, no-connect wire ends, paper and
+sheet parameters. The reader applies the same record, ownership and geometry
+checks as in the earlier formats. Present generated-leg and wire-end lists must
+be nonempty. Parameters require a page. Paper may be absent from snapshots
+saved without the opening migration.
+
+The first desktop Save or browser Download rewrites older sheets at the same
+paths even when their records are unchanged. Later unchanged saves preserve
+the exact bytes. Removing optional records or using Undo and Redo keeps the
+sheet/10 header.
+
+#### Historical appearance and generated legs
+
 Sheet/4 retains sheet/3's required `net_labels`, `labels` and `subsheets` arrays,
 even when empty. Each placement may add non-null `field_layout`, keyed by
 `reference`, `value` or an existing optional field ID. A layout stores `offset`
@@ -534,22 +619,20 @@ symbol space), `visible`, `show_name`, `rotation` (0/90/180/270), `align`
 the schematic center range. Manual offsets turn with the symbol; explicit text
 orientation is independent. Unspecified reference/value layouts retain legacy
 automatic rendering, and optional fields start hidden. Absent metadata/layout
-stays omitted, preserving older canonical document encodings. Older readers
-reject the project/11 or /12 and sheet/4 extensions instead of silently discarding data. Reference/value content
+stays omitted. Earlier project and sheet headers reject fields introduced in
+project/11 or /12 and sheet/4. Reference/value content
 edits stay in `project.json`; label placement edits stay in the owning sheet.
 
 Sheet/5 extends sheet/4 with optional non-null `text` on each named anchor. It uses
 the same field-layout vocabulary and bounds. Offsets are relative to the electrical
 anchor in its unrotated space; the text angle is explicit and its height scales
-with zoom. Missing `text` preserves the automatic layout and old sheet encoding.
-Only sheets with authored net-name appearance use version 5; older readers reject
-that version. Appearance edits do not move contacts or alter net names.
+with zoom. Missing `text` uses the automatic layout. Appearance edits leave
+contacts and net names unchanged.
 
 Sheet/6 extends sheet/5 with an optional non-null boolean `mirrored` on a unit
 placement. A mirrored unit reflects left-to-right about its center before the
 stored quarter-turn rotation, so pin positions and drawing transform agree.
-`mirrored` is emitted only when true; removing the last mirror returns the sheet
-to the version its remaining content needs. Field layouts keep their authored local
+`mirrored` is emitted only when true. Field layouts keep their authored local
 offsets, which are reflected and turned with the drawing. Explicit text
 orientation stays as authored and is not changed by turns or mirroring.
 Older readers reject sheet/6 rather than silently dropping the reflection. The diagnostic legacy single-file encoding refuses mirrored
@@ -562,9 +645,8 @@ its exact `bends` array. The record lets a later mirror remove only the
 connecting leg it created and preserve authored routes after a folder or archive
 reopen. A record is emitted only while its endpoints and bends still exactly
 match that wire; after any route edit the wire becomes authored again and the
-record is dropped. Removing the last live record returns the sheet to the version
-its remaining content needs. Sheets without live records reject the array, and
-older readers reject sheet/7 rather than silently dropping the provenance. The
+record is dropped. When there are no live records, the writer omits the array.
+Historical sheet/7 requires at least one live record. The
 diagnostic legacy single-file encoding refuses live generated legs because its
 wire vocabulary has no provenance field.
 
@@ -578,8 +660,8 @@ All appearances of the same part terminal share the selection. Omission uses the
 primary function. Empty, null, duplicate or unresolved records are refused; at
 most 4,096 selections may be stored per project.
 
-Projects that pin version-5 symbols use project format 48, with or without an
-explicit selection. This format composes with part-group memberships and assembly
+Projects can pin version-5 symbols with or without an explicit selection.
+Project/62 composes with part-group memberships and assembly
 profiles without changing board, sheet, or instance document headers. Placing a
 version-5 symbol and changing pin functions require current storage; neither edit
 migrates projects. Pin function Preview and Apply both reject a changed selection
@@ -589,9 +671,10 @@ refuses choices rather than omitting them.
 
 `pcbcraft-project/56` stores the same records when a project also has an active
 [designator lock](#designator-locks): it accepts both `pin_functions` and
-`designator_locked: true` under the rules of project/48 and project/51. The encoder
-selects /56 only when both are present, /48 for pin functions alone and /51 for
-locks alone. Readers accept /48, /51 and /56 and every earlier format.
+`designator_locked: true` under the rules of project/48 and project/51.
+Project/61 and /62 accept either field independently, subject to the same validation.
+Readable project/60 stores pin functions with or without a lock, alongside output
+recipes; project/47 and /57 refuse pin functions.
 
 ### Intentional no-connect records
 
@@ -608,24 +691,24 @@ the addressed part terminal resolves its current mark position. Missing or
 type-changed targets remain addressed unresolved intent and can be removed;
 they do not silently acquire another pin. Explicit null, empty lists, duplicate
 or malformed terminal tokens and unknown fields are rejected. Folder/archive
-round trips use the same codec, and unchanged projects without markers preserve
-their prior low-level bytes. This is separate from package `unconnected_pads`.
+round trips use the same codec. Projects without markers omit the records.
+Package `unconnected_pads` records carry separate physical intent.
 
 Sheet/8 requires a nonempty `no_connect_ends` array of junction IDs, written in
 ascending order, and otherwise retains sheet/6 fields plus optional nonempty
 generated-leg records from sheet/7. Each ID must be a live junction on that exact
 sheet; duplicate, unknown, foreign-sheet and out-of-range IDs are rejected.
 The endpoint owns the mark position, so moving it requires no separate marker
-coordinate. Older headers reject the new field. Project/19 requires at least
-one pin or wire-end marker across the project; removing the last marker allows
-ordinary lower-version encoding again.
+coordinate. Earlier sheet headers reject the field. Historical project/19
+requires at least one pin or wire-end marker across the project. Current saves
+omit the field when removing the last marker.
 
 See the [no-connect contract](../schematic/no-connect-markers.md) for commands and checks.
 
 ### Sheet paper records
 
-Sheet/9 adds a required `page` record after `id` and is written for every sheet
-with paper, which is every sheet created or opened by this version:
+Sheet/9 introduced a required `page` record. Current sheet/10 saves place it
+after `id` when the sheet has paper:
 
 ```json
 "page": {"paper":"a4","orientation":"landscape","at_nm":[-148590000,-105410000]}
@@ -647,11 +730,10 @@ sheet keeps its frame across app updates. Only the app's bundled templates exist
 so far; a sheet naming any other template is refused rather than opened without
 its frame. Templates have no files in the project folder yet.
 Unknown fields, null (for `page` or `template`) and other sizes are rejected, and
-older versions reject `page`. Sheet/9 is a
-superset of sheet/8: it always carries the three hierarchy/named arrays, and its
-`generated_legs` and `no_connect_ends` arrays are optional but nonempty when
-present, with the sheet/7 and sheet/8 rules. Changing one sheet's paper changes
-only that sheet's document. The diagnostic single-file encoding refuses paper.
+sheet formats before /9 reject `page`. Sheet/9 and /10 both support optional
+`generated_legs` and `no_connect_ends` arrays under the sheet/7 and sheet/8 rules.
+Changing one sheet's paper changes only that sheet's document. The diagnostic
+single-file encoding refuses paper.
 
 `sheet.set_page` takes `sheet`, `paper`, `orientation` and an optional `at`
 point. Without `at` the paper's top-left corner stays where it is, and the frame
@@ -665,7 +747,8 @@ Project/51 stores optional `designator_locked: true` on each locked part-instanc
 record in the existing `components` array. The missing field means false;
 explicit false, null, other types and unknown fields are refused. Project/51
 requires at least one true flag, and earlier headers reject lock fields;
-project/56 applies the same rule alongside alternate pin functions. Older
+project/56 applies the same rule alongside alternate pin functions. Readable
+project/57 also requires a lock, and project/60 accepts one optionally. Older
 readers reject project/51 rather than silently dropping intent. The diagnostic
 single-file codec refuses locks; folder and `.pc` codecs retain them.
 
@@ -678,18 +761,15 @@ field command can also carry other edits, whose geometry, appearance and board-s
 effects are separate from the lock flag. Project/51 retains the optional
 project parameters, net-class catalog, assignments, net registry, no-connect
 intent, part groups and assembly profiles under their existing validation rules.
-Board-owned instance registries keep their existing instances/1–5, /7 or /8
-vocabulary according to their content. Projects with differential pairs keep all
-pair records when a lock upgrades project/45 to project/51; board-owned pairs
-still use instances/8. Schematic-only projects keep the same embedded registry
-home.
+Projects with differential pairs keep those records when a lock is added.
+Current board-owned records use [instances/10](#board-instance-records).
+Schematic-only projects keep the same embedded registry home.
 
 Setting the first lock adopts storage, allocation-watermark and sheet-occurrence
 metadata in that same undoable transaction if the older project lacks them.
-Opening, inspection and an unchanged edit never create a lock. Unlocked projects
-retain their earlier encoding; unlocking the last part returns to the version
-required by the remaining content, retaining any adopted metadata. Undo restores
-the prior authored content. If no intervening Save has adopted storage metadata,
+Opening, inspection and an unchanged edit never create a lock. Unlocking the
+last part omits the last lock flag while keeping project/63. Undo restores the
+prior authored content. If no intervening Save has adopted storage metadata,
 Undo also removes layout and occurrence metadata added by the lock edit, and
 restores the exact prior documents for an already-watermarked project. Undo
 retains an adopted numeric allocation watermark under the existing monotonic
@@ -713,13 +793,10 @@ Parameters are named text values that texts show as `@project.Name`,
 values that differ from the defaults are stored, so a project that sets none
 keeps its earlier bytes.
 
-A sheet/9 document may carry a nonempty `parameters` object directly after
-`page`. A project/22 entry point requires a nonempty `parameters` object;
-project/23 accepts the same object optionally alongside generated net numbers;
-project/24 and project/39 accept it optionally alongside the part-group catalog;
-project/36 accepts it alongside the assembly profile catalog, and project/45
-alongside differential pairs. Project/51 accepts it alongside designator locks,
-with differential pairs optional. In each of these project formats, the object appears directly before `sheets`:
+Sheet/9 and /10 documents may carry a nonempty `parameters` object directly after
+`page`. The current project entry point accepts an optional nonempty
+`parameters` object alongside other authored records. The writer places it
+directly before `sheets`:
 
 ```json
 "parameters": {
@@ -735,9 +812,8 @@ references. Editing ignores case, so a name that differs from another stored
 name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
-objects require sheet/9; project parameter objects require project/22, project/23,
-project/24, project/36, project/39, project/45 or project/51 and are rejected in
-other project versions. Project/22 is a superset
+objects require paper. Project parameter objects are supported in project/22,
+/23, /24, /36, /39, /45, /47, /48, /51, /56, /57 and /60–/62. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
 generated net numbers and permits those same optional fields, including project
@@ -748,15 +824,17 @@ records and an optional profile catalog alongside its required differential
 pairs. Project/51 requires a designator lock and permits the same records with or
 without pairs. All these formats require adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
-Removing the last project value returns the entry point to the version its other
-content needs. The diagnostic single-file encoding refuses parameters.
+Removing the last project value omits the parameters object. The diagnostic
+single-file encoding refuses parameters.
 
 ### Part-group records
 
 Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
-/45 and /51 also accept the group catalog, with either membership representation.
-Board-owned pairs keep instances/8 regardless of membership representation.
+/45, /47, /48, /51, /56, /57 and /60–/62 also accept the catalog, with either membership
+representation.
+Both membership representations compose with pairs in the
+[current instance format](#board-instance-records).
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
 with its existing rules, and it requires adopted storage and occurrence metadata.
@@ -770,10 +848,9 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-With compact memberships, the encoder selects project/56, /48 or /51 when
-alternate pin functions or an active designator lock select it, otherwise project/45 if pairs are present, otherwise project/36 if an
-assembly profile catalog is retained, otherwise project/39. Board-owned compact
-memberships use instances/8 with pairs and instances/7 without pairs.
+Current board-owned records use instances/10 for either representation.
+Historical instances/7 carries compact memberships without pairs. Instances/8
+allows either representation and requires pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
 record contains a sorted UUID `groups` dictionary
 and sorted `part_instances` rows (`part_instance` plus sorted numeric `groups`
@@ -820,6 +897,21 @@ and project/12. Moving/renaming a label
 changes only its record; an unchanged save retains all document bytes. Folder
 and packed-project validation rejects foreign endpoints, ID collisions, missing
 or null arrays, unknown fields/types and invalid text or geometry before adoption.
+
+### Net wire appearance
+
+An optional `appearance` object on a logical net registry record overrides the
+screen-space color and stroke width of that net's schematic wires. `color` is an
+RGB triple of integers from 0 to 255. `width_cp` is an integer from 50 to 800
+hundredths of a point. The object must specify at least one channel. Missing
+channels use the theme default.
+
+Schematic-only projects store the registry in `project.json`. Registered boards
+store it in `instances.json`. Project/63 and instances/10 support the record
+alongside the other optional fields. The reader also accepts the preview
+project/52 envelope, with instances/9 for a registered board. Production
+project/61 and /62 reject appearance records. Resetting an override omits the
+field on the next save while retaining the current versions and the net identity.
 
 ### Hierarchical sheet records
 
@@ -881,10 +973,9 @@ Omitted rotation means zero, and canonical records omit zero to preserve legacy
 bytes. A nonzero orientation requires `pcbcraft-board/4` or a later supported board version; earlier versions
 and legacy single-file encodings refuse it rather than lose orientation. Version
 4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
-material and mapping identities. Without rotation, versions 1–3 apply only if no
-other field requires a later format. Legacy single-file export refuses rotation.
-Moving an isolated footprint changes its placement record; any track ends carried
-with the footprint also change. Rotation can additionally change the board header. Every project has its sheet documents. A new schematic-only
+material and mapping identities. Legacy single-file export refuses rotation.
+Moving or rotating an isolated footprint changes its placement record. Any track
+ends carried with the footprint also change. Every project has its sheet documents. A new schematic-only
 project has no board document; an explicitly created PCB and legacy implicit-board
 projects have a physical board document even when no footprints are placed;
 its path follows the registration after folder adoption. The board registry
@@ -898,9 +989,8 @@ pad ID, together with its position and optional rotation. The complete
 its path identity. Missing, conflicting or unused definitions are refused; loading
 never substitutes a built-in definition. Version 5 allows absent setup or the
 version-3 setup vocabulary. Legacy marker instances can coexist with physical
-placements, and legacy single-file export refuses physical definitions. Existing
-canonical marker-only documents retain their bytes in a no-op codec round trip;
-marker placements are not upgraded to physical pads implicitly. Deleting the last placement using a physical definition removes its
+placements, and legacy single-file export refuses physical definitions. A header
+migration preserves marker placements and their existing geometry. Deleting the last placement using a physical definition removes its
 unused pinned copy on save.
 
 Pinned footprints hold up to 1,024 pads and 256 artwork objects, pinned symbols
@@ -911,9 +1001,9 @@ Board format 6 requires a `silkscreen` object with `text_height_nm`,
 `stroke_width_nm` and `pad_clearance_nm`, as defined in the
 [footprint contract](../libraries/footprint-library.md#silkscreen-settings). It permits the
 same optional setup, placement orientation and pinned definitions as version 5.
-Versions 1–5 refuse this field; untouched older boards keep their bytes and use
-the stable default style for definitions that request physical silk. Editing the
-style changes only the board document. Legacy single-file export refuses these
+Versions 1–5 refuse this field. Missing settings use the stable default style
+for definitions that request physical silk. Editing the style changes only the
+board document. Legacy single-file export refuses these
 settings rather than discarding them.
 
 Board format 7 adds a nonempty `assignments` array before `footprints`. Each
@@ -924,8 +1014,7 @@ incomplete/nonbijective mappings and disagreements with an existing placement
 are refused. Unplaced assignments retain their pinned files even with an empty
 `footprints` array. The incremental encoder writes one assignment per record
 budget and emits shared definition copies once. Setup and silkscreen remain
-optional under version 7, with their existing validation. Older boards retain
-their prior encoding until a package assignment is authored. Legacy single-file
+optional under version 7, with their existing validation. Legacy single-file
 export refuses independent assignments rather than losing them.
 
 Board format 10 is explicitly enabled by `pcb.initialize_update_baseline` and
@@ -936,8 +1025,8 @@ defines the codec and current engine-only limitations; older readers refuse this
 format instead of dropping retained physical state.
 
 Board format 11 retains that baseline while allowing desired assignments to differ
-from accepted placements. It is required exactly when package intent is pending;
-Apply or resetting intent to accepted values removes that difference. Desired
+from accepted placements. Format 11 requires pending package intent.
+Format 42 supports both states. Apply or resetting intent removes the difference. Desired
 mappings validate against live logical terminals and pinned package pads, while
 accepted footprint mappings validate independently against historical terminals.
 
@@ -961,8 +1050,7 @@ The radius is derived from center/start, not stored. Each arc occupies one line
 in UUID order, at most 4,096 per board. End radial error is at most 1 nm inclusive;
 zero radius, zero sweep, full circles, invalid dimensions/layers and duplicate
 copper IDs are rejected with exact integer predicates. Formats 26 and 35 require
-nonempty `arcs`; other headers refuse the field. Readers without support for
-these formats refuse them. No data without arcs is upgraded to either format.
+nonempty `arcs`. Formats 41 and 42 support arcs as an optional array.
 Native documents and archives round-trip the exact records; the diagnostic
 single-file writer refuses them. Geometry consumers refuse rather than flatten
 these records until circular conductive contours are implemented.
@@ -983,9 +1071,8 @@ drill at least 50,000 and smaller than the pad and the pad at most 10,000,000. A
 spans every copper layer and needs a setup with at least two; a board holds at most
 16,384 (2,048 in earlier releases), within the native board document size limit.
 Format 13 requires at least one via, and its `tracks` array is optional. Either
-array is omitted when empty, and formats before 12 reject both fields. With no
-vias, tracks alone require format 12 unless other fields require a later format.
-Deleting the last track and via leaves the format required by the remaining data.
+array is omitted when empty, and formats before 12 reject both fields.
+Deleting the last track or via leaves the current header at format 42.
 Net membership is not stored; it is derived from copper geometry and the accepted nets.
 Legacy single-file export refuses tracks and vias.
 
@@ -993,8 +1080,8 @@ Board format 14 marks bottom-side footprints with `"bottom": true` on their plac
 records and is otherwise format 13, so tracks and vias stay optional. It requires at
 least one bottom-side footprint, and earlier formats reject the field; top-side records
 omit it. A bottom footprint mirrors its local X before rotation, and its surface pads
-and technical graphics use the back layers. Flipping the last footprint back to the top
-returns the board to the format its other data requires, with the same bytes as before.
+and technical graphics use the back layers. Flipping the last footprint back
+to the top omits the flag, with the same format-42 bytes as before the flip.
 Legacy single-file export refuses bottom-side footprints.
 
 Board format 15 adds optional `reference_offset` and `reference_text` fields on a
@@ -1002,8 +1089,8 @@ footprint placement. The offset is measured in local nanometers before rotation
 or side mirroring. The sparse print object overrides words, font, paired text
 height/stroke, local rotation, alignment and visibility while retaining the
 component's identity and reference. Format 15 requires at least one nonzero
-offset or nonempty print override. Resetting the last of both restores the
-format required by the board's other data.
+offset or nonempty print override. Resetting both omits them from the next
+format-42 save.
 The [footprint format specification](../libraries/footprint-schema.md) defines its placement schema and coordinate contract.
 
 Board format 16 adds optional integer `stroke_nm` to layer graphics, bounded
@@ -1013,26 +1100,22 @@ explicit nulls are rejected. The format carries every field supported by format
 15, including reference-position and print overrides, and requires at least one
 stroked graphic. Older formats reject the new field. Graphics reference existing
 non-copper layer UUIDs; conductive copper linework uses the existing track records
-and their connectivity/DRC/export rules. Removing the last stroked graphic returns
-the board to the format required by its remaining data. Unchanged legacy boards
-retain their previous encoding and bytes.
+and their connectivity/DRC/export rules. Removing the last stroked graphic
+leaves the current header at format 42.
 
 Board format 18 adds optional `locked: true` on track and via records and
 requires at least one authored lock. It is a superset of format 17, including
 multi-pad mappings, physical graphics, accepted baselines and pending intent.
-Absent copper lock flags mean false; canonical saves omit false. Removing the
-last active copper lock leaves the format required by the remaining data; for
-example, a board with an active footprint lock uses format 34, 35 with arcs,
-or 37 with straight-via teardrops. Headers below 18
+Absent copper lock flags mean false. Canonical saves omit false and use format
+42 regardless of active locks. Historical headers below 18
 refuse active copper locks, and older readers refuse format 18.
 Flags survive folder/archive reopen and undo/redo without changing object IDs,
 geometry or connectivity. The shared lock command and protection policy are in
 [the layout workflow](../pcb/locks.md#fixed-tracks-and-vias).
 
-The earlier local format 8 rectangle remains readable and byte-stable on no-op
-save. Its first actual geometry edit materializes a layer-addressed drawing in
-format 9. Canonical versions 1–7 keep their encoding on unchanged codec round
-trips. The current reader rejects incompatible newer data, but tolerates a
+The earlier local format 8 rectangle remains readable. Its first geometry
+edit materializes a layer-addressed drawing. Header migration alone preserves
+the rectangle record. The current reader rejects incompatible newer data, but tolerates a
 noncanonical `locked: false` as described in [footprint lock metadata](#placed-footprint-lock-metadata).
 Legacy single-file export refuses edge graphics. Board document additions do not introduce a broader
 multiboard migration; the entry point separately records explicit zero-or-one
@@ -1134,7 +1217,7 @@ the working documents.
 Moving or rotating a symbol changes only its sheet record. Editing a reference
 or value changes only its component record in `project.json`. Board geometry stays
 in `board.json`. Placing a new definition changes the project and sheet documents
-and adds its saved symbol file. After the first layout migration, a no-op save rewrites no project documents.
+and adds its saved symbol file. After layout and header migration, a no-op save rewrites no project documents.
 Even after another document changes, unaffected documents retain their original
 bytes, including valid custom formatting.
 
