@@ -257,6 +257,27 @@ during the call. Enabling `save_to_project_minutes` lets the editor later save
 an eligible dirty project to its existing location on that schedule without
 another command.
 
+## Net wire appearance
+
+`nets.inspect_appearance` reports a logical net’s effective schematic wire
+override and identity status. `nets.set_appearance` takes `expected_revision`,
+a net `target` and an `appearance` patch. Send an RGB `color` array or a
+`width_cp` integer from 50 to 800 hundredths of a point to set those channels.
+Use a nonempty `clear` array naming `color` or `width_cp` to remove individual
+overrides, or use `{}` or `null` to reset both.
+
+The edit promotes an eligible derived net in the same Undo step and rejects stale
+revisions. The commands work in live and headless sessions and share the command
+path used by schematic Properties. The overrides are persisted against the
+[logical net registry](formats/native-project-storage.md#net-wire-appearance).
+These are additions to command API version 1.
+
+Use `nets.set_properties` to edit up to 64 distinct current logical nets in one
+Undo step. Send `targets`, `expected_revision` and a `changes` object with an
+optional `appearance` patch, `add_classes` and `remove_classes`. Omitted fields
+keep their values on each net. Class lists update assignments to existing rule
+definitions. An invalid or repeated electrical target rejects the entire edit.
+
 ## MCP reference
 
 - <a name="command-api-version"></a>[Command API version](automation/command-api.md#command-api-version),

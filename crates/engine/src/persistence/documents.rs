@@ -44,7 +44,10 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 /// The sole project entry-point version emitted by the native writer.
-pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/61";
+pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/63";
+const PRE_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/61";
+const PRE_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/62";
+const LEGACY_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/52";
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
@@ -57,6 +60,10 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
+// Read-only recipe envelopes from earlier builds.
+const OUTPUT_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/47";
+const RECIPE_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/57";
+const RECIPE_PIN_FUNCTION_PROJECT_FORMAT: &str = "pcbcraft-project/60";
 const PIN_FUNCTION_PROJECT_FORMAT: &str = "pcbcraft-project/48";
 const PIN_FUNCTION_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/56";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
@@ -67,6 +74,9 @@ const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
 const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const PAIR_INSTANCES_FORMAT: &str = "pcbcraft-instances/8";
+const PRE_APPEARANCE_INSTANCES_FORMAT: &str = "pcbcraft-instances/9";
+/// Current board-owned instance format, including optional net wire appearance.
+pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/10";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -74,6 +84,8 @@ const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const GENERATED_SHEET_FORMAT: &str = "pcbcraft-sheet/7";
 const WIRE_END_SHEET_FORMAT: &str = "pcbcraft-sheet/8";
 const PAGE_SHEET_FORMAT: &str = "pcbcraft-sheet/9";
+/// Current sheet write format. Raw snapshots may omit paper until opened for editing.
+pub const CURRENT_SHEET_FORMAT: &str = "pcbcraft-sheet/10";
 const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -152,6 +164,8 @@ struct ProjectDocument {
     parameters: Option<crate::parameters::Parameters>,
     #[serde(default, deserialize_with = "present")]
     assembly_profiles: Option<crate::board::assembly_profile::Catalog>,
+    #[serde(default, deserialize_with = "crate::board::output_recipe::stored_recipes")]
+    output_recipes: Option<Vec<crate::board::output_recipe::Recipe>>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
 }
@@ -193,7 +207,12 @@ impl ProjectDocument {
     fn layout_format(&self) -> &str {
         match self.format.as_str() {
             COMPACT_PART_GROUP_PROJECT_FORMAT => PART_GROUP_PROJECT_FORMAT,
-            CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
+            PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT => {
+                PIN_FUNCTION_LOCK_PROJECT_FORMAT
+            }
+            OUTPUT_RECIPE_PROJECT_FORMAT => ASSEMBLY_PROFILE_PROJECT_FORMAT,
+            RECIPE_LOCK_PROJECT_FORMAT => DESIGNATOR_LOCK_PROJECT_FORMAT,
+            RECIPE_PIN_FUNCTION_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
             format => format,
         }
     }
@@ -432,7 +451,13 @@ pub fn is_document_path(path: &str) -> bool {
 /// either group membership encoding remain optional under those headers.
 /// Project/51 requires an active designator lock. Differential pairs are optional;
 /// board-owned pairs still use instances/8 with either group membership encoding.
-/// Project/61 uses the project/56 vocabulary with optional designator locks.
+/// Project/61 uses the project/56 vocabulary with optional designator locks and accepts
+/// instances/9, where the registry, pairs and either membership encoding are optional.
+/// Project/62 adds optional output recipes for the registered board. When present, the
+/// list is nonempty.
+/// The older recipe envelopes stay readable and require recipes: project/47 follows project/36
+/// without requiring profiles, project/57 follows project/51, and project/60 follows project/56
+/// with optional designator locks.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -442,6 +467,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
+    let legacy_appearance = project.format == LEGACY_APPEARANCE_PROJECT_FORMAT;
+    let supports_appearance = current_format || legacy_appearance;
+    let canonical_instances = match project.format.as_str() {
+        CURRENT_PROJECT_FORMAT => Some(CURRENT_INSTANCES_FORMAT),
+        PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT => Some(PRE_APPEARANCE_INSTANCES_FORMAT),
+        _ => None,
+    };
+    let supports_optional_recipes = current_format || project.format == PRE_APPEARANCE_PROJECT_FORMAT;
+    let recipe_format =
+        matches!(project.format.as_str(), OUTPUT_RECIPE_PROJECT_FORMAT | RECIPE_LOCK_PROJECT_FORMAT | RECIPE_PIN_FUNCTION_PROJECT_FORMAT);
+    let optional_locks = canonical_instances.is_some() || project.format == RECIPE_PIN_FUNCTION_PROJECT_FORMAT;
+    // Recipes were required in the three feature-selected envelopes and optional from /62 onward.
+    if (if recipe_format { project.output_recipes.is_none() } else { !supports_optional_recipes && project.output_recipes.is_some() })
+        || project.output_recipes.as_ref().is_some_and(Vec::is_empty)
+    {
+        return Err(
+            "project.json: output_recipes requires project format 47, 57, 60, 62 or 63 and a nonempty array; formats 47, 57 and 60 require it."
+                .into(),
+        );
+    }
+    let mut output_recipes = project.output_recipes.take().unwrap_or_default();
     // The current envelope shares the project/56 vocabulary but makes locks optional.
     project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
@@ -450,14 +496,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
     let pin_function_format = matches!(project.format.as_str(), PIN_FUNCTION_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
-    if (!lock_format && !pair_format && !pin_function_format && profile_format != project.assembly_profiles.is_some())
+    if (!lock_format && !pair_format && !pin_function_format && !recipe_format && profile_format != project.assembly_profiles.is_some())
         || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
     {
         return Err("project.json: assembly profiles require project format 36, 45, 48, 51 or 56 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if (!current_format && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
+    if (!optional_locks && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
         || project.components.iter().any(|part| part.designator_locked == Some(false))
     {
         return Err("Designator locks require project format 51 or 56 and at least one true designator_locked flag; omit unlocked flags.".into());
@@ -567,6 +613,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
     }
     let (mut registrations, storage_layout) = project.registry()?;
+    if !output_recipes.is_empty() {
+        let board = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
+        crate::board::output_recipe::validate_recipes(&output_recipes, board).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+        output_recipes.sort_by_key(|recipe| recipe.id);
+    }
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
     let registered = (part_format && project.boards.is_some())
         || matches!(
@@ -667,32 +718,45 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let optional_bindings =
-                    (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
-                let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                let pair_instances = pair_format
-                    || ((lock_format || pin_function_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
-                if pair_instances {
-                    // Instances/8 keeps its header for either membership encoding.
-                    compact_part_groups = instance.compact_part_group_memberships.is_some();
-                } else if optional_part_groups {
-                    // Without pairs, the instance header distinguishes the two encodings.
-                    compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
+                let canonical_header = canonical_instances == Some(instance.format.as_str());
+                if (legacy_appearance && !canonical_header)
+                    || (instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_appearance)
+                        && !(supports_appearance && canonical_header))
+                {
+                    return Err(format!("{path}: net wire appearance requires project/63 with instances/10, or legacy project/52 with instances/9"));
                 }
-                let expected = if pair_instances {
-                    PAIR_INSTANCES_FORMAT
-                } else if compact_part_groups {
-                    COMPACT_PART_GROUP_INSTANCES_FORMAT
-                } else if supports_part_groups && instance.part_group_memberships.is_some() {
-                    PART_GROUP_INSTANCES_FORMAT
-                } else if generated_net_format || numbered {
-                    GENERATED_NET_INSTANCES_FORMAT
-                } else if binding_format || optional_bindings {
-                    BINDING_INSTANCES_FORMAT
-                } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
-                    NET_INSTANCES_FORMAT
+                let expected = if canonical_header {
+                    compact_part_groups = instance.compact_part_group_memberships.is_some();
+                    instance.format.as_str()
                 } else {
-                    INSTANCES_FORMAT
+                    let optional_bindings = (parameter_format || superset_format)
+                        && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
+                    let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
+                    let pair_instances = pair_format
+                        || ((recipe_format || lock_format || pin_function_format)
+                            && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                    if pair_instances {
+                        // Instances/8 keeps its header for either membership encoding.
+                        compact_part_groups = instance.compact_part_group_memberships.is_some();
+                    } else if optional_part_groups {
+                        // Without pairs, the instance header distinguishes the two encodings.
+                        compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
+                    }
+                    if pair_instances {
+                        PAIR_INSTANCES_FORMAT
+                    } else if compact_part_groups {
+                        COMPACT_PART_GROUP_INSTANCES_FORMAT
+                    } else if supports_part_groups && instance.part_group_memberships.is_some() {
+                        PART_GROUP_INSTANCES_FORMAT
+                    } else if generated_net_format || numbered {
+                        GENERATED_NET_INSTANCES_FORMAT
+                    } else if binding_format || optional_bindings {
+                        BINDING_INSTANCES_FORMAT
+                    } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
+                        NET_INSTANCES_FORMAT
+                    } else {
+                        INSTANCES_FORMAT
+                    }
                 };
                 if instance.format != expected || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
@@ -728,12 +792,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (!parameter_format && !superset_format && binding_format != has_bindings)
         || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
     {
-        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and the content-selected instance format when board-owned; project format 21 requires nonempty assignments.".into());
+        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if !lock_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    if !supports_appearance && stored_registry.is_some_and(crate::nets::Registry::has_appearance) {
+        return Err("Net wire appearance requires project format 63 or legacy format 52.".into());
+    }
+    if !lock_format && !recipe_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
-            "Differential pairs require project format 45, 48, 51 or 56 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
+            "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
         );
     }
@@ -744,7 +811,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
         return Err(
-            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and instances format 4, 5, 7 or 8 when board-owned, with a number on every record."
+            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and a compatible instance format when board-owned, with a number on every record."
                 .into(),
         );
     }
@@ -762,6 +829,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
         let mut sheet: SheetDocument = parse(documents, &reference.file)?;
+        let current = sheet.format == CURRENT_SHEET_FORMAT;
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
             (SHEET_FORMAT, false, false, false)
             | (HIERARCHY_FORMAT, true, true, false)
@@ -771,32 +839,40 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (MIRROR_SHEET_FORMAT, true, true, true)
             | (GENERATED_SHEET_FORMAT, true, true, true)
             | (WIRE_END_SHEET_FORMAT, true, true, true)
-            | (PAGE_SHEET_FORMAT, true, true, true) => {}
+            | (PAGE_SHEET_FORMAT | CURRENT_SHEET_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if !matches!(
-            sheet.format.as_str(),
-            FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
-        ) && sheet.symbols.iter().any(|s| s.field_layout.is_some())
+        if !current
+            && !matches!(
+                sheet.format.as_str(),
+                FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            )
+            && sheet.symbols.iter().any(|s| s.field_layout.is_some())
         {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
+        if !current
+            && !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
             && sheet.symbols.iter().any(|s| s.mirrored.is_some())
         {
             return Err(format!("{}: mirrored placements require sheet format 6", reference.file));
         }
-        if !matches!(
-            sheet.format.as_str(),
-            TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
-        ) && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
+        if !current
+            && !matches!(
+                sheet.format.as_str(),
+                TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            )
+            && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
         {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
         }
         if sheet.format == GENERATED_SHEET_FORMAT && sheet.generated_legs.as_ref().is_none_or(|records| records.is_empty()) {
             return Err(format!("{}: sheet format 7 requires generated contact legs", reference.file));
         }
-        if !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT) && sheet.generated_legs.is_some() {
+        if !current
+            && !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
+            && sheet.generated_legs.is_some()
+        {
             return Err(format!("{}: generated contact legs require sheet format 7", reference.file));
         }
         if let Some(records) = &sheet.generated_legs {
@@ -817,7 +893,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 }
             }
         }
-        if sheet.format == WIRE_END_SHEET_FORMAT || (sheet.format == PAGE_SHEET_FORMAT && sheet.no_connect_ends.is_some()) {
+        if sheet.format == WIRE_END_SHEET_FORMAT || ((current || sheet.format == PAGE_SHEET_FORMAT) && sheet.no_connect_ends.is_some()) {
             let records = sheet.no_connect_ends.as_ref().ok_or("Sheet format 8 requires no-connect wire ends.")?;
             let unique: BTreeSet<_> = records.iter().copied().collect();
             let junctions: BTreeSet<_> = sheet.junctions.iter().map(|junction| junction.id).collect();
@@ -831,15 +907,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         } else if sheet.no_connect_ends.is_some() {
             return Err("No-connect wire ends require sheet format 8.".into());
         }
-        if (sheet.format == PAGE_SHEET_FORMAT) != sheet.page.is_some() {
+        if !current && (sheet.format == PAGE_SHEET_FORMAT) != sheet.page.is_some() {
             return Err(format!("{}: sheet format 9 and only sheet format 9 requires paper", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         metadata.page =
             sheet.page.clone().map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
         if let Some(parameters) = sheet.parameters.take() {
-            if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
-                return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));
+            if metadata.page.is_none() || parameters.is_empty() {
+                return Err(format!("{}: sheet parameters require paper and a nonempty object", reference.file));
             }
             crate::parameters::check(&parameters, crate::parameters::Scope::Sheet).map_err(|error| format!("{}: {error}", reference.file))?;
             metadata.parameters = Arc::new(parameters);
@@ -884,6 +960,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: compact_part_groups,
@@ -908,20 +985,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(
-            sheet.format.as_str(),
-            SHEET_FORMAT
-                | HIERARCHY_FORMAT
-                | NAMED_FORMAT
-                | FIELDS_SHEET_FORMAT
-                | TEXT_LAYOUT_FORMAT
-                | MIRROR_SHEET_FORMAT
-                | GENERATED_SHEET_FORMAT
-                | WIRE_END_SHEET_FORMAT
-                | PAGE_SHEET_FORMAT
-        ) || sheet.id != reference.id
-        {
-            return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
+        if sheet.id != reference.id {
+            return Err(format!("{sheet_path}: sheet identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
         let junctions: BTreeSet<_> = sheet.junctions.iter().map(|j| j.id).collect();
@@ -1589,6 +1654,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     project_data.parameters = Arc::new(project_parameters);
     project_data.assembly_profiles = Arc::new(profile_catalog);
+    project_data.output_recipes = Arc::new(output_recipes);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
@@ -1769,8 +1835,8 @@ impl DocumentsEncoder {
     /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
     /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
     /// Net and pair records each consume one record budget in their shared instance home.
-    /// A legacy membership home that exceeds a byte limit restarts once in the compact
-    /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
+    /// An expanded membership home that exceeds a byte limit restarts once using
+    /// compact membership records. Only disposable encoding state changes; no project edit or Save refusal is
     /// introduced. Legacy layout metadata is adopted on the save snapshot before writing.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         match self.step_records(records) {
@@ -1835,6 +1901,8 @@ impl DocumentsEncoder {
                     }
                     p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();
+                    let recipes = p.output_recipes();
+                    crate::board::output_recipe::validate_recipes(recipes, p.board_target().map(|target| target.board))?;
                     if p.pin_function_count() > crate::pin_functions::MAX_CHOICES {
                         return Err("Alternate pin function selection limit reached.".into());
                     }
@@ -1876,6 +1944,14 @@ impl DocumentsEncoder {
                     }
                     if has_profiles {
                         writeln!(self.bytes, "  \"assembly_profiles\": {},", json(p.assembly_profiles.as_ref())?).map_err(|e| e.to_string())?;
+                    }
+                    if !recipes.is_empty() {
+                        self.bytes.extend_from_slice(b"  \"output_recipes\": [\n");
+                        let mut first = true;
+                        for recipe in recipes {
+                            record(&mut self.bytes, &mut first, recipe)?;
+                        }
+                        self.bytes.extend_from_slice(b"\n  ],\n");
                     }
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
@@ -2216,28 +2292,14 @@ impl DocumentsEncoder {
 
     /// Finish components/package choices, writing adopted instances in their single storage home
     /// before starting sheets. Instance records consume the ordinary incremental record budget.
-    /// A board-owned home takes the header required by the registry and membership vocabulary.
+    /// Board-owned instances always use the current header, including after a compact retry.
     fn finish_project_document(&mut self) -> Result<(), String> {
         if self.instance_records.is_some() {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if self.project.net_registry.has_pairs() {
-                    PAIR_INSTANCES_FORMAT
-                } else if self.use_compact_memberships {
-                    COMPACT_PART_GROUP_INSTANCES_FORMAT
-                } else if !self.project.part_group_memberships.is_empty() {
-                    PART_GROUP_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_generated_numbers() {
-                    GENERATED_NET_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_class_bindings() {
-                    BINDING_INSTANCES_FORMAT
-                } else if self.project.net_registry.records.is_empty() {
-                    INSTANCES_FORMAT
-                } else {
-                    NET_INSTANCES_FORMAT
-                };
-                write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
+                write!(self.bytes, "{{\n  \"format\": \"{CURRENT_INSTANCES_FORMAT}\",\n  \"board\": \"{board}\",\n")
+                    .map_err(|error| error.to_string())?;
             } else {
                 self.bytes.extend_from_slice(b"  ],\n  \"schematic_instances\": {\n");
             }
@@ -2251,7 +2313,8 @@ impl DocumentsEncoder {
         }
         self.finish_document(ENTRY_POINT.to_owned())?;
         self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.phase = 12;
         Ok(())
     }
 
@@ -2305,7 +2368,8 @@ impl DocumentsEncoder {
         }
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
         self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.phase = 12;
         Ok(())
     }
 
@@ -2317,7 +2381,8 @@ impl DocumentsEncoder {
         if self.sheet_cursor < self.project.sheets.len() {
             self.cursor = 0;
             self.first = true;
-            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+            sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+            self.phase = 12;
         } else if self.project.board_target().is_some() {
             board_header(&mut self.bytes, &self.project)?;
             if self.project.board.tracks.is_empty() {
@@ -2333,7 +2398,7 @@ impl DocumentsEncoder {
         Ok(())
     }
 
-    /// Append the sheet/8 endpoint intent array after wires and optional generated-leg records.
+    /// Append endpoint intent after wires and optional generated-leg records.
     /// Records remain incremental, with the ordinary sheet close shared by all formats.
     fn finish_sheet_routes(&mut self) -> Result<(), String> {
         if self.project.sheets[self.sheet_cursor].no_connect_ends.is_empty() {
@@ -2633,47 +2698,15 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
-fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
-    let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
-    let text = sheet.net_labels.iter().any(|l| l.text.is_some());
-    let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
-    let generated = sheet.has_live_generated_legs();
-    let ends = !sheet.no_connect_ends.is_empty();
-    let format = if sheet.page.is_some() {
-        PAGE_SHEET_FORMAT
-    } else if ends {
-        WIRE_END_SHEET_FORMAT
-    } else if generated {
-        GENERATED_SHEET_FORMAT
-    } else if mirrored {
-        MIRROR_SHEET_FORMAT
-    } else if text {
-        TEXT_LAYOUT_FORMAT
-    } else if fields {
-        FIELDS_SHEET_FORMAT
-    } else if !sheet.net_labels.is_empty() {
-        NAMED_FORMAT
-    } else if hierarchy {
-        HIERARCHY_FORMAT
-    } else {
-        SHEET_FORMAT
-    };
-    write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
+/// Begin a sheet in the current format, retaining any authored paper and its parameters.
+fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<(), String> {
+    write!(bytes, "{{\n  \"format\": \"{CURRENT_SHEET_FORMAT}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
     if let Some(page) = sheet.page {
         writeln!(bytes, "  \"page\": {},", json(&page.record())?).map_err(|e| e.to_string())?;
         write_parameters(bytes, &sheet.parameters)?;
     } else if !sheet.parameters.is_empty() {
-        return Err("sheet parameters require sheet paper (sheet format 9)".into());
+        return Err("sheet parameters require paper".into());
     }
-    if sheet.page.is_some() || text || fields || mirrored || generated || ends || !sheet.net_labels.is_empty() {
-        bytes.extend_from_slice(b"  \"net_labels\": [\n");
-        Ok(12)
-    } else if hierarchy {
-        bytes.extend_from_slice(b"  \"labels\": [\n");
-        Ok(2)
-    } else {
-        bytes.extend_from_slice(b"  \"symbols\": [\n");
-        Ok(4)
-    }
+    bytes.extend_from_slice(b"  \"net_labels\": [\n");
+    Ok(())
 }

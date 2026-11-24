@@ -51,8 +51,8 @@ the board in `instances.json` or in `project.json` for a schematic-only project.
 First Save adds these [occurrence records](formats/sheet-occurrence-storage.md) to older
 board-folder projects while preserving their existing board paths.
 Named nets and explicitly promoted nets use a [sparse persistent registry](formats/net-registry-storage.md)
-in those same instance homes. Its first record selects project/17, with
-instances/2 for a board; opening or inspecting an older project does not promote nets.
+in those same instance homes. Opening or inspecting an older project leaves its
+net identities unchanged.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.

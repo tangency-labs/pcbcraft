@@ -4,7 +4,7 @@ use crate::project_files::{Job, ProjectFiles, Update};
 use pcbcraft_engine::persistence::encode_packed;
 use pcbcraft_engine::{
     DELETE_SYMBOL, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, decode, encode_documents},
+    persistence::{CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, decode, encode_documents},
 };
 use serde_json::json;
 use std::{
@@ -21,7 +21,7 @@ fn unchanged_native_save_advances_only_the_project_header() {
     for archive in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::default();
-        session.apply("project.new", &json!({"name":"Migration test","create_board":true})).unwrap();
+        session.apply("project.new", &json!({"name":"Migration test"})).unwrap();
         apply(&mut session, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
         let expected = encode_documents(session.snapshot().unwrap()).unwrap();
         let mut old = expected.clone();
@@ -46,6 +46,75 @@ fn unchanged_native_save_advances_only_the_project_header() {
         assert!(!reopened.target.needs_upgrade());
         save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
         assert_eq!(read(), expected);
+    }
+}
+
+/// Migrate only an older papered sheet even when the decoded project has no pending edits.
+#[test]
+fn unchanged_native_save_migrates_only_the_old_sheet() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Sheet migration"})).unwrap();
+    apply(&mut session, pcbcraft_engine::sheets::CREATE_SHEET, json!({"name":"Other"}));
+    let snapshot = session.snapshot().unwrap();
+    let path = format!("sheets/{}.json", snapshot.sheet_target().id());
+    let sibling = format!("sheets/{}.json", snapshot.sheets().nth(1).unwrap().target.id());
+    let mut canonical = encode_documents(snapshot).unwrap();
+    canonical.get_mut(&sibling).unwrap().extend_from_slice(b"\n  ");
+    let mut original = canonical.clone();
+    let historical = String::from_utf8(canonical[&path].clone()).unwrap().replacen(CURRENT_SHEET_FORMAT, "pcbcraft-sheet/9", 1);
+    original.insert(path, historical.into_bytes());
+
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(original.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let opened = load(target).unwrap();
+        assert!(opened.target.needs_upgrade());
+        assert!(opened.opened.is_none(), "paper was already present");
+        assert_eq!(opened.target.documents.as_deref(), Some(&original));
+        save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
+
+        let reopened = load(target).unwrap();
+        assert!(!reopened.target.needs_upgrade());
+        assert_eq!(reopened.target.documents.as_deref(), Some(&canonical));
+        save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
+        assert_eq!(load(target).unwrap().target.documents.as_deref(), Some(&canonical));
+    }
+}
+
+/// An old instance header alone triggers a one-time folder or packed save migration.
+#[test]
+fn unchanged_native_save_migrates_only_the_old_instances_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Instance migration","create_board":true})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let instance = snapshot.instances_document_path().unwrap();
+    let board = snapshot.board_document_path().unwrap();
+    let mut canonical = encode_documents(snapshot).unwrap();
+    canonical.get_mut(&board).unwrap().extend_from_slice(b"\n  ");
+    let mut original = canonical.clone();
+    let historical = String::from_utf8(canonical[&instance].clone()).unwrap().replacen(CURRENT_INSTANCES_FORMAT, "pcbcraft-instances/1", 1);
+    original.insert(instance, historical.into_bytes());
+
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(original.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let opened = load(target).unwrap();
+        assert!(opened.target.needs_upgrade());
+        assert!(opened.opened.is_none());
+        assert_eq!(opened.target.documents.as_deref(), Some(&original));
+        save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
+
+        let reopened = load(target).unwrap();
+        assert!(!reopened.target.needs_upgrade());
+        assert_eq!(reopened.target.documents.as_deref(), Some(&canonical));
+        save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
+        assert_eq!(load(target).unwrap().target.documents.as_deref(), Some(&canonical));
     }
 }
 
@@ -114,7 +183,7 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
                 assert!(!root.join(path).exists());
                 assert!(root.join(path.replace("/starter/", "/basic-components/")).exists());
             } else if path.starts_with("sheets/") {
-                assert!(fs::read(root.join(path)).unwrap().starts_with(b"{\n  \"format\": \"pcbcraft-sheet/9\""));
+                assert_eq!(serde_json::from_slice::<serde_json::Value>(&fs::read(root.join(path)).unwrap()).unwrap()["format"], CURRENT_SHEET_FORMAT);
             } else {
                 assert_eq!(fs::read(root.join(path)).unwrap(), *bytes);
             }
@@ -122,13 +191,17 @@ fn previous_split_folder_opens_previews_and_saves_in_place() {
     }
 }
 
-/// Derive the expected layout migration, then replace only the board with its current encoding.
+/// Derive the expected layout migration, then use the current encodings for the board and sheets.
 fn expected_saved_layout(documents: Documents) -> Documents {
     let mut migrated = pcbcraft_engine::persistence::migrate_board_layout(documents, ".").unwrap();
     let snapshot = decode_documents(&migrated).unwrap();
     let path = snapshot.board_document_path().unwrap();
-    let mut encoded = encode_documents(snapshot).unwrap();
-    migrated.insert(path.clone(), encoded.remove(&path).unwrap());
+    let encoded = encode_documents(snapshot).unwrap();
+    for (name, bytes) in encoded {
+        if name == path || name.starts_with("sheets/") {
+            migrated.insert(name, bytes);
+        }
+    }
     migrated
 }
 

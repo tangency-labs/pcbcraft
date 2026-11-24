@@ -240,10 +240,9 @@ fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Proje
 
 /// Save with current headers and retain exact unaffected bytes, including on Save As.
 fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
-    let current = original.is_some_and(|documents| has_current_write_formats(documents, snapshot));
     if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
-        && current
         && let Some(original) = original
+        && has_current_write_formats(original, snapshot)
     {
         return Ok(original.clone());
     }
