@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
-pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
+pub(crate) const MAX_OFFSET_NM: i64 = 100_000_000;
 /// Most pads in one footprint: a full 32 x 32 ball grid array.
 pub(crate) const MAX_PADS: usize = 1024;
 /// Most parameterized artwork objects in one footprint.

@@ -216,7 +216,46 @@ mod live {
                     json!({"type":"object","description":"A bounded native reusable or manufacturer part record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
-                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": [
+                                    "insert",
+                                    "replace",
+                                    "replace_many",
+                                    "delete",
+                                    "transform",
+                                    "duplicate",
+                                    "paste",
+                                    "array",
+                                    "metadata",
+                                    "generate_courtyard",
+                                    "undo",
+                                    "redo"
+                                ]
+                            }
+                        },
+                        "required": ["operation"],
+                        "if": {
+                            "properties": {
+                                "operation": {"const": "generate_courtyard"}
+                            },
+                            "required": ["operation"]
+                        },
+                        "then": {
+                            "properties": {
+                                "clearance_nm": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": pcbcraft_engine::authoring::courtyard::MAX_CLEARANCE_NM
+                                }
+                            },
+                            "required": ["clearance_nm"]
+                        },
+                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
+                    })
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     json!({"type": "integer", "minimum": 0})
@@ -377,7 +416,9 @@ mod live {
                 .iter()
                 .map(|param| {
                     let mut schema = param.kind.schema();
-                    schema["description"] = json!(param.summary);
+                    if schema.get("description").is_none() {
+                        schema["description"] = json!(param.summary);
+                    }
                     (param.name.to_owned(), schema)
                 })
                 .collect();
@@ -2094,6 +2135,199 @@ mod live {
                     "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
                     changes.join("\n")
                 ),
+            }
+        }
+
+        /// Discovery for `app.library_edit` preserves the detailed `Action` field description
+        /// (including required `clearance_nm` and optional `source`/`stroke_nm`/`replace_existing`
+        /// for `generate_courtyard`), while native `Action` validation still enforces `clearance_nm`.
+        #[test]
+        fn library_edit_discovery_documents_generate_courtyard_fields_and_requires_clearance() {
+            let described = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let action = &described["params"]["properties"]["action"];
+            let operations = action["properties"]["operation"]["enum"].as_array().expect("operation enum");
+            assert!(operations.contains(&json!("generate_courtyard")));
+            let description = action["description"].as_str().expect("action description");
+            assert!(
+                description.contains("generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing"),
+                "unexpected description: {description}"
+            );
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
+        }
+
+        /// Minimal JSON Schema evaluator covering the keywords used in command contracts
+        /// (`type`, `const`, `enum`, numeric bounds, object `properties`/`required`/
+        /// `additionalProperties`, and combinators `if`/`then`/`else`/`allOf`/`anyOf`/`oneOf`/`not`).
+        fn schema_accepts(schema: &Value, instance: &Value) -> bool {
+            if let Some(allowed) = schema.as_bool() {
+                return allowed;
+            }
+            let Some(obj) = schema.as_object() else {
+                return true;
+            };
+            if let Some(expected_type) = obj.get("type") {
+                let matches_one = |kind: &str| match kind {
+                    "object" => instance.is_object(),
+                    "array" => instance.is_array(),
+                    "string" => instance.is_string(),
+                    "boolean" => instance.is_boolean(),
+                    "null" => instance.is_null(),
+                    "integer" => instance.is_i64() || instance.is_u64(),
+                    "number" => instance.is_number(),
+                    _ => false,
+                };
+                let ok = match expected_type {
+                    Value::String(kind) => matches_one(kind),
+                    Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).any(matches_one),
+                    _ => false,
+                };
+                if !ok {
+                    return false;
+                }
+            }
+            if let Some(expected) = obj.get("const")
+                && instance != expected
+            {
+                return false;
+            }
+            if let Some(allowed) = obj.get("enum").and_then(Value::as_array)
+                && !allowed.contains(instance)
+            {
+                return false;
+            }
+            if let Some(min) = obj.get("minimum").and_then(Value::as_i64)
+                && let Some(actual) = instance.as_i64()
+                && actual < min
+            {
+                return false;
+            }
+            if let Some(max) = obj.get("maximum").and_then(Value::as_i64)
+                && let Some(actual) = instance.as_i64()
+                && actual > max
+            {
+                return false;
+            }
+            if let Some(map) = instance.as_object() {
+                if let Some(required) = obj.get("required").and_then(Value::as_array)
+                    && required.iter().filter_map(Value::as_str).any(|key| !map.contains_key(key))
+                {
+                    return false;
+                }
+                let props = obj.get("properties").and_then(Value::as_object);
+                if let Some(props) = props {
+                    for (key, sub) in props {
+                        if let Some(val) = map.get(key)
+                            && !schema_accepts(sub, val)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                if let Some(additional) = obj.get("additionalProperties") {
+                    for (key, val) in map {
+                        if props.is_none_or(|p| !p.contains_key(key)) && !schema_accepts(additional, val) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            if let Some(cond) = obj.get("if") {
+                if schema_accepts(cond, instance) {
+                    if let Some(then_schema) = obj.get("then")
+                        && !schema_accepts(then_schema, instance)
+                    {
+                        return false;
+                    }
+                } else if let Some(else_schema) = obj.get("else")
+                    && !schema_accepts(else_schema, instance)
+                {
+                    return false;
+                }
+            }
+            if let Some(all) = obj.get("allOf").and_then(Value::as_array)
+                && !all.iter().all(|sub| schema_accepts(sub, instance))
+            {
+                return false;
+            }
+            if let Some(any) = obj.get("anyOf").and_then(Value::as_array)
+                && !any.iter().any(|sub| schema_accepts(sub, instance))
+            {
+                return false;
+            }
+            if let Some(one) = obj.get("oneOf").and_then(Value::as_array)
+                && one.iter().filter(|sub| schema_accepts(sub, instance)).count() != 1
+            {
+                return false;
+            }
+            if let Some(neg) = obj.get("not")
+                && schema_accepts(neg, instance)
+            {
+                return false;
+            }
+            true
+        }
+
+        /// The published `app.library_edit` action schema (both live discovery and the committed
+        /// contract snapshot) must reject `generate_courtyard` without `clearance_nm`, accept it
+        /// with a valid `clearance_nm`, and not require `clearance_nm` for other operations.
+        #[test]
+        fn library_edit_published_schema_requires_clearance_only_for_generate_courtyard() {
+            let live_entry = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let live_action = &live_entry["params"]["properties"]["action"];
+            let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
+            let snapshot_action = &snapshot["window_commands"]["app.library_edit"]["params"]["properties"]["action"];
+
+            for (source, schema) in [("window_catalog", live_action), ("command-contracts.json", snapshot_action)] {
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard"})),
+                    "{source}: generate_courtyard without clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": "250000"})),
+                    "{source}: non-integer clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": -1})),
+                    "{source}: negative clearance_nm must be rejected"
+                );
+                assert!(
+                    !schema_accepts(
+                        schema,
+                        &json!({"operation": "generate_courtyard", "clearance_nm": pcbcraft_engine::authoring::courtyard::MAX_CLEARANCE_NM + 1})
+                    ),
+                    "{source}: clearance_nm above MAX_CLEARANCE_NM must be rejected"
+                );
+                assert!(
+                    schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": 0})),
+                    "{source}: generate_courtyard with minimum clearance_nm must be accepted"
+                );
+                assert!(
+                    schema_accepts(schema, &json!({"operation": "generate_courtyard", "clearance_nm": 250_000})),
+                    "{source}: generate_courtyard with clearance_nm must be accepted"
+                );
+                assert!(
+                    schema_accepts(
+                        schema,
+                        &json!({
+                            "operation": "generate_courtyard",
+                            "clearance_nm": 250_000,
+                            "source": "pads_only",
+                            "stroke_nm": 50_000,
+                            "replace_existing": false
+                        })
+                    ),
+                    "{source}: generate_courtyard with optional fields must be accepted"
+                );
+                assert!(!schema_accepts(schema, &json!({"clearance_nm": 250_000})), "{source}: missing operation must be rejected");
+                for operation in
+                    ["insert", "replace", "replace_many", "delete", "transform", "duplicate", "paste", "array", "metadata", "undo", "redo"]
+                {
+                    assert!(
+                        schema_accepts(schema, &json!({"operation": operation})),
+                        "{source}: operation `{operation}` must not require clearance_nm"
+                    );
+                }
             }
         }
 
