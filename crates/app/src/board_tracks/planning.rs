@@ -239,6 +239,7 @@ impl Planning {
     pub(super) fn current_plan(&self) -> Option<&Plan> {
         self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| &ready.plan)
     }
+
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(error) = &self.error {
@@ -256,19 +257,20 @@ impl Planning {
             .into(),
         )
     }
-    /// Retain the previous legal geometry during longer solves only under its original prefix.
+    /// Retain displayed geometry under its captured source and fixed prefix.
     pub(super) fn preview(&self, draft: &Draft, width: i64) -> Vec<Point> {
         let mut path = draft.points.clone();
-        if let Some(ready) = &self.visible
-            && ready.key.source == draft.source
-            && ready.key.prefix == path
-            && ready.key.changes == draft.changes
-            && ready.key.request.width_nm == width
-            && ready.key.request.layer.to_string() == draft.layer
-        {
-            path.extend(ready.plan.points.iter().copied().skip(1));
+        if let Some(plan) = self.displayed(draft, width) {
+            path.extend(plan.points.iter().copied().skip(1));
         }
         path
+    }
+
+    /// A superseded result may still draw a path while replanning but cannot flag old blockers.
+    pub(super) fn collisions(&self) -> Option<&BTreeSet<String>> {
+        let ready = self.ready.as_ref()?;
+        self.wanted.as_ref().filter(|wanted| wanted.key == ready.key && !ready.plan.collisions.is_empty())?;
+        Some(&ready.plan.collisions)
     }
     /// Return displacement geometry only for the displayed route's source, prefix and sizes.
     /// Retained geometry cannot authorize placement without current full-path validation.
@@ -321,7 +323,9 @@ impl Planning {
         match result {
             Ok(Some(plan)) => {
                 let ready = Ready { key, plan };
-                if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
+                let draws_leg = ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. });
+                let clear_highlight = ready.key.request.mode == Mode::Highlight && ready.plan.outcome == Outcome::Reached;
+                if draws_leg || clear_highlight {
                     self.visible = Some(ready.clone());
                 }
                 self.ready = Some(ready);

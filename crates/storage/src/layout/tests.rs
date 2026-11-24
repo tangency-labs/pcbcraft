@@ -10,6 +10,11 @@ fn legacy() -> Arc<Project> {
     decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap()
 }
 
+/// Use a frozen flat archive rather than asking the current writer for old output.
+fn legacy_documents() -> Documents {
+    decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap().documents
+}
+
 /// Previous split folders open/preview without rewrites and migrate atomically on first Save.
 /// Every interrupted checkpoint recovers a complete old or new project; later saves are no-ops.
 #[test]
@@ -90,7 +95,7 @@ fn previous_entry_point_migrates_at_every_checkpoint() {
 #[test]
 fn migration_recovers_at_every_publication_checkpoint() {
     let original = legacy();
-    let before = encode_documents(original.clone()).unwrap();
+    let before = legacy_documents();
     let after_project = prepare(original.clone(), None, Some(&before)).unwrap();
     let after = pcbcraft_engine::persistence::migrate_board_layout(before.clone(), ".").unwrap();
     let board_path = after_project.board_document_path().unwrap();
@@ -137,7 +142,7 @@ fn foreign_areas_choose_and_retain_a_free_namespace() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
         let original = legacy();
-        let before = encode_documents(original.clone()).unwrap();
+        let before = legacy_documents();
         crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
         fs::create_dir(root.join(area.to_uppercase())).unwrap();
         fs::write(root.join(area.to_uppercase()).join("notes.txt"), b"keep").unwrap();
@@ -161,7 +166,7 @@ fn foreign_areas_choose_and_retain_a_free_namespace() {
 fn namespace_created_during_staging_is_never_claimed() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    let before = encode_documents(legacy()).unwrap();
+    let before = legacy_documents();
     crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
     let after = pcbcraft_engine::persistence::migrate_board_layout(before.clone(), ".").unwrap();
     assert!(
@@ -202,7 +207,7 @@ fn new_zero_and_one_board_projects_use_folder_format() {
         let snapshot = session.snapshot().unwrap();
         let docs = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/16");
+        assert_eq!(entry["format"], pcbcraft_engine::persistence::CURRENT_PROJECT_FORMAT);
         assert_eq!(entry["layout_root"], ".");
         assert_eq!(entry["boards"].as_array().unwrap().len(), usize::from(create_board));
         assert!(!docs.contains_key("board.json"));

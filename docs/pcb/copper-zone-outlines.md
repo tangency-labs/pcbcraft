@@ -161,17 +161,11 @@ a document undo entry.
 
 ## Storage and limits
 
-[Board/20](../formats/native-project-storage.md#zone-outline-records) is a superset of board/19
-with an optional board-rules object and a required nonempty `zones` array. A board
-that also has a placement origin requires at least board/21; assembly profile
-adoptions require at least board/22, extended stack fields board/23, explicit via
-assignments board/24, thermal or insulation material reports board/25,
-[circular copper records](circular-copper-records.md) board/26 and footprint locks
-board/34. The encoder chooses the required format, preserving the zone outlines
-alongside the origin, rules, adoptions, setup, material reports and via intent.
-Each zone is one JSON line in UUID order and contains only authored intent. A board
-without zones keeps the format its other content requires; no fill or preview is
-saved. Existing folder/archive codecs, recovery and Undo/Redo use those records.
+Current board files use [format 42](../formats/native-project-storage.md#current-board-records).
+Each zone is one JSON line in UUID order and contains only authored intent.
+Removing the final zone omits the array. Historical format 20 requires a
+nonempty `zones` array. Folder and archive codecs, recovery, and Undo/Redo
+use the authored records. Fill and preview are derived in memory.
 
 A board allows 256 zones and 8,192 total vertices, with 3–256 distinct bounded
 vertices per zone. Closure is implicit, area must be nonzero and edges must not

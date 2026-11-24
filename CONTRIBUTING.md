@@ -70,7 +70,12 @@ boundaries extend to multiple views.
 Use the [native storage contract](docs/formats/native-project-storage.md) before changing
 saved data and the [symbol format guide](docs/libraries/symbol-library.md) before changing
 library definitions. Preserve stable IDs/order, no-op saves and migrations from
-every supported old format. Generate fixtures through shared commands and the
+every supported old format. Give each native writer one current schema and keep
+older schemas readable. Store optional features as optional records so removing
+a feature never downgrades the file. Publish changes to library items as new
+revisions, preserving existing pinned revisions. See the
+[native write policy](docs/formats/native-project-storage.md#native-write-policy).
+Generate fixtures through shared commands and the
 production encoder instead of hand-editing project documents. To generate an
 original fixture set, use a destination that does not already exist:
 

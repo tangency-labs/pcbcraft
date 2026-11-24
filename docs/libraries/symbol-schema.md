@@ -33,10 +33,15 @@ schema envelope. File paths, source registration IDs and the latest installed
 library revision do not determine the pinned identity.
 
 `format` versions the readable contract. `revision` versions immutable content.
-Changing either does not silently replace definitions in an existing project.
+The symbol editor's native export and publication write `pcbcraft-symbol/5`
+for every new definition, with either one or several units. The schema supports
+optional category, electrical behavior, instance defaults and alternate pin
+functions. Removing optional records leaves the output at version 5. Published
+files stay byte-for-byte intact, and project pins retain the original schema and
+revision address.
+
 Version 1 refuses electrical behavior/default fields, and versions 1–2 refuse
-`category`. A version-3 symbol requires a non-null category binding. Unchanged
-older definitions retain their existing format and saved bytes.
+`category`. A version-3 symbol requires a non-null category binding.
 
 The [symbol guide](symbol-library.md) defines the existing geometry, pin
 appearance, defaults and power behavior. A unit can contain at most 441 pins on
@@ -62,13 +67,15 @@ through sixteen alternate functions. Names are case-sensitive, trimmed, single-l
 Types use the existing terminal vocabulary. Every appearance of that terminal must
 have an integrated pin lead; the choice does not override the lead's name visibility.
 Alternates and their order belong to the shared terminal, not its individual unit drawings.
-Formats 1–4 refuse the field. Adding an alternate switches the draft to
-`pcbcraft-library-item/5` and its published symbol to `pcbcraft-symbol/5`.
-Removing the last alternate does not switch either record back.
+Formats 1–4 refuse the field. Adding an alternate adopts the
+`pcbcraft-library-item/5` draft envelope, which that editor item retains after
+the last alternate is removed. Native export and publication use
+`pcbcraft-symbol/5` throughout.
 
 A placed part can select one alternate per terminal. Selection does not renumber,
 swap or move terminals or change connectivity. See [placed-part storage](../formats/native-project-storage.md#alternate-pin-function-records).
-A project with both a selected alternate and an active designator lock saves as project/56.
+The current project format stores alternate choices and designator locks
+independently. Project/56 remains readable for older projects that combine them.
 
 ## Explicit category defaults
 
@@ -146,9 +153,9 @@ a hierarchy subtree, allocates that part only once.
 
 The symbol editor can add and select units through the shared authoring actions.
 It retains source unit order, inactive drawings and globally unique primitive IDs in
-`pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
-name, type and alternate-list edits propagate to other appearances. Without
-alternates, native export emits format 4 when several units exist. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
+the editable library item. Shared terminal name, type and alternate-list edits
+propagate to other appearances, and native export uses format 5 for any unit
+count. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
 changes only the authored definition, including its shared terminal appearances;
 it adds no saved fields. It does not swap terminals/gates in placed instances or
 update their native package mappings. Alternative symbol definitions for a part,

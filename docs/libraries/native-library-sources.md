@@ -491,14 +491,11 @@ HTTP(S) URL requirement and the rule that a loaded record never fetches a link.
 Draft edits check those bounds before they are accepted; publication checks the
 declared envelope and resolves the exact dependencies.
 
-The first description, keyword or link selects the `pcbcraft-part/5` envelope
-for the draft. Removing the last metadata field downgrades a rated draft to
-`pcbcraft-part/4` and an unrated one to `pcbcraft-part/2`; adding metadata to a
-retained format-1 draft upgrades it. Publication reselects and validates the
-envelope. Because the full definition is pinned with the part, editing its
-metadata changes the dependency digest and invalidates a placement captured
-against the earlier content. Descriptive metadata adds no electrical
-requirement: schematic placement still needs an exact symbol.
+The editor prepares new generic part revisions in `pcbcraft-part/6`, whether
+or not they carry device ratings or descriptive metadata. Clearing an optional
+field keeps the format current. An edited definition has a different dependency
+digest, so placement captured against the earlier content must be refreshed.
+Schematic placement still requires an exact symbol.
 
 The fixed footer has the primary **Publish…** action and publication/destination
 state. It opens the destination form; choose a writable library, or use **New

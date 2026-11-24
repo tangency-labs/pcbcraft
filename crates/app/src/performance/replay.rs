@@ -20,6 +20,7 @@ pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
 /// Stable identity for full-capacity boards where adding a track/via must be refused cleanly.
 pub(super) const ENVELOPE_TRACE_ID: &str = "route-reverse-capacity-cancel-edit-v1";
 pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
+pub(super) const HELD_DRAG_TRACE_ID: &str = "held-track-drag-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
 /// Pooled UI frame samples from runtime-validated active-route pointer moves that reverse direction.
 /// Kept outside the `replay.{id}.*` per-step namespace so no trace step ID can collide with it.
@@ -45,6 +46,7 @@ enum Action {
     SelectShove,
     ShovePreview,
     ShoveHistory,
+    HeldDragHistory,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -147,6 +149,33 @@ impl Step {
             }
         }
         key(&mut steps, "exit", ReplayKey::Cancel, false);
+        steps
+    }
+
+    /// Hold a single track, wait for its validated shove, then cancel or release it.
+    pub(super) fn held_drag() -> Vec<Self> {
+        let pickup = Point { x_nm: -55_000_000, y_nm: -18_000_000 };
+        let target = Point { x_nm: -55_000_000, y_nm: -19_900_000 };
+        let mut steps = vec![Self { id: "drag.mode".into(), action: Action::SelectShove, routing_after: false }];
+        for attempt in ["cancel", "commit"] {
+            steps.push(Self {
+                id: format!("drag.{attempt}.down"),
+                action: Action::Pointer { at: pickup, pressed: Some(true) },
+                routing_after: false,
+            });
+            steps.push(Self { id: format!("drag.{attempt}.preview"), action: Action::Pointer { at: target, pressed: None }, routing_after: false });
+            if attempt == "cancel" {
+                for pressed in [true, false] {
+                    steps.push(Self {
+                        id: if pressed { "cancel.down" } else { "cancel.up" }.into(),
+                        action: Action::Key { key: ReplayKey::Cancel, pressed },
+                        routing_after: false,
+                    });
+                }
+            }
+            steps.push(Self { id: format!("drag.{attempt}.up"), action: Action::Pointer { at: target, pressed: Some(false) }, routing_after: false });
+        }
+        steps.push(Self { id: "drag.history".into(), action: Action::HeldDragHistory, routing_after: false });
         steps
     }
 
@@ -310,11 +339,14 @@ impl Driver {
         let track = board.tracks().first().ok_or("missing replay track")?.id.to_owned();
         app.views.active.board.active_layer = Some(top.clone());
         app.views.active.filters_open = false;
-        app.views.active.camera.center_on(if artifact.trace_id == SHOVE_TRACE_ID {
+        app.views.active.camera.center_on(if matches!(artifact.trace_id.as_str(), SHOVE_TRACE_ID | HELD_DRAG_TRACE_ID) {
             Point { x_nm: -55_000_000, y_nm: -20_000_000 }
         } else {
             Point { x_nm: 10_160_000, y_nm: 0 }
         });
+        if artifact.trace_id == HELD_DRAG_TRACE_ID {
+            app.views.active.camera.set_snap_nm(100_000);
+        }
         let contacts =
             if artifact.trace.iter().any(|step| matches!(step.action, Action::Contact { .. } | Action::ContactPreview | Action::HistoryCheck)) {
                 let lines = board.ratsnest()?.lines;
@@ -355,7 +387,12 @@ impl Driver {
                 }
                 events.push(Event::Key { key: key.egui(), physical_key: None, pressed: *pressed, repeat: false, modifiers: Modifiers::NONE })
             }
-            Action::Pointer { at, pressed } => events = Self::pointer(app, *at, *pressed)?,
+            Action::Pointer { at, pressed } => {
+                if step.id == "drag.commit.up" {
+                    self.edits += 1;
+                }
+                events = Self::pointer(app, *at, *pressed)?;
+            }
             Action::Contact { target, pressed } => {
                 let contacts = self.contacts.as_ref().ok_or("contact input has no captured connection")?;
                 events = Self::pointer(app, contacts.points[usize::from(*target)], *pressed)?;
@@ -413,6 +450,10 @@ impl Driver {
                 super::shove::verify_replay(&mut app.session, &self.original, artifact.board)?;
                 self.edits += 2;
             }
+            Action::HeldDragHistory => {
+                super::shove::verify_held_drag_replay(&mut app.session, &self.original, artifact.board)?;
+                self.edits += 2;
+            }
             Action::SharedEdit => {
                 if !app.views.active.board.tracks.routing() {
                     return Err("shared edit needs a pending route".into());
@@ -468,12 +509,13 @@ impl Driver {
             Some("shove.cancel.preview" | "shove.commit.preview") => {
                 app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared")
             }
+            Some("drag.cancel.preview" | "drag.commit.preview") => app.message.is_none() && !app.views.active.board.tracks.held_drag_previewed(),
             Some("shove.vertex.up") => app.message.is_none() && app.views.active.board.tracks.committing(),
             Some("shove.finish.down" | "shove.finish.up") => app.message.is_none() && app.session.revision() < self.revision + self.edits,
             Some("contact.preview") => {
                 app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared")
             }
-            Some("contact.commit.up") => app.message.is_none() && app.session.revision() < self.revision + self.edits,
+            Some("contact.commit.up" | "drag.commit.up") => app.message.is_none() && app.session.revision() < self.revision + self.edits,
             _ => false,
         }
     }
@@ -503,6 +545,9 @@ impl Driver {
                 | "shove.vertex.up"
                 | "shove.finish.down"
                 | "shove.finish.up"
+                | "drag.cancel.preview"
+                | "drag.commit.preview"
+                | "drag.commit.up"
         ) {
             return Ok(());
         }
@@ -572,7 +617,7 @@ impl Driver {
                 return Err("layer key did not change the route layer".into());
             }
         }
-        if matches!(step.id.as_str(), "shove.cancel.preview" | "shove.commit.preview")
+        if matches!(step.id.as_str(), "shove.cancel.preview" | "shove.commit.preview" | "drag.cancel.preview" | "drag.commit.preview")
             && (app.views.active.board.tracks.displacement_preview() == 0
                 || app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"))
         {
@@ -584,10 +629,12 @@ impl Driver {
         if step.id == "contact.preview" && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
             return Err("preview did not finish validated preparation".into());
         }
-        if step.id == "contact.commit.up" && app.session.revision() != self.revision + self.edits {
+        if matches!(step.id.as_str(), "contact.commit.up" | "drag.commit.up") && app.session.revision() != self.revision + self.edits {
             return Err("route did not publish exactly one revision".into());
         }
-        if step.id == "cancel.up" && encode_packed(app.session.snapshot().ok_or("missing project after cancel")?)? != self.original {
+        if matches!(step.id.as_str(), "cancel.up" | "drag.cancel.up")
+            && encode_packed(app.session.snapshot().ok_or("missing project after cancel")?)? != self.original
+        {
             return Err("cancel published authored changes".into());
         }
         Ok(())

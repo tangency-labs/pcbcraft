@@ -272,6 +272,41 @@ pub fn rendered_fixture(artifact_json: &str) -> Result<String> {
     serde_json::to_string(&artifact).map_err(|e| e.to_string())
 }
 
+/// Keep the joint board's saved bytes while substituting a held-drag trace.
+pub fn held_drag_fixture(artifact_json: &str) -> Result<String> {
+    let mut artifact = load_artifact(artifact_json)?;
+    if !artifact.recipe.starts_with("shove-joints-v1-") {
+        return Err("held drag requires a saved shove joint fixture".into());
+    }
+    artifact.trace_id = super::replay::HELD_DRAG_TRACE_ID.into();
+    artifact.trace = super::replay::Step::held_drag();
+    serde_json::to_string(&artifact).map_err(|e| e.to_string())
+}
+
+/// Verify the release moved the requested track and follower, shoved the fixed-input rail,
+/// and produced one clearance-checked edit with exact history and native reopen.
+pub(super) fn verify_held_drag_replay(session: &mut Session, original: &[u8], board: BoardTarget) -> Result<()> {
+    let project = decode_packed(original)?.project;
+    let before = project.board_view(board).ok_or("missing drag source")?;
+    let after = session.project().and_then(|p| p.board_view(board)).ok_or("missing held drag result")?;
+    let fixed = point(-58_000_000, -16_000_000);
+    let old_joint = point(-58_000_000, -18_000_000);
+    let joint = point(-58_000_000, -19_900_000);
+    let rail_start = point(-60_000_000, -20_000_000);
+    let source = |start| before.tracks().iter().find(|track| track.start == start).ok_or("missing held drag source track");
+    let primary = source(old_joint)?;
+    let follower = source(fixed)?;
+    let rail = source(rail_start)?;
+    if !after.tracks().iter().any(|track| track.id == primary.id && track.start == joint && track.end == point(-52_000_000, joint.y_nm))
+        || !after.tracks().iter().any(|track| track.id == follower.id && track.start == fixed && track.end == joint)
+        || !after.tracks().iter().any(|track| track.id == rail.id && track != rail)
+        || after.vias() != before.vias()
+    {
+        return Err("held drag did not publish the moved joint and displaced rail".into());
+    }
+    verify_changed(session, &project, board, BTreeSet::from([primary.id, follower.id, rail.id]))
+}
+
 /// Validate the real editor commit against the same saved single-neighbor source and oracle.
 pub(super) fn verify_replay(session: &mut Session, original: &[u8], board: BoardTarget) -> Result<()> {
     let project = decode_packed(original)?.project;
