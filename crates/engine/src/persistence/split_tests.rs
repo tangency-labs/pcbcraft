@@ -481,9 +481,11 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
         .collect();
     let live_count = legs.len();
     assert!(live_count >= 64);
+    let wire_count = sheet_data.wires.len();
     let sample = legs[0].clone();
     legs.push(crate::wire::GeneratedLeg { wire: 999_999, end: sample.end, other: sample.other, bends: sample.bends.clone() });
     legs.push(crate::wire::GeneratedLeg { wire: sample.wire, end: sample.other, other: sample.end, bends: sample.bends });
+    let leg_count = legs.len();
     sheet_data.generated_legs = Arc::new(legs);
 
     let expected = encode_documents(snapshot.clone()).unwrap();
@@ -497,16 +499,38 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
     let mut leg_match_steps = 0_usize;
     let mut prev_wire_cursor = 0_usize;
     let mut prev_leg_cursor = 0_usize;
+    // Phase 25 drains the wire index one entry per record, so it runs with a one-record budget:
+    // each step must remove exactly one entry, and the phase ends only after the index is empty.
+    let mut budget = batch;
+    let mut draining: Option<usize> = None;
+    let mut drain_steps = 0_usize;
+    let mut drains_finished = 0_usize;
     let incremental = loop {
-        if let Some(encoded) = encoder.step(batch).unwrap() {
+        let encoded = encoder.step(budget).unwrap();
+        budget = batch;
+        let progress = encoder.generated_leg_scan_progress();
+        if let Some(remaining) = draining.take() {
+            match progress {
+                Some((25, _, indexed, _)) => {
+                    assert!(remaining > 0, "an empty wire index must end the drain");
+                    assert_eq!(indexed, remaining - 1, "one record drains exactly one wire index entry");
+                }
+                _ => {
+                    assert_eq!(remaining, 0, "the drain ended with wire index entries left");
+                    drains_finished += 1;
+                }
+            }
+        }
+        if let Some(encoded) = encoded {
             break encoded;
         }
-        if let Some((phase, cursor, _indexed, matched)) = encoder.generated_leg_scan_progress() {
+        if let Some((phase, cursor, indexed, matched)) = progress {
             match phase {
                 23 => {
                     wire_index_steps += 1;
                     assert!(cursor >= prev_wire_cursor);
                     assert!(cursor - prev_wire_cursor <= batch);
+                    assert_eq!(indexed, cursor, "each scanned wire adds one index entry");
                     prev_wire_cursor = cursor;
                 }
                 24 => {
@@ -514,14 +538,27 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
                     assert!(cursor >= prev_leg_cursor);
                     assert!(cursor - prev_leg_cursor <= batch);
                     assert!(matched <= cursor);
+                    assert_eq!(indexed, wire_count, "leg matching keeps the whole wire index");
                     prev_leg_cursor = cursor;
+                    // Stop at the last leg so the step that enters phase 25 drains nothing.
+                    budget = (leg_count - cursor).clamp(1, batch);
                 }
-                _ => {}
+                25 => {
+                    if drain_steps == 0 {
+                        assert_eq!(indexed, wire_count, "entering the drain must not remove entries");
+                    }
+                    drain_steps += 1;
+                    draining = Some(indexed);
+                    budget = 1;
+                }
+                phase => unreachable!("generated-leg scan reported phase {phase}"),
             }
         }
     };
     assert!(wire_index_steps >= 6, "wire indexing should span multiple bounded steps");
     assert!(leg_match_steps >= 6, "generated-leg matching should span multiple bounded steps");
+    assert_eq!(drains_finished, 1, "the wire index drain should finish exactly once");
+    assert_eq!(drain_steps, wire_count + 1, "the drain should take one step per wire index entry");
     assert_eq!(incremental, expected);
 
     // Cancel strictly mid-leg during phase 24 and verify a subsequent save is unaffected.
