@@ -2143,6 +2143,8 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[9],
     library::sources::COMMANDS[10],
     library::sources::COMMANDS[11],
+    library::sources::COMMANDS[12],
+    library::sources::COMMANDS[13],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -3597,6 +3599,13 @@ impl Session {
         self.history_root_revision
     }
 
+    /// Whether the next Undo restores an authored snapshot rather than a host-local edit.
+    /// Local edits do not change the revision, so a host offering Undo for one authored edit
+    /// checks both this and the revision.
+    pub fn next_undo_is_authored(&self) -> bool {
+        matches!(self.undo.last(), Some(HistoryEntry::Project(_)))
+    }
+
     /// Whether the command can run now, for greying out a menu item. Setup initialization
     /// requires an unconfigured board; populated boards require explicit pad-resolution consent
     /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit
@@ -3648,6 +3657,8 @@ impl Session {
             | netlist::EXPORT_NETLIST
             | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_ADOPTION
+            | library::sources::APPLY_ADOPTION
             | library::sources::WHERE_USED
             | library::sources::PREVIEW_FOOTPRINT_REVISION
             | pin_functions::SET
@@ -3900,7 +3911,12 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if id.starts_with("library.") {
-            return self.library_command(id, params);
+            let before = self.revision;
+            let result = self.library_command(id, params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
         }
         if id == COMPLETE_PACKAGES {
             return self.complete_packages(params);
