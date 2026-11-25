@@ -430,9 +430,9 @@ impl BoardView<'_> {
     /// Reports one [`Kind::Short`] violation per copper island that joins distinct intended nets,
     /// including direct pad contacts and arcs touching foreign copper. Listed violations are
     /// capped at [`MAX_LISTED`] (1,000); `report.total > report.violations.len()` indicates
-    /// truncation. Only `violations`, `counts` and `total` carry meaning on the returned
-    /// [`Report`] (`rules` is default and `sources` is empty). Does not run clearance, dimension,
-    /// outline or courtyard DRC checks; refuses teardrop boards.
+    /// truncation. The report carries the board's effective defaults and their sources, but
+    /// physical shorts do not consult class-specific rules, so `class_rules` is absent. Does not
+    /// run clearance, dimension, outline or courtyard DRC checks; refuses teardrop boards.
     pub fn copper_shorts(self) -> Result<Report, String> {
         self.require_no_teardrops()?;
         let lands = super::track::lands(self);
@@ -462,7 +462,7 @@ impl BoardView<'_> {
             },
             &mut found,
         );
-        Ok(found.finish(Rules::default(), BTreeMap::new()))
+        Ok(found.finish(self, self.effective_rules(), None))
     }
 
     /// Report one short per physical island containing pads from distinct intended nets.

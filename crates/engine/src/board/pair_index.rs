@@ -159,7 +159,7 @@ impl PairIndex {
     /// Query the same broad phase for an external contour. Visit only overlapping bounds,
     /// stopping on the first exact match from the caller's native contact predicate.
     pub(super) fn any_overlapping(&self, contour: &Contour, search: &mut Search, mut matches: impl FnMut(usize) -> bool) -> bool {
-        let target = Bounds::new(contour);
+        let target = Bounds::from_contour(contour);
         self.begin(search, 0.);
         loop {
             match self.next_in(target, self.len(), search) {
