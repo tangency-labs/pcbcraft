@@ -740,7 +740,7 @@ fn split_places_the_sheet_symbol_and_refuses_bad_requests() {
         (
             json!({"items":items,"name":"Filter","x_nm":null,"y_nm":null,"expected_revision":revision}),
             ErrorCode::InvalidParams,
-            "must be given together",
+            "`x_nm` must be a whole number of nanometers within the schematic bounds",
         ),
         (json!({"items":items,"name":"Filter","expected_revision":revision + 1}), ErrorCode::StaleRevision, "revision"),
         (json!({"items":items,"name":taken,"expected_revision":revision}), ErrorCode::InvalidParams, "already exists"),
