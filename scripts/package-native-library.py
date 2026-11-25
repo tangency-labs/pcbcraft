@@ -12,8 +12,20 @@ from pathlib import Path
 DIRECTORIES = ("symbols", "footprints", "categories", "parts", "manufacturer-parts", "lifecycle-assertions")
 
 
+def is_document_name(name: str) -> bool:
+    """Match the flat JSON leaf-name rules in the engine's is_document_path."""
+    return (
+        name.endswith(".json")
+        and len(name.encode("utf-8")) <= 128
+        and not name.startswith(".")
+        and "/" not in name
+        and "\\" not in name
+        and not any(ord(char) <= 0x1F or 0x7F <= ord(char) <= 0x9F for char in name)
+    )
+
+
 def bundle(root: Path) -> bytes:
-    """Bound regular input files and reject symlinks before creating a portable bundle."""
+    """Bound regular input files and reject unsupported paths before bundling."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError("The library must be a regular directory")
     paths = [root / "library.json"]
@@ -27,8 +39,13 @@ def bundle(root: Path) -> bytes:
     documents = {}
     total = 0
     for path in paths:
-        if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+        if path.is_symlink() or not path.is_file():
             raise ValueError(f"{path}: expected a regular JSON file")
+        if not is_document_name(path.name):
+            raise ValueError(
+                f"Unsupported library path {path.relative_to(root).as_posix()!r}: "
+                "expected a flat JSON filename of at most 128 UTF-8 bytes without a leading dot, separators or control characters"
+            )
         if path.stat().st_size > 1024 * 1024:
             raise ValueError(f"{path}: exceeds 1 MiB")
         with path.open("rb") as source:
