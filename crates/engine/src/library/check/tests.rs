@@ -675,10 +675,20 @@ fn unresolved_reference_is_an_error() {
 #[test]
 fn oversized_capture_is_an_error() {
     let fixture = fixture();
-    // The fixture footprint has 3 pads; add copies up to the limit, then one more.
-    let documents = edited(&fixture, |text| (4..=MAX_PADS).fold(text.to_owned(), |text, _| repeat_pad(&text, 0, 0)));
+    // Fill the footprint with copies of its first pad up to the limit, then one more; each input
+    // is parsed and serialized once.
+    let padded = |total: usize| {
+        edited(&fixture, |text| {
+            let mut value: Value = serde_json::from_str(text).unwrap();
+            let pads = value["pads"].as_array_mut().unwrap();
+            let copy = pads[0].clone();
+            pads.resize(total, copy);
+            serde_json::to_string_pretty(&value).unwrap() + "\n"
+        })
+    };
+    let documents = padded(MAX_PADS);
     assert!(Capture::from_documents(&documents, &Catalog::default()).is_ok(), "the last good value is the limit");
-    let documents = edited(&fixture, |text| (4..=MAX_PADS + 1).fold(text.to_owned(), |text, _| repeat_pad(&text, 0, 0)));
+    let documents = padded(MAX_PADS + 1);
     let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
     assert!(matches!(error, CheckError::TooLarge { limit: MAX_PADS, .. }), "{error}");
     let documents = edited(&fixture, |text| format!("{text}{}", " ".repeat(MAX_FILE_BYTES)));
