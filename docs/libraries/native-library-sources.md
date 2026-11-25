@@ -302,7 +302,10 @@ nonempty single-line trimmed note of up to 4,096 characters (no control
 characters), and `provenance` contains `publisher` (up to 256 characters)
 without a personal registration or path. No fields accept null or unknown keys.
 The payload, not the filename, defines the exact address. Publish a new assertion
-revision to change a state; reusing an address for different content is a conflict.
+revision to change a state; reusing an address for different content is a conflict,
+even across source registrations. A refresh that omits a revision stops serving
+that copy but retains its content for conflict checks until the registration is
+removed.
 The transfer packager and bundled-library embedding include this directory, and
 `scripts/check-library-schemas.py` validates its records.
 

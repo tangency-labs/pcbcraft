@@ -886,3 +886,34 @@ fn refresh_omitting_assertion_retains_history_and_quarantines_mutated_reintroduc
     catalog.install("fixture", Arc::new(NativeSource::load(&mutated).unwrap())).unwrap();
     assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &mutated_assertion);
 }
+
+/// Omission hides an assertion without letting another registration reuse its immutable address.
+#[test]
+fn omitted_assertion_history_checks_content_across_registrations() {
+    let (documents, draft, released) = source();
+    let path = "lifecycle-assertions/drawing-assessment.r1.json";
+    let mut omitted = documents.clone();
+    assert!(omitted.remove(path).is_some());
+    let mut changed = draft.clone();
+    changed.reason = "Changed reason in another registration".into();
+    let mut changed_documents = documents.clone();
+    changed_documents.insert(path.into(), changed.encode().unwrap());
+    let original = Arc::new(NativeSource::load(&documents).unwrap());
+
+    let mut catalog = Catalog::default();
+    catalog.install("first", original.clone()).unwrap();
+    catalog.install("first", Arc::new(NativeSource::load(&omitted).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap_err(), "Lifecycle assertion revision is unavailable");
+
+    catalog.install("second", original).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &draft);
+    catalog.remove("second").unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap_err(), "Lifecycle assertion revision is unavailable");
+
+    catalog.install("second", Arc::new(NativeSource::load(&changed_documents).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap_err(), "Conflicting content at this immutable lifecycle assertion address");
+    assert_eq!(catalog.lifecycle_assertion(&released.address).unwrap().as_ref(), &released);
+
+    catalog.remove("first").unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &changed);
+}

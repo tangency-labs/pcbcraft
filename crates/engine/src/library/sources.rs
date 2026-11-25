@@ -966,10 +966,16 @@ impl Catalog {
             self.manufacturer_index.entry(record.part.clone()).or_default().push(record.reference());
         }
     }
-    /// Rebuild exact assertion lookup and conflicts independently of definition availability.
+    /// Compare retained and current assertion content across registrations, but only offer
+    /// assertions present in a current, available source.
     fn rebuild_assertions(&mut self) {
         let mut known = BTreeMap::new();
         let mut conflicts: BTreeSet<_> = self.changed_assertions.values().flatten().cloned().collect();
+        for (address, assertion) in self.seen_assertions.values().flatten() {
+            if known.insert(address, assertion).is_some_and(|old| old != assertion) {
+                conflicts.insert(address.clone());
+            }
+        }
         let mut available = BTreeMap::new();
         for (id, source) in self.sources.iter().filter(|(id, _)| !self.disabled_builtin.contains(*id)) {
             for (_, assertion) in &source.assertions {
