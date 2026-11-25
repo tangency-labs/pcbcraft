@@ -10,10 +10,10 @@ board solid and `board/1` for the Craft bridge
 It was agreed in [the #86 discussion](https://github.com/tangency-labs/pcbcraft/issues/86#issuecomment-7015453468).
 
 It builds on the [3D model storage](library-sources.md#3d-model-storage) design,
-the [library record rules](part-schema.md#exact-references), the
-[footprint coordinates](footprint-schema.md#coordinates-and-generated-reference)
+the [library record rules](../libraries/part-schema.md#exact-references), the
+[footprint coordinates](../libraries/footprint-schema.md#coordinates-and-generated-reference)
 and the [geometry kernel](geometry-kernel.md). The machine-readable record schema
-is [model-v1.schema.json](schemas/model-v1.schema.json).
+is [model-v1.schema.json](../schemas/model-v1.schema.json).
 
 ## Scope
 
@@ -31,7 +31,7 @@ describes one geometry file and nothing about where that geometry is placed.
 
 | Field | Meaning |
 | --- | --- |
-| `format`, `library`, `id`, `revision`, `name`, `license` | Common identity fields with the [existing rules](part-schema.md#exact-references); as for footprints, the codec enforces trimmed, nonblank `name` and `license`, which the schema does not check |
+| `format`, `library`, `id`, `revision`, `name`, `license` | Common identity fields with the [existing rules](../libraries/part-schema.md#exact-references); as for footprints, the codec enforces trimmed, nonblank `name` and `license`, which the schema does not check |
 | `source` | Required provenance (`kind`, `reference`, `locator`); descriptive, never fetched on load |
 | `redistribution` | `allowed`, `not_allowed` or `unknown`; decides which operations may copy the bytes into a new file ([Redistribution](#redistribution)) |
 | `geometry` | `kind` (`step`), `sha256` of the exact file bytes as 64 lowercase hex digits, and `size_bytes` |
@@ -100,32 +100,25 @@ Viewing and checks read the bytes in place and are not affected.
 
 A model binds to a **package variant** of a part definition, not to the part as a
 whole and not to a footprint: one footprint serves many parts with different
-bodies, and one part can have several packages. The binding is an optional
-`model` field on each `packages.<variant>` record, which needs a new part format,
-`pcbcraft-part/5`. The part schema and codec arrive with the implementation
-slice.
+bodies, and one part can have several packages. The proposed `pcbcraft-part/7`
+adds an optional `model` field to each `packages.<variant>` record in
+[format 6](../libraries/part-schema.md#formats-and-implementation). The new
+part schema and codec arrive with the implementation slice.
 
-Format 5 extends [format 4](part-schema.md#formats-and-implementation): every
-package may carry a `model`, and `terminal_ratings` becomes optional, still
-nonempty when present. It keeps format 2's
-[optional drawings](part-schema.md#optional-drawings-and-compatibility): a
-footprint-only part with no `symbol` and an empty `mapping` on each package is
-valid and can be bound. `terminal_ratings` still requires a `symbol`, with the
-format-4 terminal checks. A writer selects the lowest format that holds the
-content:
+Format 7 preserves format 6's descriptive metadata, optional terminal ratings,
+and [optional drawings](../libraries/part-schema.md#optional-drawings-and-compatibility).
+A footprint-only part can carry a model binding with no `symbol` and an empty
+`mapping` on each package. When `terminal_ratings` is present, it must be
+nonempty and refer to terminals on the exact symbol under the existing rules.
 
-| Content | Format written |
-| --- | --- |
-| No binding and no supply range | 2, or 1 for a retained format-1 record |
-| Supply ranges and no binding | 4 |
-| A binding on any package, `no_body` included, with or without supply ranges | 5 |
-
-- **Removing the last binding** writes format 4 if supply ranges remain and
-  format 2 otherwise. Removing the last supply range from a part that still has
-  a binding keeps format 5.
-- **Readers.** Formats 1, 2 and 4 stay readable. Earlier readers refuse format 5
-  rather than open the part without its bindings.
-- **Format 3** is never written and stays refused.
+- **Writers.** Once format 7 is current, new generic part drafts and published
+  revisions use it whether or not they contain a model binding, supply ranges,
+  or descriptive metadata. Removing the last binding omits its `model` field.
+  Removing the last supply range omits `terminal_ratings`. Both edits still
+  write format 7.
+- **Readers.** Formats 1, 2, 4, 5 and 6 stay readable. Existing historical
+  revisions retain their declared format when read and pinned. Readers that
+  support only formats through 6 refuse a format-7 record. Format 3 stays refused.
 
 ```json
 "model": {
@@ -263,7 +256,7 @@ assets/<sha256>.step                             # Embed only
 
 ### Packed projects
 
-Today a [`.pc` manifest](native-project-storage.md#packed-projects-and-manifests)
+Today a [`.pc` manifest](../formats/native-project-storage.md#packed-projects-and-manifests)
 must have an empty `assets` list, and any missing file or digest mismatch fails
 the open. The storage slice adds asset support in a new container format,
 `pcbcraft-container/4`, and keeps the two kinds of entry apart:
@@ -334,10 +327,12 @@ height stands in for a missing model in a mechanical output.
   fixed-axes reading.
 - **Source frame.** A Y-up fixture with an origin offset seats on Z = 0 at the
   footprint origin.
-- **Part formats.** A part with supply ranges and a bound model round-trips as
-  format 5. Removing its binding writes format 4, then removing its ranges
-  writes format 2. A format-4 reader refuses the format-5 file. A footprint-only
-  part with no symbol and a `no_body` binding round-trips as format 5.
+- **Part formats.** A part with descriptive metadata, supply ranges and a bound
+  model round-trips as format 7. Removing its binding and then its ranges keeps
+  the metadata and writes format 7 at each step. A new part without any of those
+  fields also writes format 7. A format-6 reader refuses the format-7 file, and
+  a format-6 revision stays format 6 when read and pinned. A footprint-only part
+  with no symbol and a `no_body` binding round-trips as format 7.
 - **Storage.** Link and embed round trips reopen offline; switching mode keeps
   identity and alignment; an unchanged save is byte-identical; tampered bytes
   report `hash_mismatch`.
@@ -362,7 +357,7 @@ height stands in for a missing model in a mechanical output.
 ## Delivery order
 
 1. This contract and the model record schema.
-2. Engine codecs for `pcbcraft-model/1` and `pcbcraft-part/5`, and native library
+2. Engine codecs for `pcbcraft-model/1` and `pcbcraft-part/7`, and native library
    loading of `models/`.
 3. Project pinning, link and embed, `pcbcraft-container/4` manifest assets and hash checks.
 4. Model import through a shared command and the part form slot.
