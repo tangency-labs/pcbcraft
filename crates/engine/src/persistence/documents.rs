@@ -377,10 +377,10 @@ impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
-    /// Optional reference-only parametric relations. Any board format may carry them; they never
-    /// select the format. Builds without relation support refuse the record as an unknown field.
-    #[serde(default, deserialize_with = "crate::board::reference::present")]
-    relations: Option<crate::board::relations::Relations>,
+    /// Optional reference-only relations. Read the raw record until board format dispatch has
+    /// accepted the header. Older builds without relation support reject the field.
+    #[serde(default, deserialize_with = "present")]
+    relations: Option<Box<serde_json::value::RawValue>>,
     #[serde(default, deserialize_with = "present")]
     arcs: Option<Vec<crate::board::arc::ArcTrack>>,
     #[serde(default, deserialize_with = "present")]
@@ -1073,10 +1073,6 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (board.format != CURRENT_BOARD_FORMAT && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: test-point marks require format 43 and a nonempty array.".into());
     }
-    // Relations are an optional record keyed on the field, not the header: validate them when present.
-    if let Some(relations) = &board.relations {
-        relations.validate().map_err(|error| format!("board.json: {error}"))?;
-    }
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (!current && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
@@ -1445,6 +1441,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
+    let relations = board
+        .relations
+        .as_deref()
+        .map(|raw| {
+            let record = serde_json::from_str::<crate::board::relations::Relations>(raw.get())
+                .map_err(|error| format!("{}: relations: {error}", board_path.as_deref().unwrap_or("board.json")))?;
+            record.validate().map_err(|error| format!("board.json: {error}"))?;
+            Ok::<_, String>(Arc::new(record))
+        })
+        .transpose()?;
     let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
     if !current && grouped != has_groups {
         return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
@@ -1630,7 +1636,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         baseline.validate_assets(project_data)?;
     }
-    Arc::make_mut(&mut project_data.board).relations = board.relations.map(Arc::new);
+    Arc::make_mut(&mut project_data.board).relations = relations;
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Arc::make_mut(&mut project_data.board).rules = board.rules;

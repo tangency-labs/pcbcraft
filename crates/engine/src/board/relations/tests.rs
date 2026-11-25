@@ -288,12 +288,24 @@ fn a_format_relations_keep_the_board_format_and_reopen() {
     assert_eq!(listed[0]["id"], id);
     assert_eq!(bytes(&reopened), docs);
 
-    for format in ["pcbcraft-board/39", "pcbcraft-board/58"] {
-        let mut changed = board.clone();
-        changed["format"] = json!(format);
-        let mut doc = docs.clone();
-        doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
-        assert!(decode_documents(&doc).is_err(), "{format}");
+    // Isolate header dispatch from geometry and setup. Check semantic and structural witness
+    // failures, including a supported-header control for each invalid payload.
+    let mut out_of_bounds = board["relations"].clone();
+    out_of_bounds["relations"][0]["last_resolved"][0]["at"]["x_nm"] = json!(2_000_000_000_i64);
+    let mut wrong_arity = board["relations"].clone();
+    wrong_arity["relations"][0]["last_resolved"].as_array_mut().unwrap().pop();
+    for (record, diagnostic) in [(out_of_bounds, "display witness"), (wrong_arity, "relations: invalid length")] {
+        for format in ["pcbcraft-board/39", "pcbcraft-board/58", crate::persistence::CURRENT_BOARD_FORMAT] {
+            let changed = json!({"format":format,"relations":record,"footprints":[]});
+            let mut doc = docs.clone();
+            doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
+            let error = decode_documents(&doc).unwrap_err();
+            if format == crate::persistence::CURRENT_BOARD_FORMAT {
+                assert!(error.contains(diagnostic), "{format}: {error}");
+            } else {
+                assert_eq!(error, format!("board.json: unsupported board format or incompatible setup: {format}"));
+            }
+        }
     }
     let mut empty = board.clone();
     empty["relations"]["relations"] = json!([]);
@@ -303,6 +315,60 @@ fn a_format_relations_keep_the_board_format_and_reopen() {
 
     run(&mut reopened, DELETE, json!({"ids":[id]})).unwrap();
     assert_eq!(bytes(&reopened), plain);
+}
+
+/// Pad and via marks share board/43 with a dimension attached to the marked pad. Mark edits do
+/// not change the reference and invalidate an older Cut approval; new Cut previews refuse marks.
+#[test]
+fn a_format_board_43_marks_and_relations_round_trip_and_refuse_cut() {
+    use crate::{ADD_VIA, SET_TEST_POINT, board::clipboard::CUT};
+
+    let mut s = board::track::tests::routed_fixture();
+    run(&mut s, ADD_VIA, json!({"at":{"x_nm":0,"y_nm":20_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000})).unwrap();
+    let project = s.project().unwrap();
+    let board = project.board_target().unwrap().board;
+    let footprint = format!("footprint-{}", project.board.footprints()[0].id);
+    let via_id = project.board.vias[0].id;
+    let pad = json!({"kind":"pad","footprint":footprint,"pad":"1"});
+    let via = json!({"kind":"via","via":via_id});
+    let pad_cut = json!({"items":{"footprints":[footprint]}});
+    let via_cut = json!({"items":{"vias":[via_id]}});
+    let reference = pick(&mut s, 0, "pad.center", Some("1"));
+    let id = add(&mut s, "horizontal", origin(), reference);
+    let original = run(&mut s, LIST, json!({})).unwrap()["relations"].clone();
+    assert_eq!(original[0]["id"], id);
+    assert_eq!(original[0]["status"], "reference");
+
+    let approval = reviewed(&mut s, CUT, pad_cut.clone());
+    let mark = |s: &mut Session, target: &Value, purpose: &str, sides: &str| {
+        run(s, SET_TEST_POINT, json!({"board":board,"target":target,"purpose":purpose,"sides":sides})).unwrap();
+    };
+    mark(&mut s, &pad, "assembly", "top");
+    mark(&mut s, &via, "fabrication", "bottom");
+    let stale = unchanged(&mut s, |s| run(s, APPLY, decision(&approval)));
+    assert_eq!(stale.details()["reason"], "stale_preview");
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"], original);
+    let saved = bytes(&s);
+    let path = test_board_path(&saved);
+    let stored: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(stored["format"], "pcbcraft-board/43");
+    assert_eq!(stored["relations"]["relations"][0]["id"], id);
+    assert_eq!(stored["test_points"], json!([{"target":pad,"flags":{"assembly":"top"}}, {"target":via,"flags":{"fabrication":"bottom"}}]));
+    let mut reopened = Session::default();
+    reopened.open_snapshot(decode_documents(&saved).unwrap());
+    assert_eq!(bytes(&reopened), saved);
+    mark(&mut reopened, &pad, "assembly", "both");
+    assert_eq!(run(&mut reopened, LIST, json!({})).unwrap()["relations"], original);
+    let before_cut = bytes(&reopened);
+    let edited: Value = serde_json::from_slice(&before_cut[&path]).unwrap();
+    assert_eq!(edited["relations"], stored["relations"]);
+    assert_eq!(edited["test_points"][0]["flags"]["assembly"], "both");
+    assert_eq!(edited["test_points"][1], stored["test_points"][1]);
+    for params in [pad_cut, via_cut] {
+        let error = unchanged(&mut reopened, |s| run(s, PREVIEW, json!({"intent":{"command":CUT,"params":params}})));
+        assert!(error.to_string().contains("Cut would discard test-point marks"), "{error}");
+    }
+    assert_eq!(bytes(&reopened), before_cut);
 }
 
 /// Adding and deleting a reference-only horizontal dimension on a project opened from legacy
