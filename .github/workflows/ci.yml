@@ -342,6 +342,31 @@ jobs:
       artifact-prefix: pcbcraft-nightly-${{ github.sha }}
       nightly: true
 
+  nightly-release:
+    name: Publish Nightly prerelease
+    needs: [nightly-packages]
+    if: ${{ !cancelled() && needs.nightly-packages.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: pcbcraft-nightly-${{ github.sha }}-*
+          path: packages
+      - name: Update the rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-nightly.sh
+
   pages-build:
     # Only a fully qualified main revision may produce a deployment artifact.
     # Full CI skips quick-compile; do not inherit its implicit ancestor success check.

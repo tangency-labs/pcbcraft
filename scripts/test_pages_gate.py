@@ -36,6 +36,7 @@ def job_allowed(job, *, ancestor_results=(), cancelled=False, **changes):
     values = {"needs.changes.result": "success", "needs.checks.result": "success",
               "needs.changes.outputs.mode": "full",
               "needs.pages-build.result": "success",
+              "needs.nightly-packages.result": "success",
               "github.ref": "refs/heads/main", "github.event_name": "push",
               "github.event.repository.private": False, **changes}
     block = jobs()[job]
@@ -71,9 +72,10 @@ class PagesGateTests(unittest.TestCase):
 
     def test_all_validation_jobs_feed_the_gate_without_a_deployment_cycle(self):
         graph = jobs()
-        validation = set(graph) - {"checks", "nightly-packages", "pages-build", "pages-deploy"}
+        validation = set(graph) - {"checks", "nightly-packages", "nightly-release", "pages-build", "pages-deploy"}
         self.assertEqual(needs(graph["checks"]), validation)
         self.assertEqual(needs(graph["nightly-packages"]), {"changes", "checks"})
+        self.assertEqual(needs(graph["nightly-release"]), {"nightly-packages"})
         self.assertEqual(needs(graph["pages-build"]), {"changes", "checks"})
         self.assertEqual(needs(graph["pages-deploy"]), {"checks", "pages-build"})
 
@@ -132,6 +134,13 @@ class PagesGateTests(unittest.TestCase):
         ):
             with self.subTest(changes=changes):
                 self.assertFalse(job_allowed("nightly-packages", **changes))
+
+    def test_nightly_release_requires_successful_packaging(self):
+        self.assertTrue(job_allowed("nightly-release", ancestor_results=("skipped",)))
+        for result in ("failure", "cancelled", "skipped"):
+            with self.subTest(result=result):
+                self.assertFalse(job_allowed("nightly-release", **{"needs.nightly-packages.result": result}))
+        self.assertFalse(job_allowed("nightly-release", cancelled=True))
 
     def revision_check(self, current, exit_code=0):
         """Run the real final-revision shell check against a local API stub, never GitHub."""

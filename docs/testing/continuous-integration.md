@@ -112,5 +112,7 @@ hosted run; local Linux results do not establish it.
 
 [Desktop packages](desktop-builds-and-releases.md) are available from the manual
 preview workflow and as nightly artifacts after full CI passes on main.
+When all desktop packages succeed and the commit is still current, CI also
+updates the rolling Nightly prerelease.
 The manual **Prepare release** workflow builds the same native packages and
 creates the version tag and draft GitHub release.

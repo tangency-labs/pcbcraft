@@ -29,6 +29,13 @@ The app bar shows the version and Git's abbreviated commit hash, for example
 `v0.1.0 nightly (a1b2c3d)`. Manual preview artifacts are also available for
 selected revisions.
 
+When all three platforms finish and the commit is still at the tip of
+`main`, CI updates the rolling [Nightly prerelease](https://github.com/tangency-labs/pcbcraft/releases/tag/nightly).
+Its notes link to the tested commit's CI run, the four packages and their
+combined checksums. The page stays at the same address as the `nightly` tag
+moves forward. Nightly is marked as a prerelease so GitHub's Latest release
+continues to point to a stable version.
+
 ## Prepare a release
 
 1. Set `[workspace.package].version` in the root `Cargo.toml` if the release
