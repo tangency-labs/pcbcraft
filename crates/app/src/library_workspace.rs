@@ -90,7 +90,7 @@ impl PcbApp {
         self.dialog = Dialog::None;
         self.message = self.enter_workspace(ctx, "library", Placement::Here).err();
     }
-    /// The ribbon's Updates opens the same pane review as its Review library updates button.
+    /// Schematic's Libraries › Updates opens the same pane review as Parts Library's Project › Updates.
     pub(super) fn open_library_updates(&mut self, ctx: &egui::Context) {
         self.open_library_workspace(ctx);
         if self.message.is_some() {
@@ -281,6 +281,15 @@ impl PcbApp {
                 && (self.views.active.library.as_ref().is_some_and(|state| state.project.is_some()) || !self.session.libraries().conflicting(key))
         });
         let editable = selected && idle && source.is_some_and(|source| self.writable_libraries().iter().any(|(id, _)| id == source));
+        // Updates reviews the open project's placed parts. A folder operation names its refusal
+        // in the tool's tooltip and accessible name instead of loose text in the pane.
+        let updates_refusal = self.library_sources.command_refusal(pcbcraft_engine::library::sources::AVAILABLE_REVISIONS);
+        let updates = (
+            "Updates",
+            ToolIcon::Sync,
+            updates_refusal.unwrap_or("Review library updates"),
+            self.session.project().is_some() && updates_refusal.is_none(),
+        );
         let response = workspace::ribbon(
             ui,
             "Parts Library",
@@ -366,6 +375,7 @@ impl PcbApp {
                                 idle && project.is_none() && source.is_some(),
                             )],
                         ),
+                        (3, "Project", vec![updates]),
                     ] {
                         workspace::ribbon_separator(ui);
                         let entries: Vec<_> = labels
@@ -415,6 +425,15 @@ impl PcbApp {
                         self.message = self.begin_library_item_delete(ui.ctx(), &source, &key).err();
                     }
                 }
+                12 => match adoption::discover(self) {
+                    Ok(review) => {
+                        if let Some(state) = self.views.active.library.as_mut() {
+                            state.adoption = Some(review);
+                        }
+                        self.message = None;
+                    }
+                    Err(error) => self.message = Some(error),
+                },
                 _ => {}
             }
         }
