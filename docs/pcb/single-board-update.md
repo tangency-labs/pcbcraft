@@ -164,20 +164,16 @@ it later proposes an addition using that choice, which remains unplaced after Ap
 
 ## Persisted records
 
-Board format `pcbcraft-board/10` requires a `baseline` object. Earlier board
-formats reject that field and retain their previous no-op encoding until baseline
-initialization. Setup, silkscreen, graphics, legacy outline, assignments and
-placements retain their existing records alongside it.
+[Board format 43](../formats/native-project-storage.md#current-board-records)
+stores the optional accepted `baseline` alongside desired `assignments`.
+The desired mapping must cover the live component and exact pinned package.
+The baseline and placement keep the accepted package and mapping independently.
+Inspection reports `pending_update` when the desired package for a board-eligible
+part differs from accepted history. Apply or resetting the intent clears that
+difference while keeping the same board header.
 
-Board format `pcbcraft-board/11` is used while a desired `assignments` entry
-for a board-eligible component differs from accepted history. Excluded-only choices
-remain in version 10. The entry is the sole package intent; its mapping
-must cover the current live component and exact pinned package. The baseline and
-placement retain the accepted package/mapping independently. Inspection reports
-`pending_update`. An older reader rejects version 11 instead of equating desired
-and physical choices. Apply adopts those choices and returns to version 10 when
-no pending package intent remains. Resetting intent to the accepted package is
-also a normal desired-assignment edit.
+Historical format 10 requires a baseline, and format 11 requires both a baseline
+and pending package intent. Excluded-only choices do not count as pending.
 
 | Baseline field | Meaning |
 | --- | --- |

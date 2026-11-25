@@ -15,10 +15,10 @@ for the affected packages and their dependents. A passing selected stage reports
 | Code PR without `approved-for-ci` | Repository checks, formatting and quick native compile |
 | Code PR with `approved-for-ci` | Repository checks, formatting, affected-package Clippy and unit/integration tests, plus command-contract comparison |
 | PR changing Cargo manifests, Cargo.lock or deny.toml | Dependency license/source/ban checks in addition to its selected stage |
-| Main code push, merge group, nightly or manual workflow | Full native workspace suite, doctests and opt-in harness; Windows, browser packaging, WASI and dependency checks |
+| Main code push, merge group, nightly or manual workflow | Full native workspace suite, doctests and opt-in harness; Windows and macOS tests, browser packaging, WASI and dependency checks |
 | Unrelated label change on an approved PR | Repository checks and reuse of an actual approved native pass for the identical head and merge commit; no new native build |
 
-Windows, browser packaging, WASI, doctests and the opt-in performance harness do
+Windows and macOS tests, browser packaging, WASI, doctests and the opt-in performance harness do
 not run on ordinary PR events, even after approval. Removing `approved-for-ci`
 returns later pushes to quick feedback. Adding it enables affected native tests;
 it does not start the broad platform suite. Use Actions → CI → Run workflow on a
@@ -56,39 +56,41 @@ existing run, never starts a build, and fails closed on API errors, revoked
 approval, stale revisions or missing results. Approval-label events and new
 pushes supersede prior PR work; unrelated labels cannot cancel a real build.
 
-## Full builds, Windows and caches
+## Full builds, desktop platforms and caches
 
-Pages builds and deploys run inside CI after the aggregate `checks` job succeeds
-in full-validation mode. Only public-repository main pushes and manual CI runs
-on main can deploy; PR, nightly and documentation-only runs do not publish the
-site. The build checks out the exact tested commit, and deployment checks main
-again before publishing so a superseded revision is skipped. An API failure
-prevents deployment. The separate push-triggered Pages workflow has been removed,
-so manual deployment also goes through the full CI workflow.
-
-Both Pages jobs use explicit status conditions so the quick-compile job's
-intentional skip during full CI does not suppress publication. Cancellation
-still stops publication, and deployment requires both the aggregate checks and
-the Pages build to succeed.
+The `web` job builds the release site once from the exact tested commit. It
+stages that output for Pages on public-repository main pushes and manual full
+CI runs on main. Deployment requires both the web build and the aggregate
+`checks` job to succeed, and checks main again before publishing so a
+superseded revision is skipped. A Pages artifact upload failure surfaces in
+deployment while desktop nightlies can continue. PR, scheduled, and
+documentation-only runs skip publication.
 
 Full runs retain the complete Windows workspace suite, both Windows Clippy
 passes, Python/Node regressions and the opt-in harness. Windows checkouts keep
 `core.autocrlf=true`; Git attributes protect recorded evidence bytes. The build
-job stages the existing native-window lifecycle test from Cargo's JSON output.
+job stages the native-window lifecycle executable reported by Cargo during
+the workspace tests, so the desktop smoke job uses that build.
 A separate GitHub Windows desktop runs that normally opt-in test with DX12/FXC
 and a 180-second deadline. Zero tests or a nonzero exit fail, and only the owned
 process is killed on timeout. This checks frame delivery, window lifetimes and
 close cancellation, not endurance or physical input latency.
 
+The macOS job runs the Rust workspace suite, including the desktop launcher and
+app title-bar tests. Visual and pointer-interaction checks on a macOS desktop
+still require a separate run.
+
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping
 release and ordinary development profiles are unchanged. Platforms have separate
-cache keys; only main saves caches and PRs restore them. New keys initially build
-cold. Default runners remain `ubuntu-latest` and `windows-latest`; `CI_RUNNER` and
-`CI_RUNNER_WINDOWS` can select provisioned runners. Custom Windows builds must be
-x64 MSVC executables compatible with the presenting `windows-latest` desktop.
-`CI_BUILD_JOBS` defaults to four, and `CI_BUILD_JOBS_WINDOWS` to two. No runner
-subscriptions, credentials or branch settings are changed here.
+cache keys, and only main saves caches. The Windows cache keeps dependencies
+under a new key. Its first build is cold, so the job has a 75-minute timeout.
+The Linux native job has 45 minutes to let cold tests finish and save their
+cache. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
+`CI_RUNNER`, `CI_RUNNER_WINDOWS` and `CI_RUNNER_MACOS` select provisioned runners.
+Custom Windows builds must be x64 MSVC executables compatible with the presenting
+`windows-latest` desktop. `CI_BUILD_JOBS` defaults to four on Linux, and
+`CI_BUILD_JOBS_WINDOWS` and `CI_BUILD_JOBS_MACOS` default to two.
 
 ## Evidence and scope
 
@@ -105,3 +107,10 @@ This work is separate from the investigation/container work in
 stages, package consumers, label changes, unknown inputs, strict completion and
 exact-revision reuse. Actual full Windows desktop qualification requires a full
 hosted run; local Linux results do not establish it.
+
+[Desktop packages](desktop-builds-and-releases.md) are available from the manual
+preview workflow and as nightly artifacts after full CI passes on main.
+When all desktop packages succeed and the commit is still current, CI also
+updates the rolling Nightly prerelease.
+The manual **Prepare release** workflow builds the same native packages and
+creates the version tag and draft GitHub release.

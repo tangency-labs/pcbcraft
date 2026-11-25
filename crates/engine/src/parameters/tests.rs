@@ -163,7 +163,7 @@ fn page_numbers_follow_browser_order() {
     assert_eq!(resolve(&mut s, &other, "@instance.Page")["text"], "3");
 }
 
-/// Parameters round-trip byte for byte in folders and archives. Sheet values live in sheet/9 and
+/// Parameters round-trip byte for byte in folders and archives. Sheet values live with their paper and
 /// project values make the entry point project/22; a project without any keeps its old bytes.
 #[test]
 fn parameters_are_stored_one_per_line_and_round_trip() {

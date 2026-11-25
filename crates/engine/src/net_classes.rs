@@ -147,6 +147,9 @@ pub struct Definition {
     pub name: String,
     #[serde(deserialize_with = "unique_rules")]
     pub rules: Rules,
+    /// Electrical values authored on this class, independent of dimensional routing rules.
+    #[serde(default, skip_serializing_if = "crate::nets::intent::IntentV1::is_empty", deserialize_with = "crate::nets::intent::stored")]
+    pub(crate) authored_intent: crate::nets::intent::IntentV1,
 }
 
 /// Reject repeated dimensional keys before JSON decoding can silently replace authored intent.
@@ -226,6 +229,11 @@ pub fn validate_draft(name: &str, rules: &Rules) -> Result<(), String> {
 }
 
 impl Catalog {
+    /// Authored values are optional class fields of the one current catalog vocabulary.
+    pub(crate) fn has_authored_intent(&self) -> bool {
+        self.definitions.iter().any(|class| !class.authored_intent.is_empty())
+    }
+
     /// Validate the complete bounded catalog before adoption. Duplicate IDs never overwrite records.
     pub fn validate(&self) -> Result<(), String> {
         crate::named_catalog::validate(&self.format, "pcbcraft-net-classes/1", "net-class", "class", &self.definitions)?;

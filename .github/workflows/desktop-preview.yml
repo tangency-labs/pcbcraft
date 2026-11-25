@@ -1,0 +1,81 @@
+name: Desktop preview packages
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        required: true
+        type: string
+      nightly:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_TARGET_DIR: target
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: windows-x64
+            runner: windows-2025
+          - platform: macos-aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: desktop-preview-${{ matrix.platform }}
+          save-if: false
+      - name: Abbreviate the nightly revision
+        if: inputs.nightly
+        id: nightly
+        shell: bash
+        run: |
+          revision="$(git rev-parse --short HEAD)"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - run: cargo build --locked --release -p pcbcraft -p pcbcraft-cli
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+          PCBCRAFT_NIGHTLY_REVISION: ${{ steps.nightly.outputs.revision }}
+      - name: Install nFPM for Linux packages
+        if: matrix.platform == 'linux-x86_64'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          archive=nfpm_2.47.0_Linux_x86_64.tar.gz
+          curl -fsSLO "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/$archive"
+          echo "0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783  $archive" | sha256sum --check
+          mkdir nfpm-bin
+          tar -xzf "$archive" -C nfpm-bin nfpm
+          echo "$PWD/nfpm-bin" >> "$GITHUB_PATH"
+      - run: python -B scripts/package-desktop.py ${{ matrix.platform }} --bin-dir target/release --output dist/preview
+        env:
+          PCBCRAFT_PACKAGE_RELEASE: ${{ inputs.nightly && format('0.{0}.{1}', github.run_id, github.run_attempt) || '1' }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ inputs.artifact-prefix || 'pcbcraft-preview' }}-${{ matrix.platform }}
+          path: dist/preview/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true

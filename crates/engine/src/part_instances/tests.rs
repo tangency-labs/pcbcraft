@@ -127,7 +127,7 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         let reserved_format =
             crate::persistence::historical_documents(crate::persistence::diagnostic_snapshot(project.clone()), "pcbcraft-project/14");
         let error = decode_documents(&reserved_format).unwrap_err();
-        assert!(error.contains("Pinned part selections require project format"), "unexpected rejection: {error}");
+        assert!(error.contains("pinned part selections are not allowed in pcbcraft-project/14"), "unexpected rejection: {error}");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
         assert!(docs.keys().any(|path| path.starts_with("library/categories/")));
         assert!(docs.keys().any(|path| path.starts_with("library/manufacturer-parts/")));
@@ -333,10 +333,10 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     let text = fragment.to_text().unwrap();
     assert_eq!(crate::board::clipboard::BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
     let docs = encode_documents(project.clone()).unwrap();
-    let board_path = docs.iter().find(|(_, bytes)| String::from_utf8_lossy(bytes).contains("pcbcraft-board/17")).unwrap().0;
+    let board_path = docs.iter().find(|(_, bytes)| String::from_utf8_lossy(bytes).contains(crate::persistence::CURRENT_BOARD_FORMAT)).unwrap().0;
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     let mut old = docs.clone();
-    let text = String::from_utf8(old[board_path].clone()).unwrap().replace("pcbcraft-board/17", "pcbcraft-board/16");
+    let text = String::from_utf8(old[board_path].clone()).unwrap().replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/16");
     old.insert(board_path.clone(), text.into_bytes());
     assert!(decode_documents(&old).is_err());
     let mut old_baseline = baseline.as_ref().clone();

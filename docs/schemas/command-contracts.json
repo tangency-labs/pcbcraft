@@ -34,6 +34,350 @@
         "type": "object"
       }
     },
+    "electrical_intent.inspect": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "address": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "net": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "project": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "schematic",
+                              "board"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "project",
+                      "scope",
+                      "net"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "net"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "address"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "class": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "net_class"
+                  },
+                  "project": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "class"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "target"
+        ],
+        "type": "object"
+      }
+    },
+    "electrical_intent.set": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "intent": {
+            "additionalProperties": false,
+            "properties": {
+              "working_voltage": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "basis": {
+                        "enum": [
+                          "dc",
+                          "peak_ac"
+                        ]
+                      },
+                      "magnitude": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "unit": {
+                            "const": "V"
+                          },
+                          "value": {
+                            "maxLength": 38,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "unit"
+                        ],
+                        "type": "object"
+                      },
+                      "reference": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "earth"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "address": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "net": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "project": {
+                                    "format": "uuid",
+                                    "type": "string"
+                                  },
+                                  "scope": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "format": "uuid",
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "enum": [
+                                          "schematic",
+                                          "board"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "id"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "project",
+                                  "scope",
+                                  "net"
+                                ],
+                                "type": "object"
+                              },
+                              "kind": {
+                                "const": "net"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "address"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "magnitude",
+                      "basis",
+                      "reference"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "address": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "net": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "project": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "schematic",
+                              "board"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "project",
+                      "scope",
+                      "net"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "net"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "address"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "class": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "net_class"
+                  },
+                  "project": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "class"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "expected_revision",
+          "target",
+          "intent"
+        ],
+        "type": "object"
+      }
+    },
+    "library.apply_adoption": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "pattern": "^component-[1-9][0-9]*$",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "preview": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instances",
+          "expected_revision",
+          "preview"
+        ],
+        "type": "object"
+      }
+    },
     "library.available_revisions": {
       "params": {
         "additionalProperties": false,
@@ -171,6 +515,32 @@
         "required": [
           "item",
           "documents"
+        ],
+        "type": "object"
+      }
+    },
+    "library.preview_adoption": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "pattern": "^component-[1-9][0-9]*$",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "instances",
+          "expected_revision"
         ],
         "type": "object"
       }
@@ -606,6 +976,137 @@
         "type": "object"
       }
     },
+    "nets.inspect_appearance": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "persistent"
+                  },
+                  "net": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "project": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "schematic",
+                          "board"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "scope",
+                  "net"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "anchor": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "label",
+                          "port",
+                          "terminal"
+                        ],
+                        "type": "string"
+                      },
+                      "object": {
+                        "maximum": 9223372036854775807,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "occurrence": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "project": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "board",
+                              "schematic"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      },
+                      "terminal": {
+                        "maxLength": 256,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "project",
+                      "scope",
+                      "occurrence",
+                      "object",
+                      "terminal"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "derived"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "anchor"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      }
+    },
     "nets.inspect_classes": {
       "params": {
         "additionalProperties": false,
@@ -1030,6 +1531,226 @@
         "type": "object"
       }
     },
+    "nets.set_appearance": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "appearance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "clear": {
+                    "items": {
+                      "enum": [
+                        "color",
+                        "width_cp"
+                      ],
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "color": {
+                    "items": {
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "type": "array"
+                  },
+                  "width_cp": {
+                    "maximum": 800,
+                    "minimum": 50,
+                    "type": "integer"
+                  }
+                },
+                "allOf": [
+                  {
+                    "not": {
+                      "allOf": [
+                        {
+                          "required": [
+                            "clear",
+                            "color"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "clear": {
+                              "contains": {
+                                "const": "color"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "allOf": [
+                        {
+                          "required": [
+                            "clear",
+                            "width_cp"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "clear": {
+                              "contains": {
+                                "const": "width_cp"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "persistent"
+                  },
+                  "net": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "project": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "schematic",
+                          "board"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "scope",
+                  "net"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "anchor": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "label",
+                          "port",
+                          "terminal"
+                        ],
+                        "type": "string"
+                      },
+                      "object": {
+                        "maximum": 9223372036854775807,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "occurrence": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "project": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "scope": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "board",
+                              "schematic"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "type": "object"
+                      },
+                      "terminal": {
+                        "maxLength": 256,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "project",
+                      "scope",
+                      "occurrence",
+                      "object",
+                      "terminal"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "derived"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "anchor"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_revision",
+          "target",
+          "appearance"
+        ],
+        "type": "object"
+      }
+    },
     "nets.set_classes": {
       "params": {
         "additionalProperties": false,
@@ -1172,6 +1893,257 @@
           "expected_revision",
           "target",
           "classes"
+        ],
+        "type": "object"
+      }
+    },
+    "nets.set_properties": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "add_classes": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "appearance": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "not": {
+                          "allOf": [
+                            {
+                              "required": [
+                                "clear",
+                                "color"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "clear": {
+                                  "contains": {
+                                    "const": "color"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "not": {
+                          "allOf": [
+                            {
+                              "required": [
+                                "clear",
+                                "width_cp"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "clear": {
+                                  "contains": {
+                                    "const": "width_cp"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "clear": {
+                        "items": {
+                          "enum": [
+                            "color",
+                            "width_cp"
+                          ],
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "color": {
+                        "items": {
+                          "maximum": 255,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "type": "array"
+                      },
+                      "width_cp": {
+                        "maximum": 800,
+                        "minimum": 50,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "remove_classes": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "type": "object"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "targets": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "persistent"
+                    },
+                    "net": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "project": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "scope": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "schematic",
+                            "board"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "project",
+                    "scope",
+                    "net"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "anchor": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "label",
+                            "port",
+                            "terminal"
+                          ],
+                          "type": "string"
+                        },
+                        "object": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "occurrence": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "project": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "scope": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "board",
+                                "schematic"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "terminal": {
+                          "maxLength": 256,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "project",
+                        "scope",
+                        "occurrence",
+                        "object",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "derived"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "anchor"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "expected_revision",
+          "targets",
+          "changes"
         ],
         "type": "object"
       }
@@ -2338,6 +3310,68 @@
           "expected_revision",
           "footprints",
           "mode"
+        ],
+        "type": "object"
+      }
+    },
+    "pcb.apply_footprint_revision": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  },
+                  "maxItems": 128,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              ]
+            },
+            "maxProperties": 1024,
+            "minProperties": 1,
+            "type": "object"
+          },
+          "part_instance": {
+            "type": "string"
+          },
+          "unconnected_pads": {
+            "items": {
+              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "board",
+          "part_instance",
+          "expected_revision",
+          "acceptance",
+          "mapping"
         ],
         "type": "object"
       }
@@ -4912,6 +5946,40 @@
           }
         },
         "required": [],
+        "type": "object"
+      }
+    },
+    "pcb.merge_tracks": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tracks": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 65536,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "board",
+          "expected_revision",
+          "tracks"
+        ],
         "type": "object"
       }
     },
@@ -8253,6 +9321,209 @@
         "type": "object"
       }
     },
+    "pcb.set_output_recipe": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "properties": {
+                      "drill": {
+                        "const": true
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "gerber_layers": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ],
+                "properties": {
+                  "assembly_profile": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "profile": {
+                        "format": "uuid",
+                        "not": {
+                          "const": "00000000-0000-0000-0000-000000000000"
+                        },
+                        "type": "string"
+                      },
+                      "revision": {
+                        "maximum": 4294967295,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "profile",
+                      "revision"
+                    ],
+                    "type": "object"
+                  },
+                  "board": {
+                    "format": "uuid",
+                    "not": {
+                      "const": "00000000-0000-0000-0000-000000000000"
+                    },
+                    "type": "string"
+                  },
+                  "drill": {
+                    "type": "boolean"
+                  },
+                  "file_stem": {
+                    "maxLength": 48,
+                    "minLength": 1,
+                    "not": {
+                      "enum": [
+                        "con",
+                        "prn",
+                        "aux",
+                        "nul",
+                        "com1",
+                        "com2",
+                        "com3",
+                        "com4",
+                        "com5",
+                        "com6",
+                        "com7",
+                        "com8",
+                        "com9",
+                        "lpt1",
+                        "lpt2",
+                        "lpt3",
+                        "lpt4",
+                        "lpt5",
+                        "lpt6",
+                        "lpt7",
+                        "lpt8",
+                        "lpt9"
+                      ]
+                    },
+                    "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])",
+                    "type": "string"
+                  },
+                  "gerber_layers": {
+                    "items": {
+                      "format": "uuid",
+                      "not": {
+                        "const": "00000000-0000-0000-0000-000000000000"
+                      },
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "maxItems": 128,
+                    "type": "array",
+                    "uniqueItems": true
+                  },
+                  "name": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?(?![\\s\\S])",
+                    "type": "string"
+                  },
+                  "origin": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "board_zero"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "outline_lower_left"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "point"
+                          },
+                          "x_nm": {
+                            "maximum": 987300000,
+                            "minimum": -987300000,
+                            "type": "integer"
+                          },
+                          "y_nm": {
+                            "maximum": 987300000,
+                            "minimum": -987300000,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "x_nm",
+                          "y_nm"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "units": {
+                    "enum": [
+                      "mm",
+                      "in"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "board",
+                  "units",
+                  "file_stem",
+                  "gerber_layers",
+                  "drill"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recipe": {
+            "format": "uuid",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            },
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "recipe",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.set_placement_origin": {
       "params": {
         "additionalProperties": false,
@@ -8473,6 +9744,87 @@
         "required": [
           "settings",
           "expected_revision"
+        ],
+        "type": "object"
+      }
+    },
+    "pcb.set_test_point": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "purpose": {
+            "enum": [
+              "assembly",
+              "fabrication"
+            ],
+            "type": "string"
+          },
+          "sides": {
+            "enum": [
+              "top",
+              "bottom",
+              "both",
+              null
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "footprint": {
+                    "pattern": "^footprint-[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "pad"
+                  },
+                  "pad": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "footprint",
+                  "pad"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "via"
+                  },
+                  "via": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "via"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "board",
+          "expected_revision",
+          "target",
+          "purpose",
+          "sides"
         ],
         "type": "object"
       }
@@ -11450,6 +12802,106 @@
         "type": "object"
       }
     },
+    "schematic.preview_split_sheet": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "net_labels": {
+                "items": {
+                  "pattern": "^net-label-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "no_connects": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "part": {
+                          "pattern": "^component-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "terminal": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "part",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "junction": {
+                          "pattern": "^junction-[1-9][0-9]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "junction"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "symbols": {
+                "items": {
+                  "pattern": "^symbol-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "wires": {
+                "items": {
+                  "pattern": "^wire-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "symbols",
+              "wires"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
     "schematic.remove_sheet": {
       "params": {
         "additionalProperties": false,
@@ -11983,6 +13435,125 @@
         "type": "object"
       }
     },
+    "schematic.split_sheet": {
+      "params": {
+        "additionalProperties": false,
+        "dependentRequired": {
+          "x_nm": [
+            "y_nm"
+          ],
+          "y_nm": [
+            "x_nm"
+          ]
+        },
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "net_labels": {
+                "items": {
+                  "pattern": "^net-label-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "no_connects": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "part": {
+                          "pattern": "^component-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "terminal": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "part",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "junction": {
+                          "pattern": "^junction-[1-9][0-9]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "junction"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "symbols": {
+                "items": {
+                  "pattern": "^symbol-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "wires": {
+                "items": {
+                  "pattern": "^wire-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "symbols",
+              "wires"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "x_nm": {
+            "maximum": 987300000,
+            "minimum": -987300000,
+            "type": "integer"
+          },
+          "y_nm": {
+            "maximum": 987300000,
+            "minimum": -987300000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "name",
+          "expected_revision"
+        ],
+        "type": "object"
+      }
+    },
     "sheet.create": {
       "params": {
         "additionalProperties": false,
@@ -12168,6 +13739,31 @@
     }
   },
   "window_commands": {
+    "app.board_image": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "render",
+              "cancel",
+              "preview"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.library_browse": {
       "params": {
         "additionalProperties": false,
@@ -12404,6 +14000,9 @@
           "document": {
             "minimum": 0,
             "type": "integer"
+          },
+          "dry_run": {
+            "type": "boolean"
           },
           "expected_revision": {
             "minimum": 0,
@@ -12762,7 +14361,7 @@
               "minimum": 1,
               "type": "integer"
             },
-            "maxItems": 512,
+            "maxItems": 1536,
             "type": "array",
             "uniqueItems": true
           },
@@ -13265,6 +14864,28 @@
       },
       "scope": "window"
     },
+    "app.set_render_board": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "board",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.set_workspace": {
       "params": {
         "additionalProperties": false,
@@ -13288,7 +14909,8 @@
               "symbol_editor",
               "footprint_editor",
               "library",
-              "manufacturing"
+              "manufacturing",
+              "render"
             ],
             "type": "string"
           }
@@ -13407,6 +15029,26 @@
         },
         "required": [
           "operation"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "file.archive_folder": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trash_source": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },

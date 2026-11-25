@@ -9,22 +9,16 @@ named anchors and hierarchy; the registry records identity and reconciliation.
 
 ## Records and version boundary
 
-The current project entry point accepts an optional registry in the existing
-instance home. A board-owned registry uses instances/2, instances/3 with
-[class bindings](net-class-assignments.md), or instances/4 with generated numbers.
-Board-owned memberships use instances/5 or /7, and pairs use instances/8.
-Designator locks remain independent of the registry. Every record stored under project/23 has a positive
-`generated_number`; duplicate numbers, explicit nulls, missing numbers and use
-under older headers are rejected. Project/24 carries the same records beside
-[part groups](part-groups.md), with generated numbers optional: a
-registry there numbers every record under the same rules or numbers none.
-Without pairs, board-owned expanded memberships select instances/5 and compact
-memberships select instances/7. A part-group catalog without
-memberships keeps the instance header the other records need, such as
-instances/4 for a numbered registry. Active, ambiguous and retired records reserve
-their numbers, which are never inferred from component references.
-`net_registry` is optional within the existing schematic/board instance home;
-an explicitly empty or malformed registry is rejected. The registry stores
+The current project entry point permits an optional registry in either
+instance home. Board-owned records use
+[instances/12](native-project-storage.md#board-instance-records) with optional
+[class bindings](net-class-assignments.md), numbers, pairs, wire appearance,
+[authored electrical intent](electrical-intent.md) and either membership
+representation. Historical instances/2–5 and /7–/10 retain their existing
+validation rules. A numbered registry under the current format has a positive,
+unique `generated_number` on every record. Active, ambiguous and retired records
+reserve their numbers. An explicitly empty or malformed `net_registry` is
+rejected. The registry stores
 UUID-sorted records, each with one primary anchor, up to three ordered fallbacks,
 snapshot-qualified lineage and an active, ambiguous or retired state. It never
 stores a complete endpoint membership list. Retired records reserve their UUIDs.
@@ -69,16 +63,16 @@ is not an electrical or routing qualification. A member may become retired or
 ambiguous; the stored relationship keeps that exact UUID and does not follow
 successors or set a review state automatically.
 
-The current project format accepts an optional pair list, and board-owned pairs
-use instances/8. Legacy project/45 and instances/8 require pairs. A present
-`pairs` field must be nonempty. Registries can be fully numbered or fully
-unnumbered. Existing
-class catalogs and bindings, parameters, no-connect intent, part groups and
-assembly profiles keep their existing validation rules. Either expanded or
-compact memberships can follow the registry; the field name selects which
-encoding instances/8 contains. Removing the last pair keeps the current project
-format. The board-owned instance file uses the version required by the remaining
-records.
+The current project and instance formats accept optional pairs. Historical
+project/45 and instances/8 require pairs. A present `pairs` array must be
+nonempty. Registries can be fully numbered or fully unnumbered. Existing class
+bindings, parameters, no-connect intent, membership and assembly profiles keep
+their validation rules. Removing the last pair omits the array and retains both
+current headers.
+
+[Authored electrical intent](native-project-storage.md#authored-electrical-intent)
+is an optional field on a net registry record in the current project format;
+it does not select a different instance header or affect wire appearance.
 
 At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one

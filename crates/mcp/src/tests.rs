@@ -226,6 +226,106 @@ fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() 
     assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
 }
 
+/// The split preview returns the same review data through live and headless dispatch with
+/// inspection omitted, and neither path changes the project or its revision.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn split_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
+    use crate::{
+        Backend, Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::sheet_split::PREVIEW;
+
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = OpenEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = editor.0.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    editor.0.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":editor.0.revision()})).unwrap();
+    let snapshot = editor.0.snapshot().unwrap();
+    editor.0.open_snapshot(snapshot.clone());
+    let mut headless = Headless::with_project(snapshot.clone());
+    let revision = headless.call("project.inspect", json!({})).unwrap()["revision"].clone();
+    let request = json!({"command":PREVIEW,"params":{"items":{"symbols":[symbols[0]],"wires":[]},"name":"Split"},"inspect":false});
+    let before = editor.0.inspect();
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let report = headless.call("engine.execute", request).unwrap();
+    assert_eq!(report["split_preview"], live["split_preview"]);
+    let ports = report["split_preview"]["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0]["inside"], json!([from]));
+    assert_eq!(ports[0]["outside"], json!([to]));
+    assert_eq!(report["split_preview"]["cut_wires"].as_array().unwrap().len(), 1);
+    assert_eq!(report["revision"], revision);
+    assert_eq!(live["revision"], before["revision"]);
+    assert!(report.get("project").is_none());
+    assert_eq!(editor.0.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+}
+
+/// The split runs through MCP as one edit at the previewed revision: the moved symbol is on
+/// the new sheet, one undo restores the project, and a repeated sheet name is refused.
+#[test]
+fn split_sheet_applies_through_mcp_as_one_undo_step() {
+    use pcbcraft_engine::sheet_split::{PREVIEW, SPLIT};
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    session.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":session.revision()})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let items = json!({"symbols":[symbols[0]],"wires":[]});
+    let preview = json!({"command":PREVIEW,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let report = crate::backend::call_session(&mut session, "engine.execute", &preview).unwrap();
+    assert_eq!(report["split_preview"]["ports"].as_array().unwrap().len(), 1);
+
+    let split = json!({"command":SPLIT,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let done = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap();
+    assert_eq!(done["revision"], json!(session.revision()));
+    let project = session.project().unwrap();
+    let child = project.sheets().find(|sheet| sheet.name == "Split").unwrap().target;
+    assert_eq!(project.for_sheet(child).unwrap().symbols().iter().map(|symbol| symbol.id()).collect::<Vec<_>>(), [symbols[0].clone()]);
+    assert_eq!(project.for_sheet(child).unwrap().hierarchical_labels().len(), 1);
+
+    let again = json!({"command":PREVIEW,"params":{"sheet":before.sheet_target().id(),"items":{"symbols":[symbols[1]],"wires":[]},"name":"split"},"inspect":false});
+    let refused = crate::backend::call_session(&mut session, "engine.execute", &again).unwrap_err();
+    assert_eq!(refused.code(), "invalid_params");
+    assert!(refused.message().contains("already exists"), "{}", refused.message());
+    let stale = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap_err();
+    assert_eq!(stale.code(), "stale_revision");
+
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(session.project().unwrap().sheets().len(), before.sheets().len());
+    assert_eq!(session.project().unwrap().symbols().len(), 2);
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
@@ -820,12 +920,14 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
     let commands = commands.as_array().expect("library command list");
     for id in [
+        "library.apply_adoption",
         "library.available_revisions",
         "library.list_sources",
         "library.load_source",
         "library.parse_quantity",
         "library.prepare_part_publication",
         "library.prepare_publication",
+        "library.preview_adoption",
         "library.preview_footprint_revision",
         "library.preview_pin_remap",
         "library.remove_source",
@@ -1026,6 +1128,38 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
     assert_eq!(failed["isError"], true);
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
+}
+
+/// Net appearance commands are backward-compatible catalog additions: discovery keeps API version
+/// 1, publishes their full patch schema, and the catalog revision still changes when they are absent.
+#[test]
+fn net_appearance_commands_are_version_one_catalog_additions() {
+    use pcbcraft_engine::command_api::{COMMAND_API_VERSION, catalog_revision};
+    use pcbcraft_engine::nets::{INSPECT_APPEARANCE, MAX_PROPERTY_TARGETS, SET_APPEARANCE, SET_PROPERTIES};
+
+    assert_eq!(COMMAND_API_VERSION, 1);
+    let mut s = server();
+    let listed = call(&mut s, "list_commands", json!({}));
+    assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
+    let commands = body(&listed);
+    let commands = commands.as_array().unwrap();
+    let found = |id: &str| commands.iter().find(|command| command["id"] == id).cloned().unwrap();
+    let inspect = found(INSPECT_APPEARANCE);
+    let set = found(SET_APPEARANCE);
+    let batch = found(SET_PROPERTIES);
+    assert_eq!(batch["params"]["properties"]["targets"]["maxItems"], json!(MAX_PROPERTY_TARGETS));
+    assert_eq!(inspect["id"], json!(INSPECT_APPEARANCE));
+    assert_eq!(set["id"], json!(SET_APPEARANCE));
+    let clear = &set["params"]["properties"]["appearance"]["oneOf"][1]["properties"]["clear"];
+    assert_eq!(clear["items"]["enum"], json!(["color", "width_cp"]));
+
+    let without: Vec<Value> = commands
+        .iter()
+        .filter(|command| ![INSPECT_APPEARANCE, SET_APPEARANCE, SET_PROPERTIES].iter().any(|id| command["id"] == *id))
+        .cloned()
+        .collect();
+    assert_eq!(commands.len(), without.len() + 3);
+    assert_ne!(catalog_revision(&without), catalog_revision(commands));
 }
 
 /// Discovery and inspection expose the same immutable scope. Both return modes refuse the
@@ -2472,6 +2606,60 @@ fn native_part_selection_and_compatibility_are_available_through_mcp() {
     assert_eq!(edited["project"]["components"][0]["part"]["compatibility"]["status"], "does_not_meet_requirements");
     let stale = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
     assert_eq!(stale["isError"], true);
+}
+
+/// MCP answers a track merge with its full diff, previews it without an edit on a dry run,
+/// and applies it as one undo step.
+#[test]
+fn merging_tracks_over_mcp_returns_the_diff() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap();
+    let layer = setup
+        .project()
+        .unwrap()
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+        .unwrap()
+        .id;
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":0,"y_nm":0},{"x_nm":2_000_000,"y_nm":0},{"x_nm":5_000_000,"y_nm":0}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let tracks: Vec<_> = setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|track| track.id).collect();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let params = json!({"board":board.board,"tracks":tracks,"dry_run":true,"expected_revision":before["revision"]});
+    let preview = call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params}));
+    assert_ne!(preview["isError"], true, "{preview}");
+    let preview = body(&preview);
+    assert_eq!(preview["revision"], before["revision"]);
+    assert_eq!(preview["merge_tracks"]["removed"], json!([tracks[1]]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let mut params = params;
+    params["dry_run"] = json!(false);
+    let merged = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params})));
+    assert_eq!(merged["merge_tracks"]["after"][0]["end"], json!({"x_nm":5_000_000,"y_nm":0}));
+    let after = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(after["revision"], merged["revision"]);
+    assert_eq!(after["project"]["boards"][0]["tracks"].as_array().unwrap().len(), 1);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"][0]["tracks"], before["project"]["boards"][0]["tracks"]);
+}
+
+/// The largest merge report the engine accepts still fits the live editor's reply frame with
+/// its wrapper, so a merge is never published and then refused by the transport.
+#[test]
+fn the_merge_report_budget_fits_the_live_reply_limit() {
+    let wrapper = serde_json::to_vec(&json!({"result":{"revision":u64::MAX,"merge_tracks":null}})).unwrap().len() - "null".len();
+    assert!(pcbcraft_engine::board::track::MERGE_REPORT_MAX_BYTES + wrapper <= crate::live::MAX_REPLY_BYTES);
 }
 
 /// MCP exposes explicit board lock intent and the same atomic protection as the editor.

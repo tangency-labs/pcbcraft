@@ -318,7 +318,7 @@ above, so symbol-only and footprint-only libraries are normal.
 | Vendor download (zip of KiCad files) | Proposed below |
 | Generator (for example a connector family) | Proposed: produces native records from explicit inputs |
 | Git repository | [#93](https://github.com/tangency-labs/pcbcraft/issues/93) |
-| Remote provider or team catalog | [#94](https://github.com/tangency-labs/pcbcraft/issues/94) |
+| Remote provider or team catalog | [#94](https://github.com/tangency-labs/pcbcraft/issues/94); first slice proposed in [team-catalog.md](team-catalog.md) |
 
 Every source answers the same questions:
 
@@ -500,12 +500,18 @@ override it:
   content doesn't match the pinned hash is rejected, never substituted.
 - **Caching** a linked model never changes the project's mode or marks it dirty.
 
+[3D model records, bindings and frames](3d-model-records.md) proposes the
+record, the package-variant binding, the model and board frames and the
+storage paths for this design.
+
 ## Related designs
 
 These need their own documents and must respect the boundaries above:
 
 - **Suppliers and pricing (#94).** Supplier offers (SKUs, packaging, MOQ),
-  dated price and stock snapshots, and lifecycle and compliance reports.
+  dated price and stock snapshots, and lifecycle and compliance reports. The
+  first slice, a read-only team catalog, is proposed in
+  [team-catalog.md](team-catalog.md).
   - These are provider records. They are never part of a library definition, and
     a refresh never changes a chosen MPN or makes a new revision.
   - They are never saved to a project by default. Keeping a dated quote is a

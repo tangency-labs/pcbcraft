@@ -62,6 +62,9 @@
 - Slice, Heal and Delete in the ribbon.
 - Contextual Break releases one or both attached ends, with free movement of detached straight
   pieces, guarded departure and reconnection on return.
+- A selected wire’s **Net appearance** in Properties sets the color and width for all wires on
+  that logical net, with width shown as a percentage of the default stroke. The same commands
+  are available through MCP.
 - Shared undo and headless MCP commands.
 
 ### Remaining scope
@@ -105,6 +108,24 @@
 
 - Applying proposals, duplicate repair, full renumbering and a graphical review control remain in
   [#45](https://github.com/tangency-labs/pcbcraft/issues/45).
+
+## Sheet split
+
+### Available
+
+- [Read-only `schematic.preview_split_sheet`](../schematic/hierarchical-sheets.md#preview-a-split-to-a-new-sheet)
+  and [`schematic.split_sheet`](../schematic/hierarchical-sheets.md#move-a-selection-to-a-new-sheet) in the
+  engine and live/headless MCP, and a Move to New Sheet… form from the schematic context menu and
+  Sheets ribbon menu.
+- Moved symbols, wires and part instances keep their IDs.
+- Boundary nets become hierarchical labels and sheet pins with previewed names and directions;
+  global or power nets need no port.
+- One undo step, refused if the netlist would change.
+
+### Remaining scope
+
+- Merging sheets back, choosing port names or directions in the form, and splits that need assembly
+  variants.
 
 ## Implementation notes
 

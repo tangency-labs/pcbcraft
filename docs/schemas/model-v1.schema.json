@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:model:1",
+  "title": "PCBcraft 3D model record, format 1 (proposed)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "redistribution",
+    "geometry"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-model/1"
+    },
+    "library": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "id": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "revision": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/revision"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "source": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/source"
+    },
+    "redistribution": {
+      "enum": [
+        "allowed",
+        "not_allowed",
+        "unknown"
+      ]
+    },
+    "geometry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "kind": {
+          "const": "step"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        }
+      }
+    },
+    "source_frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "up_axis": {
+          "const": "y"
+        },
+        "origin_offset": {
+          "$ref": "#/$defs/nonzero_point"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "coordinate": {
+      "type": "integer",
+      "minimum": -100000000,
+      "maximum": 100000000
+    },
+    "nonzero_point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x_nm",
+        "y_nm",
+        "z_nm"
+      ],
+      "properties": {
+        "x_nm": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "y_nm": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "z_nm": {
+          "$ref": "#/$defs/coordinate"
+        }
+      },
+      "not": {
+        "properties": {
+          "x_nm": {
+            "const": 0
+          },
+          "y_nm": {
+            "const": 0
+          },
+          "z_nm": {
+            "const": 0
+          }
+        }
+      }
+    }
+  }
+}

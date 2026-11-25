@@ -46,7 +46,7 @@ fn pair_save_reopen_and_net_rename_preserve_identity_and_bytes() {
         assert!(stored_registry(&mut stored)["pairs"][0].get("state").is_none());
         assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         if board {
-            assert_eq!(stored["format"], "pcbcraft-instances/8");
+            assert_eq!(stored["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
         }
         assert_eq!(session.project().unwrap().inspect_net_registry().unwrap()["pairs"], json!([pair]));
         round_trip(&session);
@@ -71,6 +71,44 @@ fn pair_save_reopen_and_net_rename_preserve_identity_and_bytes() {
     }
 }
 
+/// Adding a recipe to a paired board keeps the current format and its pair registry in
+/// the current board-owned instance format.
+#[test]
+fn output_recipe_preserves_differential_pairs_and_instance_header() {
+    let (mut session, pair, _) = paired(true);
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+    let reopened = decode_documents(&before).unwrap();
+    let board = reopened.board_target().unwrap().board;
+    let path = reopened.instances_document_path().unwrap();
+    let recipe = Uuid::from_u128(9001);
+    apply(
+        &mut session,
+        crate::SET_OUTPUT_RECIPE,
+        json!({"recipe":recipe,"content":{
+            "name":"Drill","board":board,"units":"mm","file_stem":"drill","gerber_layers":[],"drill":true
+        }}),
+    );
+    let after = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+    assert_eq!(after[&path], before[&path]);
+    let reopened = decode_documents(&after).unwrap();
+    assert_eq!(reopened.output_recipes()[0].id, recipe);
+    assert_eq!(reopened.net_registry.pairs.as_ref(), &[Arc::new(pair)]);
+    let packed = encode_packed(session.snapshot().unwrap()).unwrap();
+    assert_eq!(decode_packed(&packed).unwrap().documents, after);
+
+    let mut instances: Value = serde_json::from_slice(&after[&path]).unwrap();
+    assert_eq!(instances["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
+    instances["format"] = json!("pcbcraft-instances/2");
+    assert!(decode_documents(&replaced(&after, &path, &instances)).err().unwrap().contains("unsupported instances format"));
+
+    apply(&mut session, "edit.undo", json!({}));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// A lock upgrades the existing pair project without changing its registry payload, and
 /// removing the last lock restores the previous envelope in both storage homes.
 #[test]
@@ -92,7 +130,7 @@ fn designator_lock_migrates_pair_projects_without_changing_pair_intent() {
         if let Some(path) = instance_path {
             assert_eq!(locked[&path], before[&path]);
             let mut instance: Value = serde_json::from_slice(&locked[&path]).unwrap();
-            assert_eq!(instance["format"], "pcbcraft-instances/8");
+            assert_eq!(instance["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
             instance["format"] = json!("pcbcraft-instances/2");
             assert!(crate::persistence::decode_documents(&replaced(&locked, &path, &instance)).is_err());
         } else {
@@ -223,11 +261,14 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
         let original: Value = serde_json::from_slice(&docs[&path]).unwrap();
         let mut missing = original.clone();
         stored_registry(&mut missing).as_object_mut().unwrap().remove("pairs");
-        let missing = replaced(&docs, &path, &missing);
+        assert!(!decode_documents(&replaced(&docs, &path, &missing)).unwrap().net_registry.has_pairs());
         if board {
-            assert!(decode_documents(&missing).unwrap_err().contains("unsupported instances format"));
-        } else {
-            assert!(!decode_documents(&missing).unwrap().net_registry.has_pairs());
+            let mut legacy = original.clone();
+            legacy["format"] = json!("pcbcraft-instances/8");
+            let legacy_project = decode_documents(&replaced(&docs, &path, &legacy)).unwrap();
+            assert_eq!(encode_documents(legacy_project).unwrap(), docs);
+            missing["format"] = json!("pcbcraft-instances/8");
+            assert!(decode_documents(&replaced(&docs, &path, &missing)).unwrap_err().contains("unsupported instances format"));
         }
         for (project_format, instances_format) in [("pcbcraft-project/23", "pcbcraft-instances/4"), ("pcbcraft-project/17", "pcbcraft-instances/2")] {
             let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
@@ -239,7 +280,7 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
                 downgraded = replaced(&downgraded, &path, &instance);
             }
             let error = decode_documents(&downgraded).unwrap_err();
-            assert!(error.contains("Differential pairs require project format"), "{error}");
+            assert!(error.contains(&format!("differential pairs not allowed in {project_format}")), "{error}");
         }
         if board {
             for version in [
@@ -248,7 +289,7 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
                 "pcbcraft-instances/5",
                 "pcbcraft-instances/6",
                 "pcbcraft-instances/7",
-                "pcbcraft-instances/9",
+                "pcbcraft-instances/999",
             ] {
                 let mut instance = original.clone();
                 instance["format"] = json!(version);
@@ -274,9 +315,14 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
         assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         let mut stored: Value = serde_json::from_slice(&lower[&path]).unwrap();
         if board {
-            assert_eq!(stored["format"], "pcbcraft-instances/4");
+            assert_eq!(stored["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
         }
         assert!(stored_registry(&mut stored).get("pairs").is_none());
+        if board {
+            stored["format"] = json!("pcbcraft-instances/4");
+            let legacy = decode_documents(&replaced(&lower, &path, &stored)).unwrap();
+            assert_eq!(encode_documents(legacy).unwrap(), lower);
+        }
         let lower_project = decode_documents(&lower).unwrap();
         assert!(lower_project.inspect_net_registry().unwrap().get("pairs").is_none());
         assert_eq!(encode_documents(lower_project).unwrap(), lower);
@@ -517,7 +563,7 @@ fn pair_envelope_preserves_unnumbered_registry_and_rejects_partial_numbers() {
     let mut value: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
     stored_registry(&mut value)["records"][0]["generated_number"] = json!(1);
     let error = decode_documents(&replaced(&documents, ENTRY_POINT, &value)).unwrap_err();
-    assert!(error.contains("with a number on every record"), "{error}");
+    assert!(error.contains("must specify generated_number on every record"), "{error}");
 }
 
 /// Pair-only candidates have no valid members and cannot publish a snapshot, revision or history
@@ -620,7 +666,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
             assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             let stored: Value = serde_json::from_slice(&docs[&path]).unwrap();
             if board {
-                assert_eq!(stored["format"], "pcbcraft-instances/8");
+                assert_eq!(stored["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
             }
             let home = if board { &stored } else { &stored["schematic_instances"] };
             assert_eq!(home.get("part_group_memberships").is_some(), !compact);
@@ -638,7 +684,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
                 let home = if board { &mut mixed } else { &mut mixed["schematic_instances"] };
                 home["part_group_memberships"] = json!(candidate.part_group_memberships().iter().collect::<Vec<_>>());
                 let error = decode_documents(&replaced(&docs, &path, &mixed)).unwrap_err();
-                assert!(error.contains("exactly one membership encoding"), "{error}");
+                assert_eq!(error, "part_group_memberships and compact_part_group_memberships cannot both be present.");
             }
             let without_pairs = |mut project: crate::Project| {
                 Arc::make_mut(&mut project.net_registry).pairs = Arc::default();
@@ -648,10 +694,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
             assert_eq!(without_pairs((*reopened).clone()), lower);
             assert_eq!(serde_json::from_slice::<Value>(&lower[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
             if board {
-                assert_eq!(
-                    serde_json::from_slice::<Value>(&lower[&path]).unwrap()["format"],
-                    if compact { "pcbcraft-instances/7" } else { "pcbcraft-instances/5" }
-                );
+                assert_eq!(serde_json::from_slice::<Value>(&lower[&path]).unwrap()["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
             }
             assert_eq!(encode_documents(decode_documents(&lower).unwrap()).unwrap(), lower);
         }

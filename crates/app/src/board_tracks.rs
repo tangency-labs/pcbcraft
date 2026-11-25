@@ -1003,7 +1003,7 @@ pub(super) fn interact(
         if finish || response.double_clicked() {
             state.planning.finish_pending_vertex();
         }
-        if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if crate::board_canvas::secondary_pressed_here(response) {
             state.escape();
         }
         out.consumed = true;
@@ -1021,7 +1021,7 @@ pub(super) fn interact(
         state.moving = None;
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
-    if !state.tool && state.busy() && ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if !state.tool && state.busy() && crate::board_canvas::secondary_pressed_here(response) {
         state.preparation.cancel();
         if state.moving.take().is_none() && state.segment.take().is_none() {
             state.via_tool = false;

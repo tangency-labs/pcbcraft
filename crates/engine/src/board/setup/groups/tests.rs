@@ -69,13 +69,13 @@ fn mixed_and_unknown_roles_have_explicit_memberships() {
     assert_eq!(groups.signal.iter().map(|l| l.id).collect::<Vec<_>>(), vec![ids[1]]);
 }
 
-/// Saved membership uses stable IDs, canonical physical order and board format 41 only when present.
+/// Named membership uses stable IDs and physical order. Historical format 41 requires a group.
 #[test]
 fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
     let mut s = session(4);
     let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let board_path = persistence::test_board_path(&before);
-    assert_eq!(serde_json::from_slice::<Value>(&before[&board_path]).unwrap()["format"], "pcbcraft-board/2");
+    assert_eq!(serde_json::from_slice::<Value>(&before[&board_path]).unwrap()["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     let ids = copper(&s);
     let group = crate::fresh_id().unwrap();
     let mut setup = candidate(&s);
@@ -83,7 +83,7 @@ fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
     apply(&mut s, setup);
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let board: Value = serde_json::from_slice(&saved[&board_path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(board["setup"]["stackup"]["layer_groups"][0]["layers"], json!([ids[1], ids[3]]));
     assert!(board["setup"]["stackup"].get("outer").is_none());
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
@@ -98,6 +98,7 @@ fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
         assert!(persistence::decode_documents(&old).unwrap_err().contains("layer_groups field requires board format 41"));
     }
     let mut empty = board.clone();
+    empty["format"] = json!("pcbcraft-board/41");
     empty["setup"]["stackup"]["layer_groups"] = json!([]);
     old.insert(board_path.clone(), serde_json::to_vec(&empty).unwrap());
     assert!(persistence::decode_documents(&old).unwrap_err().contains("requires at least one group"));
@@ -105,6 +106,7 @@ fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
     old.insert(board_path.clone(), serde_json::to_vec(&empty).unwrap());
     assert!(persistence::decode_documents(&old).unwrap_err().contains("requires at least one group"));
     let mut unconfigured = board;
+    unconfigured["format"] = json!("pcbcraft-board/41");
     unconfigured.as_object_mut().unwrap().remove("setup");
     old.insert(board_path.clone(), serde_json::to_vec(&unconfigured).unwrap());
     assert!(persistence::decode_documents(&old).unwrap_err().contains("unsupported board format or incompatible setup"));
@@ -182,7 +184,7 @@ fn omitting_layer_groups_preserves_memberships_and_prunes_removed_copper() {
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
-/// An explicit empty `stackup.layer_groups` clears all named groups and returns to the legacy format.
+/// An explicit empty `stackup.layer_groups` clears all named groups and restores the previous bytes.
 #[test]
 fn explicit_empty_layer_groups_clears_memberships() {
     let mut s = session(4);
@@ -377,30 +379,30 @@ fn named_group_fields_and_unicode_labels_use_native_validation() {
 
 /// A portable profile maps group member identities to the target board's retained copper.
 #[test]
-fn profile_groups_rebase_members_and_require_the_group_header() {
+fn profile_groups_rebase_members_and_require_a_compatible_header() {
+    use super::super::profile::{CURRENT_FORMAT, SetupProfile};
     let mut source = session(4);
     let source_ids = copper(&source);
     let mut setup = candidate(&source);
     setup["stackup"]["layer_groups"] = json!([{"id":crate::fresh_id().unwrap(),"name":"Inner","layers":[source_ids[1],source_ids[2]]}]);
     apply(&mut source, setup);
-    let profile =
-        super::super::profile::SetupProfile::new("Shared stack".into(), source.project().unwrap().board_setup().unwrap().clone(), Default::default())
-            .unwrap();
+    let profile = SetupProfile::new("Shared stack".into(), source.project().unwrap().board_setup().unwrap().clone(), Default::default()).unwrap();
     let bytes = profile.encode().unwrap();
     let mut raw: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(raw["format"], "pcbcraft-setup-profile/5");
-    assert_eq!(super::super::profile::SetupProfile::decode(&bytes).unwrap(), profile);
+    assert_eq!(raw["format"], CURRENT_FORMAT);
+    assert_eq!(SetupProfile::decode(&bytes).unwrap(), profile);
     let target = session(4);
     let target_ids = copper(&target);
-    let rebased = target.project().unwrap().board_setup().unwrap().with_profile(&profile).unwrap();
+    raw["format"] = json!("pcbcraft-setup-profile/5");
+    let historical = SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    assert_eq!(historical.encode().unwrap(), bytes);
+    let rebased = target.project().unwrap().board_setup().unwrap().with_profile(&historical).unwrap();
     assert_eq!(rebased.stackup().layer_groups[0].layers, vec![target_ids[1], target_ids[2]]);
     raw["format"] = json!("pcbcraft-setup-profile/1");
     raw["setup"]["stackup"]["layer_groups"] = json!([]);
-    assert!(
-        super::super::profile::SetupProfile::decode(&serde_json::to_vec(&raw).unwrap())
-            .unwrap_err()
-            .contains("layer_groups field requires setup profile version 5")
-    );
+    assert!(SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap_err().contains("layer_groups field requires setup profile version 5"));
+    raw["format"] = json!(CURRENT_FORMAT);
+    assert!(SetupProfile::decode(&serde_json::to_vec(&raw).unwrap()).unwrap_err().contains("must be omitted when empty"));
     let mut query = session(4);
     let error = query.execute(INSPECT_LAYER_GROUPS, &json!({"board":crate::fresh_id().unwrap()})).unwrap_err();
     assert!(matches!(error, CommandError::NotFound(_)), "{error:?}");
@@ -433,7 +435,7 @@ fn group_free_profile_clears_target_memberships() {
 }
 
 /// Groups preserve reports, stack fields, origins, rules, zones, assigned vias and profile adoptions;
-/// clearing groups restores the original format and bytes.
+/// clearing groups restores the original bytes.
 #[test]
 fn groups_preserve_reports_vias_and_profile_adoptions() {
     let mut s = Session::default();
@@ -495,8 +497,8 @@ fn groups_preserve_reports_vias_and_profile_adoptions() {
     let path = persistence::test_board_path(&saved);
     let grouped: Value = serde_json::from_slice(&saved[&path]).unwrap();
     let ungrouped: Value = serde_json::from_slice(&earlier[&path]).unwrap();
-    assert_eq!(ungrouped["format"], "pcbcraft-board/25");
-    assert_eq!(grouped["format"], "pcbcraft-board/41");
+    assert_eq!(ungrouped["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    assert_eq!(grouped["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(grouped["vias"].as_array().unwrap().len(), 1);
     assert!(grouped["vias"][0]["net_assignment"].is_object());
     assert_eq!(grouped["assembly_profiles"], json!([{"profile":assembly,"revision":1}]));
@@ -511,7 +513,7 @@ fn groups_preserve_reports_vias_and_profile_adoptions() {
         super::super::profile::SetupProfile::new("Combined setup".into(), s.project().unwrap().board_setup().unwrap().clone(), Default::default())
             .unwrap();
     let bytes = profile.encode().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap()["format"], "pcbcraft-setup-profile/5");
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap()["format"], super::super::profile::CURRENT_FORMAT);
     assert_eq!(super::super::profile::SetupProfile::decode(&bytes).unwrap(), profile);
     let mut without_groups = candidate(&s);
     without_groups["stackup"]["layer_groups"] = json!([]);
