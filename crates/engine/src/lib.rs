@@ -1062,6 +1062,7 @@ pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_AS
 pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES, AlignMode};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
+pub use library::sources::APPLY_FOOTPRINT_REVISION;
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Move a placed footprint's reference without moving its physical package.
@@ -1963,6 +1964,7 @@ const CATALOG: &[Command] = &[
         summary: "Accept one current preview atomically, preserving unchanged footprint placement. Stale, replaced or foreign-session tokens are refused.",
         params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN],
     },
+    library::sources::FOOTPRINT_REVISION_COMMAND,
     Command {
         id: CANCEL_UPDATE,
         title: "Cancel Board Update Preview",
@@ -3784,6 +3786,7 @@ impl Session {
             | INITIALIZE_UPDATE_BASELINE
             | PREVIEW_UPDATE
             | APPLY_UPDATE
+            | APPLY_FOOTPRINT_REVISION
             | CANCEL_UPDATE
             | PLACE_ASSIGNED_FOOTPRINT
             | PLACE_ASSIGNED_FOOTPRINTS
@@ -4239,6 +4242,7 @@ impl Session {
             INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
                 | PLACE_FOOTPRINT
@@ -4355,6 +4359,7 @@ impl Session {
                 | INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | CANCEL_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
@@ -4570,6 +4575,7 @@ impl Session {
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
             APPLY_UPDATE => self.apply_board_update(params)?,
+            APPLY_FOOTPRINT_REVISION => self.apply_footprint_revision(params)?,
             CANCEL_UPDATE => self.cancel_board_update(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_ASSIGNED_FOOTPRINTS => {
@@ -5129,6 +5135,15 @@ impl Session {
         Self::prepare_change_from_snapshot(self.project.as_ref(), self.defer_net_reconciliation, project, reconcile)
     }
 
+    /// Run the same transaction preparation on an immutable source, including on a worker.
+    fn prepare_snapshot_change(
+        source: Option<&Arc<Project>>,
+        defer_net_reconciliation: bool,
+        project: Project,
+    ) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from_snapshot(source, defer_net_reconciliation, project, Project::reconcile_nets)
+    }
+
     /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
     /// preparation can run off the editor thread without mutating session state.
     pub(crate) fn prepare_change_from_snapshot(
@@ -5245,8 +5260,9 @@ impl Session {
         self.publish_change(project, highest);
     }
 
-    /// Publish a validated candidate through shared Undo/Redo and revision handling.
-    /// Callers skipping prepare_change must preserve topology, identities and allocation metadata.
+    /// Publish an already validated candidate through shared Undo/Redo and revision handling.
+    /// Deferred callers must recheck snapshot authority; callers skipping prepare_change must
+    /// preserve topology, identities and allocation metadata.
     fn publish_change(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;

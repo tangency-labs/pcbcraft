@@ -789,8 +789,11 @@ for the result contract. For one placed instance, pass the reported `board`
 and `part_instance` to `library.preview_footprint_revision`. The
 [pad preview](libraries/native-library-sources.md#preview-footprint-pad-changes) shows what
 would change and which straight track ends or through vias would lose contact;
-standalone circular track ends are not checked. Nothing is applied; pad map
-resolution and adoption remain future work.
+standalone circular track ends are not checked. Nothing changes until you
+[apply the reviewed revision](libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
+with `pcb.apply_footprint_revision`. Pass the successful unfiltered preview's
+board, instance, revision and acceptance digest plus a complete terminal map.
+Tracks and vias stay in place, so run the board design checks after adoption.
 
 To find where an exact revision is used in the open project, select that item in
 Parts Library and click **Where used** in Preview. From MCP, pass its exact
