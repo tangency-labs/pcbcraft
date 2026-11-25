@@ -30,7 +30,9 @@ pub use documents::{
 };
 mod packed;
 mod power_migration;
-pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
+pub use packed::{
+    PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_deflated_packed_documents, encode_packed, encode_packed_documents,
+};
 pub use power_migration::migrate_power_markers;
 pub(crate) use power_migration::reject_duplicate_json_keys;
 
@@ -352,6 +354,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 locked: false,
                 reference_offset: None,
                 reference_text: None,
+                test_points: BTreeMap::new(),
             })
             .collect(),
     });
@@ -506,14 +509,20 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, active footprint and designator locks, occurrence IDs, sheet paper,
-    /// net classes, and part groups require split documents or an archive; refuse loss.
+    /// drawings, rotation, active footprint and designator locks, test-point marks, occurrence IDs,
+    /// sheet paper, net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.board.has_test_points() {
+            return Err("legacy diagnostic encoding cannot represent test-point marks; use split documents".into());
+        }
         if project.components.values().any(|part| part.designator_locked) {
             return Err("Designator locks require split project format 51 or a packed archive.".into());
         }
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
+        }
+        if project.net_registry.has_authored_intent() {
+            return Err("Authored electrical intent requires split documents or a packed archive.".into());
         }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());

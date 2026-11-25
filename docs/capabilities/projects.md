@@ -73,8 +73,8 @@
 - Drag-in docks beside a destination pane, with direct cross-window drops when positions are
   available.
 - Schematic and PCB inspection targets in per-window split layouts.
-- Multiple native editor windows with Linux title-bar dragging/maximize/restore and edge/corner
-  resizing, including while project dialogs block editing.
+- Multiple native editor windows with the integrated title bar, window dragging, maximize and
+  restore, and edge and corner resizing, including while project dialogs block editing.
 - Splitting inside them, tab placement/close actions, independent cameras and selections, shared
   edits/undo/save, bidirectional component counterpart highlights and [optional directed following
   across schematic sheets](../design/board-workspace-plan.md#correspondence-and-cross-probing) for PCB

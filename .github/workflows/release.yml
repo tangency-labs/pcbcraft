@@ -1,0 +1,119 @@
+name: Prepare release
+run-name: "Prepare release from ${{ github.sha }}"
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Read workspace version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Require main
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "Run Prepare release on main." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+
+          with open("Cargo.toml", "rb") as manifest:
+              version = tomllib.load(manifest)["workspace"]["package"]["version"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version):
+              raise SystemExit(f"Invalid workspace release version: {version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"version={version}", file=output)
+          PY
+
+  packages:
+    needs: version
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-preview.yml
+    with:
+      artifact-prefix: pcbcraft-release
+
+  draft:
+    name: Stage draft release
+    needs: [version, packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: pcbcraft-release-*
+          path: packages
+      - name: Verify checksums and collect release assets
+        shell: bash
+        run: |
+          for platform in linux-x86_64 windows-x64 macos-aarch64; do
+            (cd "packages/pcbcraft-release-$platform" && sha256sum --check --strict SHA256SUMS.txt)
+          done
+          mkdir release
+          cp -- \
+            "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.tar.gz" \
+            "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.deb" \
+            "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.rpm" \
+            "packages/pcbcraft-release-windows-x64/pcbcraft-$RELEASE_VERSION-windows-x64.zip" \
+            "packages/pcbcraft-release-macos-aarch64/pcbcraft-$RELEASE_VERSION-macos-aarch64.dmg" \
+            release/
+          (cd release && sha256sum -- * > SHA256SUMS.txt)
+      - name: Tag the built commit and stage the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          ref="refs/tags/$tag"
+          existing_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" |
+            jq -r --arg ref "$ref" '.[] | select(.ref == $ref) | .ref')"
+          if [[ -z "$existing_ref" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$ref" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          current_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$tag" --jq .sha)"
+          if [[ "$current_sha" != "$GITHUB_SHA" ]]; then
+            echo "Release tag $tag points to $current_sha instead of $GITHUB_SHA." >&2
+            exit 1
+          fi
+          if is_draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"; then
+            if [[ "$is_draft" != true ]]; then
+              echo "Release $tag is already published." >&2
+              exit 1
+            fi
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber release/*
+          else
+            prerelease=()
+            if [[ "${tag%%+*}" == *-* ]]; then
+              prerelease=(--prerelease)
+            fi
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --draft "${prerelease[@]}" --title "PCBcraft $tag" --generate-notes release/*
+          fi

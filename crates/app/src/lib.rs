@@ -70,6 +70,7 @@ mod project_files;
 mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod render_workspace;
 mod requirement_input;
 mod ribbon;
 mod rule_diagram;
@@ -103,7 +104,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-pub use editor_windows::{APP_TITLE, MAIN_WINDOW_MIN_SIZE};
+pub use editor_windows::{APP_TITLE, MAIN_WINDOW_MIN_SIZE, desktop_window_chrome};
 pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
@@ -185,6 +186,14 @@ struct Utilities {
     assistant: bool,
 }
 
+/// Include the abbreviated checkout revision in the version shown by nightly packages.
+fn display_version() -> String {
+    match option_env!("PCBCRAFT_NIGHTLY_REVISION") {
+        Some(revision) if !revision.is_empty() => format!("{VERSION} nightly ({revision})"),
+        _ => VERSION.to_owned(),
+    }
+}
+
 /// Draw the utilities every workspace's app bar ends with, so they share one set, order,
 /// tooltips and breakpoints: the version and Report a bug from 950 points, Help from
 /// [`COMPACT_APP_BAR`] (narrower bars leave its rows to the Home page), Preferences, then the
@@ -193,7 +202,7 @@ struct Utilities {
 fn utilities(ui: &mut Ui, width: f32, assistant: Option<(bool, bool)>) -> Utilities {
     let mut picked = Utilities::default();
     if width >= 950.0 {
-        ui.label(dim(format!("v{VERSION}")));
+        ui.label(dim(format!("v{}", display_version())));
         ui.add_space(Tokens::get().space_8);
         if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
@@ -255,6 +264,8 @@ enum Dialog {
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     BoardColor(board_appearance::Edit),
+    #[cfg(not(target_arch = "wasm32"))]
+    BrowseRenderBoard(render_workspace::Browse),
     Zone(Box<board_zones::Edit>),
     CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
@@ -281,6 +292,10 @@ enum Dialog {
     OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
+    ArchiveFolder {
+        trash_source: bool,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
     LocalMcp {
         error: Option<String>,
         copied: bool,
@@ -306,6 +321,8 @@ pub struct PcbApp {
     library_sources: native_sources::Sources,
     library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
     manufacturing_files: manufacturing::Files,
+    #[cfg(not(target_arch = "wasm32"))]
+    render_worker: render_workspace::Worker,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -452,8 +469,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             id: "render",
             multiple_views: true,
             title: "3D render",
-            description: "Inspect the assembled board, layers and components",
-            tabs: None,
+            description: "Inspect the PCB outline, thickness and drill holes",
+            tabs: if IN_BROWSER { None } else { Some("View") },
             icon: workspace::WorkspaceIcon::Render,
             current: false,
         },
@@ -493,6 +510,8 @@ impl PcbApp {
             ),
             routing_presets: board_presets::Presets::from_storage(cc.storage.and_then(|storage| storage.get_string(board_presets::STORAGE_KEY))),
             views,
+            #[cfg(not(target_arch = "wasm32"))]
+            render_worker: render_workspace::Worker::new(cc.wgpu_render_state.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -759,6 +778,14 @@ impl PcbApp {
             let save_as_shortcut = ui.ctx().format_shortcut(&SAVE_AS);
             if MenuItem::new("Save As…").icon(MenuIcon::Save).shortcut(&save_as_shortcut).enabled(can_save).show(ui) {
                 self.dialog = Dialog::SaveEncoding;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if MenuItem::new("Archive Project Folder…")
+                .icon(MenuIcon::Save)
+                .enabled(can_save && self.files.archive_source(&self.session).is_some())
+                .show(ui)
+            {
+                self.dialog = Dialog::ArchiveFolder { trash_source: false };
             }
         }
 
@@ -2464,6 +2491,8 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::BrowseRenderBoard(browse) => self.render_board_dialog(ctx, browse),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
@@ -2514,6 +2543,27 @@ impl PcbApp {
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
+            Dialog::ArchiveFolder { mut trash_source } => {
+                if let Some(source) = self.files.archive_source(&self.session) {
+                    let mut archive = false;
+                    let mut cancel = false;
+                    let closing = shell::dialog(ctx, "archive_folder", "Archive Project Folder", |ui| {
+                        ui.label("Save the current edits to a compressed .pc and switch to that archive.");
+                        ui.label(source.display().to_string());
+                        pcbcraft_chrome::controls::checkbox(ui, &mut trash_source, "Move original folder to Trash");
+                        ui.horizontal(|ui| {
+                            cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
+                            archive = pcbcraft_chrome::controls::button(ui, "Choose archive location…").clicked();
+                        });
+                    });
+                    if archive {
+                        self.save_project_file(Some(SaveFormat::ArchiveFolder { trash_source }), ctx);
+                    } else if !(closing || cancel) {
+                        self.dialog = Dialog::ArchiveFolder { trash_source };
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Dialog::LocalMcp { error, copied } => self.local_mcp_dialog(ctx, error, copied),
             Dialog::Preferences(mut window) => {
                 let shortcuts = shortcut_list(ctx, self.preferences.navigation);
@@ -2551,7 +2601,7 @@ impl PcbApp {
             Dialog::About => {
                 let mut close = false;
                 let closing = shell::dialog(ctx, "about_dialog", "About PCBCraft", |ui| {
-                    ui.label(format!("PCBCraft {VERSION}"));
+                    ui.label(format!("PCBCraft {}", display_version()));
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
@@ -2684,6 +2734,8 @@ impl PcbApp {
     fn project_file_tick(&mut self, ctx: &egui::Context) {
         self.handle_close_request(ctx);
         self.poll_manufacturing(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_render(ctx);
         // The desktop command line's open starts once, before this frame's poll can report it.
         #[cfg(not(target_arch = "wasm32"))]
         self.begin_startup_open(ctx);
@@ -2823,6 +2875,11 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.views.active.render.is_some() && !(main && self.home) {
+            self.render_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.manufacturing.is_some() && !(main && self.home) {
             self.manufacturing_frame(ui, integrated_titlebar);
             return;

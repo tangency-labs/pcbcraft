@@ -24,6 +24,9 @@
 
 ### Available
 
+- The desktop [3D render workspace](../pcb-layout-workflow.md#preview-the-board-in-3d)
+  shows the board substrate, cutouts and round through holes with a navigable camera.
+
 - [Single-layer zone outlines](../pcb/copper-zone-outlines.md) with net selection/promotion,
   polygon/rectangle creation, edge resizing, vertex insertion/removal, axis alignment, boundary
   hatching, modifier/box/mixed selection and atomic Delete, Properties, layer/filter visibility,
@@ -147,6 +150,18 @@
 
 - Exact cross-view highlighting/Reveal #398.
 
+## Test-point marks
+
+### Available
+
+- [Shared command](../automation/board-commands.md#test-point-marks) to mark placed pads and vias
+  for assembly or bare-board testing, independently by board face, with undo/redo and native
+  save/reopen.
+
+### Remaining scope
+
+- No fixture report, probe-access validation, variant filtering or editor controls yet.
+
 ## Footprint locks
 
 ### Available
@@ -230,7 +245,9 @@ is storage and inspection only, not pair authoring or routing.
 can be authored through shared commands, with retained origins, split inheritance,
 merge conflicts and protected class removal. [Class-aware routing, clearance
 queries and DRC](../formats/net-class-consumers.md) consume those bindings with effective
-dimensions and per-object provenance. [Editor controls](../pcb/net-class-editor.md) use the same commands and scoped identities. Zones,
+dimensions and per-object provenance. A [working-voltage requirement](../formats/electrical-intent.md)
+can be declared on persistent nets or classes in Rules or through shared commands. It is reported as
+unverified and does not affect routing or checks. [Editor controls](../pcb/net-class-editor.md) use the same commands and scoped identities. Zones,
 repeated instances and system registries remain separate work.
 [Part groups](../formats/part-groups.md) collect part instances by stable part-instance
 ID through shared headless/live MCP commands, with a project-wide catalog,
