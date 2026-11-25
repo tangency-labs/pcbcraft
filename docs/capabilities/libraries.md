@@ -56,8 +56,8 @@
 ### Remaining scope
 
 - Git sources [#93](https://github.com/tangency-labs/pcbcraft/issues/93), provider catalogs
-  [#94](https://github.com/tangency-labs/pcbcraft/issues/94), browser/remote publishing and reviewed
-  project updates.
+  [#94](https://github.com/tangency-labs/pcbcraft/issues/94), browser/remote publishing, and adoption
+  of geometric, pin-map or orderable-selection changes.
 
 ## Implementation notes
 
@@ -124,10 +124,16 @@ loaded native revisions, including through live/headless MCP with `inspect: fals
 It preserves project pins and history, reports missing/conflicting/unresolved
 sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](../libraries/native-library-sources.md#query-available-revisions).
+Reviewed [adoption](../libraries/native-library-sources.md#adopt-non-geometric-revisions)
+moves chosen instances to a newer symbol or generic-part revision whose changes
+are limited to names and default values, through `library.preview_adoption` and
+`library.apply_adoption` or the Parts Library review, as one undoable edit.
 [Preview footprint pad changes](../libraries/native-library-sources.md#preview-footprint-pad-changes)
 reports altered pads and lost contact for straight track ends and through vias
-on one placed instance. It does not check standalone circular track ends, move
-copper, resolve pad maps or adopt revisions.
+on one placed instance. It does not check standalone circular track ends or edit
+the project. A separate [reviewed Apply command](../libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
+requires a complete pad map, pins the exact replacement and leaves copper in
+place. Undo restores the old package in one step.
 
 Parts Library Preview and `library.where_used` list actual instances of an exact
 native item revision in the open project, separating footprint assignments from

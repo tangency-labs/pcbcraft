@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate native symbol, footprint, category and part JSON against the published schemas.
+"""Validate native symbol, footprint, category, part and model JSON against the published schemas.
 
 Uses Python 3.10+ and jsonschema 4.18+. References resolve from this repository
 only. Cross-record semantic validation belongs to the engine's library resolver.
@@ -39,6 +39,7 @@ FORMATS = {
     "pcbcraft-part/5": "urn:pcbcraft:schema:part:5",
     "pcbcraft-part/6": "urn:pcbcraft:schema:part:6",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
+    "pcbcraft-model/1": "urn:pcbcraft:schema:model:1",
 }
 
 
@@ -74,7 +75,7 @@ def validators():
 
 def records(root):
     """Discover flat native item directories; manifests are validated by the source loader."""
-    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts") for path in sorted((root / name).glob("*.json"))]
+    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts", "models") for path in sorted((root / name).glob("*.json"))]
 
 
 def validate(paths, sources):
@@ -84,7 +85,7 @@ def validate(paths, sources):
     examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts") + records(ROOT / "examples/sensor-node-library")
     discovered = bundled + examples + [path for source in sources for path in records(source)]
     inputs = [(path, path.parent.name) for path in discovered] + [(path, None) for path in paths]
-    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/"}
+    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/", "models":"pcbcraft-model/"}
     for path, directory in inputs:
         try:
             value = read_json(path)

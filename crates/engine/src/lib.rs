@@ -39,6 +39,7 @@ pub mod schematic;
 pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
+pub mod sheet_split;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -49,6 +50,7 @@ pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::output_recipe::SET_OUTPUT_RECIPE;
 pub use board::rules::SET_RULES;
+pub use board::test_points::SET_TEST_POINT;
 pub use board::track::{
     ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MERGE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE,
     UNROUTE_CONNECTION,
@@ -188,6 +190,9 @@ enum ParamKind {
     RuleLength,
     BoardRules,
     PlacementOrigin,
+    TestPointTarget,
+    TestPointPurpose,
+    TestPointSides,
     /// An assembly profile UUID from inspection.
     AssemblyProfileId,
     /// Immutable assembly profile content, or null to retire the addressed profile.
@@ -202,6 +207,9 @@ enum ParamKind {
     ClassSet,
     ClassId,
     ClassTarget,
+    IntentVersion,
+    IntentTarget,
+    AuthoredIntent,
     /// Sparse schematic wire appearance patch, or null to reset to theme defaults.
     NetAppearance,
     /// Distinct scoped nets in one batch edit.
@@ -339,6 +347,9 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
+            Self::TestPointTarget => board::test_points::target_schema(),
+            Self::TestPointPurpose => json!({"type":"string","enum":["assembly","fabrication"]}),
+            Self::TestPointSides => json!({"enum":["top","bottom","both",null]}),
             Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
             Self::OutputRecipeId => non_nil_uuid_schema(),
             Self::OutputRecipeContent => board::output_recipe::schema(),
@@ -347,6 +358,9 @@ impl ParamKind {
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
+            Self::IntentVersion => json!({"type":"integer","const":nets::intent::CONTRACT_VERSION}),
+            Self::IntentTarget => nets::intent::target_schema(),
+            Self::AuthoredIntent => nets::intent::intent_schema(),
             Self::NetAppearance => nets::appearance_param_schema(),
             Self::NetPropertyTargets => nets::property_targets_schema(),
             Self::NetPropertyChanges => nets::property_changes_schema(),
@@ -710,6 +724,10 @@ impl ParamKind {
                 .map_err(|_| "must contain supported integer-nanometre class rules")
                 .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
             Self::ClassSet => net_classes::parse_set(value).map(|_| ()).map_err(|_| "must contain a bounded set of unique non-nil class UUIDs"),
+            Self::IntentVersion if value.as_u64() == Some(u64::from(nets::intent::CONTRACT_VERSION)) => Ok(()),
+            Self::IntentVersion => Err("requires authored electrical intent version 1"),
+            Self::IntentTarget => nets::intent::validate_target(value),
+            Self::AuthoredIntent => nets::intent::validate_intent(value),
             Self::ClassTarget => nets::ClassTarget::parse(value)
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
@@ -725,6 +743,12 @@ impl ParamKind {
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
             Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
+            Self::TestPointTarget if board::test_points::valid_target(value) => Ok(()),
+            Self::TestPointTarget => Err("must identify one placed pad or via"),
+            Self::TestPointPurpose if serde_json::from_value::<board::test_points::Purpose>(value.clone()).is_ok() => Ok(()),
+            Self::TestPointPurpose => Err("must be assembly or fabrication"),
+            Self::TestPointSides if serde_json::from_value::<Option<board::test_points::Sides>>(value.clone()).is_ok() => Ok(()),
+            Self::TestPointSides => Err("must be top, bottom, both or null"),
             Self::OutputRecipeId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
             Self::OutputRecipeId => Err("must identify an output recipe by non-nil UUID"),
             Self::OutputRecipeContent if board::output_recipe::valid_content(value) => Ok(()),
@@ -968,6 +992,9 @@ impl Command {
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == sheet_split::SPLIT {
+            schema["dependentRequired"] = json!({"x_nm":["y_nm"], "y_nm":["x_nm"]});
+        }
         if self.id == RESHAPE_TRACKS {
             schema["if"] = json!({"required":["mode"]});
             schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});
@@ -981,6 +1008,10 @@ impl Command {
     }
 }
 
+const INTENT_VERSION: Param =
+    Param { required: true, name: "version", summary: "Authored electrical intent contract version", kind: ParamKind::IntentVersion };
+const INTENT_TARGET: Param =
+    Param { required: true, name: "target", summary: "An existing scoped net or project-owned net class", kind: ParamKind::IntentTarget };
 const NAME: Param = Param { required: true, name: "name", summary: "The project's name", kind: ParamKind::Name };
 const NEW_NAME: Param = Param { required: false, name: "name", summary: "The project's name (default Untitled)", kind: ParamKind::Name };
 const NEW_BOARD_NAME: Param = Param { required: false, name: "name", summary: "The board's name (default Board)", kind: ParamKind::Name };
@@ -1028,6 +1059,7 @@ pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_AS
 pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES, AlignMode};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
+pub use library::sources::APPLY_FOOTPRINT_REVISION;
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Move a placed footprint's reference without moving its physical package.
@@ -1785,6 +1817,18 @@ const CATALOG: &[Command] = &[
         params: &[Param { required: true, name: "token", summary: "Token returned by annotate.preview in this session", kind: ParamKind::Text }],
     },
     Command {
+        id: sheet_split::PREVIEW,
+        title: "Preview Split to New Sheet",
+        summary: "Review moving selected objects to a new child sheet without editing: the symbols, part instances, wires and labels that move with their IDs, the boundary nets that become ports, and global or power nets that need none.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..EXPECTED_REVISION }],
+    },
+    Command {
+        id: sheet_split::SPLIT,
+        title: "Move to New Sheet",
+        summary: "Move selected objects to a new child sheet as one undo step. Symbols, part instances, wires and labels keep their IDs; each boundary net from the preview becomes a hierarchical label and sheet pin, so the netlist is unchanged. The sheet symbol goes at x_nm, y_nm, or where the moved objects were.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..ANCHOR_X }, Param { required: false, ..ANCHOR_Y }, EXPECTED_REVISION],
+    },
+    Command {
         id: annotation::PREVIEW,
         title: "Preview schematic annotation",
         summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
@@ -1935,6 +1979,7 @@ const CATALOG: &[Command] = &[
         summary: "Accept one current preview atomically, preserving unchanged footprint placement. Stale, replaced or foreign-session tokens are refused.",
         params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN],
     },
+    library::sources::FOOTPRINT_REVISION_COMMAND,
     Command {
         id: CANCEL_UPDATE,
         title: "Cancel Board Update Preview",
@@ -2149,6 +2194,8 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[9],
     library::sources::COMMANDS[10],
     library::sources::COMMANDS[11],
+    library::sources::COMMANDS[12],
+    library::sources::COMMANDS[13],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2239,7 +2286,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::arc::SET_ARCS,
         title: "Store Circular Tracks",
-        summary: "Replace exact circular copper records. Geometry consumers refuse boards containing arcs; no conductive validation is performed. One undo step; dry_run returns the full before/after lists without changes.",
+        summary: "Replace exact circular copper records without conductive validation. Connectivity, ratsnest and via inspection account for arcs; clearance, DRC, preparation, fabrication, transforms, clipboard and other PCB edits still refuse boards containing arcs. One undo step; dry_run returns the full before/after lists without changes.",
         params: &[
             Param { required: true, summary: "Board UUID from inspection; required even for a single board", ..BOARD },
             EXPECTED_REVISION,
@@ -2709,6 +2756,18 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_TEST_POINT,
+        title: "Set Test Point",
+        summary: "Mark a placed pad or via on the top, bottom, or both board faces for one test purpose, or clear that purpose, in one undo step.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param { name: "target", required: true, summary: "One placed pad or via on the addressed board", kind: ParamKind::TestPointTarget },
+            Param { name: "purpose", required: true, summary: "Assembly or fabrication test", kind: ParamKind::TestPointPurpose },
+            Param { name: "sides", required: true, summary: "Top, bottom, both faces, or null to clear", kind: ParamKind::TestPointSides },
+        ],
+    },
+    Command {
         id: SET_COPPER_LOCKED,
         title: "Set Copper Lock",
         summary: "Lock or unlock selected tracks and vias atomically. Locked copper stays selectable; edits to geometry, sizes or deletion fail as a whole. Copies preserve locks.",
@@ -2842,6 +2901,29 @@ const CATALOG: &[Command] = &[
                 summary: "Second object's explicit class set for symmetric clearance resolution",
             },
         ],
+    },
+    Command {
+        id: nets::intent::SET,
+        title: "Set Authored Electrical Intent",
+        summary: "Replace the working-voltage requirement on one existing net or class in one undo step, or validate without changing it.",
+        params: &[
+            INTENT_VERSION,
+            EXPECTED_REVISION,
+            INTENT_TARGET,
+            Param {
+                name: "intent",
+                kind: ParamKind::AuthoredIntent,
+                required: true,
+                summary: "Complete replacement; omitted or null fields are unset",
+            },
+            Param { name: "dry_run", kind: ParamKind::Flag, required: false, summary: "Validate the same edit without publishing it" },
+        ],
+    },
+    Command {
+        id: nets::intent::INSPECT,
+        title: "Inspect Authored Electrical Intent",
+        summary: "Read the authored working voltage, its source, unverified status and review state on one net or class; unset is null.",
+        params: &[INTENT_VERSION, INTENT_TARGET],
     },
     Command {
         id: nets::SET_CLASSES,
@@ -3623,6 +3705,13 @@ impl Session {
         self.history_root_revision
     }
 
+    /// Whether the next Undo restores an authored snapshot rather than a host-local edit.
+    /// Local edits do not change the revision, so a host offering Undo for one authored edit
+    /// checks both this and the revision.
+    pub fn next_undo_is_authored(&self) -> bool {
+        matches!(self.undo.last(), Some(HistoryEntry::Project(_)))
+    }
+
     /// Whether the command can run now, for greying out a menu item. Setup initialization
     /// requires an unconfigured board; populated boards require explicit pad-resolution consent
     /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit
@@ -3674,6 +3763,8 @@ impl Session {
             | netlist::EXPORT_NETLIST
             | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_ADOPTION
+            | library::sources::APPLY_ADOPTION
             | library::sources::WHERE_USED
             | library::sources::PREVIEW_FOOTPRINT_REVISION
             | pin_functions::SET
@@ -3686,6 +3777,8 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | nets::intent::SET
+            | nets::intent::INSPECT
             | nets::SET_APPEARANCE
             | nets::SET_PROPERTIES
             | nets::INSPECT_APPEARANCE
@@ -3711,11 +3804,14 @@ impl Session {
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
             | annotation::APPLY
+            | sheet_split::PREVIEW
+            | sheet_split::SPLIT
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
             | PREVIEW_UPDATE
             | APPLY_UPDATE
+            | APPLY_FOOTPRINT_REVISION
             | CANCEL_UPDATE
             | PLACE_ASSIGNED_FOOTPRINT
             | PLACE_ASSIGNED_FOOTPRINTS
@@ -3758,6 +3854,7 @@ impl Session {
             | DELETE_TRACKS
             | UNROUTE_CONNECTION
             | SET_COPPER_LOCKED
+            | SET_TEST_POINT
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -3882,7 +3979,7 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// Authorized symbol-field dry runs, annotation previews and split previews return proposals without
     /// publishing edits. Failed commands leave the project intact. Scope refusals precede
     /// validation; otherwise a stale `expected_revision` is reported first unless the command
     /// returns a stale query outcome, as `pcb.plan_route` does.
@@ -3900,12 +3997,23 @@ impl Session {
             }
             return Ok(result);
         }
+        if id == nets::intent::INSPECT {
+            self.validate_project_command(id, params)?;
+            return self.inspect_electrical_intent(params);
+        }
+        if id == nets::intent::SET {
+            return self.apply(id, params).map(|revision| json!({"revision":revision}));
+        }
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             return self.preview_symbol_fields(params);
         }
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
             return self.preview_annotation(params);
+        }
+        if id == sheet_split::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_split(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3927,7 +4035,12 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if id.starts_with("library.") {
-            return self.library_command(id, params);
+            let before = self.revision;
+            let result = self.library_command(id, params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
         }
         if id == COMPLETE_PACKAGES {
             return self.complete_packages(params);
@@ -4139,6 +4252,7 @@ impl Session {
             INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
                 | PLACE_FOOTPRINT
@@ -4182,6 +4296,7 @@ impl Session {
                 | DELETE_TRACKS
                 | UNROUTE_CONNECTION
                 | SET_COPPER_LOCKED
+                | SET_TEST_POINT
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -4223,6 +4338,8 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | nets::intent::SET
+                | nets::intent::INSPECT
                 | nets::SET_APPEARANCE
                 | nets::SET_PROPERTIES
                 | nets::INSPECT_APPEARANCE
@@ -4248,11 +4365,14 @@ impl Session {
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
                 | annotation::APPLY
+                | sheet_split::PREVIEW
+                | sheet_split::SPLIT
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | CANCEL_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
@@ -4346,6 +4466,10 @@ impl Session {
             net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
             net_classes::INSPECT | net_classes::RESOLVE => {
                 self.net_class_query(id, params)?;
+            }
+            nets::intent::SET => self.set_electrical_intent(params)?,
+            nets::intent::INSPECT => {
+                self.inspect_electrical_intent(params)?;
             }
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
@@ -4463,10 +4587,15 @@ impl Session {
                 self.preview_annotation(params)?;
             }
             annotation::APPLY => self.apply_annotation(params)?,
+            sheet_split::PREVIEW => {
+                self.preview_split(params)?;
+            }
+            sheet_split::SPLIT => self.split_sheet(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
             APPLY_UPDATE => self.apply_board_update(params)?,
+            APPLY_FOOTPRINT_REVISION => self.apply_footprint_revision(params)?,
             CANCEL_UPDATE => self.cancel_board_update(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_ASSIGNED_FOOTPRINTS => {
@@ -4524,6 +4653,7 @@ impl Session {
                 }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
+            SET_TEST_POINT => self.set_test_point(params)?,
             MERGE_TRACKS => {
                 self.merge_tracks(params)?;
             }
@@ -5025,6 +5155,15 @@ impl Session {
         Self::prepare_change_from_snapshot(self.project.as_ref(), self.defer_net_reconciliation, project, reconcile)
     }
 
+    /// Run the same transaction preparation on an immutable source, including on a worker.
+    fn prepare_snapshot_change(
+        source: Option<&Arc<Project>>,
+        defer_net_reconciliation: bool,
+        project: Project,
+    ) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from_snapshot(source, defer_net_reconciliation, project, Project::reconcile_nets)
+    }
+
     /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
     /// preparation can run off the editor thread without mutating session state.
     pub(crate) fn prepare_change_from_snapshot(
@@ -5115,13 +5254,14 @@ impl Session {
         if !defer_net_reconciliation {
             reconcile(&mut project, previous.map(Arc::as_ref))?;
         }
-        // Copper and package maps can exhaust the native board document even before the
-        // record-count limits. Check the changed board before publishing snapshot or history.
+        // Copper, package maps and test-point marks can exhaust the native board document even
+        // before the record-count limits. Check the changed board before publishing snapshot or history.
         if previous.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()
-                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
+                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some())
+                || project.board.has_test_points())
         {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
@@ -5135,13 +5275,20 @@ impl Session {
     /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
         let (project, highest) = self.prepare_change(project)?;
-        let project = self.retain_allocation_watermark(Arc::new(project));
-        self.publish_change(project, highest);
+        self.publish_prepared_change(project, highest);
         Ok(())
     }
 
-    /// Publish a validated candidate through shared Undo/Redo and revision handling.
-    /// Callers skipping prepare_change must preserve topology, identities and allocation metadata.
+    /// Publish an already validated candidate. Metadata-only handlers use the same history
+    /// boundary after verifying their own payload; only topology edits prepare connectivity.
+    fn publish_prepared_change(&mut self, project: Project, highest: u64) {
+        let project = self.retain_allocation_watermark(Arc::new(project));
+        self.publish_change(project, highest);
+    }
+
+    /// Publish an already validated candidate through shared Undo/Redo and revision handling.
+    /// Deferred callers must recheck snapshot authority; callers skipping prepare_change must
+    /// preserve topology, identities and allocation metadata.
     fn publish_change(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;

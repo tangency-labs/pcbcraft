@@ -132,9 +132,11 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(check.failures(self.needs(selected)), [])
 
     def test_qualification_cannot_skip_a_platform_or_lose_its_stage(self):
-        needs = self.needs(select.full())
-        needs["changes"]["outputs"]["windows"] = "false"
-        self.assertTrue(check.failures(needs))
+        for platform in ("windows", "macos"):
+            with self.subTest(platform=platform):
+                needs = self.needs(select.full())
+                needs["changes"]["outputs"][platform] = "false"
+                self.assertIn("qualification requires every platform check", check.failures(needs))
         needs = self.needs(select.full())
         del needs["changes"]["outputs"]["mode"]
         self.assertTrue(check.failures(needs))
@@ -308,6 +310,7 @@ class WindowsTests(unittest.TestCase):
         commands = windows.commands()
         self.assertIn("--workspace", commands[0])
         self.assertIn("--workspace", commands[1])
+        self.assertIn("--message-format=json", commands[1])
         self.assertTrue(any("performance::" in c for c in commands))
         self.assertTrue(any("performance-harness" in c and "clippy" in c for c in commands))
 
@@ -334,10 +337,13 @@ class WindowsTests(unittest.TestCase):
             executable.write_bytes(b"fixture executable")
             executable.with_suffix(".pdb").write_bytes(b"fixture symbols")
             artifact = {"reason": "compiler-artifact", "target": {"name": "native_window_lifecycle"}, "executable": str(executable)}
-            result = subprocess.CompletedProcess([], 0, json.dumps(artifact) + "\n", "")
+            diagnostic = {"reason": "compiler-message", "message": {"rendered": "compiler warning\n"}}
+            command = self.cargo_fixture([diagnostic, artifact, {"reason": "build-finished"}], output="running tests")
             destination = root / "staged"
-            with patch("ci.windows.subprocess.run", return_value=result):
-                windows.stage_lifecycle(destination)
+            with patch("builtins.print") as log:
+                windows.stage_lifecycle(destination, windows.run_workspace_tests(command))
+            log.assert_any_call("running tests\n", end="", flush=True)
+            log.assert_any_call("compiler warning\n", end="", flush=True)
             self.assertEqual((destination / "native_window_lifecycle.exe").read_bytes(), b"fixture executable")
             self.assertEqual((destination / executable.with_suffix(".pdb").name).read_bytes(), b"fixture symbols")
             self.assertTrue((destination / "SOLIDCORE-NOTICE").is_file())
@@ -345,9 +351,19 @@ class WindowsTests(unittest.TestCase):
     def test_artifact_staging_rejects_missing_or_ambiguous_executables(self):
         artifact = {"reason": "compiler-artifact", "target": {"name": "native_window_lifecycle"}, "executable": "fixture.exe"}
         for items in ([], [artifact, artifact]):
-            result = subprocess.CompletedProcess([], 0, "\n".join(json.dumps(item) for item in items), "")
-            with patch("ci.windows.subprocess.run", return_value=result), self.assertRaises(RuntimeError):
-                windows.stage_lifecycle(Path("unused"))
+            with self.assertRaises(RuntimeError):
+                windows.run_workspace_tests(self.cargo_fixture(items))
+
+    def test_workspace_failure_rejects_an_executable_that_was_emitted(self):
+        artifact = {"reason": "compiler-artifact", "target": {"name": "native_window_lifecycle"}, "executable": "fixture.exe"}
+        with self.assertRaises(subprocess.CalledProcessError):
+            windows.run_workspace_tests(self.cargo_fixture([artifact], exit_code=1))
+
+    @staticmethod
+    def cargo_fixture(items, output="", exit_code=0):
+        """Emit the same mixture of Cargo JSON records and plain test output."""
+        lines = "\n".join([*(json.dumps(item) for item in items), output]).strip()
+        return [sys.executable, "-X", "utf8", "-c", f"print({lines!r}); raise SystemExit({exit_code})"]
 
 
 if __name__ == "__main__":

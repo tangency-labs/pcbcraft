@@ -264,7 +264,7 @@ when applying other edits.
 
 ## Persistence and limits
 
-Current saves write [board format 42](../formats/native-project-storage.md#current-board-records)
+Current saves write [board format 43](../formats/native-project-storage.md#current-board-records)
 for all supported stackups, including those with materials, copper roles,
 thickness qualifiers, and thermal or insulation reports. Embedded material
 definitions resolve without the source library. Each material revision and
@@ -305,7 +305,7 @@ are refused rather than silently dropped.
 The Physical stackup page stages the selected copper's role and named group
 memberships with every other setup field; `pcb.set_board_setup` remains the only
 stack mutation command, and the Board setup UI sends an explicit `[]` when the user
-removes the last group. The next format-42 save omits the group array.
+removes the last group. The next format-43 save omits the group array.
 Historical board format 41 and setup profile format 5 require at least one
 named group. The [current profile format](#silkscreen-and-portable-setup-profiles)
 makes groups optional. Import rebases their members onto the destination copper

@@ -44,7 +44,8 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 /// The sole project entry-point version emitted by the native writer.
-pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/63";
+pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/68";
+const PRE_INTENT_PROJECT_FORMAT: &str = "pcbcraft-project/63";
 const PRE_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/61";
 const PRE_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/62";
 const LEGACY_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/52";
@@ -75,8 +76,9 @@ const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const PAIR_INSTANCES_FORMAT: &str = "pcbcraft-instances/8";
 const PRE_APPEARANCE_INSTANCES_FORMAT: &str = "pcbcraft-instances/9";
-/// Current board-owned instance format, including optional net wire appearance.
-pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/10";
+const PRE_INTENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/10";
+/// Current board-owned instance format, including optional net wire appearance and authored electrical intent.
+pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/12";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -105,8 +107,11 @@ const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
 const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
-/// Current board write format, with an optional setup and optional authored records.
-pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/42";
+/// The format 42 vocabulary without test-point marks; still read, never written.
+const UNMARKED_BOARD_FORMAT: &str = "pcbcraft-board/42";
+/// Current board write format: the format 42 vocabulary plus optional test-point marks, with an
+/// optional setup and optional authored records.
+pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/43";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -207,9 +212,11 @@ impl ProjectDocument {
     fn layout_format(&self) -> &str {
         match self.format.as_str() {
             COMPACT_PART_GROUP_PROJECT_FORMAT => PART_GROUP_PROJECT_FORMAT,
-            PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT => {
-                PIN_FUNCTION_LOCK_PROJECT_FORMAT
-            }
+            PRE_RECIPE_PROJECT_FORMAT
+            | PRE_APPEARANCE_PROJECT_FORMAT
+            | LEGACY_APPEARANCE_PROJECT_FORMAT
+            | PRE_INTENT_PROJECT_FORMAT
+            | CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
             OUTPUT_RECIPE_PROJECT_FORMAT => ASSEMBLY_PROFILE_PROJECT_FORMAT,
             RECIPE_LOCK_PROJECT_FORMAT => DESIGNATOR_LOCK_PROJECT_FORMAT,
             RECIPE_PIN_FUNCTION_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
@@ -402,6 +409,8 @@ struct BoardDocument {
     tracks: Option<Vec<crate::board::track::Track>>,
     #[serde(default, deserialize_with = "present")]
     vias: Option<Vec<crate::board::track::Via>>,
+    #[serde(default, deserialize_with = "super::present")]
+    test_points: Option<Vec<crate::board::test_points::Record>>,
     footprints: Vec<Footprint>,
 }
 
@@ -468,13 +477,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
     let legacy_appearance = project.format == LEGACY_APPEARANCE_PROJECT_FORMAT;
-    let supports_appearance = current_format || legacy_appearance;
+    let pre_intent = project.format == PRE_INTENT_PROJECT_FORMAT;
+    let supports_appearance = current_format || pre_intent || legacy_appearance;
     let canonical_instances = match project.format.as_str() {
         CURRENT_PROJECT_FORMAT => Some(CURRENT_INSTANCES_FORMAT),
+        PRE_INTENT_PROJECT_FORMAT => Some(PRE_INTENT_INSTANCES_FORMAT),
         PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT => Some(PRE_APPEARANCE_INSTANCES_FORMAT),
         _ => None,
     };
-    let supports_optional_recipes = current_format || project.format == PRE_APPEARANCE_PROJECT_FORMAT;
+    let supports_optional_recipes = current_format || pre_intent || project.format == PRE_APPEARANCE_PROJECT_FORMAT;
     let recipe_format =
         matches!(project.format.as_str(), OUTPUT_RECIPE_PROJECT_FORMAT | RECIPE_LOCK_PROJECT_FORMAT | RECIPE_PIN_FUNCTION_PROJECT_FORMAT);
     let optional_locks = canonical_instances.is_some() || project.format == RECIPE_PIN_FUNCTION_PROJECT_FORMAT;
@@ -483,30 +494,37 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || project.output_recipes.as_ref().is_some_and(Vec::is_empty)
     {
         return Err(
-            "project.json: output_recipes requires project format 47, 57, 60, 62 or 63 and a nonempty array; formats 47, 57 and 60 require it."
+            "project.json: output_recipes requires project format 47, 57, 60, 62, 63 or 68 and a nonempty array; formats 47, 57 and 60 require it."
                 .into(),
         );
     }
     let mut output_recipes = project.output_recipes.take().unwrap_or_default();
     // The current envelope shares the project/56 vocabulary but makes locks optional.
-    project.format = project.layout_format().to_owned();
+    let layout_format = project.layout_format().to_owned();
+    let incoming_format = std::mem::replace(&mut project.format, layout_format);
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let lock_format = matches!(project.format.as_str(), DESIGNATOR_LOCK_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
     let pin_function_format = matches!(project.format.as_str(), PIN_FUNCTION_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
-    if (!lock_format && !pair_format && !pin_function_format && !recipe_format && profile_format != project.assembly_profiles.is_some())
-        || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
-    {
-        return Err("project.json: assembly profiles require project format 36, 45, 48, 51 or 56 and a nonempty identity catalog.".into());
+    if !lock_format && !pair_format && !pin_function_format && !recipe_format {
+        check_project_field(&incoming_format, "assembly_profiles", profile_format, project.assembly_profiles.is_some())?;
+    }
+    if project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: assembly_profiles must be nonempty when present in {incoming_format}."));
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if (!optional_locks && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
-        || project.components.iter().any(|part| part.designator_locked == Some(false))
-    {
-        return Err("Designator locks require project format 51 or 56 and at least one true designator_locked flag; omit unlocked flags.".into());
+    if project.components.iter().any(|part| part.designator_locked == Some(false)) {
+        return Err(format!("{ENTRY_POINT}: designator_locked must be true when present in {incoming_format}; omit unlocked flags."));
+    }
+    if !optional_locks {
+        let has_lock = project.components.iter().any(|part| part.designator_locked.is_some());
+        if lock_format && !has_lock {
+            return Err(format!("{ENTRY_POINT}: {incoming_format} requires at least one true designator_locked flag."));
+        }
+        check_project_field(&incoming_format, "designator_locked", lock_format, has_lock)?;
     }
     let occurrences = matches!(
         project.format.as_str(),
@@ -548,21 +566,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PIN_FUNCTION_PROJECT_FORMAT
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
     );
-    if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56; any catalog must be nonempty.".into());
+    if !parameter_format && !superset_format {
+        check_project_field(&incoming_format, "net_classes", class_format, project.net_classes.is_some())?;
     }
-    if (!superset_format && parameter_format != project.parameters.is_some())
-        || (superset_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
-    {
-        return Err("Project parameters require project format 22, 23, 24, 36, 39, 45, 48, 51 or 56, with a nonempty list.".into());
+    if !superset_format {
+        check_project_field(&incoming_format, "parameters", parameter_format, project.parameters.is_some())?;
+    } else if project.parameters.as_ref().is_some_and(|items| items.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: parameters must be nonempty when present in {incoming_format}."));
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
         return Err("Empty project parameter lists must be omitted.".into());
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if !optional_part_groups && part_group_format != project.part_groups.is_some() {
-        return Err("Part-group catalog requires project format 24, 36, 39, 45, 48, 51 or 56. Formats 24 and 39 require a nonempty catalog.".into());
+    if !optional_part_groups {
+        check_project_field(&incoming_format, "part_groups", part_group_format, project.part_groups.is_some())?;
     }
     let mut part_groups = project.part_groups.take();
     if let Some(catalog) = &mut part_groups {
@@ -581,10 +599,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         catalog.definitions.sort_by_key(|class| class.id);
     }
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
-        return Err("No-connect intent requires project format 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: no_connects are not allowed in {incoming_format}."));
     }
     if !pin_function_format && project.components.iter().any(|part| part.pin_functions.is_some()) {
-        return Err("Alternate pin functions require project format 48 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: pin_functions are not allowed in {incoming_format}."));
     }
     let part_format = matches!(
         project.format.as_str(),
@@ -610,7 +628,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: extended package mappings are not allowed in {incoming_format}."));
     }
     let (mut registrations, storage_layout) = project.registry()?;
     if !output_recipes.is_empty() {
@@ -656,27 +674,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
+        return Err(format!("{ENTRY_POINT}: unsupported project format or incompatible board registration for {incoming_format}."));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56".into());
+        return Err(format!("{ENTRY_POINT}: schematic_instances is not allowed in {incoming_format}."));
     }
-    if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
-        || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
-        || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
-    {
-        return Err(
-            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56, no board and a nonempty bounded list"
-                .into(),
-        );
+    if !foldered && !part_format {
+        check_project_field(&incoming_format, "footprint_choices", project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT, schematic_packages)?;
+    }
+    if project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS) {
+        return Err(format!("{ENTRY_POINT}: footprint_choices must contain 1 to {MAX_SYMBOLS} entries in {incoming_format}."));
+    }
+    if schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: footprint_choices require an empty boards list in {incoming_format}."));
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: pinned part selections are not allowed in {incoming_format}."));
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56".into());
+        return Err(format!("{ENTRY_POINT}: component metadata is not allowed in {incoming_format}."));
     }
-    if matches!(
+    let requires_watermark = matches!(
         project.format.as_str(),
         WATERMARK_PROJECT_FORMAT
             | OPTIONAL_BOARD_PROJECT_FORMAT
@@ -698,17 +716,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PAIR_PROJECT_FORMAT
             | PIN_FUNCTION_PROJECT_FORMAT
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
-    ) != project.numeric_id_high_water.is_some()
-    {
-        return Err(format!(
-            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56"
-        ));
-    }
+    );
+    check_project_field(&incoming_format, "numeric_id_high_water", requires_watermark, project.numeric_id_high_water.is_some())?;
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
         || (project.format == PREVIOUS_PROJECT_FORMAT && project.sheets.len() != 1)
     {
-        return Err(format!("{ENTRY_POINT}: invalid sheet count for {}", project.format));
+        return Err(format!("{ENTRY_POINT}: invalid sheet count for {incoming_format}."));
     }
     let mut sheet_ids = BTreeSet::from([project.id]);
     let mut sheet_names = BTreeSet::new();
@@ -719,11 +733,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
                 let canonical_header = canonical_instances == Some(instance.format.as_str());
+                if current_format && !canonical_header && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_authored_intent) {
+                    return Err(format!("{path}: board-owned authored electrical intent requires {CURRENT_INSTANCES_FORMAT}."));
+                }
                 if (legacy_appearance && !canonical_header)
                     || (instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_appearance)
                         && !(supports_appearance && canonical_header))
                 {
-                    return Err(format!("{path}: net wire appearance requires project/63 with instances/10, or legacy project/52 with instances/9"));
+                    return Err(format!(
+                        "{path}: net wire appearance requires project/68 with instances/12, project/63 with instances/10, or legacy project/52 with instances/9"
+                    ));
                 }
                 let expected = if canonical_header {
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
@@ -774,7 +793,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 )
             }
             (None, Some(records)) if !supports_part_groups && records.part_group_memberships.is_some() => {
-                return Err("Part-group memberships require project format 24, 36, 39, 45, 48, 51 or 56.".into());
+                return Err(format!("{ENTRY_POINT}: part_group_memberships is not allowed in {incoming_format}."));
             }
             (None, Some(records)) => {
                 if optional_part_groups {
@@ -789,37 +808,37 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
     let has_bindings =
         instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings);
-    if (!parameter_format && !superset_format && binding_format != has_bindings)
-        || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
-    {
-        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
+    if !parameter_format && !superset_format {
+        check_project_field(&incoming_format, "net class assignments", binding_format, has_bindings)?;
+    } else if has_bindings && net_classes.is_none() {
+        return Err(format!("{ENTRY_POINT}: net class assignments require a net-class catalog in {incoming_format}."));
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
     if !supports_appearance && stored_registry.is_some_and(crate::nets::Registry::has_appearance) {
-        return Err("Net wire appearance requires project format 63 or legacy format 52.".into());
+        return Err("Net wire appearance requires project format 68, 63 or legacy format 52.".into());
     }
-    if !lock_format && !recipe_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
-        return Err(
-            "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
-                .into(),
-        );
+    if !lock_format && !recipe_format && !pin_function_format {
+        check_project_field(&incoming_format, "differential pairs", pair_format, stored_registry.is_some_and(crate::nets::Registry::has_pairs))?;
+    }
+    // The project envelope versions authored net and class intent, including fields nested
+    // inside the project-owned net-classes/1 catalog. Older projects cannot carry them.
+    let net_intent = stored_registry.is_some_and(crate::nets::Registry::has_authored_intent);
+    let class_intent = net_classes.as_ref().is_some_and(crate::net_classes::Catalog::has_authored_intent);
+    if !current_format && (net_intent || class_intent) {
+        return Err(format!("Authored electrical intent requires {CURRENT_PROJECT_FORMAT}."));
     }
     let has_numbers = stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers);
-    if (!supports_part_groups && generated_net_format != has_numbers)
-        || (superset_format
-            && has_numbers
-            && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
-    {
-        return Err(
-            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and a compatible instance format when board-owned, with a number on every record."
-                .into(),
-        );
+    if !supports_part_groups {
+        check_project_field(&incoming_format, "generated net numbers", generated_net_format, has_numbers)?;
     }
-    if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err(
-            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 and the corresponding instance vocabulary."
-                .into(),
-        );
+    if superset_format
+        && has_numbers
+        && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none()))
+    {
+        return Err(format!("{ENTRY_POINT}: a numbered net registry must specify generated_number on every record in {incoming_format}."));
+    }
+    if !no_connect_format {
+        check_project_field(&incoming_format, "net_registry", net_format, stored_registry.is_some())?;
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -1049,6 +1068,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             tracks: None,
             vias: None,
             arcs: None,
+            test_points: None,
             teardrops: None,
             baseline: None,
             footprints: vec![],
@@ -1057,8 +1077,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
 
     // Current boards use one record vocabulary. The older headers still require or forbid
     // particular records, while all versions share the record and geometry validators.
-    let current = board.format == CURRENT_BOARD_FORMAT;
+    let current = board.format == CURRENT_BOARD_FORMAT || board.format == UNMARKED_BOARD_FORMAT;
     let grouped = board.format == GROUP_BOARD_FORMAT;
+    if (board.format != CURRENT_BOARD_FORMAT && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: test-point marks require format 43 and a nonempty array.".into());
+    }
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (!current && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
@@ -1077,7 +1100,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
     if (assigned_vias && !has_assigned_vias) || (!extended_board_format && !reported && !assigned_vias && has_assigned_vias) {
-        return Err("board.json: explicit via assignments require format 24, 25, 26, 34 or 35; format 24 requires an assignment.".into());
+        return Err("board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41, 42 or 43; format 24 requires an assignment.".into());
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
@@ -1085,7 +1108,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
         return Err(
-            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34 or 35. Format 22 requires at least one profile.".into()
+            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43. Format 22 requires at least one profile."
+                .into(),
         );
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
@@ -1097,7 +1121,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
         return Err(
-            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34 or 35, and format 21 requires a placement origin.".into()
+            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43, and format 21 requires a placement origin."
+                .into(),
         );
     }
     if let Some(origin) = &board.placement_origin {
@@ -1108,7 +1133,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err("board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34 or 35 and a nonempty array; format 20 requires zones.".into());
+        return Err(
+            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43 and a nonempty array; format 20 requires zones."
+                .into(),
+        );
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
@@ -1360,8 +1388,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (CURRENT_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (CURRENT_BOARD_FORMAT, None) => None,
+        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1428,11 +1456,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
     if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34 or 35; format 25 requires at least one of them.".into());
+        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41, 42 or 43; format 25 requires at least one of them.".into());
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
     if (stacked && !stack_fields) || (!extended_board_format && !reported && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34 or 35; format 23 requires at least one of them.".into());
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41, 42 or 43; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -1451,7 +1479,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 return Err(format!("{path}: saved symbol identity does not match its file name"));
             }
             if !pin_function_format && definition.format() == crate::library::SYMBOL_FORMAT_V5 {
-                return Err(format!("{path}: alternate-capable symbol definitions require project format 48 or 56"));
+                return Err(format!("{path}: alternate-capable symbol definitions are not allowed in {incoming_format}."));
             }
             symbol_copies.insert((definition.library.clone(), definition.id.clone(), definition.revision()), definition);
             definitions.push(value);
@@ -1645,6 +1673,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     teardrops.sort_by_key(|record| record.id);
     Arc::make_mut(&mut project_data.board).teardrops = teardrops;
     crate::board::teardrop::validate(project_data).map_err(|error| format!("board.json: {error}"))?;
+    if let Some(records) = board.test_points {
+        Arc::make_mut(&mut project_data.board).install_test_points(records).map_err(|error| format!("board.json: {error}"))?;
+    }
     crate::part_instances::storage::validate_project(project_data)?;
     if let Some(catalog) = net_classes {
         project_data.net_classes = Arc::new(catalog);
@@ -1657,6 +1688,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project_data.output_recipes = Arc::new(output_recipes);
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
+    }
+    if class_intent {
+        for class in &project_data.net_classes.definitions {
+            class
+                .authored_intent
+                .validate_reference(None, |id| project_data.net_registry.records.binary_search_by_key(&id, |record| record.id).is_ok())?;
+            class.authored_intent.validate_split_baselines(None, &project_data.net_registry.records)?;
+        }
     }
     let mut zones = board.zones.unwrap_or_default();
     zones.sort_by_key(|zone| zone.id);
@@ -1716,6 +1755,15 @@ pub(super) fn check_documents(documents: &Documents) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Report required or forbidden fields using the incoming envelope, not its layout alias.
+fn check_project_field(format: &str, field: &str, required: bool, present: bool) -> Result<(), String> {
+    match (required, present) {
+        (true, false) => Err(format!("{ENTRY_POINT}: {format} requires {field}.")),
+        (false, true) => Err(format!("{ENTRY_POINT}: {field} not allowed in {format}.")),
+        _ => Ok(()),
+    }
 }
 
 /// Parse a required document and keep its filename in syntax and schema errors.
@@ -1793,6 +1841,7 @@ pub struct DocumentsEncoder {
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
     generated_legs: Vec<GeneratedLegRecord<'static>>,
+    test_point_pad: Option<String>,
 }
 
 /// Identical shared pins are reusable, but one immutable address cannot discard a different body.
@@ -1828,6 +1877,7 @@ impl DocumentsEncoder {
             use_compact_memberships,
             size_limit_exceeded: false,
             generated_legs: Vec::new(),
+            test_point_pad: None,
         }
     }
 
@@ -2192,6 +2242,26 @@ impl DocumentsEncoder {
                         self.finish_sheet()?;
                     }
                 }
+                BOARD_TRACKS => {
+                    if let Some(track) = self.project.board.tracks.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, track)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(BOARD_ARRAY_END);
+                        self.start_board_list_after_tracks();
+                    }
+                }
+                BOARD_VIAS => {
+                    if let Some(via) = self.project.board.vias.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, via)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(BOARD_ARRAY_END);
+                        self.start_board_list_after_vias();
+                    }
+                }
+                BOARD_PAD_TEST_POINTS => self.step_pad_test_points()?,
+                BOARD_VIA_TEST_POINTS => self.step_via_test_points()?,
                 7 => {
                     if let Some((&id, assignment)) =
                         self.project.board.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
@@ -2366,10 +2436,12 @@ impl DocumentsEncoder {
             sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
             self.phase = 12;
         } else if self.project.board_target().is_some() {
-            self.phase = 7;
-            self.cursor = 0;
-            self.first = true;
             board_header(&mut self.bytes, &self.project)?;
+            if self.project.board.tracks.is_empty() {
+                self.start_board_list_after_tracks();
+            } else {
+                self.start_board_list(BOARD_TRACKS, BOARD_TRACKS_START);
+            }
         } else {
             self.phase = 9;
             self.cursor = 0;
@@ -2391,6 +2463,73 @@ impl DocumentsEncoder {
         Ok(())
     }
 
+    /// Start vias when present, otherwise continue past routed copper.
+    fn start_board_list_after_tracks(&mut self) {
+        if self.project.board.vias.is_empty() {
+            self.start_board_list_after_vias();
+        } else {
+            self.start_board_list(BOARD_VIAS, BOARD_VIAS_START);
+        }
+    }
+
+    /// Test-point marks follow routed copper and precede placements.
+    fn start_board_list_after_vias(&mut self) {
+        if self.project.board.has_test_points() {
+            self.start_board_list(BOARD_PAD_TEST_POINTS, BOARD_TEST_POINTS_START);
+        } else {
+            self.start_board_placements();
+        }
+    }
+
+    /// Open a board array and reset the incremental record cursor and separator.
+    fn start_board_list(&mut self, phase: u8, start: &[u8]) {
+        self.bytes.extend_from_slice(start);
+        self.phase = phase;
+        self.cursor = 0;
+        self.first = true;
+    }
+
+    /// Emit at most one mark or advance one placement; a sparse board cannot skip a whole run
+    /// of unmarked placements inside one budget step.
+    fn step_pad_test_points(&mut self) -> Result<(), String> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        let Some(footprint) = self.project.board.footprints().get(self.cursor as usize) else {
+            self.phase = BOARD_VIA_TEST_POINTS;
+            self.cursor = 0;
+            return Ok(());
+        };
+        let after = self.test_point_pad.as_deref().map_or(Unbounded, Excluded);
+        if let Some((pad, &flags)) = footprint.test_points.range::<str, _>((after, Unbounded)).next() {
+            let mark = crate::board::test_points::Record::pad(footprint.id, pad.clone(), flags);
+            record(&mut self.bytes, &mut self.first, &mark)?;
+            self.test_point_pad = Some(pad.clone());
+        } else {
+            self.cursor += 1;
+            self.test_point_pad = None;
+        }
+        Ok(())
+    }
+
+    /// Visit one via per budget step after the pads, retaining UUID order and the array separator.
+    fn step_via_test_points(&mut self) -> Result<(), String> {
+        if let Some(via) = self.project.board.vias.get(self.cursor as usize) {
+            if !via.test_points.is_empty() {
+                let mark = crate::board::test_points::Record::via(via.id, via.test_points);
+                record(&mut self.bytes, &mut self.first, &mark)?;
+            }
+            self.cursor += 1;
+        } else {
+            self.bytes.extend_from_slice(BOARD_ARRAY_END);
+            self.start_board_placements();
+        }
+        Ok(())
+    }
+
+    /// Continue into the ordinary assignment and footprint phases after the optional marks.
+    fn start_board_placements(&mut self) {
+        self.start_board_list(7, board_placements_header(&self.project));
+    }
+
     /// Advance to the next list and reset its ordering cursor and separator state.
     fn next(&mut self) {
         self.phase += 1;
@@ -2410,6 +2549,14 @@ impl DocumentsEncoder {
     }
 }
 
+const BOARD_PAD_TEST_POINTS: u8 = 21;
+const BOARD_VIA_TEST_POINTS: u8 = 22;
+const BOARD_TRACKS: u8 = 23;
+const BOARD_VIAS: u8 = 24;
+const BOARD_TRACKS_START: &[u8] = b"  \"tracks\": [\n";
+const BOARD_VIAS_START: &[u8] = b"  \"vias\": [\n";
+const BOARD_TEST_POINTS_START: &[u8] = b"  \"test_points\": [\n";
+const BOARD_ARRAY_END: &[u8] = b"  ],\n";
 const BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS: &[u8] = b"  ],\n  \"footprints\": [\n";
 const DOCUMENT_END: &[u8] = b"  ]\n}\n";
 
@@ -2433,11 +2580,28 @@ impl Write for BoardByteCounter {
     }
 }
 
-/// Check the native board document before adopting an edited board with copper or package
-/// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
+/// Check the native board document before adopting an edited board with copper, package maps
+/// or test-point marks. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
     board_header(&mut bytes, project)?;
+    count_board_array(&mut bytes, BOARD_TRACKS_START, &project.board.tracks)?;
+    count_board_array(&mut bytes, BOARD_VIAS_START, &project.board.vias)?;
+    if project.board.has_test_points() {
+        let mut first = true;
+        bytes.write_all(BOARD_TEST_POINTS_START).map_err(|error| error.to_string())?;
+        use crate::board::test_points::Record;
+        for footprint in project.board.footprints() {
+            for (pad, &flags) in &footprint.test_points {
+                record(&mut bytes, &mut first, &Record::pad(footprint.id, pad.clone(), flags))?;
+            }
+        }
+        for via in project.board.vias.iter().filter(|via| !via.test_points.is_empty()) {
+            record(&mut bytes, &mut first, &Record::via(via.id, via.test_points))?;
+        }
+        bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
+    }
+    bytes.write_all(board_placements_header(project)).map_err(|error| error.to_string())?;
     let mut first = true;
     for assignment in project.board.assignments.values() {
         record(&mut bytes, &mut first, assignment)?;
@@ -2450,6 +2614,24 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
         record(&mut bytes, &mut first, footprint)?;
     }
     bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
+}
+
+/// Count an optional routed-copper list with the same framing and record writer as Save.
+fn count_board_array(bytes: &mut BoardByteCounter, start: &[u8], records: &[impl Serialize]) -> Result<(), String> {
+    if !records.is_empty() {
+        bytes.write_all(start).map_err(|error| error.to_string())?;
+        let mut first = true;
+        for item in records {
+            record(bytes, &mut first, item)?;
+        }
+        bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Open the next canonical array, shared by Save and the board size check.
+fn board_placements_header(project: &Project) -> &'static [u8] {
+    if project.board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" }
 }
 
 /// Emit the same current header for folder saves, packed saves and board size preflight.
@@ -2567,25 +2749,6 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
-    if !board.tracks.is_empty() {
-        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for track in &board.tracks {
-            record(bytes, &mut first, track)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.vias.is_empty() {
-        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for via in &board.vias {
-            record(bytes, &mut first, via)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    bytes
-        .write_all(if board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" })
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

@@ -1,4 +1,5 @@
-//! Shared, revision-bound class authoring and net inspection for schematic and PCB views.
+//! Shared, revision-bound class authoring, net inspection and working-voltage requirements
+//! for schematic and PCB views.
 use crate::rule_diagram::label;
 use crate::{Dialog, PcbApp, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
@@ -6,9 +7,9 @@ use pcbcraft_engine::{
     Project,
     board::view::BoardTarget,
     net_classes::{self, ContributionStatus, Definition, Property, Resolution, Rules, Source},
-    nets::{Anchor, ClassBinding, ClassTarget},
+    nets::{Anchor, ClassBinding, ClassTarget, intent},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
@@ -16,6 +17,7 @@ use uuid::Uuid;
 enum Page {
     Classes,
     Net,
+    Voltage,
 }
 
 /// Text keeps its original integer even when the displayed unit rounds it.
@@ -45,6 +47,44 @@ struct NetChoice {
     target: ClassTarget,
 }
 
+/// A saved net identity or class that can hold one working-voltage requirement. The target is
+/// the exact `electrical_intent` selector; the label is display only. A historical owner is a
+/// net that was deleted, merged or left ambiguous but still carries a declaration: it is listed
+/// so the declaration can be reviewed and cleared, never redeclared.
+#[derive(Debug)]
+struct Owner {
+    label: String,
+    target: Value,
+    net: Option<Uuid>,
+    anchor: Option<Value>,
+    historical: bool,
+}
+
+/// A voltage reference names Earth or a saved net identity, never a display name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reference {
+    Earth,
+    Net(Uuid),
+}
+
+/// Editable requirement text. The magnitude stays exact decimal text for the engine to check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VoltageFields {
+    declared: bool,
+    value: String,
+    peak_ac: bool,
+    reference: Reference,
+}
+
+/// One owner's draft beside the inspected report it was loaded from.
+#[derive(Debug)]
+struct VoltageDraft {
+    owner: usize,
+    fields: VoltageFields,
+    original: VoltageFields,
+    report: Value,
+}
+
 /// A modal owns one view/revision and immutable inspection snapshot. No idle-frame graph work.
 #[derive(Debug)]
 pub(super) struct Edit {
@@ -61,6 +101,10 @@ pub(super) struct Edit {
     classes: BTreeSet<Uuid>,
     original_classes: BTreeSet<Uuid>,
     bindings: Vec<ClassBinding>,
+    scope: Value,
+    owners: Vec<Owner>,
+    references: Vec<(Uuid, String)>,
+    voltage: Option<VoltageDraft>,
     selection_error: Option<String>,
     error: Option<String>,
 }
@@ -166,12 +210,48 @@ impl Edit {
     ) -> Result<Self, String> {
         let registry = project.inspect_net_registry()?;
         let rows = registry["nets"].as_array().ok_or("Net inspection is unavailable.")?;
+        let scope = registry["scope"].clone();
         let mut nets = Vec::new();
+        let mut owners = Vec::new();
+        let mut references = Vec::new();
         for row in rows {
             let anchor: Anchor = serde_json::from_value(row["anchor"].clone()).map_err(|error| error.to_string())?;
             let label = row["name"].as_str().unwrap_or("Unresolved net").to_owned();
+            if let Some(id) = row["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) {
+                let address = json!({"project":project.id(),"scope":scope,"net":id});
+                owners.push(Owner {
+                    label: format!("Net · {label}"),
+                    target: json!({"kind":"net","address":address}),
+                    net: Some(id),
+                    anchor: Some(row["anchor"].clone()),
+                    historical: false,
+                });
+                // Only a named net can be chosen as a new reference, matching the engine rule.
+                if row["names"].as_array().is_some_and(|names| !names.is_empty()) {
+                    references.push((id, label.clone()));
+                }
+            }
             nets.push(NetChoice { label, target: ClassTarget::Derived { anchor } });
         }
+        for record in registry["records"].as_array().into_iter().flatten() {
+            if record["state"]["kind"] == "active" || record["authored_intent"]["voltage"].is_null() {
+                continue;
+            }
+            let Some(id) = record["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) else { continue };
+            let address = json!({"project":project.id(),"scope":scope,"net":id});
+            owners.push(Owner {
+                label: format!("Former net · {}", &id.to_string()[..8]),
+                target: json!({"kind":"net","address":address}),
+                net: Some(id),
+                anchor: None,
+                historical: true,
+            });
+        }
+        for class in &project.net_classes().definitions {
+            let target = json!({"kind":"net_class","project":project.id(),"class":class.id});
+            owners.push(Owner { label: format!("Class · {}", class_label(&project, class)), target, net: None, anchor: None, historical: false });
+        }
+        let selected_target = selected.as_ref().ok().and_then(|selected| selected.as_ref());
         let net_index = match selected.as_ref().ok().and_then(Option::as_ref) {
             Some(target @ ClassTarget::Derived { .. }) => nets.iter().position(|net| &net.target == target),
             Some(ClassTarget::Persistent { net, .. }) => {
@@ -180,6 +260,15 @@ impl Edit {
             }
             None => None,
         };
+        let owner_index = selected_target.and_then(|selected| {
+            owners.iter().position(|owner| {
+                !owner.historical
+                    && match selected {
+                        ClassTarget::Persistent { net, .. } => owner.net == Some(*net),
+                        ClassTarget::Derived { anchor } => owner.anchor.is_some() && owner.anchor == serde_json::to_value(anchor).ok(),
+                    }
+            })
+        });
         let mut edit = Self {
             source,
             project,
@@ -194,11 +283,18 @@ impl Edit {
             classes: BTreeSet::new(),
             original_classes: BTreeSet::new(),
             bindings: Vec::new(),
+            scope,
+            owners,
+            references,
+            voltage: None,
             selection_error: selected.err(),
             error: None,
         };
         if let Some(index) = net_index {
             edit.load_net(index)?;
+        }
+        if let Some(index) = owner_index {
+            edit.load_voltage(index)?;
         }
         Ok(edit)
     }
@@ -224,6 +320,40 @@ impl Edit {
         self.error = None;
         Ok(())
     }
+    /// Read one owner's requirement through the same inspection path as `electrical_intent.inspect`.
+    fn load_voltage(&mut self, index: usize) -> Result<(), String> {
+        let owner = self.owners.get(index).ok_or("Net or class no longer available.")?;
+        let report = self.project.inspect_electrical_intent(&owner.target).map_err(|error| error.to_string())?;
+        let saved = &report["intent"]["working_voltage"];
+        let fields = if saved.is_null() {
+            VoltageFields { declared: false, value: String::new(), peak_ac: false, reference: Reference::Earth }
+        } else {
+            let reference = match saved["reference"]["address"]["net"].as_str() {
+                Some(net) => Reference::Net(Uuid::parse_str(net).map_err(|error| error.to_string())?),
+                None => Reference::Earth,
+            };
+            VoltageFields {
+                declared: true,
+                value: saved["magnitude"]["value"].as_str().unwrap_or_default().to_owned(),
+                peak_ac: saved["basis"] == "peak_ac",
+                reference,
+            }
+        };
+        self.voltage = Some(VoltageDraft { owner: index, original: fields.clone(), fields, report });
+        self.error = None;
+        Ok(())
+    }
+    /// Build the `electrical_intent.set` replacement. An undeclared requirement clears it.
+    fn voltage_intent(&self, fields: &VoltageFields) -> Value {
+        if !fields.declared {
+            return json!({"working_voltage": null});
+        }
+        let reference = match fields.reference {
+            Reference::Earth => json!({"kind":"earth"}),
+            Reference::Net(net) => json!({"kind":"net","address":{"project":self.project.id(),"scope":self.scope,"net":net}}),
+        };
+        json!({"working_voltage":{"magnitude":{"value":fields.value.trim(),"unit":"V"},"basis":if fields.peak_ac { "peak_ac" } else { "dc" },"reference":reference}})
+    }
     /// Use exact class UUIDs for selection and retain all sparse source integers in the draft.
     fn load_class(&mut self, id: Option<Uuid>) {
         self.draft = Some(ClassDraft::new(id.and_then(|id| self.project.net_classes().get(id)), self.baseline(), self.unit));
@@ -235,6 +365,7 @@ impl Edit {
         match self.page {
             Page::Classes => self.draft.as_ref().is_some_and(|draft| draft.changed(self.unit)),
             Page::Net => self.classes != self.original_classes,
+            Page::Voltage => self.voltage.as_ref().is_some_and(|draft| draft.fields != draft.original),
         }
     }
 
@@ -431,6 +562,148 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
     });
 }
 
+/// Designer-facing wording for the engine's requirement report; unknown codes stay legible.
+fn review_reason(reason: &str) -> &str {
+    match reason {
+        "reference_retired" => "The reference net no longer exists in the design.",
+        "reference_ambiguous" => "The reference net was split and no branch kept its identity.",
+        "reference_merged" => "The reference net was merged into another net.",
+        "reference_resolved" => "Resolving a split restored the original net identity. Choose that net again if it is still the reference.",
+        "reference_split" => "The reference net was split; another branch now has its own identity.",
+        "net_retired" => "This net no longer exists in the design.",
+        "net_ambiguous" => "This net was split and no branch kept its identity.",
+        "net_merged" => "This net was merged into another net.",
+        "net_resolved" => "Resolving a split restored the original net identity. Re-declare the voltage on that net if it still applies.",
+        "net_split" => "This net was split; another branch now has its own identity.",
+        other => other,
+    }
+}
+
+/// Whether every review reason is a split that kept the identities: saving the unchanged
+/// declaration again then records the review and clears the flag.
+fn split_review(report: &Value) -> bool {
+    let reasons = report["requirement"]["reasons"].as_array();
+    reasons.is_some_and(|reasons| !reasons.is_empty() && reasons.iter().all(|reason| reason.as_str().is_some_and(|r| r.ends_with("_split"))))
+}
+
+/// Author and inspect one working-voltage requirement through `electrical_intent`. The
+/// status rows repeat the shared inspection report: where the value came from, that nothing
+/// verifies it yet, and whether its owner or reference needs review. A retained reference
+/// that is no longer current stays selectable so editing the value does not silently drop it.
+/// Returns whether the designer asked to revert this page's draft.
+fn voltage_page(ui: &mut egui::Ui, edit: &mut Edit, dirty: bool, pick_owner: &mut Option<usize>) -> bool {
+    ui.add_enabled_ui(!dirty, |ui| {
+        controls::Choice::from_id_salt("voltage_owner_choice")
+            .width(ui.available_width())
+            .selected_text(
+                edit.voltage.as_ref().and_then(|draft| edit.owners.get(draft.owner)).map_or("Choose net or class", |owner| owner.label.as_str()),
+            )
+            .show_ui(ui, |ui| {
+                for (index, owner) in edit.owners.iter().enumerate() {
+                    ui.selectable_value(pick_owner, Some(index), &owner.label);
+                }
+            })
+            .response
+            .accessible_name("Declared on");
+    });
+    let discard = ui.add_enabled_ui(dirty, |ui| controls::button(ui, "Revert working voltage changes")).inner.clicked();
+    let Some(draft) = &mut edit.voltage else {
+        ui.label(shell::dim(if edit.owners.is_empty() { "No saved nets or classes" } else { "No net or class selected" }));
+        return discard;
+    };
+    let own_net = edit.owners.get(draft.owner).and_then(|owner| owner.net);
+    let historical = edit.owners.get(draft.owner).is_some_and(|owner| owner.historical);
+    form::section(ui, "Requirement", |ui| {
+        if historical {
+            let removed =
+                draft.report["requirement"]["reasons"].as_array().is_some_and(|reasons| reasons.iter().any(|reason| reason == "net_retired"));
+            ui.label(shell::dim(if removed {
+                "This net is no longer in the design. Its declaration can be reviewed or cleared, not changed."
+            } else {
+                "This net identity is no longer active. Its declaration can be reviewed or cleared, not changed."
+            }));
+        }
+        controls::checkbox(ui, &mut draft.fields.declared, "Declare working voltage");
+        ui.add_enabled_ui(draft.fields.declared && !historical, |ui| {
+            properties::field(ui, "Value", |ui| {
+                controls::text(ui, &mut draft.fields.value).accessible_name("Working voltage value");
+                ui.label("V");
+            });
+            properties::field(ui, "Basis", |ui| {
+                controls::Choice::from_id_salt("voltage_basis")
+                    .width(160.)
+                    .selected_text(if draft.fields.peak_ac { "Peak AC" } else { "DC" })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut draft.fields.peak_ac, false, "DC");
+                        ui.selectable_value(&mut draft.fields.peak_ac, true, "Peak AC");
+                    })
+                    .response
+                    .accessible_name("Voltage basis");
+            });
+            let retained = match draft.original.reference {
+                Reference::Net(net) if !edit.references.iter().any(|(id, _)| *id == net) => Some(net),
+                _ => None,
+            };
+            let reference_label = |reference: Reference| match reference {
+                Reference::Earth => "Earth".to_owned(),
+                Reference::Net(net) => edit
+                    .references
+                    .iter()
+                    .find(|(id, _)| *id == net)
+                    .map_or_else(|| format!("Retained net · {}", &net.to_string()[..8]), |(_, name)| name.clone()),
+            };
+            properties::field(ui, "Reference", |ui| {
+                controls::Choice::from_id_salt("voltage_reference")
+                    .width(ui.available_width())
+                    .selected_text(reference_label(draft.fields.reference))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut draft.fields.reference, Reference::Earth, "Earth");
+                        for (id, name) in edit.references.iter().filter(|(id, _)| Some(*id) != own_net) {
+                            ui.selectable_value(&mut draft.fields.reference, Reference::Net(*id), name);
+                        }
+                        if let Some(net) = retained {
+                            ui.selectable_value(&mut draft.fields.reference, Reference::Net(net), reference_label(Reference::Net(net)));
+                        }
+                    })
+                    .response
+                    .accessible_name("Voltage reference");
+            });
+        });
+    });
+    form::section(ui, "Status", |ui| {
+        let requirement = &draft.report["requirement"];
+        let source = match requirement["source"].as_str() {
+            Some("authored_on_net") => "Entered on this net",
+            Some("authored_on_net_class") => "Entered on this class",
+            _ => "Not declared",
+        };
+        properties::field(ui, "Source", |ui| ui.label(source).accessible_name(format!("Requirement source: {source}")));
+        if !requirement.is_null() {
+            let verification = "Unverified: no ERC, DRC or solver checks this value yet";
+            properties::field(ui, "Checked", |ui| ui.label(shell::dim(verification)).accessible_name(format!("Verification: {verification}")));
+            let reasons: Vec<_> = requirement["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            if reasons.is_empty() {
+                properties::field(ui, "Review", |ui| ui.label("Current").accessible_name("Review: Current"));
+            } else {
+                form::conflict(ui, |ui| {
+                    ui.strong("Needs review");
+                    for reason in reasons {
+                        ui.label(review_reason(reason));
+                    }
+                    ui.label("The original declaration and reference are kept until you change them.");
+                    if split_review(&draft.report) {
+                        ui.label("After checking it, choose Save working voltage to record the review.");
+                    }
+                });
+            }
+        }
+        if dirty {
+            ui.label(shell::dim("Unsaved working voltage"));
+        }
+    });
+    discard
+}
+
 /// Duplicate display names receive a short identity only when necessary to distinguish rows.
 fn class_label(project: &Project, class: &Definition) -> String {
     if project.net_classes().definitions.iter().filter(|other| other.name == class.name).count() > 1 {
@@ -448,6 +721,7 @@ pub(super) struct Actions {
     discard: bool,
     pick_class: Option<Uuid>,
     pick_net: Option<usize>,
+    pick_owner: Option<usize>,
     pub(super) board_defaults: bool,
     net_color: Option<(BoardTarget, Uuid, String)>,
 }
@@ -459,13 +733,21 @@ impl Edit {
     }
     /// The containing modal owns its footer; editor content supplies its action label.
     pub(super) fn primary(&self) -> &'static str {
-        if self.page == Page::Classes { "Save class" } else { "Assign classes" }
+        match self.page {
+            Page::Classes => "Save class",
+            Page::Net => "Assign classes",
+            Page::Voltage => "Save working voltage",
+        }
     }
     /// Validate only this editor's staged fields; other setup pages retain independent drafts.
     pub(super) fn can_apply(&self) -> bool {
         match self.page {
             Page::Classes => self.draft.as_ref().is_some_and(|d| d.rules(self.unit).is_ok()) && self.changed(),
             Page::Net => self.target.is_some() && self.changed(),
+            Page::Voltage => self.voltage.as_ref().is_some_and(|draft| {
+                let confirm = draft.fields.declared && split_review(&draft.report);
+                (self.changed() || confirm) && (!draft.fields.declared || !draft.fields.value.trim().is_empty())
+            }),
         }
     }
     /// A containing host may retain unsaved content while refreshing after its own validated
@@ -482,12 +764,17 @@ impl Edit {
         let rules = edit.draft.as_ref().map(|draft| draft.rules(edit.unit));
         let mut pick_class = edit.selected_class;
         let mut pick_net = edit.net_index;
+        let mut pick_owner = edit.voltage.as_ref().map(|draft| draft.owner);
         let mut new_class = false;
         let mut board_defaults = false;
         let mut net_color = None;
         let discard;
         ui.add_enabled_ui(!dirty, |ui| {
-            properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules")])
+            properties::tabs(
+                ui,
+                &mut edit.page,
+                &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules"), (Page::Voltage, "Working voltage")],
+            )
         });
         if !current {
             ui.label(shell::error("The project or view changed. Close and reopen Rules to continue."));
@@ -584,6 +871,7 @@ impl Edit {
                     ui.label(shell::dim("No supported net selected"));
                 }
             }
+            Page::Voltage => discard = voltage_page(ui, edit, dirty, &mut pick_owner),
         }
         if let Some(error) = &edit.error {
             ui.label(shell::error(error));
@@ -594,7 +882,7 @@ impl Edit {
             ui.label(shell::error(error));
         }
 
-        Actions { page, new_class, discard, pick_class, pick_net, board_defaults, net_color }
+        Actions { page, new_class, discard, pick_class, pick_net, pick_owner, board_defaults, net_color }
     }
 }
 
@@ -681,7 +969,7 @@ impl PcbApp {
     /// Apply one editor's typed actions through shared commands. A true result means this host
     /// successfully submitted its own command; errors retain the draft and stale sources refuse.
     pub(super) fn apply_rule_actions(&mut self, ctx: &egui::Context, edit: &mut Edit, actions: Actions, submit: bool) -> bool {
-        let Actions { page, new_class, discard, pick_class, pick_net, .. } = actions;
+        let Actions { page, new_class, discard, pick_class, pick_net, pick_owner, .. } = actions;
         if discard {
             match edit.page {
                 Page::Classes => {
@@ -694,6 +982,12 @@ impl PcbApp {
                 }
                 Page::Net => {
                     edit.classes = edit.original_classes.clone();
+                    edit.error = None;
+                }
+                Page::Voltage => {
+                    if let Some(draft) = &mut edit.voltage {
+                        draft.fields = draft.original.clone();
+                    }
                     edit.error = None;
                 }
             }
@@ -713,10 +1007,17 @@ impl PcbApp {
         {
             edit.error = Some(error);
         }
+        if pick_owner != edit.voltage.as_ref().map(|draft| draft.owner)
+            && let Some(index) = pick_owner
+            && let Err(error) = edit.load_voltage(index)
+        {
+            edit.error = Some(error);
+        }
         if submit && current && valid && edit.page == page {
             let old_ids: BTreeSet<_> = edit.project.net_classes().definitions.iter().map(|class| class.id).collect();
             let selected = edit.selected_class;
             let chosen_net = edit.net_index.and_then(|index| edit.nets.get(index)).map(|net| net.target.clone());
+            let chosen_owner = edit.voltage.as_ref().and_then(|draft| edit.owners.get(draft.owner)).map(|owner| owner.target.clone());
             match edit.page {
                 Page::Classes => {
                     if let Some(draft) = &edit.draft {
@@ -743,6 +1044,13 @@ impl PcbApp {
                         );
                     }
                 }
+                Page::Voltage => {
+                    if let (Some(draft), Some(target)) = (&edit.voltage, &chosen_owner) {
+                        let params = json!({"version":intent::CONTRACT_VERSION,"expected_revision":edit.source.revision,"target":target,
+                            "intent":edit.voltage_intent(&draft.fields)});
+                        self.run(intent::SET, &params);
+                    }
+                }
             }
             if let Some(error) = self.message.take() {
                 edit.error = Some(error);
@@ -766,6 +1074,12 @@ impl PcbApp {
                             if let Some(target) = chosen_net
                                 && let Some(index) = refreshed.nets.iter().position(|net| net.target == target)
                                 && let Err(error) = refreshed.load_net(index)
+                            {
+                                refreshed.error = Some(error);
+                            }
+                            if let Some(target) = chosen_owner
+                                && let Some(index) = refreshed.owners.iter().position(|owner| owner.target == target)
+                                && let Err(error) = refreshed.load_voltage(index)
                             {
                                 refreshed.error = Some(error);
                             }
