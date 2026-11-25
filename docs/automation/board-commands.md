@@ -91,6 +91,24 @@ in board order), the `package` (`library`, `id`, `revision`, `name`), `locations
 fingerprints are the first 128 bits of a SHA-256 digest, in hex. These findings are
 not part of `pcb.check_design` yet and cannot be waived.
 
+## Test-point marks
+
+Use `pcb.set_test_point` with the board UUID and `expected_revision` from
+inspection. Set `target` to `{"kind":"pad","footprint":"footprint-7","pad":"1"}`
+or `{"kind":"via","via":"<via-uuid>"}` using IDs from that board. Set `purpose`
+to `assembly` or `fabrication` and `sides` to `top`, `bottom`, `both`, or `null`
+to clear that purpose. A pad or via can carry both purposes. The face is relative
+to the board, not the footprint's orientation.
+
+Each change is one undo step, and repeating the same mark does not advance the
+revision. A marked pad must be a real land, not a legacy placeholder. Like other
+`pcb.*` edits, `pcb.set_test_point` is currently refused on boards with stored
+circular copper (`arcs`) or stored straight via teardrops (`teardrops`). Inspection
+includes `test_point` on marked pads and vias, and native save/reopen preserves
+it. To relocate a marked object, use Move, not Cut. This records intent only: it does not check probe access
+or generate a fixture report. [Native storage](../formats/native-project-storage.md#test-point-records)
+describes the saved records and compatibility.
+
 ## Saved board defaults
 
 `pcb.set_rules` requires an explicit `board`, `expected_revision` and complete

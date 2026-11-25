@@ -7,9 +7,12 @@ use crate::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+mod appearance;
 mod codec;
 mod numbering;
 mod pairs;
+mod properties;
+mod reconciliation;
 mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
@@ -346,10 +349,16 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let merged = id_for(&session, &pins[0]);
     let before = encode_documents(session.snapshot().unwrap()).unwrap();
     let old = session.project().unwrap().net_registry.clone();
+    let occurrence_records = |project: &crate::Project| {
+        let instances = project.sheet_instances();
+        (instances.circuit_uses, instances.sheet_occurrences)
+    };
+    let occurrences = occurrence_records(session.project().unwrap());
     apply(&mut session, crate::board::identity::CREATE_BOARD, json!({}));
     let project = session.project().unwrap();
     let scope = project.net_scope();
     assert_eq!(scope.kind, ScopeKind::Board);
+    assert_eq!(occurrence_records(project), occurrences);
     assert_eq!(id_for(&session, &pins[0]), merged);
     for record in &project.net_registry.records {
         if matches!(record.state, State::Active {}) {
@@ -364,10 +373,12 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let entry: Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
     assert!(entry.get("schematic_instances").is_none());
     let path = project.instances_document_path().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], "pcbcraft-instances/4");
+    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
     round_trip(&session);
+    assert_eq!(occurrence_records(&decode_documents(&after).unwrap()), occurrences);
     apply(&mut session, "edit.undo", json!({}));
     assert_eq!(session.project().unwrap().net_registry, old);
+    assert_eq!(occurrence_records(session.project().unwrap()), occurrences);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     apply(&mut session, "edit.redo", json!({}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
@@ -558,6 +569,134 @@ fn opening_a_named_project_sixteen_does_not_promote_or_change_its_bytes() {
     apply(&mut session, crate::net_labels::ADD, json!({"name":"NEW","style":"local","x_nm":25_400_000,"y_nm":0}));
     assert_eq!(session.project().unwrap().net_registry.records.len(), 2);
     round_trip(&session);
+}
+
+/// Net-wide wire appearance is authored through the same revision-checked command as MCP,
+/// promoted with stable identity, and restored with undo, redo and both native codecs.
+#[test]
+fn net_appearance_promotes_and_survives_history_and_reopen() {
+    let (mut session, pins) = circuit(2, false);
+    let wire = connect(&mut session, &pins[0], &pins[1]);
+    let id = promote(&mut session, &pins[0]);
+    let project = session.project().unwrap();
+    let target = serde_json::to_value(ClassTarget::Persistent { project: project.id(), scope: project.net_scope(), net: id }).unwrap();
+    let saved_before = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&saved_before[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{"color":[12,34,56],"width_cp":250}}));
+    let project = session.project().unwrap();
+    let expected = Some(Appearance { color: Some([12, 34, 56]), width_cp: Some(250) });
+    assert_eq!(project.net_registry.record(id).unwrap().appearance, expected);
+    assert_eq!(project.wire_appearances().unwrap().get(&wire), expected.as_ref());
+    let inspected = session.execute(INSPECT_APPEARANCE, &json!({"target":target})).unwrap();
+    assert_eq!(inspected["appearance"], serde_json::to_value(expected).unwrap());
+    assert_eq!(inspected["status"], "ready");
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+    round_trip(&session);
+
+    let revision = session.revision();
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{"color":[12,34,56],"width_cp":250}}));
+    assert_eq!(session.revision(), revision);
+    assert!(session.apply(SET_APPEARANCE, &json!({"target":target,"appearance":null,"expected_revision":revision-1})).is_err());
+    apply(&mut session, "edit.undo", json!({}));
+    assert_eq!(session.project().unwrap().net_registry.record(id).unwrap().appearance, None);
+    assert!(session.project().unwrap().wire_appearances().unwrap().is_empty());
+    apply(&mut session, "edit.redo", json!({}));
+    assert_eq!(session.project().unwrap().net_registry.record(id).unwrap().appearance, expected);
+
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":null}));
+    assert_eq!(session.project().unwrap().net_registry.record(id).unwrap().appearance, None);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved_before);
+}
+
+/// A sparse patch replaces only the supplied fields; reset and unbounded values are explicit.
+#[test]
+fn net_appearance_patches_are_sparse_and_bounded() {
+    let (mut session, pins) = circuit(2, false);
+    connect(&mut session, &pins[0], &pins[1]);
+    let id = promote(&mut session, &pins[0]);
+    let project = session.project().unwrap();
+    let target = serde_json::to_value(ClassTarget::Persistent { project: project.id(), scope: project.net_scope(), net: id }).unwrap();
+    let revision = session.revision();
+    assert!(session.apply(SET_APPEARANCE, &json!({"target":target,"appearance":{"width_cp":49},"expected_revision":revision})).is_err());
+    assert!(session.apply(SET_APPEARANCE, &json!({"target":target,"appearance":{"color":[1,2]},"expected_revision":revision})).is_err());
+    assert!(session.apply(SET_APPEARANCE, &json!({"target":target,"appearance":{"unknown":1},"expected_revision":revision})).is_err());
+    assert_eq!(session.revision(), revision);
+
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{"color":[1,2,3]}}));
+    assert_eq!(session.project().unwrap().net_registry.record(id).unwrap().appearance, Some(Appearance { color: Some([1, 2, 3]), width_cp: None }));
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{"width_cp":MAX_WIDTH_CP}}));
+    assert_eq!(
+        session.project().unwrap().net_registry.record(id).unwrap().appearance,
+        Some(Appearance { color: Some([1, 2, 3]), width_cp: Some(MAX_WIDTH_CP) })
+    );
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{}}));
+    assert_eq!(session.project().unwrap().net_registry.record(id).unwrap().appearance, None);
+}
+
+/// A board-owned registry supports appearance in the current and preview envelopes, and rejects
+/// appearance in previous production formats that never supported it.
+#[test]
+fn net_appearance_respects_board_instances_format() {
+    let (mut session, pins) = circuit(2, true);
+    connect(&mut session, &pins[0], &pins[1]);
+    let id = promote(&mut session, &pins[0]);
+    let project = session.project().unwrap();
+    let target = serde_json::to_value(ClassTarget::Persistent { project: project.id(), scope: project.net_scope(), net: id }).unwrap();
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":{"color":[255,128,0]}}));
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+    let instances_path = crate::persistence::test_board_path(&saved).replace("board.json", "instances.json");
+    let instances: Value = serde_json::from_slice(&saved[&instances_path]).unwrap();
+    assert_eq!(instances["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
+    round_trip(&session);
+
+    let mut with_legacy_instances = saved.clone();
+    let mut old_instances = instances;
+    old_instances["format"] = json!("pcbcraft-instances/9");
+    with_legacy_instances.insert(instances_path, serde_json::to_vec(&old_instances).unwrap());
+    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/68"));
+
+    let mut old_entry = entry;
+    old_entry["format"] = json!("pcbcraft-project/62");
+    with_legacy_instances.insert(ENTRY_POINT.to_owned(), serde_json::to_vec(&old_entry).unwrap());
+    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/68"));
+
+    old_entry["format"] = json!("pcbcraft-project/52");
+    with_legacy_instances.insert(ENTRY_POINT.to_owned(), serde_json::to_vec(&old_entry).unwrap());
+    let reopened = decode_documents(&with_legacy_instances).unwrap();
+    assert_eq!(encode_documents(reopened).unwrap(), saved);
+
+    let board = session.project().unwrap().boards().next().unwrap();
+    let content = json!({"board":board.target.board,"name":"Prototype","units":"mm","file_stem":"prototype","gerber_layers":[],"drill":true});
+    apply(&mut session, crate::board::output_recipe::SET_OUTPUT_RECIPE, json!({"recipe":Uuid::from_u128(1),"content":content}));
+    let combined = encode_documents(session.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&combined).unwrap();
+    assert_eq!(reopened.output_recipes().len(), 1);
+    assert!(reopened.net_registry.has_appearance());
+
+    // The last production envelopes already supported both features; preserve them on upgrade.
+    let path = reopened.instances_document_path().unwrap();
+    let mut predecessor = combined.clone();
+    for (path, format) in [(ENTRY_POINT, "pcbcraft-project/63"), (path.as_str(), "pcbcraft-instances/10")] {
+        let mut value: Value = serde_json::from_slice(&combined[path]).unwrap();
+        value["format"] = json!(format);
+        predecessor.insert(path.into(), serde_json::to_vec(&value).unwrap());
+    }
+    assert_eq!(encode_documents(decode_documents(&predecessor).unwrap()).unwrap(), combined);
+
+    apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":null}));
+    let cleared = encode_documents(session.snapshot().unwrap()).unwrap();
+    let cleared_entry: Value = serde_json::from_slice(&cleared[ENTRY_POINT]).unwrap();
+    let cleared_instances_path = crate::persistence::test_board_path(&cleared).replace("board.json", "instances.json");
+    let cleared_instances: Value = serde_json::from_slice(&cleared[&cleared_instances_path]).unwrap();
+    assert_eq!(cleared_entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
+    assert_eq!(cleared_instances["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
+    let reopened = decode_documents(&cleared).unwrap();
+    assert_eq!(reopened.output_recipes().len(), 1);
+    assert!(!reopened.net_registry.has_appearance());
 }
 
 mod classes;

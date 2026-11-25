@@ -3,6 +3,8 @@
 ## 0.1.0 (unreleased)
 
 - Check for polarized packages with no readable orientation using `pcb.check_assembly`. The read-only report warns once per package revision when symmetrical lands, silkscreen and fabrication artwork leave its orientation ambiguous and no zero orientation is declared. Read-only headless sessions can run it. Definitions with an orientation statement use `pcbcraft-footprint/7`, with or without non-plated holes; existing definitions and assembly output profiles are unchanged.
+- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Native saves use `pcbcraft-project/68` and, for registered boards, `pcbcraft-instances/12` whether or not a declaration is present. Files using the previous headers still open and migrate on save. Declarations are optional `authored_intent` fields, and the project envelope versions those fields inside the unchanged `pcbcraft-net-classes/1` catalog.
+- Add shared exact circular arc contact geometry (`board::arc::geometry::ArcGeometry`) and wire circular arcs into board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`), ratsnest, via inspection and the engine `copper_shorts` primitive. Clearance queries, DRC, copper preparation, transforms, clipboard, fabrication and PCB editing keep refusing arc boards until follow-up PRs account for arcs.
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
@@ -19,6 +21,13 @@ has its own highlight and read-only Properties label without selecting an owner
 for editing. These filters start off to preserve existing picking defaults;
 project edits and reopened documents do not restore stale inspection selections.
 
+`pcb.set_test_point` marks individual placed pads and vias for assembly or
+bare-board fabrication testing. The two marks are independent, name the board
+face, and survive Undo/Redo and native save/reopen. Saved boards now use board
+format 43: the format 42 records plus optional marks. Format 42 boards still
+open and refuse marks, and earlier releases refuse format 43. Clearing the last
+mark keeps format 43. This change does not add reports.
+
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
@@ -28,6 +37,14 @@ accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
 See [stating a version](docs/automation/command-api.md#stating-a-version).
+
+`pcb.merge_tracks` tidies routed copper: it merges the listed collinear segments
+on the same layer and width that meet at a free end, and absorbs stacked
+duplicates, keeping the lowest UUID with the merged ends. Ends at a junction,
+via or pad and locked segments stay as they are, so connectivity does not change.
+The whole merge is one undo step, and a dry run returns the same diff without
+changing the project. In the PCB editor, **Layout → Modify → Merge Tracks** runs
+it on the selected tracks.
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,

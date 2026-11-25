@@ -31,6 +31,41 @@ pub(super) struct EditorWindows {
 /// The application name in native window titles, shown alone or after the window's document.
 pub const APP_TITLE: &str = "PCBCraft";
 
+/// Give a native editor viewport the application's integrated title bar.
+pub fn desktop_window_chrome(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    integrated_window_chrome(viewport, cfg!(target_os = "macos"))
+}
+
+fn integrated_window_chrome(viewport: egui::ViewportBuilder, macos: bool) -> egui::ViewportBuilder {
+    if macos {
+        // AppKit owns edge resizing. Winit cannot begin a native resize from a client gesture.
+        viewport
+            .with_decorations(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+            .with_titlebar_buttons_shown(false)
+            .with_fullsize_content_view(true)
+    } else {
+        viewport.with_decorations(false)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn desktop_chrome_hides_the_system_title_bar_and_retains_macos_resize() {
+    let viewport = egui::ViewportBuilder::default().with_title("Board");
+    let mac = integrated_window_chrome(viewport.clone(), true);
+    assert_eq!(mac.decorations, Some(true));
+    assert_eq!(mac.titlebar_shown, Some(false));
+    assert_eq!(mac.title_shown, Some(false));
+    assert_eq!(mac.titlebar_buttons_shown, Some(false));
+    assert_eq!(mac.fullsize_content_view, Some(true));
+    assert_eq!(mac.title, viewport.title);
+    let client = integrated_window_chrome(viewport.clone(), false);
+    assert_eq!(client.decorations, Some(false));
+    assert_eq!(client.title, viewport.title);
+}
+
 /// The smallest client size of the main native window, in logical points.
 pub const MAIN_WINDOW_MIN_SIZE: [f32; 2] = [640.0, 400.0];
 
@@ -427,6 +462,10 @@ impl PcbApp {
     /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.render_browse_host().is_some_and(|host| host != self.views.host) {
+            return;
+        }
         if self.rule_dialog_host().is_some_and(|host| host != self.views.host) {
             return;
         }
@@ -535,10 +574,8 @@ impl PcbApp {
             let title = window_title(&self.view_title(id));
             let integrated_titlebar = self.integrated_titlebar;
             let panels = self.windows.panels.entry(host).or_default();
-            let mut builder = egui::ViewportBuilder::default()
-                .with_title(title)
-                .with_decorations(!integrated_titlebar)
-                .with_min_inner_size(DETACHED_WINDOW_MIN_SIZE);
+            let builder = egui::ViewportBuilder::default().with_title(title).with_min_inner_size(DETACHED_WINDOW_MIN_SIZE);
+            let mut builder = if integrated_titlebar { desktop_window_chrome(builder) } else { builder.with_decorations(true) };
             if !panels.placed {
                 builder = builder.with_inner_size([1100.0, 760.0]);
                 if let Some(position) = self.windows.spawn_positions.remove(&host) {
@@ -605,13 +642,13 @@ impl PcbApp {
             self.begin_project_close(ctx);
             return;
         }
-        let close_rules = self.rule_dialog_host() == Some(host);
+        let close_dialog = self.rule_dialog_host() == Some(host) || self.render_browse_host() == Some(host);
         let next = if host == self.views.main { self.views.hosts.keys().copied().find(|id| *id != host) } else { Some(self.views.main) };
         if let Some(next) = next {
             self.bind_editor_host(next);
         }
         self.views.close_host(host);
-        if close_rules || self.arrangement_dialog_host() == Some(host) {
+        if close_dialog || self.arrangement_dialog_host() == Some(host) {
             self.dialog = Dialog::None;
         }
         self.windows.panels.remove(&host);

@@ -13,7 +13,9 @@ pub(crate) const MAX_ARTWORK: usize = 256;
 pub(crate) const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
 pub(crate) const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
-/// Requires an orientation statement and can carry either kind of plated opening.
+/// Native format for all newly authored footprints without an orientation statement, with any supported mix of holes.
+pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/6";
+/// Requires an orientation statement and can carry any supported mix of holes.
 pub(crate) const ORIENTATION_FORMAT: &str = "pcbcraft-footprint/7";
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
@@ -206,7 +208,7 @@ pub struct FootprintDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
     /// Optional assembly orientation statement. Its presence selects format 7; without it,
-    /// the authored holes select the format.
+    /// format 6 or a historical format matching the authored holes applies.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
     pub orientation: Option<Orientation>,
 }
@@ -372,39 +374,33 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
-    /// Select the narrowest native format that retains every authored hole.
-    pub(crate) fn format_for(has_npth: bool, pads: &[RectPad]) -> &'static str {
-        if pads.iter().any(|pad| pad.plated_slot.is_some()) {
-            SLOT_FORMAT
-        } else if has_npth {
-            NPTH_FORMAT
-        } else {
-            LEGACY_FORMAT
-        }
-    }
-
-    /// An orientation statement selects format 7, including for footprints with authored holes.
-    pub(crate) fn expected_format(&self) -> &'static str {
-        if self.orientation.is_some() { ORIENTATION_FORMAT } else { Self::format_for(!self.non_plated_holes.is_empty(), &self.pads) }
-    }
-
-    /// Report presence of an authored slot in a validated, versioned footprint.
+    /// Report actual slot geometry for fabrication and clipboard feature checks.
     pub(crate) fn has_plated_slots(&self) -> bool {
-        self.format == SLOT_FORMAT || (self.format == ORIENTATION_FORMAT && self.pads.iter().any(|pad| pad.plated_slot.is_some()))
+        self.pads.iter().any(|pad| pad.plated_slot.is_some())
     }
 
-    /// Refuse unknown versions and mismatched feature/version pairs before writing or accepting a definition.
+    /// Keep the historical feature requirements while allowing any supported mix in format 6.
+    /// An orientation statement requires format 7, which also allows any supported mix, and
+    /// format 7 requires one. Pad and hole dimensions are validated separately.
     fn validate_format(&self) -> Result<(), String> {
-        let expected = self.expected_format();
-        match self.format.as_str() {
-            format if format == expected => Ok(()),
-            ORIENTATION_FORMAT => Err(format!("footprint format must be {expected} for a definition without an orientation statement")),
-            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT if self.orientation.is_some() => {
-                Err(format!("footprint format must be {ORIENTATION_FORMAT} for a definition with an orientation statement"))
+        let matches_content = match self.format.as_str() {
+            ORIENTATION_FORMAT if self.orientation.is_none() => {
+                return Err(format!("footprint format must be {CURRENT_FORMAT} for a definition without an orientation statement"));
             }
-            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT => Err("footprint format does not match its authored hole content".into()),
-            _ => Err(format!("unsupported footprint format {}", self.format)),
+            ORIENTATION_FORMAT => true,
+            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | CURRENT_FORMAT if self.orientation.is_some() => {
+                return Err(format!("footprint format must be {ORIENTATION_FORMAT} for a definition with an orientation statement"));
+            }
+            CURRENT_FORMAT => true,
+            LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
+            NPTH_FORMAT => !self.non_plated_holes.is_empty() && !self.has_plated_slots(),
+            SLOT_FORMAT => self.has_plated_slots(),
+            _ => return Err(format!("unsupported footprint format {}", self.format)),
+        };
+        if !matches_content {
+            return Err("footprint format does not match its authored hole content".into());
         }
+        Ok(())
     }
 
     /// Validate the schema, provenance, bounded geometry and distinct electrical pad identifiers.

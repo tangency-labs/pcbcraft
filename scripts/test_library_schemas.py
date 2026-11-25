@@ -174,6 +174,42 @@ class LibrarySchemaTests(unittest.TestCase):
             package["mapping"]["1"] = pads
             self.assertFalse(validator.is_valid(value))
 
+    def test_model_record_holds_geometry_by_hash_and_only_a_canonical_source_frame(self):
+        validator = self.checks[checker.FORMATS["pcbcraft-model/1"]]
+        model = {"format": "pcbcraft-model/1", "library": "parts-demo", "id": "sot-23", "revision": 1,
+                 "name": "SOT-23 body", "license": "CC0-1.0",
+                 "source": {"kind": "original", "reference": "pcbcraft", "locator": "tests"},
+                 "redistribution": "allowed",
+                 "geometry": {"kind": "step", "sha256": "0" * 63 + "a", "size_bytes": 1024}}
+        validator.validate(model)
+        framed = copy.deepcopy(model)
+        framed["source_frame"] = {"up_axis": "y", "origin_offset": {"x_nm": 0, "y_nm": 0, "z_nm": -350000}}
+        validator.validate(framed)
+        invalid = [
+            ("placement", {"x_nm": 0}), ("bounds", [0, 0, 0]), ("unit", "mm"), ("scale", 1),
+            ("redistribution", "maybe"), ("geometry", {"kind": "glb", "sha256": "0" * 64, "size_bytes": 1}),
+            ("geometry", {"kind": "step", "sha256": "A" * 64, "size_bytes": 1}),
+            ("geometry", {"kind": "step", "sha256": "0" * 64, "size_bytes": 0}),
+            ("geometry", {"kind": "step", "sha256": "0" * 64, "size_bytes": 64 * 1024 * 1024 + 1}),
+            ("source_frame", {}), ("source_frame", {"up_axis": "z"}),
+            ("source_frame", {"origin_offset": {"x_nm": 0, "y_nm": 0, "z_nm": 0}}),
+            ("source_frame", {"origin_offset": {"x_nm": 100000001, "y_nm": 0, "z_nm": 0}}),
+            ("source_frame", {"unit": "mm"}),
+        ]
+        for field, value in invalid:
+            with self.subTest(field=field, value=value):
+                changed = copy.deepcopy(model)
+                changed[field] = value
+                self.assertFalse(validator.is_valid(changed))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "models").mkdir()
+            (source / "models" / "sot-23.r1.json").write_text(json.dumps(model))
+            checker.validate([], [source])
+            (source / "models" / "wrong-kind.json").write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in models/"):
+                checker.validate([], [source])
+
     def test_duplicate_keys_are_rejected_before_validation(self):
         with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
             json.loads('{"field":1,"field":2}', object_pairs_hook=checker.distinct_object)
@@ -220,6 +256,29 @@ class LibrarySchemaTests(unittest.TestCase):
         validator.validate(part)
         # Ratings still require the exact symbol they belong to.
         part["terminal_ratings"] = {"1": {"supply_max": {"type": "quantity", "value": "36", "unit": "V"}}}
+        self.assertFalse(validator.is_valid(part))
+
+    def test_current_part_accepts_omitted_ratings_and_metadata(self):
+        validator = self.checks[checker.FORMATS["pcbcraft-part/6"]]
+        part = self.part5()
+        part["format"] = "pcbcraft-part/6"
+        part["terminal_ratings"] = {"1": {"supply_min": {"type": "quantity", "value": "4.5", "unit": "V"}}}
+        validator.validate(part)
+        for field in ("description", "keywords", "links"):
+            del part[field]
+            validator.validate(part)
+        invalid = copy.deepcopy(part)
+        del invalid["symbol"]
+        self.assertFalse(validator.is_valid(invalid))
+        invalid["packages"] = {}
+        self.assertFalse(validator.is_valid(invalid))
+        del part["terminal_ratings"]
+        validator.validate(part)
+        del part["symbol"]
+        self.assertFalse(validator.is_valid(part))
+        part["packages"] = {}
+        validator.validate(part)
+        part["keywords"] = []
         self.assertFalse(validator.is_valid(part))
 
     def test_legacy_part_schemas_still_reject_all_metadata(self):

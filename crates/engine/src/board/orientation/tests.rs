@@ -3,7 +3,7 @@ use crate::{
     PLACE_RESISTOR,
     board::{
         assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT},
-        definition::{LEGACY_FORMAT, NPTH_FORMAT, ORIENTATION_FORMAT, basic_components, read_saved, write_saved},
+        definition::{CURRENT_FORMAT, LEGACY_FORMAT, NPTH_FORMAT, ORIENTATION_FORMAT, basic_components, read_saved, write_saved},
     },
     library::sources::LOAD,
     persistence::{decode_documents, encode_documents, test_board_path},
@@ -517,7 +517,10 @@ fn orientation_reader() {
     refused(read_saved(missing.to_string().as_bytes()), "missing field `polarized`");
     let mut unoriented = plain;
     unoriented["format"] = json!(ORIENTATION_FORMAT);
-    refused(read_saved(unoriented.to_string().as_bytes()), "must be pcbcraft-footprint/1 for a definition without an orientation statement");
+    refused(read_saved(unoriented.to_string().as_bytes()), "must be pcbcraft-footprint/6 for a definition without an orientation statement");
+    let mut current = good.clone();
+    current["format"] = json!(CURRENT_FORMAT);
+    refused(read_saved(current.to_string().as_bytes()), "must be pcbcraft-footprint/7 for a definition with an orientation statement");
 }
 
 /// An oriented package with a circular non-plated hole is format 7 and keeps both features
