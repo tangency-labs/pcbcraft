@@ -130,8 +130,10 @@ are limited to names and default values, through `library.preview_adoption` and
 `library.apply_adoption` or the Parts Library review, as one undoable edit.
 [Preview footprint pad changes](../libraries/native-library-sources.md#preview-footprint-pad-changes)
 reports altered pads and lost contact for straight track ends and through vias
-on one placed instance. It does not check standalone circular track ends, move
-copper, resolve pad maps or adopt revisions.
+on one placed instance. It does not check standalone circular track ends or edit
+the project. A separate [reviewed Apply command](../libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
+requires a complete pad map, pins the exact replacement and leaves copper in
+place. Undo restores the old package in one step.
 The shared read-only `library.check` command reports repeated footprint pad
 numbers and incomplete or inconsistent package maps in transported library
 documents, a footprint draft or a part draft. Each finding names its rule, exact
