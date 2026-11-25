@@ -42,8 +42,9 @@ Inspect returns the session `revision`, the authored `intent` and a `requirement
 - `_split`: the net was split after the declaration was last saved, and it kept its identity on one branch while another branch received a new one;
 - `_ambiguous`: the net was split and no branch kept its identity;
 - `_merged`: the net was merged into another net;
-- `_retired`: the net was deleted.
+- `_resolved`: resolving an ambiguous split restored the original identity on this branch. This retired the provisional identity without removing the conductors;
+- `_retired`: the net was removed.
 
-A flagged declaration keeps its original value and reference; it is not redirected to a replacement net. A split that kept both identities is cleared by setting the declaration again after review, even unchanged; that save is one Undo step. For a retired, merged or ambiguous reference, setting a new value with the same retained reference keeps the flag, and choosing a current reference clears it. The declaration on a net that was deleted, merged or left ambiguous can be inspected and cleared, but not given a new value.
+A flagged declaration keeps its original value and reference; it is not redirected to a replacement net. A split that kept both identities is cleared by setting the declaration again after review, even unchanged; that save is one Undo step. When a reference is no longer current, setting a new value with the same retained reference keeps the flag. Choosing a current reference, such as the restored net if it still applies, clears it. A declaration on an ambiguous or retired net can be inspected and cleared, but not given a new value. After resolution, re-declare on the restored identity if needed.
 
 Set returns the session revision. A successful change is one Undo step, and Undo restores the earlier report. A stale or invalid request changes neither the document nor history. MCP reports a stale revision as `stale_revision`, with `current_revision` in the error details. `dry_run: true` performs the same validation but does not publish; an unchanged edit is a no-op. Declarations are saved in [native projects and archives](native-project-storage.md#authored-electrical-intent).

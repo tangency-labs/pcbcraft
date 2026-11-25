@@ -89,9 +89,12 @@ Opening or inspecting a supported older project leaves its files untouched.
 Folder saves and packed exports write `pcbcraft-project/68` for `project.json`,
 and `pcbcraft-sheet/10` for each schematic sheet. A registered board uses
 `pcbcraft-board/43` for `board.json` and `pcbcraft-instances/12` for `instances.json`.
-Version 63 adds optional net wire appearance to version 62. Version 62 added
-optional output recipes to version 61, which made designator locks optional. Earlier formats remain readable. The first save adopts the existing
-folder and occurrence migrations if needed. Subsequent unchanged saves are
+Project version 68 adds optional authored electrical intent to version 63, and
+instances version 12 adds optional board-owned net intent to version 10. Version
+63 added optional net wire appearance to version 62. Version 62 added optional
+output recipes to version 61, which made designator locks optional. Earlier
+formats remain readable. The first save adopts the existing folder and occurrence
+migrations if needed. Subsequent unchanged saves are
 byte-stable, and clearing an optional record or undoing the edit that added it
 keeps the current format.
 

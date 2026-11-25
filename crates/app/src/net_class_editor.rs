@@ -568,10 +568,12 @@ fn review_reason(reason: &str) -> &str {
         "reference_retired" => "The reference net no longer exists in the design.",
         "reference_ambiguous" => "The reference net was split and no branch kept its identity.",
         "reference_merged" => "The reference net was merged into another net.",
+        "reference_resolved" => "Resolving a split restored the original net identity. Choose that net again if it is still the reference.",
         "reference_split" => "The reference net was split; another branch now has its own identity.",
         "net_retired" => "This net no longer exists in the design.",
         "net_ambiguous" => "This net was split and no branch kept its identity.",
         "net_merged" => "This net was merged into another net.",
+        "net_resolved" => "Resolving a split restored the original net identity. Re-declare the voltage on that net if it still applies.",
         "net_split" => "This net was split; another branch now has its own identity.",
         other => other,
     }

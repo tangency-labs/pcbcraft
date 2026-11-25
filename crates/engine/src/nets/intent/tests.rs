@@ -865,6 +865,69 @@ fn working_voltage_review_flags_split_ambiguous_split_and_merge() {
     assert_eq!(ambiguous["requirement"], review(json!(["net_ambiguous"])));
 }
 
+/// Choosing a branch of an ambiguous split restores the original UUID without deleting the
+/// conductors or moving declarations off the provisional identity.
+#[test]
+fn working_voltage_distinguishes_resolved_owner_and_reference_from_removal() {
+    let (mut session, pins) = pin_circuit(6);
+    wire(&mut session, &pins[0], &pins[1]);
+    let source = promoted(&mut session, &pins[0]);
+    wire(&mut session, &pins[0], &pins[2]);
+    wire(&mut session, &pins[2], &pins[3]);
+    wire(&mut session, &pins[0], &pins[4]);
+    wire(&mut session, &pins[4], &pins[5]);
+    let selected = crate::selection::Selection {
+        symbols: [pins[0]["symbol"].as_str().unwrap().into(), pins[1]["symbol"].as_str().unwrap().into()].into(),
+        ..Default::default()
+    };
+    apply(&mut session, crate::DELETE_ITEMS, json!({"items":selected}));
+    let provisional = promoted(&mut session, &pins[2]);
+    let symbol = pins[2]["symbol"].as_str().unwrap();
+    let branch_symbol = session.project().unwrap().symbols().iter().find(|part| part.id() == symbol).unwrap();
+    let at = branch_symbol.pins()[branch_symbol.unit_definition().pin_index("1").unwrap()];
+    apply(&mut session, net_labels::ADD, json!({"name":"RESOLUTION_BRANCH","style":"local","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    assert_eq!(promoted(&mut session, &pins[2]), provisional);
+    apply(&mut session, net_classes::CREATE, json!({"name":"Review class","rules":{}}));
+    let class = session.project().unwrap().net_classes().definitions[0].id;
+    let class_target = json!({"kind":"net_class","project":provisional["address"]["project"],"class":class});
+    let branch_intent = volts("12");
+    let mut class_intent = volts("48");
+    class_intent["working_voltage"]["reference"] = json!({"kind":"net","address":provisional["address"]});
+    for (target, intent) in [(&provisional, &branch_intent), (&class_target, &class_intent)] {
+        let args = request(&session, target, intent);
+        session.apply(SET, &args).unwrap();
+    }
+    let report = |session: &mut Session, target: &Value| session.execute(INSPECT, &json!({"version":1,"target":target})).unwrap();
+    for target in [&provisional, &class_target] {
+        assert_eq!(report(&mut session, target)["requirement"]["review"], "current");
+    }
+
+    apply(&mut session, crate::nets::RESOLVE_AMBIGUITY, json!({"net":source["address"]["net"],"anchor":pins[2]}));
+    assert_eq!(promoted(&mut session, &pins[2]), source);
+    assert_eq!(inspect(&mut session, &source), json!({"working_voltage":null}));
+    let check = |session: &mut Session| {
+        for (target, intent, reason, authored_on) in [
+            (&provisional, &branch_intent, "net_resolved", "authored_on_net"),
+            (&class_target, &class_intent, "reference_resolved", "authored_on_net_class"),
+        ] {
+            let result = report(session, target);
+            assert_eq!(&result["intent"], intent);
+            assert_eq!(result["requirement"], json!({"source":authored_on,"verification":"unverified","review":"needs_review","reasons":[reason]}));
+        }
+    };
+    check(&mut session);
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut reader = Session::default();
+    reader.open_snapshot(decode_documents(&saved).unwrap());
+    check(&mut reader);
+
+    let mut repointed = class_intent;
+    repointed["working_voltage"]["reference"]["address"] = source["address"].clone();
+    let args = request(&session, &class_target, &repointed);
+    session.apply(SET, &args).unwrap();
+    assert_eq!(report(&mut session, &class_target)["requirement"]["review"], "current");
+}
+
 /// Command net addresses and their scopes are objects: a positional address or scope for the
 /// target or the reference is refused without changing the declaration, revision or history.
 #[test]

@@ -365,8 +365,8 @@ impl IntentV1 {
 
     /// Report where an authored requirement came from and whether it still describes current
     /// nets. Nothing verifies the value yet. An owner or reference that was split (even when
-    /// one branch kept its UUID), merged, left ambiguous or removed keeps the original
-    /// declaration and reference but flags it for review; nothing is redirected.
+    /// one branch kept its UUID), merged, left ambiguous, retired by resolution or removed
+    /// keeps the original declaration and reference but flags it for review; nothing is redirected.
     fn requirement(&self, project: &Project, target: Target) -> Value {
         let Some(voltage) = &self.voltage else { return Value::Null };
         let mut reasons = Vec::new();
@@ -375,7 +375,8 @@ impl IntentV1 {
             Some(State::Active {}) => {}
             Some(State::Ambiguous { .. }) => reasons.push(format!("{role}_ambiguous")),
             Some(State::Retired { reason: Retirement::Merged, .. }) => reasons.push(format!("{role}_merged")),
-            _ => reasons.push(format!("{role}_retired")),
+            Some(State::Retired { reason: Retirement::Resolution, .. }) => reasons.push(format!("{role}_resolved")),
+            Some(State::Retired { reason: Retirement::Removed, .. }) | None => reasons.push(format!("{role}_retired")),
         };
         let source = match target {
             Target::Net { address } => {
