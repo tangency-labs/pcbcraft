@@ -4,10 +4,12 @@
 //! only explains one: it decodes the transported documents structurally, keeps every authored pad
 //! in its authored order without deduplication, and reports each defect with its measured count,
 //! limit and basis. It writes no file, changes no project and records no history step.
+mod budget;
+
 use super::{
     parse_manifest, parse_symbol,
     parts::{Package, PartDefinition, PartFormatError, Reference},
-    sources::{Catalog, Documents, MAX_FILE_BYTES, check_documents},
+    sources::{Catalog, Documents, MAX_FILE_BYTES, MAX_FILES, check_documents},
 };
 use crate::{
     authoring::{Item, Kind, Primitive},
@@ -15,6 +17,7 @@ use crate::{
     part_authoring::Record,
     persistence::reject_duplicate_json_keys,
 };
+use budget::{Budget, MAX_REPORT_BYTES, MAX_WORK};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -78,11 +81,14 @@ pub struct PackageCapture {
 }
 
 /// An immutable capture of everything one check reads. Its digest binds a report to it.
+/// Construction also completes and bounds the raw findings; reporting only selects and labels
+/// those findings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Capture {
     footprints: Vec<FootprintCapture>,
     packages: Vec<PackageCapture>,
     digest: String,
+    findings: Vec<Finding>,
 }
 
 /// A capture that cannot be checked. There is no partial or clean report for it.
@@ -94,7 +100,7 @@ pub enum CheckError {
     UnsupportedFormat { file: String, format: String },
     /// An exact reference found neither in the transported documents nor in the catalog.
     Unresolved { kind: &'static str, reference: Reference },
-    /// More data than the native formats allow.
+    /// More data than the native formats or the aggregate check budget allow.
     TooLarge { what: String, limit: usize },
     /// A severity override names no registered rule.
     UnknownRule { rule: String },
@@ -393,7 +399,7 @@ struct Header {
 /// The transported documents, decoded structurally and bound to their manifest.
 #[derive(Default)]
 struct Transported {
-    footprints: Vec<FootprintCapture>,
+    footprints: BTreeMap<Reference, FootprintCapture>,
     symbols: BTreeMap<Reference, Vec<String>>,
     parts: Vec<(String, PartDefinition)>,
 }
@@ -401,10 +407,12 @@ struct Transported {
 impl Transported {
     /// Decode every footprint, symbol and part document. Categories and manufacturer parts own no
     /// pads or package maps and are not read.
-    fn read(documents: &Documents) -> Result<Self, CheckError> {
-        for (path, text) in documents {
-            if text.len() > MAX_FILE_BYTES {
-                return Err(CheckError::TooLarge { what: path.clone(), limit: MAX_FILE_BYTES });
+    fn read(documents: &Documents, work: &mut Budget) -> Result<Self, CheckError> {
+        if documents.len() <= MAX_FILES {
+            for (path, text) in documents {
+                if text.len() > MAX_FILE_BYTES {
+                    return Err(CheckError::TooLarge { what: path.clone(), limit: MAX_FILE_BYTES });
+                }
             }
         }
         check_documents(documents).map_err(|reason| CheckError::Malformed { file: "documents".into(), reason })?;
@@ -417,6 +425,7 @@ impl Transported {
             .transpose()
             .map_err(|reason| CheckError::Malformed { file: "library.json".into(), reason })?;
         let mut transported = Self::default();
+        let mut part_refs = BTreeSet::new();
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             let malformed = |reason: &str| CheckError::Malformed { file: path.clone(), reason: reason.into() };
             let library = library.as_deref().ok_or_else(|| malformed("library.json is required to bind document identity"))?;
@@ -426,16 +435,18 @@ impl Transported {
                     return Err(malformed("Footprint library does not match library.json"));
                 }
                 let reference = Reference { library: definition.library.clone(), id: definition.id.clone(), revision: definition.revision };
-                if transported.footprints.iter().any(|footprint| footprint.reference == reference) {
+                if transported.footprints.contains_key(&reference) {
                     return Err(malformed("Another document defines the same footprint revision"));
                 }
                 let pads = definition.pads.iter().enumerate().map(|(index, pad)| (u64::try_from(index).unwrap_or(u64::MAX), pad));
-                transported.footprints.push(capture_footprint(reference, CaptureSource::Document { path: path.clone() }, pads)?);
+                let footprint = capture_footprint(reference.clone(), CaptureSource::Document { path: path.clone() }, pads, work)?;
+                transported.footprints.insert(reference, footprint);
             } else if path.starts_with("symbols/") {
                 reject_duplicate_json_keys(text).map_err(|reason| malformed(&reason))?;
                 let symbol = parse_symbol(text).map_err(|reason| malformed(&reason))?;
                 let reference = Reference { library: library.into(), id: symbol.id.clone(), revision: symbol.revision() };
-                let terminals = symbol.pins().iter().map(|pin| pin.number.clone()).collect();
+                work.reference(&reference)?;
+                let terminals = copy_terminals(symbol.pins().iter().map(|pin| &pin.number), work)?;
                 if transported.symbols.insert(reference, terminals).is_some() {
                     return Err(malformed("Another document defines the same symbol revision"));
                 }
@@ -445,7 +456,8 @@ impl Transported {
                     return Err(malformed("Part library does not match library.json"));
                 }
                 let reference = part.reference();
-                if transported.parts.iter().any(|(_, existing)| existing.reference() == reference) {
+                work.reference(&reference)?;
+                if !part_refs.insert(reference) {
                     return Err(malformed("Another document defines the same part revision"));
                 }
                 transported.parts.push((path.clone(), part));
@@ -455,21 +467,29 @@ impl Transported {
     }
 
     /// Terminals of an exact symbol, from the documents first and then the catalog.
-    fn terminals(&self, symbol: Option<&Reference>, catalog: &Catalog) -> Result<Vec<String>, CheckError> {
+    fn terminals(&self, symbol: Option<&Reference>, catalog: &Catalog, work: &mut Budget) -> Result<Vec<String>, CheckError> {
         let Some(reference) = symbol else {
             return Ok(Vec::new());
         };
+        work.reference(reference)?;
         if let Some(terminals) = self.symbols.get(reference) {
-            return Ok(terminals.clone());
+            return copy_terminals(terminals, work);
         }
-        catalog
-            .symbol(&reference.library, &reference.id, reference.revision)
-            .map(|symbol| symbol.pins().iter().map(|pin| pin.number.clone()).collect())
-            .ok_or_else(|| CheckError::Unresolved { kind: "symbol", reference: reference.clone() })
+        let symbol = catalog.indexed_symbol(reference).ok_or_else(|| CheckError::Unresolved { kind: "symbol", reference: reference.clone() })?;
+        copy_terminals(symbol.pins().iter().map(|pin| &pin.number), work)
     }
 }
 
-/// Read the format first, then decode every field without semantic validation.
+fn copy_terminals<'a>(terminals: impl IntoIterator<Item = &'a String>, work: &mut Budget) -> Result<Vec<String>, CheckError> {
+    let mut copy = Vec::new();
+    for terminal in terminals {
+        work.text(terminal)?;
+        copy.push(terminal.clone());
+    }
+    Ok(copy)
+}
+
+/// Read the format first, then decode and validate identity without checking pads or publication readiness.
 fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
@@ -480,10 +500,13 @@ fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, Check
     if definition.validate_format().is_err() {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: definition.format });
     }
+    if !definition.has_valid_identity() {
+        return Err(CheckError::Malformed { file: path.into(), reason: "invalid footprint identity".into() });
+    }
     Ok(definition)
 }
 
-/// Decode a part with the native format checks but without strict package-map validation.
+/// Decode a transported part with native format and header checks but without strict package-map validation.
 fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
@@ -492,6 +515,7 @@ fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     }
     let part: PartDefinition = serde_json::from_str(text).map_err(malformed)?;
     validate_part_format(path, &part)?;
+    part.validate_header().map_err(|reason| CheckError::Malformed { file: path.into(), reason })?;
     Ok(part)
 }
 
@@ -508,15 +532,21 @@ fn capture_footprint<'a>(
     reference: Reference,
     source: CaptureSource,
     pads: impl Iterator<Item = (u64, &'a RectPad)>,
+    work: &mut Budget,
 ) -> Result<FootprintCapture, CheckError> {
-    let mut ordinals: BTreeMap<String, u16> = BTreeMap::new();
+    work.charge(128)?;
+    work.reference(&reference)?;
+    work.source(&source)?;
+    let mut ordinals: BTreeMap<&str, u16> = BTreeMap::new();
     let mut occurrences = Vec::new();
     for (index, pad) in pads {
         if occurrences.len() == MAX_PADS {
             let what = format!("Pads of footprint {}/{} revision {}", reference.library, reference.id, reference.revision);
             return Err(CheckError::TooLarge { what, limit: MAX_PADS });
         }
-        let ordinal = ordinals.entry(pad.number.clone()).or_insert(0);
+        work.charge(256)?;
+        work.text(&pad.number)?;
+        let ordinal = ordinals.entry(pad.number.as_str()).or_insert(0);
         *ordinal = ordinal.saturating_add(1);
         occurrences.push(PadOccurrence { index, ordinal: *ordinal, number: pad.number.clone(), pad: pad.clone() });
     }
@@ -524,19 +554,23 @@ fn capture_footprint<'a>(
 }
 
 /// Capture the pads of a footprint authoring draft. Non-plated holes are not pads.
-fn draft_footprint(item: &Item) -> Result<FootprintCapture, CheckError> {
+fn draft_footprint(item: &Item, work: &mut Budget) -> Result<FootprintCapture, CheckError> {
     if item.kind != Kind::Footprint {
         return Err(CheckError::Malformed { file: "item".into(), reason: "Only footprint drafts carry pad occurrences".into() });
     }
+    work.charge(item.objects.len())?;
+    work.text(&item.library)?;
+    work.text(&item.id)?;
     let pads = item.objects.iter().filter_map(|(id, primitive)| match primitive {
         Primitive::Pad { pad } => Some((*id, pad)),
         _ => None,
     });
-    capture_footprint(Reference { library: item.library.clone(), id: item.id.clone(), revision: item.revision }, CaptureSource::Draft, pads)
+    capture_footprint(Reference { library: item.library.clone(), id: item.id.clone(), revision: item.revision }, CaptureSource::Draft, pads, work)
 }
 
-/// Refuse a package larger than the part formats allow before it is captured.
-fn bounded_package(part: &Reference, name: &str, package: &Package) -> Result<(), CheckError> {
+/// Refuse an oversized package, and charge all map entries before copying the map. Repeated
+/// assignments count toward aggregate work even if they add no distinct pad to the set.
+fn bounded_package(part: &Reference, name: &str, package: &Package, work: &mut Budget) -> Result<(), CheckError> {
     let what = || format!("Package {name} of part {}/{} revision {}", part.library, part.id, part.revision);
     if package.mapping.len() > MAX_PACKAGE_TERMINALS {
         return Err(CheckError::TooLarge { what: what(), limit: MAX_PACKAGE_TERMINALS });
@@ -544,8 +578,13 @@ fn bounded_package(part: &Reference, name: &str, package: &Package) -> Result<()
     if package.unconnected_pads.len() > MAX_PADS || package.mapping.values().any(|pads| pads.len() > MAX_PADS) {
         return Err(CheckError::TooLarge { what: what(), limit: MAX_PADS });
     }
+    for terminal in package.mapping.keys() {
+        work.charge(64)?;
+        work.text(terminal)?;
+    }
     let mut distinct_pads = BTreeSet::new();
     for pad in package.mapping.values().flatten().chain(&package.unconnected_pads) {
+        work.text(pad)?;
         if distinct_pads.insert(pad.as_str()) && distinct_pads.len() > MAX_PADS {
             return Err(CheckError::TooLarge { what: what(), limit: MAX_PADS });
         }
@@ -584,12 +623,22 @@ impl Capture {
 
     /// Capture documents and optional drafts once. Exact references resolve in the transported
     /// documents first and then in the catalog; an unresolved reference is an error.
+    /// Refuses the whole capture if its work or unfiltered findings exceed the aggregate budgets.
     pub fn new(documents: &Documents, item: Option<&Item>, record: Option<&Record>, catalog: &Catalog) -> Result<Self, CheckError> {
-        let transported = Transported::read(documents)?;
-        let mut footprints = transported.footprints.clone();
-        if let Some(item) = item {
-            footprints.push(draft_footprint(item)?);
-        }
+        Self::new_bounded(documents, item, record, catalog, Budget::work(MAX_WORK), Budget::report(MAX_REPORT_BYTES))
+    }
+
+    fn new_bounded(
+        documents: &Documents,
+        item: Option<&Item>,
+        record: Option<&Record>,
+        catalog: &Catalog,
+        mut work: Budget,
+        mut output: Budget,
+    ) -> Result<Self, CheckError> {
+        let mut transported = Transported::read(documents, &mut work)?;
+        let mut footprints = std::mem::take(&mut transported.footprints);
+        let draft = item.map(|item| draft_footprint(item, &mut work)).transpose()?;
         let mut parts: Vec<(CaptureSource, &PartDefinition)> =
             transported.parts.iter().map(|(path, part)| (CaptureSource::Document { path: path.clone() }, part)).collect();
         match record {
@@ -604,29 +653,40 @@ impl Capture {
         }
         let mut packages = Vec::new();
         for (source, part) in parts {
+            work.text(&part.library)?;
+            work.text(&part.id)?;
             let reference = part.reference();
             if part.packages.len() > MAX_PACKAGES {
                 let what = format!("Packages of part {}/{} revision {}", reference.library, reference.id, reference.revision);
                 return Err(CheckError::TooLarge { what, limit: MAX_PACKAGES });
             }
-            let terminals = transported.terminals(part.symbol.as_ref(), catalog)?;
+            let terminals = transported.terminals(part.symbol.as_ref(), catalog, &mut work)?;
             let terminal_ids = terminals.iter().map(String::as_str).collect();
             let file = match &source {
                 CaptureSource::Document { path } => path.as_str(),
                 _ => "record",
             };
             for (name, package) in &part.packages {
-                bounded_package(&reference, name, package)?;
-                validate_package_assignments(name, package, part.symbol.is_some(), &terminal_ids, file)?;
+                work.charge(256)?;
+                work.text(name)?;
+                work.reference(&reference)?;
+                work.source(&source)?;
+                if let Some(symbol) = &part.symbol {
+                    work.reference(symbol)?;
+                }
                 let target = &package.footprint;
-                let known = footprints.iter().any(|footprint| footprint.reference == *target && footprint.source != CaptureSource::Draft);
-                if !known {
+                work.reference(target)?;
+                bounded_package(&reference, name, package, &mut work)?;
+                validate_package_assignments(name, package, part.symbol.is_some(), &terminal_ids, file)?;
+                if let std::collections::btree_map::Entry::Vacant(entry) = footprints.entry(target.clone()) {
                     let definition = catalog
                         .footprint(&target.library, &target.id, target.revision)
                         .ok_or_else(|| CheckError::Unresolved { kind: "footprint", reference: target.clone() })?;
                     let pads = definition.pads.iter().enumerate().map(|(index, pad)| (u64::try_from(index).unwrap_or(u64::MAX), pad));
-                    footprints.push(capture_footprint(target.clone(), CaptureSource::Catalog, pads)?);
+                    let footprint = capture_footprint(target.clone(), CaptureSource::Catalog, pads, &mut work)?;
+                    entry.insert(footprint);
                 }
+                let package_terminals = copy_terminals(&terminals, &mut work)?;
                 packages.push(PackageCapture {
                     part: reference.clone(),
                     package: name.clone(),
@@ -635,16 +695,21 @@ impl Capture {
                     footprint: target.clone(),
                     mapping: package.mapping.clone(),
                     unconnected_pads: package.unconnected_pads.clone(),
-                    terminals: terminals.clone(),
+                    terminals: package_terminals,
                 });
             }
         }
+        let mut footprints: Vec<_> = footprints.into_values().chain(draft).collect();
         footprints.sort_by(|a, b| (&a.reference, &a.source).cmp(&(&b.reference, &b.source)));
         packages.sort_by(|a, b| (&a.part, &a.package, &a.source).cmp(&(&b.part, &b.package, &b.source)));
-        let canonical = serde_json::to_vec(&(&footprints, &packages))
+        // Complete the bounded evaluation before serializing anything. An immutable capture
+        // retains those findings so both public check entry points only produce bounded reports.
+        let findings = evaluate(&footprints, &packages, &mut work, &mut output)?;
+        let mut hash = CaptureHash(Sha256::new());
+        serde_json::to_writer(&mut hash, &(&footprints, &packages))
             .map_err(|error| CheckError::Malformed { file: "capture".into(), reason: error.to_string() })?;
-        let digest = format!("{:x}", Sha256::digest(&canonical));
-        Ok(Self { footprints, packages, digest })
+        let digest = format!("{:x}", hash.0.finalize());
+        Ok(Self { footprints, packages, digest, findings })
     }
 
     /// Captured footprints sorted by exact reference and source.
@@ -661,18 +726,34 @@ impl Capture {
     }
 }
 
-/// Footprint occurrences grouped by pad number, each group in authored order.
-fn by_number(pads: &[PadOccurrence]) -> BTreeMap<&str, Vec<PadOccurrenceRef>> {
+/// Stream the original compact canonical JSON into SHA-256, without a second capture-sized buffer.
+struct CaptureHash(Sha256);
+
+impl std::io::Write for CaptureHash {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Footprint occurrences grouped by pad number, each group in authored order. Charge the full
+/// scan on every call, even when several packages resolve to the exact same footprint.
+fn by_number<'a>(pads: &'a [PadOccurrence], work: &mut Budget) -> Result<BTreeMap<&'a str, Vec<PadOccurrenceRef>>, CheckError> {
     let mut groups: BTreeMap<&str, Vec<PadOccurrenceRef>> = BTreeMap::new();
     for pad in pads {
+        work.text(&pad.number)?;
         groups.entry(pad.number.as_str()).or_default().push(PadOccurrenceRef { index: pad.index, ordinal: pad.ordinal });
     }
-    groups
+    Ok(groups)
 }
 
 /// The one checker with the built-in rules at the edit stage and their default severities.
 pub fn check(capture: &Capture) -> Report {
-    report(capture, evaluate(capture), RULES, Stage::Edit)
+    report(capture, RULES, Stage::Edit)
 }
 
 /// The one checker. GUI, MCP and publication gates call it on the same capture with their stage
@@ -682,16 +763,17 @@ pub fn check(capture: &Capture) -> Report {
 /// Refuses an override of an unknown rule or one below a required rule's floor.
 pub fn check_with(capture: &Capture, options: &Options, rules: &[Rule]) -> Result<Report, CheckError> {
     let rules = options.resolve(rules)?;
-    Ok(report(capture, evaluate(capture), &rules, options.stage))
+    Ok(report(capture, &rules, options.stage))
 }
 
 /// Keep the findings of rules that run at `stage`, give each its rule's severity and count them.
 /// A rule missing from `rules` reports nothing.
-fn report(capture: &Capture, findings: Vec<Finding>, rules: &[Rule], stage: Stage) -> Report {
+fn report(capture: &Capture, rules: &[Rule], stage: Stage) -> Report {
     let mut counts = Counts::default();
     let mut blocks_publish = false;
-    let findings: Vec<Finding> = findings
-        .into_iter()
+    let findings = capture
+        .findings
+        .iter()
         .filter_map(|finding| {
             let rule = rules.iter().find(|rule| rule.id == finding.rule && rule.stages.contains(&stage))?;
             match rule.severity {
@@ -700,30 +782,38 @@ fn report(capture: &Capture, findings: Vec<Finding>, rules: &[Rule], stage: Stag
                 Severity::Info => counts.info += 1,
             }
             blocks_publish |= rule.severity == Severity::Error && rule.stages.contains(&Stage::Publish);
-            Some(Finding { severity: rule.severity, ..finding })
+            Some(Finding { severity: rule.severity, ..finding.clone() })
         })
         .collect();
     Report { capture_digest: capture.digest.clone(), stage, findings, counts, blocks_publish }
 }
 
 /// Every built-in rule's findings, sorted by rule, subject and first occurrence.
-fn evaluate(capture: &Capture) -> Vec<Finding> {
+fn evaluate(
+    footprints: &[FootprintCapture],
+    packages: &[PackageCapture],
+    work: &mut Budget,
+    output: &mut Budget,
+) -> Result<Vec<Finding>, CheckError> {
+    output.envelope()?;
     let mut findings = Vec::new();
-    for footprint in &capture.footprints {
-        for (number, occurrences) in by_number(&footprint.pads).into_iter().filter(|(_, occurrences)| occurrences.len() > 1) {
+    let mut published = BTreeMap::new();
+    for footprint in footprints {
+        // Package maps name published footprints, so a draft never stands in for one.
+        if footprint.source != CaptureSource::Draft {
+            published.insert(&footprint.reference, footprint.pads.as_slice());
+        }
+        for (number, occurrences) in by_number(&footprint.pads, work)?.into_iter().filter(|(_, occurrences)| occurrences.len() > 1) {
+            output.finding(&footprint.reference, &footprint.source, None, number, occurrences.len())?;
             let subject = Subject::Pad { footprint: footprint.reference.clone(), number: number.into(), source: footprint.source.clone() };
             findings.push(Finding::new(RuleId::PadNumberRepeated, subject, occurrences.len(), occurrences));
         }
     }
-    for package in &capture.packages {
-        // Package maps name published footprints, so a draft never stands in for one.
-        let pads = capture
-            .footprints
-            .iter()
-            .find(|footprint| footprint.reference == package.footprint && footprint.source != CaptureSource::Draft)
-            .map(|footprint| footprint.pads.as_slice())
-            .unwrap_or_default();
-        let footprint = by_number(pads);
+    for package in packages {
+        let pads = published.get(&package.footprint).copied().unwrap_or_default();
+        let footprint = by_number(pads, work)?;
+        // Capture already charged this package's materialized terminals and every map
+        // entry, paying for the bounded passes over those inputs here as well.
         let pad = |number: &str| Subject::PackagePad {
             part: package.part.clone(),
             package: package.package.clone(),
@@ -734,6 +824,7 @@ fn evaluate(capture: &Capture) -> Vec<Finding> {
         for terminal in terminals {
             let mapped = package.mapping.get(terminal).map_or(0, Vec::len);
             if mapped == 0 {
+                output.finding(&package.part, &package.source, Some(&package.package), terminal, 0)?;
                 let subject = Subject::Terminal {
                     part: package.part.clone(),
                     package: package.package.clone(),
@@ -750,22 +841,25 @@ fn evaluate(capture: &Capture) -> Vec<Finding> {
         if package.symbol.is_some() {
             for (number, occurrences) in &footprint {
                 if !assigned.contains_key(number) {
+                    output.finding(&package.part, &package.source, Some(&package.package), number, occurrences.len())?;
                     findings.push(Finding::new(RuleId::PackagePadUnaccounted, pad(number), 0, occurrences.clone()));
                 }
             }
         }
         for (number, count) in &assigned {
-            let occurrences = footprint.get(number).cloned().unwrap_or_default();
+            let occurrences = footprint.get(number).map_or(&[][..], Vec::as_slice);
             if occurrences.is_empty() {
+                output.finding(&package.part, &package.source, Some(&package.package), number, 0)?;
                 findings.push(Finding::new(RuleId::PackagePadNotInFootprint, pad(number), 0, Vec::new()));
             }
             if *count > 1 {
-                findings.push(Finding::new(RuleId::PackagePadRepeated, pad(number), *count, occurrences));
+                output.finding(&package.part, &package.source, Some(&package.package), number, occurrences.len())?;
+                findings.push(Finding::new(RuleId::PackagePadRepeated, pad(number), *count, occurrences.to_vec()));
             }
         }
     }
     findings.sort_by(|a, b| (a.rule, &a.subject, a.occurrences.first()).cmp(&(b.rule, &b.subject, b.occurrences.first())));
-    findings
+    Ok(findings)
 }
 
 /// Decode `library.check` parameters, capture once and return the serialized report.

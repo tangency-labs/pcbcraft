@@ -239,10 +239,15 @@ impl PartDefinition {
         Ok(())
     }
 
+    /// Validate the native part header without resolving dependencies or inspecting package maps.
+    pub(crate) fn validate_header(&self) -> Result<(), String> {
+        let expected = Self::supported_format(&self.format).unwrap_or(PART_FORMAT);
+        header(&self.format, expected, &self.reference(), &self.name, &self.license)
+    }
+
     /// Validate closed records and local invariants; empty package/category choices remain valid.
     pub fn validate(&self) -> Result<(), String> {
-        let expected = Self::supported_format(&self.format).unwrap_or(PART_FORMAT);
-        header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+        self.validate_header()?;
         self.validate_format().map_err(PartFormatError::into_reason)?;
         if let Some(symbol) = &self.symbol {
             symbol.validate()?;

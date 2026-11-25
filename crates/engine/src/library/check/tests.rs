@@ -444,6 +444,39 @@ fn unsupported_or_mismatched_format_is_an_error() {
     }
 }
 
+/// The checker rejects invalid exact identities even when every pad is valid and distinct.
+#[test]
+fn rejects_invalid_transported_footprint_identity() -> Result<(), serde_json::Error> {
+    let fixture = fixture();
+    let original: Value = serde_json::from_str(&fixture.documents[&fixture.footprint_path])?;
+    let catalog = Catalog::default();
+    for (field, invalid) in [("library", json!("Bad library")), ("id", json!("-bad-id")), ("revision", json!(0))] {
+        let mut definition = original.clone();
+        definition[field] = invalid;
+        let documents = edited(&fixture, |_| definition.to_string());
+        assert_eq!(
+            Capture::from_documents(&documents, &catalog),
+            Err(CheckError::Malformed { file: fixture.footprint_path.clone(), reason: "invalid footprint identity".into() }),
+            "{field}"
+        );
+    }
+    Ok(())
+}
+
+/// A valid exact identity is sufficient to capture a footprint still missing all pads and holes.
+#[test]
+fn transported_footprint_identity_does_not_require_pads() -> Result<(), serde_json::Error> {
+    let fixture = fixture();
+    let mut definition: Value = serde_json::from_str(&fixture.documents[&fixture.footprint_path])?;
+    definition["pads"] = json!([]);
+    let documents = edited(&fixture, |_| definition.to_string());
+    assert!(crate::board::definition::read_saved(documents[&fixture.footprint_path].as_bytes()).is_err());
+    let captured_pads = Capture::from_documents(&documents, &Catalog::default())
+        .map(|capture| capture.footprints().iter().map(|footprint| footprint.pads.len()).collect::<Vec<_>>());
+    assert_eq!(captured_pads, Ok(vec![0]));
+    Ok(())
+}
+
 /// Format-1 parts require a symbol; format-2 metadata-only parts without a symbol stay accepted.
 #[test]
 fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
@@ -471,6 +504,42 @@ fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
     let metadata_only = Documents::from([("library.json".into(), manifest), (path, metadata_part)]);
     let capture = Capture::from_documents(&metadata_only, &Catalog::default()).unwrap();
     assert!(check(&capture).is_clean());
+}
+
+/// A malformed native identity is an input error for transported parts, not for drafts.
+#[test]
+fn transported_part_requires_native_identity_but_draft_does_not() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let Record::Part(mut part) = Record::new_part(None)? else { return Err("expected a generic part".into()) };
+    part.format = PART_FORMAT.into();
+    for (id, revision, reason) in [
+        ("spacer", 0, "Definition references require a positive revision."),
+        ("bad id", 1, "ID \"bad id\" must be 1 to 64 lowercase letters, digits and inner hyphens"),
+    ] {
+        part.id = id.into();
+        part.revision = revision;
+        let [transported, draft] = part_inputs(&fixture.documents, &part)?;
+        assert_eq!(
+            fixture.session.execute(CHECK, &transported),
+            Err(crate::CommandError::InvalidParams(format!("parts/check-input.json: {reason}")))
+        );
+        assert_eq!(fixture.session.execute(CHECK, &draft)?["findings"], json!([]));
+    }
+    Ok(())
+}
+
+/// A valid transported header leaves an empty package map for the checker to explain.
+#[test]
+fn transported_part_with_empty_package_map_reports_findings() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let draft = with_package(fixture.part_editor.record(), |package| package.mapping.clear());
+    let Record::Part(part) = draft else { return Err("expected a generic part".into()) };
+    let [transported, _] = part_inputs(&fixture.documents, &part)?;
+    let report = fixture.session.execute(CHECK, &transported)?;
+    assert_eq!(report["counts"], json!({"error": 7, "warning": 0, "info": 0}));
+    assert_eq!(report["findings"][0]["rule"], "package.terminal.unmapped");
+    assert_eq!(report["findings"][4]["rule"], "package.pad.unaccounted");
+    Ok(())
 }
 
 /// Current-format parts are checked as both transported documents and drafts,
@@ -615,6 +684,77 @@ fn oversized_capture_is_an_error() {
     let documents = edited(&fixture, |text| format!("{text}{}", " ".repeat(MAX_FILE_BYTES)));
     let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
     assert_eq!(error, CheckError::TooLarge { what: fixture.footprint_path.clone(), limit: MAX_FILE_BYTES });
+}
+
+/// A second package has to pay for evaluating the same physical pads again, even if both
+/// packages are clean. The first two passes fit exactly: one footprint pass and one package pass.
+#[test]
+fn aggregate_work_charges_a_reused_footprint_for_each_package() -> Result<(), CheckError> {
+    let fixture = fixture();
+    let record = connector_part(&fixture.footprint, &[("1", &["1"]), ("2", &["2"])], &["3"]);
+    let capture = Capture::from_part_record(&record, &fixture.documents, &Catalog::bundled())?;
+    let package = &capture.packages()[0];
+    let mut one_pass = Budget::work(1024);
+    by_number(&capture.footprints()[0].pads, &mut one_pass)?;
+    let limit = 2 * (1024 - one_pass.remaining);
+    let mut work = Budget::work(limit);
+    let clean = evaluate(capture.footprints(), std::slice::from_ref(package), &mut work, &mut Budget::report(256))?;
+    assert!(clean.is_empty());
+    assert_eq!(work.remaining, 0);
+    let two = [package.clone(), PackageCapture { package: "other".into(), ..package.clone() }];
+    let result = evaluate(capture.footprints(), &two, &mut Budget::work(limit), &mut Budget::report(256));
+    assert_eq!(result, Err(CheckError::TooLarge { what: "Library check work units".into(), limit }));
+    Ok(())
+}
+
+/// Two copies of the same assigned pad cost two entries, not one distinct number.
+#[test]
+fn aggregate_work_counts_repeated_assignments() -> Result<(), CheckError> {
+    let reference = Reference { library: LIBRARY.into(), id: "example".into(), revision: 1 };
+    let mut package = Package { name: "Main".into(), footprint: reference.clone(), mapping: BTreeMap::new(), unconnected_pads: vec!["1".into()] };
+    let mut measured = Budget::work(100);
+    bounded_package(&reference, "main", &package, &mut measured)?;
+    let limit = 100 - measured.remaining;
+    bounded_package(&reference, "main", &package, &mut Budget::work(limit))?;
+    package.unconnected_pads.push("1".into());
+    assert_eq!(
+        bounded_package(&reference, "main", &package, &mut Budget::work(limit)),
+        Err(CheckError::TooLarge { what: "Library check work units".into(), limit })
+    );
+    Ok(())
+}
+
+/// A bounded run fits one finding exactly. Another package of the same part contributes the
+/// same-sized finding; exceeding the budget refuses the entire capture, not just the extra row.
+#[test]
+fn aggregate_report_refuses_instead_of_returning_partial_findings() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture();
+    let catalog = Catalog::bundled();
+    let mut record = connector_part(&fixture.footprint, &[("1", &["1"]), ("2", &["2"])], &[]);
+    let from_record = |record: &Record, limit| {
+        Capture::new_bounded(&fixture.documents, None, Some(record), &catalog, Budget::work(MAX_WORK), Budget::report(limit))
+            .map_err(|error| error.to_string())
+    };
+    let limit = {
+        let mut budget = Budget::report(2048);
+        budget.envelope().map_err(|error| error.to_string())?;
+        budget.finding(&record.reference(), &CaptureSource::Draft, Some("main"), "3", 1).map_err(|error| error.to_string())?;
+        2048 - budget.remaining
+    };
+    let capture = from_record(&record, limit)?;
+    let report = check(&capture);
+    assert_eq!(rules(&report), [RuleId::PackagePadUnaccounted]);
+    assert_eq!(report.findings()[0].occurrences.len(), 1);
+    assert!(serde_json::to_vec(&report)?.len() <= limit);
+    let size_error = |limit| Err(CheckError::TooLarge { what: "Library check report byte budget".into(), limit }.to_string());
+    assert_eq!(from_record(&record, limit - 1), size_error(limit - 1));
+    let canonical = serde_json::to_vec(&(capture.footprints(), capture.packages()))?;
+    assert_eq!(capture.digest(), format!("{:x}", Sha256::digest(canonical)));
+    let Record::Part(part) = &mut record else { return Err("expected a generic part".into()) };
+    let other = part.packages.get("main").ok_or("missing fixture package")?.clone();
+    part.packages.insert("next".into(), other);
+    assert_eq!(from_record(&record, limit), size_error(limit));
+    Ok(())
 }
 
 /// A package's combined distinct pad count across all mapped terminals and `unconnected_pads` is

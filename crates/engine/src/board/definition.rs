@@ -322,6 +322,11 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
+    /// Check the exact library/item/revision identity independently of metadata and geometry.
+    pub(crate) fn has_valid_identity(&self) -> bool {
+        valid_id(&self.library) && valid_id(&self.id) && self.revision != 0
+    }
+
     /// Report actual slot geometry for fabrication and clipboard feature checks.
     pub(crate) fn has_plated_slots(&self) -> bool {
         self.pads.iter().any(|pad| pad.plated_slot.is_some())
@@ -366,9 +371,7 @@ impl FootprintDefinition {
             return Err("invalid circular non-plated hole count, centre or finished diameter".into());
         }
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
-        if !valid_id(&self.library)
-            || !valid_id(&self.id)
-            || self.revision == 0
+        if !self.has_valid_identity()
             || !text(&self.name, 200)
             || !text(&self.license, 200)
             || !text(&self.source.kind, 64)

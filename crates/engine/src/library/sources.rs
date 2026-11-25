@@ -1005,6 +1005,11 @@ impl Catalog {
             })
             .and_then(Item::symbol)
     }
+    /// Exact symbol lookup for the checker, without rescanning the catalog for each part.
+    pub(super) fn indexed_symbol(&self, reference: &Reference) -> Option<Arc<SymbolDefinition>> {
+        self.exact(reference, Kind::Symbol).ok()?.symbol()
+    }
+
     /// Inspect every revision from one available registration, including quarantined items.
     /// Browsing does not select placement candidates or silently substitute another source.
     pub fn source_items(&self, source: &str) -> &[Item] {
