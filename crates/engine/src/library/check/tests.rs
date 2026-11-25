@@ -414,6 +414,27 @@ fn pad_mapped_twice_is_a_finding() {
     assert_eq!(finding.occurrences, [PadOccurrenceRef { index: 2, ordinal: 1 }]);
 }
 
+/// Repeating a pad within a single terminal's list yields one finding, measured at two.
+#[test]
+fn pad_repeated_in_one_terminal_list_is_a_finding() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let base = connector_part(&fixture.footprint, &[("1", &["1"]), ("2", &["2"])], &["3"]);
+    let record = with_package(&base, |package| {
+        package.mapping.insert("1".into(), vec!["1".into(), "1".into()]);
+    });
+    let Record::Part(part) = record else { return Err("expected a generic part".into()) };
+    for params in part_inputs(&fixture.documents, &part)? {
+        let report = fixture.session.execute(CHECK, &params)?;
+        let [finding] = report["findings"].as_array().ok_or("expected findings")?.as_slice() else {
+            return Err(format!("expected exactly one finding: {report}").into());
+        };
+        assert_eq!(finding["rule"], "package.pad.repeated");
+        assert_eq!(finding["subject"]["number"], "1");
+        assert_eq!(finding["measured"], json!({"value":2,"unit":"count"}));
+    }
+    Ok(())
+}
+
 /// Invalid JSON, an unknown field and a repeated JSON key are errors, never a clean report;
 /// the command reports them as invalid parameters.
 #[test]
@@ -553,7 +574,11 @@ fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
     let manifest = fixture.documents["library.json"].clone();
     let legacy = Documents::from([("library.json".into(), manifest.clone()), (path.clone(), part(LEGACY_PART_FORMAT))]);
     let error = Capture::from_documents(&legacy, &Catalog::default()).unwrap_err();
-    assert_eq!(error, CheckError::UnsupportedFormat { file: path.clone(), format: LEGACY_PART_FORMAT.into() });
+    let reason = "Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.";
+    assert_eq!(error, CheckError::Malformed { file: path.clone(), reason: reason.into() });
+    let draft = Record::Part(serde_json::from_str(&legacy[&path]).unwrap());
+    let draft_error = Capture::from_part_record(&draft, &Documents::new(), &Catalog::default()).unwrap_err();
+    assert_eq!(draft_error, CheckError::Malformed { file: "record".into(), reason: reason.into() });
 
     let metadata_part = part(PART_FORMAT);
     let metadata_only = Documents::from([("library.json".into(), manifest), (path, metadata_part)]);
@@ -649,9 +674,15 @@ fn part_format_content_requirements_apply_to_documents_and_drafts() -> Result<()
         with_format(described.clone(), PART_FORMAT),
         with_format(described, RATED_PART_FORMAT),
     ] {
-        for params in part_inputs(&fixture.documents, &refused)? {
+        let Err(PartFormatError::Incompatible(reason)) = refused.validate_format() else {
+            return Err(format!("expected native format/content incompatibility for {}", refused.format).into());
+        };
+        if refused.format == METADATA_PART_FORMAT {
+            assert_eq!(reason, "pcbcraft-part/5 requires a description, keyword or link.");
+        }
+        for (file, params) in ["parts/check-input.json", "record"].into_iter().zip(part_inputs(&fixture.documents, &refused)?) {
             let result = fixture.session.execute(CHECK, &params);
-            assert!(matches!(result, Err(crate::CommandError::InvalidParams(reason)) if reason.contains(refused.format.as_str())));
+            assert_eq!(result, Err(crate::CommandError::InvalidParams(format!("{file}: {reason}"))));
         }
     }
     Ok(())
@@ -686,32 +717,29 @@ fn part_content_errors_keep_native_reasons_in_documents_and_drafts() -> Result<(
     Ok(())
 }
 
-/// A generic part draft with an unsupported format is rejected even without a symbol or
-/// packages, while a supported draft with an incomplete package map is still checked.
+/// An unknown version keeps the unsupported-format error on both input routes.
 #[test]
-fn unsupported_part_draft_format_is_an_error() {
+fn unsupported_part_format_is_an_error_in_documents_and_drafts() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = fixture();
-    let mut draft = Record::new_part(None).unwrap();
-    let Record::Part(part) = &mut draft else { panic!("part expected") };
-    part.format = "pcbcraft-part/99".into();
-    let error = Capture::from_part_record(&draft, &Documents::new(), &Catalog::default()).unwrap_err();
-    assert_eq!(error, CheckError::UnsupportedFormat { file: "record".into(), format: "pcbcraft-part/99".into() });
-    let refused = fixture.session.execute(CHECK, &json!({"documents":{},"record":draft})).unwrap_err();
-    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
-
-    let mut legacy_without_symbol = Record::new_part(None).unwrap();
-    let Record::Part(part) = &mut legacy_without_symbol else { panic!("part expected") };
-    part.format = LEGACY_PART_FORMAT.into();
-    let error = Capture::from_part_record(&legacy_without_symbol, &Documents::new(), &Catalog::default()).unwrap_err();
-    assert_eq!(error, CheckError::UnsupportedFormat { file: "record".into(), format: LEGACY_PART_FORMAT.into() });
-    let refused = fixture.session.execute(CHECK, &json!({"documents":{},"record":legacy_without_symbol})).unwrap_err();
-    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
-
-    let mut legacy = fixture.part_editor.record().clone();
-    let Record::Part(part) = &mut legacy else { panic!("part expected") };
-    part.format = LEGACY_PART_FORMAT.into();
-    let report = check(&Capture::from_part_record(&legacy, &fixture.documents, fixture.session.libraries()).unwrap());
-    assert_eq!(rules(&report), [RuleId::PackageTerminalUnmapped]);
+    let Record::Part(mut part) = Record::new_part(None)? else { return Err("expected a generic part".into()) };
+    let format = "pcbcraft-part/99";
+    part.format = format.into();
+    let [transported, draft] = part_inputs(&fixture.documents, &part)?;
+    let saved: Documents = serde_json::from_value(transported["documents"].clone())?;
+    let catalog = Catalog::default();
+    assert_eq!(
+        Capture::from_documents(&saved, &catalog),
+        Err(CheckError::UnsupportedFormat { file: "parts/check-input.json".into(), format: format.into() })
+    );
+    assert_eq!(
+        Capture::from_part_record(&Record::Part(part), &fixture.documents, &catalog),
+        Err(CheckError::UnsupportedFormat { file: "record".into(), format: format.into() })
+    );
+    for (file, params) in [("parts/check-input.json", transported), ("record", draft)] {
+        let result = fixture.session.execute(CHECK, &params);
+        assert_eq!(result, Err(crate::CommandError::InvalidParams(format!("{file}: unsupported or mismatched format {format:?}"))));
+    }
+    Ok(())
 }
 
 /// An exact footprint or symbol found neither in the documents nor in the catalog is an error.

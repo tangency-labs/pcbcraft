@@ -536,11 +536,14 @@ fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     Ok(part)
 }
 
-/// Apply the same format/content checks to a transported definition and a typed draft.
+/// Preserve native content errors for transported definitions and typed drafts, while keeping
+/// the unsupported-format error for versions the native validator does not recognize.
 fn validate_part_format(file: &str, part: &PartDefinition) -> Result<(), CheckError> {
     part.validate_format().map_err(|error| match error {
-        PartFormatError::Incompatible(_) => CheckError::UnsupportedFormat { file: file.into(), format: part.format.clone() },
-        PartFormatError::InvalidContent(reason) => CheckError::Malformed { file: file.into(), reason },
+        PartFormatError::Incompatible(_) if PartDefinition::supported_format(&part.format).is_none() => {
+            CheckError::UnsupportedFormat { file: file.into(), format: part.format.clone() }
+        }
+        PartFormatError::Incompatible(reason) | PartFormatError::InvalidContent(reason) => CheckError::Malformed { file: file.into(), reason },
     })
 }
 
