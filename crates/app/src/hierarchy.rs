@@ -101,7 +101,7 @@ pub(super) struct Edit {
 }
 
 /// Present directions as UI labels while commands retain their stable enum spellings.
-fn direction_name(direction: Direction) -> &'static str {
+pub(super) fn direction_name(direction: Direction) -> &'static str {
     match direction {
         Direction::Input => "Input",
         Direction::Output => "Output",

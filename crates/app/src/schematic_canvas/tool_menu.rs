@@ -9,6 +9,7 @@ pub(crate) enum Action {
     Paste,
     PasteOptions,
     Duplicate,
+    MoveToNewSheet,
     Symbols,
     Wire,
     Ground,
@@ -93,4 +94,9 @@ pub(super) fn clipboard(ui: &mut Ui, selected: bool) -> Option<Action> {
     ]
     .into_iter()
     .find_map(|(label, key, action, enabled)| MenuItem::new(label).shortcut(key).enabled(enabled).show(ui).then_some(action))
+}
+
+/// Moving selected symbols or wires to a new child sheet opens a form; nothing changes until Move.
+pub(super) fn split(ui: &mut Ui, selected: bool) -> Option<Action> {
+    MenuItem::new("Move to New Sheet…").enabled(selected).show(ui).then_some(Action::MoveToNewSheet)
 }

@@ -39,6 +39,7 @@ pub mod schematic;
 pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
+pub mod sheet_split;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -991,6 +992,9 @@ impl Command {
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == sheet_split::SPLIT {
+            schema["dependentRequired"] = json!({"x_nm":["y_nm"], "y_nm":["x_nm"]});
+        }
         if self.id == RESHAPE_TRACKS {
             schema["if"] = json!({"required":["mode"]});
             schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});
@@ -1805,6 +1809,18 @@ const CATALOG: &[Command] = &[
         title: "Delete Symbol",
         summary: "Remove a symbol, its incident wires and unused component. With an accepted baseline, retain its footprint pending review; otherwise remove it. Undoable.",
         params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheet_split::PREVIEW,
+        title: "Preview Split to New Sheet",
+        summary: "Review moving selected objects to a new child sheet without editing: the symbols, part instances, wires and labels that move with their IDs, the boundary nets that become ports, and global or power nets that need none.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..EXPECTED_REVISION }],
+    },
+    Command {
+        id: sheet_split::SPLIT,
+        title: "Move to New Sheet",
+        summary: "Move selected objects to a new child sheet as one undo step. Symbols, part instances, wires and labels keep their IDs; each boundary net from the preview becomes a hierarchical label and sheet pin, so the netlist is unchanged. The sheet symbol goes at x_nm, y_nm, or where the moved objects were.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..ANCHOR_X }, Param { required: false, ..ANCHOR_Y }, EXPECTED_REVISION],
     },
     Command {
         id: annotation::PREVIEW,
@@ -3761,6 +3777,8 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
+            | sheet_split::PREVIEW
+            | sheet_split::SPLIT
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3934,7 +3952,7 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// Authorized symbol-field dry runs, annotation previews and split previews return proposals without
     /// publishing edits. Failed commands leave the project intact. Scope refusals precede
     /// validation; otherwise a stale `expected_revision` is reported first unless the command
     /// returns a stale query outcome, as `pcb.plan_route` does.
@@ -3965,6 +3983,10 @@ impl Session {
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
             return self.preview_annotation(params);
+        }
+        if id == sheet_split::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_split(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -4315,6 +4337,8 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
+                | sheet_split::PREVIEW
+                | sheet_split::SPLIT
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -4531,6 +4555,10 @@ impl Session {
             annotation::PREVIEW => {
                 self.preview_annotation(params)?;
             }
+            sheet_split::PREVIEW => {
+                self.preview_split(params)?;
+            }
+            sheet_split::SPLIT => self.split_sheet(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,

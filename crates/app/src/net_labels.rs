@@ -326,6 +326,9 @@ pub(super) fn input(
             if MenuItem::new("Edit text…").show(ui) {
                 return Some(Click::NetLabelAction(label.clone(), Action::EditText));
             }
+            if MenuItem::new("Move to New Sheet…").show(ui) {
+                return Some(Click::SplitNetLabel(label.id));
+            }
             for (name, action) in
                 [("Properties…", Action::Properties), ("Move", Action::Move), ("Rotate", Action::Rotate), ("Delete Net Label", Action::Delete)]
             {
