@@ -174,6 +174,13 @@ opened from or saved to a location, whatever its name: a renamed project that wa
 never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
 `location` is present and `file.save_as` when it is null.
 
+`file.archive_folder` takes the absolute `path` for a new compressed `.pc`
+outside the active folder. It starts a save job, verifies the archive, and
+switches to it. The original folder stays by default. Pass `trash_source: true`
+to request system Trash after verification. If the archive is saved and only
+the source move fails, `file.last.status` is `failed`, its `error` explains why,
+and `file.location` reports the new archive.
+
 For pin remapping, normal live execution/`inspect_editor` exposes the captured
 token and report at `library_editors.pin_remap`; apply/cancel uses its string
 `document`, `expected_revision` and `token`. The token is runtime correlation,
@@ -219,7 +226,9 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window**. `view.open_beside` takes optional `beside` and `side` to open source `view` inside a destination pane. `view.dock` accepts source `view`, destination `beside` and optional `side` (`top`, `bottom`, `left`, `right`) for an explicit move within or across windows; `scope: "window"` splits the entire destination window. |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
-| `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
+| `app.set_workspace` | Choose a workspace in an addressed pane, here, beside it or in a native window. Use `render` for the desktop board preview. |
+| `app.set_render_board` | **Browse…** in 3D render. Takes the view ID and a board UUID from the open project. |
+| `app.board_image` | In a 3D render pane, enable GPU ray tracing (`render`) or return to the raster preview (`preview` or `cancel`). `inspect_editor` reports the pane's `ray_tracing` status. |
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
@@ -256,6 +265,27 @@ it never changes project documents or project Undo, and writes no project file
 during the call. Enabling `save_to_project_minutes` lets the editor later save
 an eligible dirty project to its existing location on that schedule without
 another command.
+
+## Net wire appearance
+
+`nets.inspect_appearance` reports a logical net’s effective schematic wire
+override and identity status. `nets.set_appearance` takes `expected_revision`,
+a net `target` and an `appearance` patch. Send an RGB `color` array or a
+`width_cp` integer from 50 to 800 hundredths of a point to set those channels.
+Use a nonempty `clear` array naming `color` or `width_cp` to remove individual
+overrides, or use `{}` or `null` to reset both.
+
+The edit promotes an eligible derived net in the same Undo step and rejects stale
+revisions. The commands work in live and headless sessions and share the command
+path used by schematic Properties. The overrides are persisted against the
+[logical net registry](formats/native-project-storage.md#net-wire-appearance).
+These are additions to command API version 1.
+
+Use `nets.set_properties` to edit up to 64 distinct current logical nets in one
+Undo step. Send `targets`, `expected_revision` and a `changes` object with an
+optional `appearance` patch, `add_classes` and `remove_classes`. Omitted fields
+keep their values on each net. Class lists update assignments to existing rule
+definitions. An invalid or repeated electrical target rejects the entire edit.
 
 ## MCP reference
 

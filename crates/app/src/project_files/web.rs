@@ -91,7 +91,7 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
     let packed = decode_packed(&bytes)?;
-    let needs_project_upgrade = !super::has_current_entry_point(&packed.documents);
+    let needs_project_upgrade = !super::has_current_write_formats(&packed.documents, &packed.project);
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
     Saved { snapshot, opened: None, upgrades: Upgrades::default(), bytes, encoding, needs_manifest, needs_project_upgrade, documents }
         .prepare_open()

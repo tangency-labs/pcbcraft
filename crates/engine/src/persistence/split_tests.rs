@@ -47,6 +47,56 @@ fn board_path(d: &Documents) -> String {
     super::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap()
 }
 
+/// Missing mandatory fields identify the incoming envelope, not its shared layout vocabulary.
+#[test]
+fn missing_numeric_id_high_water_reports_the_incoming_envelope() {
+    for create_board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":create_board})).unwrap();
+        let mut docs = documents(&session);
+        let instance = session.snapshot().unwrap().instances_document_path();
+        for (project_header, instance_header) in [("pcbcraft-project/68", "pcbcraft-instances/12"), ("pcbcraft-project/63", "pcbcraft-instances/10")]
+        {
+            edit(&mut docs, ENTRY_POINT, |entry| entry["format"] = json!(project_header));
+            if let Some(path) = &instance {
+                edit(&mut docs, path, |entry| entry["format"] = json!(instance_header));
+            }
+            decode_documents(&docs).unwrap();
+            let mut missing = docs.clone();
+            edit(&mut missing, ENTRY_POINT, |entry| assert!(entry.as_object_mut().unwrap().remove("numeric_id_high_water").is_some()));
+            assert_eq!(decode_documents(&missing).unwrap_err(), format!("{ENTRY_POINT}: {project_header} requires numeric_id_high_water."));
+        }
+    }
+}
+
+/// A bare legacy board retains its identity and absent setup through the first current save.
+#[test]
+fn bare_board_migrates_to_current_folder_and_archive_bytes() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let project = session.snapshot().unwrap();
+    let mut legacy = documents(&session);
+    let path = board_path(&legacy);
+    let current = legacy.clone();
+    edit(&mut legacy, &path, |board| {
+        assert_eq!(board["format"], CURRENT_BOARD_FORMAT);
+        assert!(board.get("setup").is_none());
+        assert_eq!(board["footprints"], json!([]));
+        board["format"] = json!("pcbcraft-board/1");
+    });
+    let reopened = decode_documents(&legacy).unwrap();
+    assert_eq!(reopened.board_target(), project.board_target());
+    assert_eq!(reopened.board_document_path().as_deref(), Some(path.as_str()));
+    assert!(reopened.board_setup().is_none());
+    let first_save = encode_documents(reopened.clone()).unwrap();
+    assert_eq!(first_save, current);
+    let archive = encode_packed(reopened).unwrap();
+    let unpacked = decode_packed(&archive).unwrap();
+    assert_eq!(unpacked.documents, first_save);
+    assert_eq!(encode_packed(unpacked.project).unwrap(), archive);
+    assert_eq!(encode_documents(decode_documents(&first_save).unwrap()).unwrap(), first_save);
+}
+
 /// Split and legacy forms retain identities, pin mappings, wire geometry and sheet names.
 #[test]
 fn round_trip_and_legacy_migrations_have_identical_documents() {

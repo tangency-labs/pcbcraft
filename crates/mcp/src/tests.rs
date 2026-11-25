@@ -791,12 +791,14 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
     let commands = commands.as_array().expect("library command list");
     for id in [
+        "library.apply_adoption",
         "library.available_revisions",
         "library.list_sources",
         "library.load_source",
         "library.parse_quantity",
         "library.prepare_part_publication",
         "library.prepare_publication",
+        "library.preview_adoption",
         "library.preview_footprint_revision",
         "library.preview_pin_remap",
         "library.remove_source",
@@ -997,6 +999,38 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
     assert_eq!(failed["isError"], true);
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
+}
+
+/// Net appearance commands are backward-compatible catalog additions: discovery keeps API version
+/// 1, publishes their full patch schema, and the catalog revision still changes when they are absent.
+#[test]
+fn net_appearance_commands_are_version_one_catalog_additions() {
+    use pcbcraft_engine::command_api::{COMMAND_API_VERSION, catalog_revision};
+    use pcbcraft_engine::nets::{INSPECT_APPEARANCE, MAX_PROPERTY_TARGETS, SET_APPEARANCE, SET_PROPERTIES};
+
+    assert_eq!(COMMAND_API_VERSION, 1);
+    let mut s = server();
+    let listed = call(&mut s, "list_commands", json!({}));
+    assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
+    let commands = body(&listed);
+    let commands = commands.as_array().unwrap();
+    let found = |id: &str| commands.iter().find(|command| command["id"] == id).cloned().unwrap();
+    let inspect = found(INSPECT_APPEARANCE);
+    let set = found(SET_APPEARANCE);
+    let batch = found(SET_PROPERTIES);
+    assert_eq!(batch["params"]["properties"]["targets"]["maxItems"], json!(MAX_PROPERTY_TARGETS));
+    assert_eq!(inspect["id"], json!(INSPECT_APPEARANCE));
+    assert_eq!(set["id"], json!(SET_APPEARANCE));
+    let clear = &set["params"]["properties"]["appearance"]["oneOf"][1]["properties"]["clear"];
+    assert_eq!(clear["items"]["enum"], json!(["color", "width_cp"]));
+
+    let without: Vec<Value> = commands
+        .iter()
+        .filter(|command| ![INSPECT_APPEARANCE, SET_APPEARANCE, SET_PROPERTIES].iter().any(|id| command["id"] == *id))
+        .cloned()
+        .collect();
+    assert_eq!(commands.len(), without.len() + 3);
+    assert_ne!(catalog_revision(&without), catalog_revision(commands));
 }
 
 /// Discovery and inspection expose the same immutable scope. Both return modes refuse the
@@ -2443,6 +2477,60 @@ fn native_part_selection_and_compatibility_are_available_through_mcp() {
     assert_eq!(edited["project"]["components"][0]["part"]["compatibility"]["status"], "does_not_meet_requirements");
     let stale = call(&mut s, "execute", json!({"command":"part.set_selection","params":params}));
     assert_eq!(stale["isError"], true);
+}
+
+/// MCP answers a track merge with its full diff, previews it without an edit on a dry run,
+/// and applies it as one undo step.
+#[test]
+fn merging_tracks_over_mcp_returns_the_diff() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap();
+    let layer = setup
+        .project()
+        .unwrap()
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+        .unwrap()
+        .id;
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":layer,"width_nm":250_000,
+        "points":[{"x_nm":0,"y_nm":0},{"x_nm":2_000_000,"y_nm":0},{"x_nm":5_000_000,"y_nm":0}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let tracks: Vec<_> = setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|track| track.id).collect();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let params = json!({"board":board.board,"tracks":tracks,"dry_run":true,"expected_revision":before["revision"]});
+    let preview = call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params}));
+    assert_ne!(preview["isError"], true, "{preview}");
+    let preview = body(&preview);
+    assert_eq!(preview["revision"], before["revision"]);
+    assert_eq!(preview["merge_tracks"]["removed"], json!([tracks[1]]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let mut params = params;
+    params["dry_run"] = json!(false);
+    let merged = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::MERGE_TRACKS,"params":params})));
+    assert_eq!(merged["merge_tracks"]["after"][0]["end"], json!({"x_nm":5_000_000,"y_nm":0}));
+    let after = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(after["revision"], merged["revision"]);
+    assert_eq!(after["project"]["boards"][0]["tracks"].as_array().unwrap().len(), 1);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"][0]["tracks"], before["project"]["boards"][0]["tracks"]);
+}
+
+/// The largest merge report the engine accepts still fits the live editor's reply frame with
+/// its wrapper, so a merge is never published and then refused by the transport.
+#[test]
+fn the_merge_report_budget_fits_the_live_reply_limit() {
+    let wrapper = serde_json::to_vec(&json!({"result":{"revision":u64::MAX,"merge_tracks":null}})).unwrap().len() - "null".len();
+    assert!(pcbcraft_engine::board::track::MERGE_REPORT_MAX_BYTES + wrapper <= crate::live::MAX_REPLY_BYTES);
 }
 
 /// MCP exposes explicit board lock intent and the same atomic protection as the editor.

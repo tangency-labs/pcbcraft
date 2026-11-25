@@ -33,15 +33,15 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     schemas = [
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
         for name in ("footprint-v1.schema.json", "footprint-v4.schema.json", "footprint-v5.schema.json",
-                     f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
+                     "footprint-v6.schema.json", f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
     ]
     for schema in schemas:
         Draft202012Validator.check_schema(schema)
     registry = Registry().with_resources(
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
-    legacy, npth, slots, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
-    successors = {"pcbcraft-footprint/4": npth, "pcbcraft-footprint/5": slots}
+    legacy, npth, slots, current, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    successors = {"pcbcraft-footprint/4": npth, "pcbcraft-footprint/5": slots, "pcbcraft-footprint/6": current}
     bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")

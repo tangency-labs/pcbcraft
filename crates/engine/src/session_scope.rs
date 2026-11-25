@@ -81,11 +81,13 @@ fn is_read_command(id: &str) -> bool {
             | net_classes::INSPECT
             | net_classes::RESOLVE
             | nets::INSPECT_CLASSES
+            | nets::intent::INSPECT
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | sources::LIST
             | sources::SEARCH
             | sources::AVAILABLE_REVISIONS
+            | sources::PREVIEW_ADOPTION
             | sources::WHERE_USED
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY
