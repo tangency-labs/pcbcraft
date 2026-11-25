@@ -5137,40 +5137,29 @@ impl Session {
         Ok(prepared)
     }
 
-    /// Run the same transaction preparation on an immutable source, including on a worker, with
-    /// the Outer relation finalization of `prepare_with`. A deferred job carries no review token,
-    /// so `refuse` must reject any staged loss or remap before the candidate is encoded.
-    fn prepare_snapshot_change(
+    /// The one preparation for a detached candidate that a deferred job publishes directly
+    /// (footprint revision, package completion, track merge). It validates and reconciles the
+    /// candidate against a captured immutable snapshot, so it can run off the editor thread
+    /// without mutating session state, then runs the Outer relation finalization of
+    /// `prepare_with` and the size check. A deferred job carries no review token, so `refuse`
+    /// must reject any staged loss or remap before the candidate is encoded or published.
+    pub(crate) fn prepare_change_from_snapshot(
         source: Option<&Arc<Project>>,
         revision: u64,
         defer_net_reconciliation: bool,
         relation_stage: board::relations::RelationStage,
         project: Project,
+        reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
         refuse: impl FnOnce(&board::relations::Disclosure) -> Result<(), CommandError>,
     ) -> Result<(Project, u64), CommandError> {
         use board::relations::{RelationInput, RelationStage};
-        let (mut project, highest) =
-            Self::prepare_core_from_snapshot(source, defer_net_reconciliation, relation_stage, project, Project::reconcile_nets)?;
+        let (mut project, highest) = Self::prepare_core_from_snapshot(source, defer_net_reconciliation, relation_stage, project, reconcile)?;
         let outer = relation_stage == RelationStage::Outer;
         if outer {
             let previous = source.map(Arc::as_ref).filter(|p| p.same_document(&project));
             refuse(&Self::finalize_relations(previous, &mut project, (revision + 1).max(highest), &RelationInput::default())?)?;
         }
         Self::check_snapshot_size(source, &project, outer)?;
-        Ok((project, highest))
-    }
-
-    /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
-    /// preparation can run off the editor thread without mutating session state.
-    pub(crate) fn prepare_change_from_snapshot(
-        previous: Option<&Arc<Project>>,
-        defer_net_reconciliation: bool,
-        project: Project,
-        reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
-    ) -> Result<(Project, u64), CommandError> {
-        let (project, highest) =
-            Self::prepare_core_from_snapshot(previous, defer_net_reconciliation, board::relations::RelationStage::Outer, project, reconcile)?;
-        Self::check_snapshot_size(previous, &project, false)?;
         Ok((project, highest))
     }
 

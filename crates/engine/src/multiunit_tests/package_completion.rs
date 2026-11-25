@@ -260,6 +260,49 @@ fn package_completion_keeps_relation_on_retired_donor_pad() {
     assert_eq!(bytes(&session), saved);
 }
 
+/// Package completion publishes its worker's candidate directly, so the shared detached
+/// preparation must run the relation verifier after net reconciliation: in Preview and in the
+/// native job, before any publication, and only when the board has relation rows. The
+/// retained-donor relation still verifies, and the job's candidate publishes once.
+#[test]
+fn package_completion_verifies_relations_on_the_worker_before_publishing() {
+    use crate::board::relations::{
+        probes::{Op, trace},
+        tests::{add, origin, pick},
+    };
+    let verified = |ops: &[Op]| ops.iter().any(|op| matches!(op, Op::VerifyReferences));
+    for related in [false, true] {
+        let mut session = quad();
+        place_loose(&mut session, 1, None);
+        let symbols = session.project().unwrap().symbols().to_vec();
+        place_quad_footprints(&mut session, &symbols);
+        apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+        if related {
+            let donor = session.project().unwrap().board.footprints().iter().position(|fp| fp.component == symbols[1].component).unwrap();
+            let reference = pick(&mut session, donor, "pad.center", Some("5"));
+            add(&mut session, "horizontal", origin(), reference);
+        }
+        let before = session.snapshot().unwrap();
+        let revision = session.revision();
+        let (preview, ops) = trace(|| complete(&mut session, Some("project"), true));
+        assert_eq!(preview.unwrap()["changes"].as_array().unwrap().len(), 1);
+        assert_eq!(verified(&ops), related, "{ops:?}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        let params = json!({"scope":"project","dry_run":false,"expected_revision":revision});
+        let job = session.prepare_package_completion(&params).unwrap();
+        let (prepared, ops) = trace(|| job.run_cancellable(&std::sync::atomic::AtomicBool::new(false)));
+        let prepared = prepared.unwrap().unwrap();
+        assert!(prepared.is_effectful());
+        assert_eq!(verified(&ops), related, "{ops:?}");
+        assert!(!ops.iter().any(|op| matches!(op, Op::Publish(_))), "{ops:?}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.revision(), revision);
+        session.commit_package_completion(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        assert_eq!(session.snapshot().unwrap().board.relations, before.board.relations);
+    }
+}
+
 /// Completion keeps the last visible donor fields without accepting a board update.
 #[test]
 fn package_completion_retains_donor_footprint_display_on_reopen() {

@@ -15,6 +15,12 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+/// A track merge has no relation review, so it cannot accept a relation loss or remap.
+pub(super) const WOULD_LOSE: &str = "This track merge would lose board relation references. \
+    Delete the relations listed in the details, merge the tracks, then add them again.";
+pub(super) const REMAP_REQUIRED: &str = "This track merge changes references that board relations pin. \
+    Delete the relations listed in the details, merge the tracks, then add them again.";
+
 /// Planned merge output ready for copper validation and publication.
 pub(super) struct PreparedMerge {
     /// Next project when applying a non-empty merge; `None` for dry runs and no-ops.

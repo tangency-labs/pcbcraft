@@ -190,12 +190,13 @@ impl FootprintRevisionJob {
         let candidate = self.candidate(project, &self.params)?;
         // Finalize relation references on the worker, as ordinary edits do, before the exact
         // encoder sees the candidate. No review here can accept a staged loss or remap.
-        let (candidate, highest) = Session::prepare_snapshot_change(
+        let (candidate, highest) = Session::prepare_change_from_snapshot(
             Some(project),
             self.source.revision(),
             self.defer_net_reconciliation,
             self.relation_stage,
             candidate,
+            Project::reconcile_nets,
             |disclosure| disclosure.refuse_decisions(WOULD_LOSE, REMAP_REQUIRED),
         )?;
         let candidate = Project::with_allocation_watermark(Arc::new(candidate), project.numeric_id_high_water);

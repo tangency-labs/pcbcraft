@@ -43,3 +43,12 @@ deadline no longer ends the reply wait. A client timeout or transport failure ca
 still lose the reply to a committed edit; inspect before retrying. See [package
 completion](../libraries/symbol-schema.md#complete-loose-packages) for the matching and
 electrical restrictions.
+
+On a board with relations, Preview and Apply check relation references the same
+way as other board edits, after the nets are reconciled. Package completion has
+no relation review, so a relation that would need a remap or would lose a
+reference refuses the command with `unavailable` and `details.reason`
+`remap_required` or `would_lose`; `details.rows` lists the relations. A short
+in a changed copper island that holds a relation's footprint refuses it with
+`affected_short`. Nothing is edited. Delete the listed relations, complete the
+packages, then add the relations again.

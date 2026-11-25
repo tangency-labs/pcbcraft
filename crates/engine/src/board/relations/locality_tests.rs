@@ -421,6 +421,59 @@ fn a_net_locality_final_pad_walk_keeps_native_direct_contact() {
     assert_eq!(bytes(&s), saved);
 }
 
+/// A track merge publishes its worker's candidate directly, so the shared detached preparation
+/// must run the relation island check. Absorbing a stacked duplicate is a deletion-only merge
+/// with no native contact phase; the vanished copy still marks the shorted island that holds a
+/// relation's footprint, so the merge is refused without editing, through the command and the
+/// native job. Without the relation the same merge publishes once.
+#[test]
+fn a_net_locality_track_merge_of_duplicate_on_shorted_relation_island_is_refused() {
+    for related in [true, false] {
+        let mut s = bridged_split_with(Bridge::Pads, |s, at| {
+            let layer = copper_layers(s)[0];
+            let branch = [at, Point { x_nm: at.x_nm, y_nm: at.y_nm + 2_000_000 }];
+            route(s, layer, &branch).unwrap();
+            route(s, layer, &branch).unwrap();
+        });
+        let tracks: Vec<_> = view(&s).tracks().iter().map(|track| track.id).collect();
+        assert_eq!(tracks.len(), 2);
+        let violations = shorts(&s, 0);
+        assert_eq!(violations.len(), 1);
+        if related {
+            let named: Vec<_> = violations[0].items.iter().filter_map(|item| item.split_once(':')).collect();
+            let index = view(&s).footprints().position(|f| f.id == named[0].0).unwrap();
+            let reference = pick(&mut s, index, "fp.origin", None);
+            add(&mut s, "aligned", origin(), reference);
+        }
+        let board = view(&s).target.board;
+        let saved = bytes(&s);
+        let revision = s.revision();
+        let observer: Arc<Observe> = Arc::default();
+        s.observe_edits(Some(observer.clone()));
+        if related {
+            let params = json!({"board":board,"tracks":tracks,"expected_revision":revision});
+            let mut job = s.prepare_copper_edit(crate::MERGE_TRACKS, &params).unwrap();
+            while !job.step(1024) {}
+            let error = job.take_result().err().unwrap();
+            assert_eq!(error.details()["reason"], "affected_short", "{error:?}");
+            let (error, ops) = trace(|| unchanged(&mut s, |s| run(s, crate::MERGE_TRACKS, json!({"board":board,"tracks":tracks}))));
+            assert_eq!(error.details()["reason"], "affected_short", "{error:?}");
+            assert!(ops.iter().any(|op| matches!(op, Op::VerifyReferences)), "{ops:?}");
+            assert!(ops.iter().any(|op| matches!(op, Op::Marked { physical: true, .. })), "{ops:?}");
+            assert!(!ops.iter().any(|op| matches!(op, Op::Publish(_))), "{ops:?}");
+            assert!(observer.0.lock().unwrap().is_empty());
+            assert_eq!(bytes(&s), saved);
+        } else {
+            let result = run(&mut s, crate::MERGE_TRACKS, json!({"board":board,"tracks":tracks})).unwrap();
+            assert_eq!(result["merge_tracks"]["removed"].as_array().unwrap().len(), 1, "{result}");
+            assert_eq!(result["merge_tracks"]["reshaped"], json!([]), "deletion only: {result}");
+            assert_eq!(s.revision(), revision + 1);
+            assert_eq!(view(&s).tracks().len(), 1);
+            assert_eq!(observer.0.lock().unwrap().len(), 1);
+        }
+    }
+}
+
 #[test]
 fn a_net_locality_native_eco_changed_land_short_and_clean_control() {
     for touches in [false, true] {

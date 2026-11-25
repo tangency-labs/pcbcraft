@@ -68,8 +68,9 @@ pub struct PreparedCopperEdit {
     displacements: Option<replacements::Changes>,
     source: Source,
     candidate: Option<Arc<Project>>,
-    /// Highest ID allocated when `Session::prepare_change_from_snapshot` already validated and
-    /// size-checked `candidate` on the worker thread, so commit only publishes it.
+    /// Highest ID allocated when `Session::prepare_change_from_snapshot` already validated,
+    /// relation-finalized and size-checked `candidate` on the worker thread, so commit only
+    /// publishes it.
     prepared_highest: Option<u64>,
     command: &'static str,
     /// The parameters the edit was prepared with, reported with it once committed.
@@ -111,6 +112,7 @@ impl PreparedCopperEdit {
 pub struct CopperEditJob {
     context: CopperPreparation,
     defer_net_reconciliation: bool,
+    relation_stage: crate::board::relations::RelationStage,
     command: &'static str,
     params: Arc<Value>,
     phase: u8,
@@ -243,6 +245,7 @@ impl Session {
         CopperEditJob {
             context: context.clone(),
             defer_net_reconciliation: self.defer_net_reconciliation,
+            relation_stage: self.relation_stage,
             command,
             params,
             phase: 0,
@@ -436,8 +439,10 @@ impl CopperEditJob {
     }
     /// Finish the existing path immediately after its own checks. Compound routes reach this
     /// only after replacement validation, avoiding an extra browser batch for ordinary edits.
-    /// For `MERGE_TRACKS`, run shared candidate validation and document-size checking here on
-    /// the worker so committing on the editor thread only publishes the prepared snapshot.
+    /// For `MERGE_TRACKS`, run shared candidate validation, relation finalization and
+    /// document-size checking here on the worker so committing on the editor thread only
+    /// publishes the prepared snapshot. A deletion-only merge reaches this without contact
+    /// phases, so the relation island check is its only final contact check.
     fn finish_prepared(&mut self) -> Result<(), CommandError> {
         let mut candidate = self.candidate.take();
         let mut prepared_highest = None;
@@ -446,9 +451,12 @@ impl CopperEditJob {
         {
             let (prepared, highest) = Session::prepare_change_from_snapshot(
                 Some(&self.context.source.snapshot),
+                self.context.source.revision(),
                 self.defer_net_reconciliation,
+                self.relation_stage,
                 (*project).clone(),
                 Project::reconcile_nets,
+                |disclosure| disclosure.refuse_decisions(merge::WOULD_LOSE, merge::REMAP_REQUIRED),
             )?;
             candidate = Some(Arc::new(prepared));
             prepared_highest = Some(highest);
