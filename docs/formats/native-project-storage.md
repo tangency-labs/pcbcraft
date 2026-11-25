@@ -48,11 +48,12 @@ Save As offers a project folder and a packed project. The folder destination is
 a new or empty project directory, while archive Save As requires an unused file.
 Unrelated root files such as `README.md` and `.git` remain untouched.
 **Archive Project Folder** on desktop publishes a compressed archive outside
-the open working folder and verifies it before requesting system Trash. The
-source is checked under its save lock against the last known documents and all
-directory entries. Git working trees, extra files, symlinks and external edits
-prevent the source move. If the archive is saved and the source move fails, the
-editor adopts the archive and reports the source outcome.
+the open working folder, verifies it, and switches the editor to it. The original
+folder stays by default. If the user chooses to move it to Trash, PCBcraft checks
+the source under its save lock against the last known documents and all directory
+entries. Git working trees, extra files, symlinks and external edits prevent the
+move. If the archive is saved and the source move fails, the editor adopts the
+archive and reports the source outcome.
 Regular `.DS_Store`, `Thumbs.db` and `desktop.ini` files are also left alone inside
 project subdirectories; they are not project documents and are never published
 or removed by a save. Other unknown files under `sheets/`, `library/` and `assets/` are refused.

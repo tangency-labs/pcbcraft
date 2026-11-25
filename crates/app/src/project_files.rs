@@ -25,7 +25,9 @@ pub(super) enum SaveFormat {
     Folder,
     Archive,
     #[cfg(not(target_arch = "wasm32"))]
-    ArchiveFolder,
+    ArchiveFolder {
+        trash_source: bool,
+    },
 }
 
 mod abandon;
@@ -395,7 +397,7 @@ impl ProjectFiles {
     /// Browser exports of migrated files encode the current schema instead of reusing old bytes.
     pub(super) fn save(&mut self, session: &Session, encoding: Option<SaveFormat>, ctx: &egui::Context) -> Result<(), String> {
         #[cfg(not(target_arch = "wasm32"))]
-        if encoding == Some(SaveFormat::ArchiveFolder) && self.busy() {
+        if matches!(encoding, Some(SaveFormat::ArchiveFolder { .. })) && self.busy() {
             return Err("A project file operation is already running".to_owned());
         }
         let snapshot = session.snapshot().ok_or("no project open")?;

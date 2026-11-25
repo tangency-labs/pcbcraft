@@ -193,7 +193,7 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
     let format = format.unwrap_or_default();
     let path = match format {
         SaveFormat::Folder => dialog.set_title("Create project folder").set_file_name(suggestion).save_file(),
-        SaveFormat::Archive | SaveFormat::ArchiveFolder => {
+        SaveFormat::Archive | SaveFormat::ArchiveFolder { .. } => {
             dialog.add_filter("Packed PCBCraft project", &["pc"]).set_file_name(format!("{suggestion}.pc")).save_file()
         }
     };
@@ -216,7 +216,7 @@ pub(super) fn save_new(
     save_new_with(snapshot, previous, format, path, folder::trash_archived_folder)
 }
 
-/// Use the normal Save As publication before verifying an archive and attempting source cleanup.
+/// Verify the published archive before performing any explicitly requested source cleanup.
 /// Inject Trash for tests without invoking the platform service.
 fn save_new_with(
     snapshot: Arc<Project>,
@@ -226,7 +226,7 @@ fn save_new_with(
     trash: impl FnOnce(&Path, &Documents) -> Result<(), String>,
 ) -> Result<Outcome, String> {
     let path = normalize(&with_extension(format, path)?)?;
-    let archive_source = if format == SaveFormat::ArchiveFolder {
+    let archive_source = if let SaveFormat::ArchiveFolder { .. } = format {
         let (_, source) = previous.filter(|(_, target)| target.encoding == Encoding::Json).ok_or("Open a project folder to archive it.")?;
         let source_root = fs::canonicalize(&source.path).map_err(|error| error.to_string())?;
         let parent = fs::canonicalize(path.parent().ok_or("Project file has no parent directory")?).map_err(|error| error.to_string())?;
@@ -266,8 +266,10 @@ fn save_new_with(
         if existing(&target.path)?.as_deref() != Some(target.bytes.as_ref()) {
             return Err("The published archive changed before it could be verified. The original folder was kept.".into());
         }
-        let baseline = source.documents.as_deref().ok_or("Missing original project documents.")?;
-        target.archive_cleanup = Some(trash(&source.path, baseline).map(|()| source.path.clone()));
+        if matches!(format, SaveFormat::ArchiveFolder { trash_source: true }) {
+            let baseline = source.documents.as_deref().ok_or("Missing original project documents.")?;
+            target.archive_cleanup = Some(trash(&source.path, baseline).map(|()| source.path.clone()));
+        }
     }
     target.documents = Some(Arc::new(documents));
     Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))

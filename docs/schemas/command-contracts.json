@@ -14243,6 +14243,9 @@
             "maxLength": 4096,
             "minLength": 1,
             "type": "string"
+          },
+          "trash_source": {
+            "type": "boolean"
           }
         },
         "required": [

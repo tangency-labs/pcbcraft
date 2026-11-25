@@ -76,13 +76,26 @@ fn archive_folder_publishes_before_cleanup_and_preserves_deflate() {
     let original_bytes = fs::read(source.join(ENTRY_POINT)).unwrap();
     move_symbol(&mut session, "symbol-3", R2_X + STEP, 0);
 
-    let inside = save_new_with(session.snapshot().unwrap(), Some(&old), SaveFormat::ArchiveFolder, source.join("inside.pc"), |_, _| {
+    let keep = SaveFormat::ArchiveFolder { trash_source: false };
+    let retire = SaveFormat::ArchiveFolder { trash_source: true };
+    let inside = save_new_with(session.snapshot().unwrap(), Some(&old), retire, source.join("inside.pc"), |_, _| {
         panic!("must refuse a destination inside the folder before cleanup")
     });
     assert!(inside.err().unwrap().contains("outside"));
     assert!(!source.join("inside.pc").exists());
 
-    let blocked = save_new_with(session.snapshot().unwrap(), Some(&old), SaveFormat::ArchiveFolder, destination.clone(), |root, baseline| {
+    let kept_archive = temporary.path().join("kept.pc");
+    let kept = save_new_with(session.snapshot().unwrap(), Some(&old), keep, kept_archive.clone(), |_, _| {
+        panic!("must never attempt cleanup without opt-in")
+    });
+    assert!(matches!(complete(&mut files, &mut session, kept), Some(Update::Message(notice)) if notice == "Project saved"));
+    assert_eq!(files.previous(&session.snapshot().unwrap()).unwrap().1.path(), kept_archive);
+    let kept_archive = decode_packed(&fs::read(kept_archive).unwrap()).unwrap();
+    assert!(kept_archive.deflated);
+    assert_eq!(positions(&kept_archive.project)[1].x_nm, R2_X + STEP);
+    assert_eq!(fs::read(source.join(ENTRY_POINT)).unwrap(), original_bytes);
+
+    let blocked = save_new_with(session.snapshot().unwrap(), Some(&old), retire, destination.clone(), |root, baseline| {
         assert_eq!(root, source);
         assert_eq!(baseline[ENTRY_POINT], original_bytes);
         let published = decode_packed(&fs::read(&destination).unwrap()).unwrap();
@@ -102,7 +115,7 @@ fn archive_folder_publishes_before_cleanup_and_preserves_deflate() {
 
     let retry = temporary.path().join("verified.pc");
     let recycled = temporary.path().join("recycled");
-    let outcome = save_new_with(session.snapshot().unwrap(), Some(&old), SaveFormat::ArchiveFolder, retry.clone(), |root, _| {
+    let outcome = save_new_with(session.snapshot().unwrap(), Some(&old), retire, retry.clone(), |root, _| {
         assert!(decode_packed(&fs::read(&retry).unwrap()).unwrap().deflated);
         fs::rename(root, &recycled).map_err(|error| error.to_string())
     });
@@ -111,7 +124,7 @@ fn archive_folder_publishes_before_cleanup_and_preserves_deflate() {
     assert_eq!(fs::read(recycled.join(ENTRY_POINT)).unwrap(), original_bytes);
 }
 
-/// The File menu explains the move and names the source before any archive job starts.
+/// The File menu names the source and starts with Trash unchecked in both themes.
 #[test]
 fn archive_folder_menu_confirms_the_source_in_both_themes() {
     use crate::{Dialog, PcbApp, preferences::ThemeChoice};
@@ -132,14 +145,22 @@ fn archive_folder_menu_confirms_the_source_in_both_themes() {
         h.run();
         h.get_by_label("Archive Project Folder…").click();
         h.run();
-        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder));
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: false }));
         let path = h.state().files.archive_source(&h.state().session).unwrap().display().to_string();
         h.get_by_label(&path);
+        h.get_by_label("Move original folder to Trash").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: true }));
         h.get_by_label("Cancel").click();
         h.run();
         assert!(matches!(h.state().dialog, Dialog::None));
         assert!(!h.state().files.busy());
         assert!(source.join(ENTRY_POINT).is_file());
+        h.get_by_label("File").click();
+        h.run();
+        h.get_by_label("Archive Project Folder…").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: false }));
     }
 }
 

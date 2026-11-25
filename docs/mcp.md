@@ -175,10 +175,11 @@ never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
 `location` is present and `file.save_as` when it is null.
 
 `file.archive_folder` takes the absolute `path` for a new compressed `.pc`
-outside the active folder. It starts a save job and requests system Trash for
-the original after verifying the archive. If the archive is saved and only the
-source move fails, `file.last.status` is `failed`, its `error` explains why, and
-`file.location` reports the new archive.
+outside the active folder. It starts a save job, verifies the archive, and
+switches to it. The original folder stays by default. Pass `trash_source: true`
+to request system Trash after verification. If the archive is saved and only
+the source move fails, `file.last.status` is `failed`, its `error` explains why,
+and `file.location` reports the new archive.
 
 For pin remapping, normal live execution/`inspect_editor` exposes the captured
 token and report at `library_editors.pin_remap`; apply/cancel uses its string

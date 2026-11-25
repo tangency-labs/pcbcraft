@@ -281,7 +281,9 @@ enum Dialog {
     OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
-    ArchiveFolder,
+    ArchiveFolder {
+        trash_source: bool,
+    },
     #[cfg(not(target_arch = "wasm32"))]
     LocalMcp {
         error: Option<String>,
@@ -768,7 +770,7 @@ impl PcbApp {
                 .enabled(can_save && self.files.archive_source(&self.session).is_some())
                 .show(ui)
             {
-                self.dialog = Dialog::ArchiveFolder;
+                self.dialog = Dialog::ArchiveFolder { trash_source: false };
             }
         }
 
@@ -2524,22 +2526,23 @@ impl PcbApp {
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Dialog::ArchiveFolder => {
+            Dialog::ArchiveFolder { mut trash_source } => {
                 if let Some(source) = self.files.archive_source(&self.session) {
                     let mut archive = false;
                     let mut cancel = false;
                     let closing = shell::dialog(ctx, "archive_folder", "Archive Project Folder", |ui| {
-                        ui.label("Save a compressed .pc with the current edits, then move the original folder to system Trash.");
+                        ui.label("Save the current edits to a compressed .pc and switch to that archive.");
                         ui.label(source.display().to_string());
+                        pcbcraft_chrome::controls::checkbox(ui, &mut trash_source, "Move original folder to Trash");
                         ui.horizontal(|ui| {
                             cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                             archive = pcbcraft_chrome::controls::button(ui, "Choose archive location…").clicked();
                         });
                     });
                     if archive {
-                        self.save_project_file(Some(SaveFormat::ArchiveFolder), ctx);
+                        self.save_project_file(Some(SaveFormat::ArchiveFolder { trash_source }), ctx);
                     } else if !(closing || cancel) {
-                        self.dialog = Dialog::ArchiveFolder;
+                        self.dialog = Dialog::ArchiveFolder { trash_source };
                     }
                 }
             }

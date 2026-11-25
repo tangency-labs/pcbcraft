@@ -1285,8 +1285,16 @@ mod live {
         WindowCommand {
             id: "file.archive_folder",
             title: "Archive Project Folder",
-            summary: "Save the open project folder as a compressed .pc at a new path outside the folder. After verification, move the original folder to system Trash. Check file.last for the outcome and any reason the original folder was kept.",
-            params: &[Param { name: "path", summary: "Absolute path of the new .pc archive", required: true, kind: Kind::Path }],
+            summary: "Save the open project folder as a compressed .pc at a new path outside the folder and switch to it. The original folder stays by default. Set trash_source to true to request system Trash after verification. Check file.last for the outcome.",
+            params: &[
+                Param { name: "path", summary: "Absolute path of the new .pc archive", required: true, kind: Kind::Path },
+                Param {
+                    name: "trash_source",
+                    summary: "Request system Trash for the original folder after verification; defaults to false",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+            ],
         },
         WindowCommand {
             id: "file.open",
@@ -2124,7 +2132,7 @@ mod live {
                         if self.files.archive_source(&self.session).is_none() {
                             return Err("Open a project folder to archive it.".to_owned());
                         }
-                        crate::SaveFormat::ArchiveFolder
+                        crate::SaveFormat::ArchiveFolder { trash_source: params["trash_source"].as_bool().unwrap_or(false) }
                     } else if params["format"] == "archive" {
                         crate::SaveFormat::Archive
                     } else {
