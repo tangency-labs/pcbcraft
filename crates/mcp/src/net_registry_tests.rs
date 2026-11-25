@@ -89,7 +89,7 @@ fn part_group_commands_share_live_and_headless_behavior() {
     );
 }
 
-/// The inter-sheet overview answers the same in the live editor and headless, with inspection
+/// The inter-sheet overview filters by sheet in both live and headless mode with inspection
 /// disabled, and leaves the live snapshot, revision and Undo history untouched.
 #[test]
 fn sheet_overview_is_shared_by_live_and_headless_clients() {
@@ -97,12 +97,16 @@ fn sheet_overview_is_shared_by_live_and_headless_clients() {
     let mut setup = Session::default();
     apply(&mut setup, "project.new", json!({}));
     apply(&mut setup, sheets::CREATE_SHEET, json!({"name":"Bus"}));
+    apply(&mut setup, sheets::CREATE_SHEET, json!({"name":"Other Bus"}));
     let targets = setup.project().unwrap().page_order();
-    for sheet in &targets {
-        apply(&mut setup, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":0,"y_nm":0}));
-        let projection = setup.project().unwrap().for_sheet(*sheet).unwrap();
-        let at = projection.terminal_position(projection.symbols()[0].terminals()[0]).unwrap();
-        apply(&mut setup, net_labels::ADD, json!({"sheet":sheet.id(),"name":"CAN_H","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    for (name, sheets, x_nm) in [("CAN_H", [targets[0], targets[1]], 0), ("CAN_L", [targets[0], targets[2]], 25_400_000)] {
+        for sheet in sheets {
+            apply(&mut setup, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":x_nm,"y_nm":0}));
+            let projection = setup.project().unwrap().for_sheet(sheet).unwrap();
+            let pin = projection.symbols().last().unwrap().terminals()[0];
+            let at = projection.terminal_position(pin).unwrap();
+            apply(&mut setup, net_labels::ADD, json!({"sheet":sheet.id(),"name":name,"style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
+        }
     }
     let snapshot = setup.snapshot().unwrap();
     let mut headless = Headless::with_project(snapshot.clone());
@@ -112,13 +116,19 @@ fn sheet_overview_is_shared_by_live_and_headless_clients() {
     let catalog = headless.call("engine.commands", json!({})).unwrap();
     assert!(catalog.as_array().unwrap().iter().any(|entry| entry["id"] == nets::SHEET_OVERVIEW));
     let revision = editor.session.revision();
-    for params in [json!({}), json!({"sheet":targets[1].id()})] {
+    for (params, expected) in [(json!({}), &[("CAN_H", [1, 2]), ("CAN_L", [1, 3])][..]), (json!({"sheet":targets[1].id()}), &[("CAN_H", [1, 2])][..])]
+    {
         let request = json!({"command":nets::SHEET_OVERVIEW,"inspect":false,"params":params});
         let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
         assert_eq!(live, headless.call("engine.execute", request).unwrap());
         assert!(live.get("project").is_none());
-        let pages: Vec<_> = live["sheet_overview"]["nets"][0]["sheets"].as_array().unwrap().iter().map(|sheet| sheet["page"].clone()).collect();
-        assert_eq!(pages, [json!(1), json!(2)]);
+        let nets = live["sheet_overview"]["nets"].as_array().unwrap();
+        assert_eq!(nets.len(), expected.len());
+        for (net, (name, pages)) in nets.iter().zip(expected) {
+            assert_eq!(net["name"], *name);
+            let actual_pages: Vec<_> = net["sheets"].as_array().unwrap().iter().map(|sheet| sheet["page"].clone()).collect();
+            assert_eq!(actual_pages, pages.map(|page| json!(page)));
+        }
     }
     let unknown = json!({"command":nets::SHEET_OVERVIEW,"inspect":false,"params":{"sheet":"6f1c2b9e-0000-4000-8000-000000000001"}});
     let live_error = call_editor(&mut editor, &json!({"method":"engine.execute","params":unknown})).unwrap_err();
