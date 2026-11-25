@@ -134,10 +134,20 @@ pub fn non_plated_hole(p: &Painter, center: Pos2, radius: f32, selected: bool) {
 /// over selection, matching pads; the placement preview retains its separate ghost color.
 pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool, emphasized: Option<bool>) {
     let t = Tokens::get();
-    let radius = radius.max(2.);
     let fill = if preview { t.accent.gamma_multiply(0.6) } else { copper_emphasis(t.board_through, emphasized.or_else(|| selected.then_some(true))) };
+    via_land(p, center, radius, drill_radius, fill);
+}
+
+/// Mark a blocking via's copper while preserving its physical drill opening.
+pub fn collision_via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32) {
+    via_land(p, center, radius, drill_radius, Tokens::get().route_collision);
+}
+
+/// Draw a filled annulus around the actual via drill.
+fn via_land(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, fill: Color32) {
+    let radius = radius.max(2.);
     p.circle_filled(center, radius, fill);
-    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
+    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), Tokens::get().board_canvas);
 }
 
 /// Draw a measuring ruler: a dashed accent line with end ticks and a label near its middle.

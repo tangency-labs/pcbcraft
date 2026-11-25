@@ -7,26 +7,25 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In board formats 34, 35, and 37, the placed footprint owns `locked`, an optional
-boolean that defaults to false and is omitted by fresh canonical encoding when
-false. Boards with active footprint locks use format 34, format 35 with arcs,
-or format 37 with straight-via teardrops. The flag leaves the pinned library
-definition and mapping unchanged. See
+In [board format 42](../formats/native-project-storage.md#current-board-records),
+the placed footprint owns `locked`, an optional boolean that defaults to false.
+Canonical encoding omits false. The flag lives on the placement, separate
+from its pinned library definition and mapping. See
 [the placement edit policy](../pcb/locks.md#placed-footprint-locks) for the
 commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
-Board format 15 adds local reference position and print overrides. Earlier board
-formats retain their existing encodings when these fields are absent. Footprint
-library definitions are independently versioned: definitions with a plated slot
-use format 5, those with only circular non-plated holes use format 4, and ordinary
-surface and circular-plated definitions still use format 1.
+Historical board format 15 adds local reference position and print overrides.
+These fields are optional in current boards. New footprint exports and publications use `pcbcraft-footprint/6` for any supported
+mix of pads and holes. Published and project-pinned revisions retain their
+original formats and addresses.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
-| Published footprint with surface or circular-plated lands only | `pcbcraft-footprint/1` | [Format 1 schema](../schemas/footprint-v1.schema.json) |
-| Published footprint with circular non-plated through holes and no slots | `pcbcraft-footprint/4` | [Format 4 schema](../schemas/footprint-v4.schema.json) |
-| Published footprint with plated slots | `pcbcraft-footprint/5` | [Format 5 schema](../schemas/footprint-v5.schema.json) |
+| Historical footprint with surface or circular-plated lands only | `pcbcraft-footprint/1` | [Format 1 schema](../schemas/footprint-v1.schema.json) |
+| Historical footprint with circular non-plated through holes and no slots | `pcbcraft-footprint/4` | [Format 4 schema](../schemas/footprint-v4.schema.json) |
+| Historical footprint with plated slots | `pcbcraft-footprint/5` | [Format 5 schema](../schemas/footprint-v5.schema.json) |
+| Current footprint definition | `pcbcraft-footprint/6` | [Format 6 schema](../schemas/footprint-v6.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](../schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
@@ -86,13 +85,13 @@ also accept `null` for some optional Rust fields as a compatibility input.
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
-| `format` | Exact native format string for the features used | See [Compatibility and versioning](#compatibility-and-versioning) |
+| `format` | Exact supported native format string | See [Compatibility and versioning](#compatibility-and-versioning) |
 | `library`, `id` | 1–64 lowercase ASCII letters, digits and internal hyphens | Stable library and item identity |
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | 1…1,024 distinct numbered pads in formats 1 and 5; 0…1,024 in format 4 | Physical lands with optional plated circular or obround holes |
-| `non_plated_holes` | 1…128 entries when present; required in format 4, optional in format 5, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
+| `pads` | Up to 1,024 distinct numbered pads. An empty array requires at least one non-plated hole and format 4 or 6 | Physical lands with optional plated circular or obround holes |
+| `non_plated_holes` | 1…128 entries when present. Required in format 4, optional in formats 5 and 6, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
 | `artwork` | Optional 1…256 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
@@ -107,7 +106,7 @@ Pad numbers and mapping identifiers retain their spelling, including `01`.
 They contain 1…8 ASCII letters, digits, `+`, `-` or `_`. The
 [footprint guide](footprint-library.md#definition-and-placement-contract)
 defines the existing land shapes, copper bindings and drill relationships.
-A format-5 pad may use `plated_slot` instead of `drill_nm`, only with
+In formats 5 and 6 a pad may use `plated_slot` in place of `drill_nm`, only with
 `copper: "all_copper"`. Its anchor is the pad centre. `width_nm` is the finished
 opening width and `length_nm` is the full end-to-end length, including both
 round caps. Both use the existing footprint dimension bounds and length must be
@@ -119,11 +118,22 @@ round outline; the record remains a slot. Null slot records are not accepted.
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
 
+Ball-grid footprints may generate pad identifiers via the authoring `array`
+action with `numbering: {"mode": "ball_grid", "skip_jedec": true|false}`.
+Row labels follow Excel-style lettering (`A`…`Z`, then `AA`, `AB`, …) with
+columns `1`…`N`. When `skip_jedec` is true, the JEDEC skip set
+(`I`, `O`, `Q`, `S`, `X`, `Z`) is omitted from every row letter (so a 26-row
+grid runs `A`…`AF`). Footprint inspection catalogs, package maps and the
+definition browser present pad identifiers in natural order (`A2` before `A10`,
+`Y26` before `AA1`), while saved JSON retains its canonical storage order.
+The shared `app.library_edit` command accepts `"dry_run": true` to validate and
+record a readable change summary without mutating the document.
+
 A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,000).
 The array implies a non-plated through hole with no copper land. It has no pad
 number and does not participate in terminal mappings or connectivity. Footprint
-rotation and side changes transform its center, not its diameter. An empty array
-is not a format-4 definition; removing the last hole restores the format-1 writer.
+rotation and side changes transform its center. Removing the last non-plated
+hole omits the array from the next format-6 export.
 
 ## Coordinates and generated reference
 
@@ -341,15 +351,18 @@ definitions carrying this extension. Definitions with no new data keep their
 existing bytes on no-op save. The format-15 board extension provides an explicit
 version for placed overrides.
 
-The format-1 field set defined here is fixed. Definitions containing slots use
-`pcbcraft-footprint/5`, including when round non-plated holes are also present.
-Definitions with only round non-plated holes continue to use format 4. Ordinary
-surface and circular-plated definitions continue to use their existing formats
-and retain unchanged-save bytes. Earlier readers refuse format 5 rather than
-silently replacing a slot with a circle. Slot-bearing drafts use
-`pcbcraft-library-item/4`; schematic and board clipboard envelopes carrying them
-use `pcbcraft-clipboard/7` and `/8` respectively. With device supply ranges in
-the same fragment, they use `/10` and `/11`.
+Version 6 accepts surface lands, round plated holes, plated slots and circular
+non-plated holes in one schema. Removing a slot or non-plated hole keeps the
+next export at version 6. Formats 1, 4 and 5 keep their historical requirements.
+Format 1 accepts surface and round plated lands. Format 4 requires a circular
+non-plated hole and excludes plated slots. Format 5 requires at least one plated
+slot and permits circular non-plated holes. Opening a newly exported definition
+requires a reader that supports format 6.
+
+Slot-bearing editor drafts use `pcbcraft-library-item/4`. Schematic and board
+clipboard envelopes carrying slots use `pcbcraft-clipboard/7` and `/8`
+respectively. With device supply ranges in the same fragment, they use `/10`
+and `/11`. These checks follow the actual slot geometry in the pinned definition.
 The board-local appearance fields above extend the first format-15 implementation
 before its release. Later changes to the released board contract require their
 own version and compatibility review.

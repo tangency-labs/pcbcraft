@@ -1,8 +1,10 @@
 # Exact circular copper records
 
 Part of [#259](https://github.com/tangency-labs/pcbcraft/issues/259). Native
-storage and validation are available; curved routing and conductive geometry
-are not yet implemented.
+storage, validation and shared circular arc contact geometry for copper
+connectivity, ratsnest, via inspection and short detection are available;
+clearance queries, DRC, curved routing and native Gerber arcs remain follow-up
+work.
 
 `pcb.set_arc_tracks` replaces the complete arc list of the addressed board.
 Supply `board`, `expected_revision` and `arcs`; `dry_run: true` validates and
@@ -44,33 +46,36 @@ invalid directions, duplicate identities, foreign/non-copper layers and invalid
 dimensions fail before any project or history change. This is geometric record
 validation, not a manufacturing tolerance or a claim that a route is safe.
 
-## Unsupported consumers
+## Supported and unsupported consumers
 
-While any arc exists, board rendering/picking and PCB editing explain that
-circular copper is unsupported. Connectivity, ratsnest, clearance queries,
-route-rule contact queries, route planning, copper preparation, group transforms, clipboard
+Board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`),
+ratsnest (`ratsnest`), via inspection (`inspect_vias`) and the engine short
+detection primitive (`copper_shorts`) evaluate exact circular arc contact
+geometry without chord substitution. Contact tests and spatial bounds include
+the end projected onto the start circle as well as the authored round end.
+Via inspection resolves derived `net` and
+`connected_to_pad` across arcs while retaining authored `net_assignment`,
+`assignment_mode` and registry `net_state`.
+
+While any arc exists, board rendering/picking and PCB editing still explain
+that circular copper is unsupported. Clearance queries, route-rule contact
+queries, route planning, copper preparation, group transforms, clipboard
 capture/paste and fabrication refuse instead of omitting arcs or treating their
 endpoints as a straight segment. Session DRC refuses; the direct board-view
 DRC report contains an `unsupported_geometry` finding and no partial checks.
 Inspection exposes the exact `arcs` list and `geometry_supported: false`.
-Via inspection retains authored `net_assignment`, `assignment_mode` and registry
-`net_state`, but returns null for derived `net` and `connected_to_pad`, with a
-`geometry_error` rather than a false disconnected result. Logical schematic
-inspection remains independent of physical geometry.
+Logical schematic inspection remains independent of physical geometry.
 
-Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available. Native
-folder/archive saves preserve exact records. The diagnostic single-document
-writer refuses arcs. Clearing the last arc restores the format required by the
-remaining board data. Arc-bearing boards use format 26 unless they also have
-an active footprint lock, in which case they use format 35. Both formats retain
-the released profile-adoption (22),
-extended-stack (23), explicit via-intent (24), thermal/insulation material-report
-(25) and earlier board fields without changing those records. Boards without arcs keep the format and bytes
-required by their remaining authored data.
+Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available.
+Folder and archive saves preserve authored arcs in
+[board format 42](../formats/native-project-storage.md#current-board-records),
+alongside locks, profiles, setup and via intent. Clearing the last arc
+omits the array and keeps the board header. The diagnostic single-document
+writer refuses arcs.
 
-Connectivity, DRC, conservative query bounds, hit testing, snapping, bounded
-render approximations, transforms, clipboard and native Gerber arcs remain
-follow-up work. There is no flattening or polyline conversion in this contract.
+Clearance queries, full DRC, hit testing, snapping, bounded render
+approximations, transforms, clipboard and native Gerber arcs remain follow-up
+work. There is no flattening or polyline conversion in this contract.
 
 ## External updates
 

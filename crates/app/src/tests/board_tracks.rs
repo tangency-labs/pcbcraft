@@ -390,6 +390,65 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
     })
 }
 
+/// The collision color belongs to the stationary obstacle's actual screen geometry.
+fn collision_track_ends_at(h: &Harness<'_, PcbApp>, end: egui::Pos2) -> bool {
+    let color = pcbcraft_chrome::Tokens::get().route_collision;
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+        if stroke.color == color && points[1].distance(end) < 0.001)
+    })
+}
+
+/// Highlight shows a fixed track and via as obstacles while keeping the proposed route's color.
+#[test]
+fn highlight_collisions_distinguishes_blocked_route_preview() {
+    let mut h = routable();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let rail_end = p(5_080_000, -2_540_000);
+    add_track(&mut h, p(5_080_000, -7_620_000), rail_end);
+    let via = p(6_350_000, -5_080_000);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":via,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+    h.run();
+    let head = p(1_270_000, -5_080_000);
+    let bend = p(2_540_000, -5_080_000);
+    let blocked = p(7_620_000, -5_080_000);
+    let clear = p(3_810_000, -5_080_000);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, head);
+    click(&mut h, "Highlight collisions");
+    click_route(&mut h, head);
+    click_route(&mut h, bend);
+    h.hover_at(at(&h, blocked));
+    h.run_steps(100);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    let via_collides = |h: &Harness<'_, PcbApp>| {
+        let center = at(h, via);
+        let collision = pcbcraft_chrome::Tokens::get().route_collision;
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.fill == collision && circle.center.distance(center) < 0.001))
+    };
+    assert!(collision_track_ends_at(&h, at(&h, rail_end)));
+    assert!(via_collides(&h));
+    assert!(preview_ends_at(&h, ink, at(&h, blocked)));
+    assert!(!collision_track_ends_at(&h, at(&h, blocked)));
+    assert!(preview_ends_at(&h, ink, at(&h, bend)));
+    click_route(&mut h, blocked);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+
+    h.hover_at(at(&h, bend));
+    h.run_steps(100);
+    assert!(!collision_track_ends_at(&h, at(&h, rail_end)));
+    assert!(!via_collides(&h));
+    h.hover_at(at(&h, clear));
+    h.run_steps(100);
+    assert!(preview_ends_at(&h, ink, at(&h, clear)));
+}
+
 /// Warm, clear pointer targets must paint in their input frame while authored copper stays fixed.
 #[test]
 fn warm_walkaround_preview_follows_continuous_pointer_input() {
@@ -1350,8 +1409,7 @@ fn u_selects_connected_copper() {
     assert_eq!(h.state().views.active.board.tracks.selected, joined);
 }
 
-/// With copper selected and no footprint selected, M then a click moves it by the snapped offset
-/// in one edit; dragging a track moves it too, and Esc cancels a move without editing.
+/// M moves selected copper in one edit; a held segment drag waits for validation before release.
 #[test]
 fn m_and_drag_move_selected_copper() {
     let mut h = routable();
@@ -1387,9 +1445,9 @@ fn m_and_drag_move_selected_copper() {
     h.drag_at(grab);
     h.run();
     h.hover_at(drop);
-    h.run();
+    h.run_steps(100);
     h.drop_at(drop);
-    h.run();
+    h.run_steps(100);
     assert_eq!(h.state().session.revision(), revision + 2, "a drag is one more edit");
     assert_ne!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().start, after_m, "the drag moved the track");
 }
@@ -2641,6 +2699,81 @@ fn modify_menu_aligns_selected_footprints() {
     assert_eq!(ys[0], ys[1], "identical footprints aligned by their tops share a Y");
 }
 
+/// Modify › Merge Tracks joins a selected straight run into one segment through the shared
+/// `pcb.merge_tracks` command and copper preparation; one Undo restores the original segments.
+#[test]
+fn modify_menu_merges_selected_straight_run_in_one_undo_step() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let p = |x: i64| Point { x_nm: x, y_nm: 2_540_000 };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[p(1_270_000), p(3_810_000), p(6_350_000), p(8_890_000)],"expected_revision":revision}),
+    );
+    h.run();
+    let segments = tracks(&h);
+    assert_eq!(segments.len(), 3);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Modify menu");
+    assert!(h.get_by_label("Merge Tracks").accesskit_node().is_disabled(), "merging needs selected segments");
+    h.key_press(Key::Escape);
+    h.run();
+    h.state_mut().views.active.board.tracks.selected = segments.iter().map(|t| t.id).collect();
+    h.run();
+    let revision = h.state().session.revision();
+    click(&mut h, "Modify menu");
+    click(&mut h, "Merge Tracks");
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit");
+    let merged = tracks(&h);
+    assert_eq!(merged.len(), 1, "the straight run is one track");
+    let ends = BTreeSet::from([(merged[0].start.x_nm, merged[0].start.y_nm), (merged[0].end.x_nm, merged[0].end.y_nm)]);
+    assert_eq!(ends, BTreeSet::from([(1_270_000, 2_540_000), (8_890_000, 2_540_000)]));
+
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(tracks(&h), segments, "one Undo restores the original segments");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Merge Tracks is enabled only by two selected track segments: a selected via or a stale id
+/// never counts as the second one.
+#[test]
+fn merge_tracks_needs_two_selected_segments_not_vias_or_stale_ids() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let p = |x: i64| Point { x_nm: x, y_nm: 2_540_000 };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[p(1_270_000), p(3_810_000), p(6_350_000)],"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":4_000_000,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    let segments = tracks(&h);
+    assert_eq!(segments.len(), 2);
+    let via = vias(&h)[0].id;
+    let stale = Uuid::from_u128(u128::MAX);
+    for (selected, enabled) in
+        [(BTreeSet::from([segments[0].id, via, stale]), false), (BTreeSet::from([segments[0].id, segments[1].id, via, stale]), true)]
+    {
+        h.state_mut().views.active.board.tracks.selected = selected;
+        h.run();
+        click(&mut h, "Modify menu");
+        assert_eq!(!h.get_by_label("Merge Tracks").accesskit_node().is_disabled(), enabled);
+        h.key_press(Key::Escape);
+        h.run();
+    }
+}
+
 /// D drags the segment under the pointer while its neighbors stretch to stay attached; a click
 /// commits all of them as one edit, and Esc cancels a drag without editing.
 #[test]
@@ -2671,6 +2804,7 @@ fn d_drags_a_segment_and_keeps_neighbors_attached() {
     let lifted = Point { x_nm: 5_080_000, y_nm: 1_270_000 };
     let target = at(&h, lifted);
     click_canvas_at(&mut h, target);
+    h.run_steps(100);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1, "one edit for the segment and its neighbors");
     let up = |x: i64| Point { x_nm: x, y_nm: 1_270_000 };
@@ -3568,6 +3702,179 @@ fn shove_drag_previews_connected_ends_and_publishes_the_neighbor() {
     }
 }
 
+/// Router Settings applies to held input, previews changes without editing, and either
+/// refuses a highlighted collision or publishes the selected policy's validated result.
+#[test]
+fn router_settings_govern_held_track_drags() {
+    use pcbcraft_engine::board::route::Mode;
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for (policy, mode) in [("Highlight collisions", Mode::Highlight), ("Walkaround", Mode::Walkaround), ("Shove", Mode::Shove)] {
+        let mut h = routable();
+        let joint = p(2_540_000, -5_080_000);
+        let far = p(7_620_000, -5_080_000);
+        let fixed = p(2_540_000, -2_540_000);
+        let segment = add_track(&mut h, joint, far);
+        let follower = add_track(&mut h, fixed, joint);
+        // A shove needs space past the dragged ends to return to the rail's fixed ends.
+        let (left, right) = if mode == Mode::Shove { (0, 10_160_000) } else { (4_200_000, 6_300_000) };
+        let obstacle = add_track(&mut h, p(left, -7_720_000), p(right, -7_720_000));
+        let originals = tracks(&h);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+
+        click(&mut h, "Route menu");
+        click(&mut h, "Router Settings");
+        assert!(h.state().views.active.board.router_settings_open);
+        assert!(matches!(h.state().dialog, Dialog::None));
+        if mode != Mode::Walkaround {
+            click(&mut h, "Router policy");
+            click(&mut h, policy);
+        }
+        click(&mut h, "Router Settings position");
+        click(&mut h, "Dock left");
+        assert_eq!(h.state().views.active.board.tracks.policy().0, mode);
+        assert_eq!(h.state().session.revision(), revision);
+
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let target = at(&h, p(5_080_000, -7_620_000));
+        assert!(h.state().views.active.canvas_cards.iter().all(|card| !card.contains(pickup) && !card.contains(target)));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(target);
+        h.run_steps(240);
+        assert!(h.state().views.active.board.router_settings_open);
+        let paths = h.state().views.active.board.tracks.replacements().to_vec();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        if mode == Mode::Highlight {
+            let status = h.state().views.active.board.tracks.preparation_status().unwrap();
+            assert!(status.contains("clearance"), "{status}");
+            assert!(paths.is_empty());
+            assert!(collision_track_ends_at(&h, at(&h, p(right, -7_720_000))));
+            assert!(!collision_track_ends_at(&h, at(&h, p(far.x_nm, -7_620_000))));
+        } else {
+            let replaced = if mode == Mode::Walkaround { segment } else { obstacle };
+            assert!(paths.iter().any(|path| path.track == replaced), "{policy}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        }
+        h.drop_at(target);
+        h.run_steps(240);
+        if mode == Mode::Highlight {
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+            assert_eq!(h.state().session.revision(), revision);
+        } else {
+            assert_eq!(h.state().message, None, "{policy}");
+            assert_eq!(h.state().session.revision(), revision + 1, "{policy}");
+            let laid = tracks(&h);
+            assert!(laid.iter().any(|t| t.id == follower && t.start == fixed && t.end == p(joint.x_nm, -7_620_000)));
+            if mode == Mode::Walkaround {
+                assert_eq!(laid.iter().find(|t| t.id == obstacle), originals.iter().find(|t| t.id == obstacle));
+                let path = paths.iter().find(|path| path.track == segment).unwrap();
+                assert_eq!((path.points[0], *path.points.last().unwrap()), (p(joint.x_nm, -7_620_000), p(far.x_nm, -7_620_000)));
+                assert!(path.points.windows(2).all(|pair| laid.iter().any(|t| t.start == pair[0] && t.end == pair[1])));
+            } else {
+                assert_published_replacements(&originals, &laid, &paths);
+            }
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+}
+
+/// Router Settings uses the common panel controls and remembers both dock and float placement.
+#[test]
+fn router_settings_can_dock_float_and_close() {
+    use crate::workspace_panels::{ROUTER, SavedPanels};
+    use pcbcraft_chrome::workspace::panels::Position;
+    let mut h = routable();
+    let revision = h.state().session.revision();
+    click(&mut h, "Route menu");
+    click(&mut h, "Router Settings");
+    assert_eq!(h.state().views.active.panels[ROUTER].position(), Position::Floating);
+    for (label, position) in [("Dock left", Position::Left), ("Dock right", Position::Right), ("Float", Position::Floating)] {
+        click(&mut h, "Router Settings position");
+        click(&mut h, label);
+        let panels = &h.state().views.active.panels;
+        assert_eq!(panels[ROUTER].position(), position);
+        let encoded = serde_json::to_string(&SavedPanels::capture(panels)).unwrap();
+        let restored: SavedPanels = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.restore()[ROUTER].saved_state(), panels[ROUTER].saved_state());
+    }
+    click(&mut h, "Close Router Settings");
+    assert!(!h.state().views.active.board.router_settings_open);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// A prepared held drag cannot publish after Escape or after another command changes the board.
+#[test]
+fn canceled_and_stale_held_track_drags_preserve_copper() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for stale in [false, true] {
+        let mut h = routable();
+        let start = p(2_540_000, -5_080_000);
+        let end = p(7_620_000, -5_080_000);
+        let id = add_track(&mut h, start, end);
+        let revision = h.state().session.revision();
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let target = at(&h, p(5_080_000, -7_620_000));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(target);
+        h.run_steps(100);
+        assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+        if stale {
+            let board = h.state().session.project().unwrap().board_target().unwrap().board;
+            h.state_mut()
+                .session
+                .apply(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":board,"tracks":[id],"locked":true,"expected_revision":revision}))
+                .unwrap();
+        } else {
+            h.key_press(Key::Escape);
+        }
+        h.run();
+        h.drop_at(target);
+        h.run_steps(100);
+        let copper = tracks(&h);
+        assert_eq!((copper[0].start, copper[0].end, copper[0].locked), (start, end, stale));
+        assert_eq!(h.state().session.revision(), revision + u64::from(stale));
+    }
+}
+
+/// A later pointer move in the same frame cannot choose which prepared drag is released.
+#[test]
+fn held_track_drag_validates_the_release_position() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for validated in [false, true] {
+        let mut h = routable();
+        let start = p(2_540_000, -5_080_000);
+        let end = p(7_620_000, -5_080_000);
+        add_track(&mut h, start, end);
+        let revision = h.state().session.revision();
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let preview = at(&h, p(5_080_000, -7_620_000));
+        let other = at(&h, p(5_080_000, -10_160_000));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(preview);
+        h.run_steps(100);
+        assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+        let (release, later) = if validated { (preview, other) } else { (other, preview) };
+        h.event(egui::Event::PointerButton { pos: release, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::PointerMoved(later));
+        h.run_steps(100);
+        let y = if validated { -7_620_000 } else { start.y_nm };
+        let copper = tracks(&h);
+        assert_eq!((copper[0].start, copper[0].end), (p(start.x_nm, y), p(end.x_nm, y)));
+        assert_eq!(h.state().session.revision(), revision + u64::from(validated));
+    }
+}
+
 /// A first click outside copper but inside a corner's clearance cannot become an inescapable
 /// draft. Keep X armed so the next clear click starts an ordinary route without Escape/relaunch.
 #[test]
@@ -4329,4 +4636,35 @@ fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Restore Router Settings with its saved presentation, including layouts from before the card.
+#[test]
+fn router_settings_visibility_survives_layout_restore() {
+    use crate::workspace_panels::ROUTER;
+    use pcbcraft_chrome::workspace::panels::Position;
+
+    let mut h = routable();
+    click(&mut h, "Route menu");
+    click(&mut h, "Router Settings");
+    click(&mut h, "Router Settings position");
+    click(&mut h, "Dock left");
+    let app = h.state_mut();
+    app.views.active.board.router_settings_collapsed = true;
+    let state = app.views.active.saved_state(&app.session).unwrap();
+    let mut encoded = serde_json::to_value(&state).unwrap();
+    let decoded = serde_json::from_value(encoded.clone()).unwrap();
+    let restored = crate::editor_view::EditorView::from_state(crate::ViewId(900), &decoded, &app.session);
+    assert!(restored.board.router_settings_open);
+    assert!(restored.board.router_settings_collapsed);
+    assert_eq!(restored.panels[ROUTER].position(), Position::Left);
+
+    let fields = encoded.as_object_mut().unwrap();
+    fields.remove("router_settings_open");
+    fields.remove("router_settings_collapsed");
+    let legacy = serde_json::from_value(encoded).unwrap();
+    let restored = crate::editor_view::EditorView::from_state(crate::ViewId(901), &legacy, &app.session);
+    assert!(!restored.board.router_settings_open);
+    assert!(!restored.board.router_settings_collapsed);
+    assert_eq!(restored.panels[ROUTER].position(), Position::Left);
 }

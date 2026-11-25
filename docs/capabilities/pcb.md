@@ -57,9 +57,13 @@
   diagnostics and same-board clipboard preservation.
 - Box, U and click select tracks and vias in lighter copper colors matching pads. Picking favors
   active-layer tracks, and Shift+Space cycles through overlapping visible objects.
-- M moves copper, D drags a segment with its neighbors attached (`pcb.reshape_tracks`), and
-  Properties edits track width and via size. Footprint moves, rotations, flips and alignments carry
-  attached track ends and refuse new shorts.
+- M and group drags move the selected copper rigidly. The
+  [dockable Router Settings](../pcb/route-planning.md#track-shove) apply Walkaround, Shove and
+  Highlight collisions to new routes, D and held drags on a single track with its neighbors
+  attached (`pcb.reshape_tracks`). Properties edits track width and via size. Footprint moves,
+  rotations, flips and alignments carry attached track ends and refuse new shorts.
+- Modify › Merge Tracks and `pcb.merge_tracks` merge collinear and stacked duplicate segments with
+  free shared ends in one undo step.
 - Inspect › DRC and `pcb.check_design` check shorts (including direct pad and via-mediated contact),
   clearance to resolved pad contours, width, annular ring, unrouted connections, board edges and
   courtyard overlap. Findings appear in the results card, canvas and status.
@@ -191,11 +195,14 @@ the Board setup form does not yet present it.
 DRC and the engine's [snapshot copper query](../pcb/copper-clearance-query.md) share
 supported pad/track/via contours, contact and clearance predicates. Queries retain
 board, snapshot, revision and effective-clearance authority, with conservative
-candidates and an exhaustive reference. Circular conductive contours remain separate
+candidates and an exhaustive reference. Circular clearance and DRC contours remain separate
 work. [Exact circular copper records](../pcb/circular-copper-records.md) support shared
-revision-checked replacement, dry-run diffs and native save/reopen; geometry
-consumers, PCB rendering/editing and fabrication explicitly refuse boards
-containing arcs rather than returning incomplete straight-only results.
+revision-checked replacement, dry-run diffs, native save/reopen and exact
+arc contact geometry for copper connectivity, ratsnest, via inspection and
+engine short detection; clearance queries, DRC, copper preparation,
+PCB rendering/editing, transforms, clipboard and fabrication still explicitly
+refuse boards containing arcs rather than returning incomplete straight-only
+results.
 [Straight via teardrop intents](../pcb/teardrop-records.md) use a shared
 revision-checked add/remove command with dry-run, per-site rule reports, one
 undo step and native save/reopen. Geometry consumers refuse boards with these

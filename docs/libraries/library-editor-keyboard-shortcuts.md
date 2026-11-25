@@ -125,7 +125,10 @@ normalized events described above. All of these shortcuts require window focus.
 **Ctrl+D** arms the same preview as paste. A later **Escape** in the same input
 batch cancels the preview, and a duplicate chord after **Escape** can still arm
 it. **R**'s rotation direction likewise follows the shift held at the press,
-not the batch's ending modifiers.
+not the batch's ending modifiers. Click extend/toggle reads the shift or
+command carried by the `PointerButton` release event for the same reason —
+a modifier released or arriving later in the batch cannot swap the click's
+meaning.
 
 ## Pending fields gate
 

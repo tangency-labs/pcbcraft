@@ -241,6 +241,7 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
         replay::ENVELOPE_TRACE_ID => Some(("envelope", replay::Step::envelope())),
         replay::COMMIT_TRACE_ID => Some(("commit", replay::Step::commit())),
         replay::SHOVE_TRACE_ID => Some(("shove", replay::Step::shove())),
+        replay::HELD_DRAG_TRACE_ID => Some(("held drag", replay::Step::held_drag())),
         _ => None,
     };
     if let Some((kind, expected)) = expected
@@ -934,5 +935,23 @@ mod tests {
         let mut unlabeled = environment();
         unlabeled.hardware.clear();
         assert!(run(&artifact, unlabeled, 1).is_err());
+    }
+
+    /// Deferred live `pcb.merge_tracks` on `envelope-v1` (65,536 tracks, 32,768 selected)
+    /// runs under `performance::` in CI, cancels and rejects stale revisions mid-flight,
+    /// and completes preview and full apply in one undo step.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn deferred_merge_tracks_on_envelope_v1_cancels_rejects_stale_and_applies() {
+        crate::live_control::verify_envelope_v1_deferred_merge();
+    }
+
+    /// Native desktop worker timing for deferred `pcb.merge_tracks` on `envelope-v1`
+    /// (65,536 tracks, 32,768 selected), reporting editor-thread admission and completion
+    /// separately for preview and apply.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn merge_timing_native_envelope_v1() {
+        crate::live_control::measure_envelope_v1_native_merge();
     }
 }

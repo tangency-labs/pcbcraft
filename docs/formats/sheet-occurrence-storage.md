@@ -9,19 +9,17 @@ instances and component-definition splitting remain separate. The subsequent
 
 ## Records and ownership
 
-Project format 16 extends project/15, retaining native part selections and multi-pad package maps. For a schematic-only project it requires
-`schematic_instances` in `project.json`. For a board project that field is
-absent and the board registration owns an `instances.json` beside `board.json`.
-The instance document's format is `pcbcraft-instances/1`, and its `board` header
-must match the registered board UUID. A second storage home is rejected.
-Container, sheet, board and pinned-definition versions do not change.
-When a sparse net registry is authored, project/17 and instances/2 add it beside
-these records. Without another feature selecting a later project format,
-registry-free projects retain project/16. Active designator locks select
-project/51 even without a registry; board-owned instances retain the header their
-content requires: instances/1–4, /5 with expanded memberships, /7 with compact
-memberships or /8 with differential pairs. A lock alone does not change that
-instance header.
+Project format 16 introduced a single storage home for occurrence records.
+Schematic-only projects store `schematic_instances` in `project.json`.
+Board projects place `instances.json` beside the registered `board.json`.
+The instance document's `board` header must match the registered board UUID,
+and the reader rejects a second storage home.
+
+Current board-owned records use [instances/9](native-project-storage.md#board-instance-records).
+Historical instances/1 stores occurrences only. Instances/2–4 add support for
+the sparse net registry, class bindings and generated numbers. Instances/5 and
+/7 store expanded and compact memberships, respectively. Instances/8 requires
+pairs and allows either membership representation. All remain readable.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet
@@ -78,12 +76,11 @@ Persistent net anchors are not added by this slice.
 
 ## Save and lifecycle behavior
 
-The low-level codec preserves a supported older encoding until migration is
-explicitly prepared. Native Save and Save As prepare the current occurrence
-format even for an otherwise unchanged project/14 or /15 snapshot. The journal publishes
-the entry point and new instance document together, preserving exact unaffected
-sheet, physical-board and pinned-definition bytes. Later unchanged saves produce
-no diff. Older readers reject the new project version.
+Opening leaves the source untouched. Native Save and Save As adopt occurrence
+metadata when needed and upgrade older instance headers at the existing paths.
+The journal publishes the entry point and instance document together, and
+unaffected current documents and pinned definitions retain their bytes. Later
+unchanged saves produce no diff.
 
 Creating the first board moves the same use/occurrence records from
 `schematic_instances` to the derived board instance document in one revision-
@@ -101,7 +98,7 @@ Recovery retains the existing old-before-commit/new-after-commit contract and
 platform durability limits.
 
 Project/15 remains readable with or without native part selections and its prior
-flat or board-folder layout. Migration to project/16 preserves its pinned parts,
+flat or board-folder layout. Migration to the current format preserves its pinned parts,
 manufacturer records, typed requirements and physical maps. Multi-unit drawings
 across flat sheets retain one component/reference/package in the shared circuit
 use; sheet occurrences do not introduce independent part instances.

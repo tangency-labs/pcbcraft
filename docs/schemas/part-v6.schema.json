@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:part:6",
+  "title": "PCBcraft current reusable part definition, format 6",
+  "description": "Current format for parts with or without a symbol, descriptive metadata or terminal supply ranges. Dependency and terminal checks use the exact referenced revisions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "library", "id", "revision", "name", "license", "source", "packages"],
+  "properties": {
+    "format": { "const": "pcbcraft-part/6" },
+    "library": { "$ref": "urn:pcbcraft:schema:part:5#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:part:5#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:part:5#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:part:5#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:part:5#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:part:5#/properties/source" },
+    "symbol": { "$ref": "urn:pcbcraft:schema:part:5#/properties/symbol" },
+    "category": { "$ref": "urn:pcbcraft:schema:part:5#/properties/category" },
+    "fixed_parameters": { "$ref": "urn:pcbcraft:schema:part:5#/properties/fixed_parameters" },
+    "packages": { "$ref": "urn:pcbcraft:schema:part:5#/properties/packages" },
+    "terminal_ratings": { "$ref": "urn:pcbcraft:schema:part:5#/properties/terminal_ratings" },
+    "description": { "$ref": "urn:pcbcraft:schema:part:5#/properties/description" },
+    "keywords": { "$ref": "urn:pcbcraft:schema:part:5#/properties/keywords" },
+    "links": { "$ref": "urn:pcbcraft:schema:part:5#/properties/links" }
+  },
+  "dependentRequired": {
+    "fixed_parameters": ["category"],
+    "terminal_ratings": ["symbol"]
+  },
+  "allOf": [{ "$ref": "urn:pcbcraft:schema:part:5#/allOf/0" }]
+}

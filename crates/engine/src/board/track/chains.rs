@@ -516,6 +516,11 @@ impl Chains {
 /// Reject overlapping legs and close returns on an open copper run. Ordinary
 /// bends share their local copper, while distant legs must keep centerline spacing.
 pub(crate) async fn legal_stroke(points: &[Point], return_spacing: f64) -> bool {
+    legal_stroke_with_spacing(points, |_, _| return_spacing).await
+}
+
+/// Validate a stroke whose minimum centerline spacing depends on the two leg indices.
+pub(crate) async fn legal_stroke_with_spacing(points: &[Point], return_spacing: impl Fn(usize, usize) -> f64) -> bool {
     if points.windows(3).any(|p| backtracks(p[0], p[1], p[2])) {
         return false;
     }
@@ -534,7 +539,7 @@ pub(crate) async fn legal_stroke(points: &[Point], return_spacing: f64) -> bool 
                 || on_leg(points[a + 1], points[b], points[b + 1])
                 || on_leg(points[b], points[a], points[a + 1])
                 || on_leg(points[b + 1], points[a], points[a + 1]);
-            if contact || (gap < return_spacing && !cone.corner) {
+            if contact || (!cone.corner && gap < return_spacing(a, b)) {
                 return false;
             }
         }

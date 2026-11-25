@@ -24,12 +24,12 @@ fn at(x_nm: i64, y_nm: i64) -> Point {
 fn exhaustive(mut builder: IslandBuilder, end: usize) -> IslandBuilder {
     for i in builder.node..end {
         for j in 0..i {
-            let layers = match (builder.layers.get(i), builder.layers.get(j)) {
+            let layers = match (builder.layers.get(i).and_then(Option::as_ref), builder.layers.get(j).and_then(Option::as_ref)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
                 _ => true,
             };
-            if layers && builder.contours[i].touches(&builder.contours[j]) {
+            if layers && builder.shapes[i].touches(&builder.shapes[j]) {
                 join(&mut builder.parent, i, j);
             }
         }
