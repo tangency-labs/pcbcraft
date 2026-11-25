@@ -143,7 +143,7 @@ fn footprint_revision_refuses_marked_pad_without_editing() {
     let both = json!([{"target":pad,"flags":{"assembly":"top","fabrication":"top"}}, via_mark]);
     let partial = json!([{"target":pad,"flags":{"fabrication":"top"}}, via_mark]);
     let via_only = json!([via_mark]);
-    let save_and_reopen = |session: &Session, revision: u64, marks: &Value| {
+    let save_and_reopen = |session: &Session, revision: u32, marks: &Value| {
         let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
         let path = crate::persistence::test_board_path(&bytes);
         let text = std::str::from_utf8(&bytes[&path]).unwrap();
