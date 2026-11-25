@@ -254,6 +254,8 @@ pub enum FindingKind {
     UnclosedQuote,
     /// Non-whitespace data follows the closing quote of a quoted field (e.g. `"1"2`).
     DataAfterClosingQuote,
+    /// Auto detection found a table that splits validly under two delimiters; choose one explicitly.
+    AmbiguousDelimiter,
     UnrecognizedHeader,
     MissingNumberColumn,
     TooManyPins,
@@ -277,6 +279,7 @@ impl FindingKind {
             Self::InputTooLarge => "Too large",
             Self::UnclosedQuote => "Quote error",
             Self::DataAfterClosingQuote => "Quote error",
+            Self::AmbiguousDelimiter => "Ambiguous delimiter",
             Self::UnrecognizedHeader => "Unrecognized header",
             Self::MissingNumberColumn => "Unmapped number",
             Self::TooManyPins => "Too many pins",
@@ -489,7 +492,13 @@ pub const fn electrical_type_label(kind: ElectricalType) -> &'static str {
 /// In automatic mode, a nonempty table whose declared header has no known column names
 /// cannot be staged until the caller disables header handling or supplies an explicit mapping.
 pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_override: Option<ColumnMapping>) -> Preview {
-    let resolved = delimiter.resolve(text);
+    let (resolved, ambiguous_delimiter) = match delimiter {
+        Delimiter::Auto => {
+            let detection = detect_delimiter_checked(text);
+            (detection.delimiter, detection.ambiguous)
+        }
+        concrete => (concrete, false),
+    };
     if text.len() > MAX_BYTES {
         return Preview {
             delimiter: resolved,
@@ -529,6 +538,18 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
             column: None,
             kind: FindingKind::DataAfterClosingQuote,
             message: format!("Line {line}: unexpected data after a closing quote."),
+        });
+    }
+    if ambiguous_delimiter {
+        findings.push(Finding {
+            row: None,
+            line: None,
+            column: None,
+            kind: FindingKind::AmbiguousDelimiter,
+            message: format!(
+                "Auto-detected {} delimiter is ambiguous: quoted fields read differently under another delimiter. Choose the delimiter explicitly before staging.",
+                resolved.label()
+            ),
         });
     }
 
@@ -979,18 +1000,22 @@ fn normalize_header(raw: &str) -> String {
 /// Maximum number of non-blank logical records sampled by [`detect_delimiter`].
 const DETECT_SAMPLE_RECORDS: usize = 8;
 
+/// Candidate delimiters considered by automatic detection.
+const DETECT_CANDIDATES: [u8; 3] = [b'\t', b',', b';'];
+
 /// Separator statistics for one candidate delimiter over the sampled logical records.
 struct SeparatorSample {
     /// Unquoted separator bytes seen across the sampled records.
     count: usize,
-    /// Non-blank logical records sampled.
+    /// Sampled records with at least one non-whitespace character outside the separators.
     records: usize,
     /// Sampled records containing at least one unquoted separator.
     records_with_separator: usize,
 }
 
 impl SeparatorSample {
-    /// Add one finished logical record; all-blank records are skipped like in [`parse_records`].
+    /// Add one finished logical record. Records with no non-whitespace content (blank lines and
+    /// delimiter-only rows) do not vote.
     fn finish_record(&mut self, has_content: bool, separators: usize) {
         if has_content {
             self.records = self.records.saturating_add(1);
@@ -1002,66 +1027,64 @@ impl SeparatorSample {
     }
 }
 
-/// Count unquoted `separator` bytes over the first non-blank logical records of `text`, using the
-/// same record boundaries as [`parse_records`]: a quote opens only at the start of a field, `""`
-/// inside quotes is an escaped quote, quoted CR/LF bytes stay inside the field, and an unquoted CR,
-/// LF or CRLF each end exactly one record. Records whose cells are all blank are skipped.
-fn sample_separator(text: &str, separator: u8) -> SeparatorSample {
-    let bytes = text.as_bytes();
+/// Count unquoted `separator` characters over the first voting logical records of `text`.
+///
+/// Records follow [`parse_records`]: `""` inside quotes is an escaped quote, quoted CR/LF stay in
+/// the field, and an unquoted CR, LF or CRLF each end exactly one record. A quote opens a quoted
+/// field only when the field is still empty, and a field starts at the record start or after any
+/// byte in `field_breaks`: `[separator]` reproduces exactly what `parse_records` sees for that
+/// separator, while all candidates make every candidate see the same quoted regions. Content uses
+/// Unicode whitespace like the `trim` in `parse_records`.
+fn sample_separator(text: &str, separator: u8, field_breaks: &[u8]) -> SeparatorSample {
     let mut sample = SeparatorSample { count: 0, records: 0, records_with_separator: 0 };
+    let mut chars = text.chars().peekable();
     let mut in_quotes = false;
     let mut field_empty = true;
     let mut record_has_content = false;
     let mut record_separators: usize = 0;
-    let mut index = 0usize;
 
-    while let Some(&byte) = bytes.get(index) {
-        if sample.records >= DETECT_SAMPLE_RECORDS {
-            break;
-        }
+    while sample.records < DETECT_SAMPLE_RECORDS
+        && let Some(ch) = chars.next()
+    {
         if in_quotes {
-            if byte == b'"' {
-                if bytes.get(index + 1) == Some(&b'"') {
+            if ch == '"' {
+                if chars.next_if_eq(&'"').is_some() {
                     record_has_content = true;
                     field_empty = false;
-                    index += 2;
-                    continue;
+                } else {
+                    in_quotes = false;
                 }
-                in_quotes = false;
-                index += 1;
                 continue;
             }
-            if !byte.is_ascii_whitespace() {
-                record_has_content = true;
-            }
+            record_has_content |= !ch.is_whitespace();
             field_empty = false;
-            index += 1;
             continue;
         }
-        if byte == b'"' && field_empty {
+        if ch == '"' && field_empty {
             in_quotes = true;
-            index += 1;
             continue;
         }
-        if byte == separator {
-            record_separators = record_separators.saturating_add(1);
-            field_empty = true;
-            index += 1;
-            continue;
-        }
-        if byte == b'\r' || byte == b'\n' {
-            index += if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') { 2 } else { 1 };
+        if ch == '\r' || ch == '\n' {
+            if ch == '\r' {
+                chars.next_if_eq(&'\n');
+            }
             sample.finish_record(record_has_content, record_separators);
             record_has_content = false;
             record_separators = 0;
             field_empty = true;
             continue;
         }
-        if !byte.is_ascii_whitespace() {
-            record_has_content = true;
+        if let Ok(byte) = u8::try_from(ch)
+            && field_breaks.contains(&byte)
+        {
+            if byte == separator {
+                record_separators = record_separators.saturating_add(1);
+            }
+            field_empty = true;
+            continue;
         }
+        record_has_content |= !ch.is_whitespace();
         field_empty = false;
-        index += 1;
     }
     if sample.records < DETECT_SAMPLE_RECORDS {
         sample.finish_record(record_has_content, record_separators);
@@ -1069,17 +1092,10 @@ fn sample_separator(text: &str, separator: u8) -> SeparatorSample {
     sample
 }
 
-/// Detect the most likely field delimiter from the first non-blank logical records of `text`.
-/// Each candidate is sampled with [`parse_records`]' quoting and CR/LF/CRLF record rules, so quoted
-/// separators and quoted line breaks never count and never split a record. Prefers Tab whenever
-/// every sampled record contains at least one unquoted tab, so TSV tables whose names contain
-/// commas stay Tab-delimited.
-fn detect_delimiter(text: &str) -> Delimiter {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let tab = sample_separator(text, b'\t');
-    let comma = sample_separator(text, b',');
-    let semi = sample_separator(text, b';');
-
+/// Pick a delimiter from per-candidate samples: Tab whenever every voting record contains an
+/// unquoted tab (so TSV names with commas stay Tab) or tabs are at least as frequent as the others;
+/// otherwise Semicolon when it outnumbers commas, else Comma.
+fn choose_delimiter(tab: &SeparatorSample, comma: &SeparatorSample, semi: &SeparatorSample) -> Delimiter {
     if (tab.records > 0 && tab.records_with_separator == tab.records) || (tab.count >= comma.count && tab.count >= semi.count && tab.count > 0) {
         Delimiter::Tab
     } else if semi.count > comma.count {
@@ -1087,6 +1103,34 @@ fn detect_delimiter(text: &str) -> Delimiter {
     } else {
         Delimiter::Comma
     }
+}
+
+/// Result of automatic delimiter detection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DelimiterDetection {
+    /// Delimiter chosen with quoting shared across all candidates.
+    delimiter: Delimiter,
+    /// Whether quoting each candidate on its own terms chooses a different delimiter, so the
+    /// table reads validly in two dialects and Auto must not stage it silently.
+    ambiguous: bool,
+}
+
+/// Detect the field delimiter from the first voting logical records of `text` (leading BOM
+/// ignored). The vote quotes fields that start after any candidate delimiter, so a quoted CSV
+/// field holding tabs or a quoted TSV field holding commas never votes. As a cross-check, each
+/// candidate is also sampled exactly as [`parse_records`] would split it; if that vote differs,
+/// the detection is flagged ambiguous.
+fn detect_delimiter_checked(text: &str) -> DelimiterDetection {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let [tab, comma, semi] = DETECT_CANDIDATES.map(|separator| sample_separator(text, separator, &DETECT_CANDIDATES));
+    let delimiter = choose_delimiter(&tab, &comma, &semi);
+    let [own_tab, own_comma, own_semi] = DETECT_CANDIDATES.map(|separator| sample_separator(text, separator, &[separator]));
+    DelimiterDetection { delimiter, ambiguous: choose_delimiter(&own_tab, &own_comma, &own_semi) != delimiter }
+}
+
+/// Detect the most likely field delimiter; see [`detect_delimiter_checked`].
+fn detect_delimiter(text: &str) -> Delimiter {
+    detect_delimiter_checked(text).delimiter
 }
 
 struct ParsedRecord {
@@ -1293,6 +1337,53 @@ mod tests {
         assert_eq!(auto.findings.len(), 1);
         assert_eq!(auto.findings[0].kind, FindingKind::InvalidPinName);
         assert_eq!(auto.findings[0].line, Some(4));
+        assert_eq!(detect_delimiter_checked(tsv), DelimiterDetection { delimiter: Delimiter::Tab, ambiguous: false });
+    }
+
+    /// A valid CSV whose quoted fields hold tab-separated header words and data must never stage
+    /// the tab reading under Auto: detection agrees with explicit Comma (pin 1 / PowerIn, not
+    /// 99 / Passive) and blocks with an ambiguity finding until the delimiter is chosen. Quoted
+    /// commas in TSV and whitespace-only (NBSP) records stay unambiguous.
+    #[test]
+    fn auto_delimiter_matches_explicit_comma_and_blocks_quoted_tab_ambiguity() {
+        let csv = "Ignore,\"Notes\tNumber\tType\tTail\",Number,Type\nx,\"ignored\t99\tpassive\ty\",1,power_in\n";
+        assert_eq!(detect_delimiter_checked(csv), DelimiterDetection { delimiter: Delimiter::Comma, ambiguous: true });
+
+        let explicit = preview(csv, Delimiter::Comma, true, None);
+        assert!(explicit.findings.is_empty(), "{:?}", explicit.findings);
+        assert_eq!((explicit.mapping.number, explicit.mapping.electrical_type), (Some(2), Some(3)));
+        let plan = explicit.into_import_plan(0).unwrap();
+        assert_eq!(plan.pins.len(), 1);
+        assert_eq!((plan.pins[0].number.as_str(), plan.pins[0].electrical_type), ("1", ElectricalType::PowerIn));
+
+        let auto = preview(csv, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Comma);
+        assert_eq!(auto.mapping, explicit.mapping);
+        assert_eq!(auto.rows.len(), 1);
+        assert_eq!(auto.rows[0].number.as_deref(), Some("1"));
+        assert_eq!(auto.rows[0].electrical_type, Some(ElectricalType::PowerIn));
+        let kinds: Vec<_> = auto.findings.iter().map(|finding| (finding.kind, finding.row)).collect();
+        assert_eq!(kinds, [(FindingKind::AmbiguousDelimiter, None)]);
+        assert_eq!(FindingKind::AmbiguousDelimiter.short_label(), "Ambiguous delimiter");
+        assert!(!auto.can_accept());
+        assert!(auto.into_import_plan(0).is_err());
+
+        let mut session = Session::default();
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": csv})).unwrap();
+        assert_eq!(reply["delimiter"], "comma");
+        assert_eq!(reply["can_accept"], false);
+        assert_eq!(reply["findings"][0]["kind"], "ambiguous_delimiter");
+        assert_eq!(reply["rows"][0]["number"], "1");
+        let chosen = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": csv, "delimiter": "comma"})).unwrap();
+        assert_eq!(chosen["can_accept"], true);
+        assert_eq!(chosen["rows"][0]["number"], "1");
+        assert_eq!(chosen["rows"][0]["electrical_type"], "power_in");
+
+        let quoted_commas = "Number\tName\tType\n1\t\"A,B,C\"\tpassive\n\u{a0}\n2\tD\tpower_in\n";
+        assert_eq!(detect_delimiter_checked(quoted_commas), DelimiterDetection { delimiter: Delimiter::Tab, ambiguous: false });
+        let tsv = preview(quoted_commas, Delimiter::Auto, true, None);
+        assert!(tsv.can_accept(), "{:?}", tsv.findings);
+        assert_eq!(tsv.rows[0].name.as_deref(), Some("A,B,C"));
     }
 
     /// TSV input (including commas inside unquoted names), quoted fields, BOM and manual column
