@@ -657,12 +657,12 @@ fn net_appearance_respects_board_instances_format() {
     let mut old_instances = instances;
     old_instances["format"] = json!("pcbcraft-instances/9");
     with_legacy_instances.insert(instances_path, serde_json::to_vec(&old_instances).unwrap());
-    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/63"));
+    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/68"));
 
     let mut old_entry = entry;
     old_entry["format"] = json!("pcbcraft-project/62");
     with_legacy_instances.insert(ENTRY_POINT.to_owned(), serde_json::to_vec(&old_entry).unwrap());
-    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/63"));
+    assert!(decode_documents(&with_legacy_instances).err().unwrap().contains("net wire appearance requires project/68"));
 
     old_entry["format"] = json!("pcbcraft-project/52");
     with_legacy_instances.insert(ENTRY_POINT.to_owned(), serde_json::to_vec(&old_entry).unwrap());
@@ -676,6 +676,16 @@ fn net_appearance_respects_board_instances_format() {
     let reopened = decode_documents(&combined).unwrap();
     assert_eq!(reopened.output_recipes().len(), 1);
     assert!(reopened.net_registry.has_appearance());
+
+    // The last production envelopes already supported both features; preserve them on upgrade.
+    let path = reopened.instances_document_path().unwrap();
+    let mut predecessor = combined.clone();
+    for (path, format) in [(ENTRY_POINT, "pcbcraft-project/63"), (path.as_str(), "pcbcraft-instances/10")] {
+        let mut value: Value = serde_json::from_slice(&combined[path]).unwrap();
+        value["format"] = json!(format);
+        predecessor.insert(path.into(), serde_json::to_vec(&value).unwrap());
+    }
+    assert_eq!(encode_documents(decode_documents(&predecessor).unwrap()).unwrap(), combined);
 
     apply(&mut session, SET_APPEARANCE, json!({"target":target,"appearance":null}));
     let cleared = encode_documents(session.snapshot().unwrap()).unwrap();

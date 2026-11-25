@@ -84,7 +84,7 @@ fn verify(root: &Path, plan: &Plan) -> Result<(), String> {
 /// Move every reviewed revision of one identity to system trash. Recovery bytes are never
 /// permanently deleted: errors restore unused source paths or retain a named recovery folder.
 pub fn execute(root: &Path, plan: &Plan) -> Result<NativeSource, String> {
-    execute_with(root, plan, super::trash_directory)
+    execute_with(root, plan, crate::trash::directory)
 }
 /// A testable boundary around the platform trash service retains the same lock and rollback
 /// behavior for real operations, including a partial/uncertain platform outcome.
@@ -389,7 +389,7 @@ mod tests {
         let after = execute_with(&root, &plan, |archive| {
             let mut command = std::process::Command::new("gio");
             command.arg("trash").arg("--").arg(archive).env("XDG_DATA_HOME", &xdg);
-            let status = super::super::wait_for_trash(&mut command, std::time::Duration::from_secs(10))?;
+            let status = crate::trash::wait_for_trash(&mut command, std::time::Duration::from_secs(10))?;
             if status.success() { Ok(()) } else { Err("gio failed".into()) }
         })
         .unwrap();

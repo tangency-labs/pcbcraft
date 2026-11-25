@@ -235,7 +235,7 @@ fn designator_lock_topology_preview_has_provisional_identities() {
         entry["schematic_instances"]["net_registry"]["records"][0].as_object_mut().unwrap().remove("generated_number");
     });
     let error = persistence::decode_documents(&missing_number).unwrap_err();
-    assert!(error.contains("Generated net numbers") && error.contains("a number on every record"), "{error}");
+    assert!(error.contains("must specify generated_number on every record"), "{error}");
     params["dry_run"] = json!(true);
     let error = session.execute(SET_SYMBOL_FIELDS, &params).unwrap_err();
     assert_eq!(error, CommandError::StaleRevision { current: session.revision() });
@@ -297,9 +297,13 @@ fn designator_lock_codec_rejects_noncanonical_and_older_records() {
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&unlocked).unwrap()).unwrap(), unlocked);
     lock(&mut session, true);
     let locked = documents(&session);
-    for (value, reason) in
-        [(json!(false), "omit unlocked"), (Value::Null, "null"), (json!(1), "boolean"), (json!("true"), "boolean"), (json!([]), "boolean")]
-    {
+    for (value, reason) in [
+        (json!(false), "designator_locked must be true when present in pcbcraft-project/68; omit unlocked flags"),
+        (Value::Null, "null"),
+        (json!(1), "boolean"),
+        (json!("true"), "boolean"),
+        (json!([]), "boolean"),
+    ] {
         let mut bad = locked.clone();
         entry_edit(&mut bad, |entry| entry["components"][0]["designator_locked"] = value);
         let error = persistence::decode_documents(&bad).unwrap_err();
@@ -311,7 +315,7 @@ fn designator_lock_codec_rejects_noncanonical_and_older_records() {
         let mut bad = locked.clone();
         entry_edit(&mut bad, |entry| entry["format"] = json!(header));
         let error = persistence::decode_documents(&bad).unwrap_err();
-        assert!(error.contains("Designator locks require project format 51"), "{error}");
+        assert!(error.contains(&format!("designator_locked not allowed in {header}")), "{error}");
     }
     let mut missing = unlocked.clone();
     entry_edit(&mut missing, |entry| entry["format"] = json!("pcbcraft-project/51"));
@@ -442,11 +446,11 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             entry.as_object_mut().unwrap().remove("net_classes");
         });
         let error = persistence::decode_documents(&missing_catalog).unwrap_err();
-        assert!(error.contains("Net class assignments require project format 21") && error.contains("net-class catalog"), "{error}");
+        assert!(error.contains("net class assignments require a net-class catalog"), "{error}");
         let mut empty_choices = saved.clone();
         entry_edit(&mut empty_choices, |entry| entry["footprint_choices"] = json!([]));
         let error = persistence::decode_documents(&empty_choices).unwrap_err();
-        assert!(error.contains("project footprint choices") && error.contains("a nonempty bounded list"), "{error}");
+        assert!(error.contains("footprint_choices must contain 1 to"), "{error}");
         lock(&mut session, false);
         let after = documents(&session);
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&after).unwrap()).unwrap(), after);
@@ -531,19 +535,23 @@ fn designator_locks_preserve_group_representations_and_assembly_profiles() {
                     let mut conflicting = locked.clone();
                     let path = snapshot.instances_document_path().unwrap_or_else(|| persistence::ENTRY_POINT.into());
                     let mut record: Value = serde_json::from_slice(&conflicting[&path]).unwrap();
+                    assert_eq!(entry["format"], "pcbcraft-project/68");
+                    if board {
+                        assert_eq!(record["format"], "pcbcraft-instances/12");
+                    }
                     let home = if board { &mut record } else { &mut record["schematic_instances"] };
                     home["part_group_memberships"] = serde_json::to_value(snapshot.part_group_memberships().iter().collect::<Vec<_>>()).unwrap();
                     conflicting.insert(path, serde_json::to_vec(&record).unwrap());
                     let error = persistence::decode_documents(&conflicting).unwrap_err();
-                    assert!(error.contains("exactly one membership encoding"), "{error}");
+                    assert_eq!(error, "part_group_memberships and compact_part_group_memberships cannot both be present.");
                 }
                 if profiles {
                     let mut downgraded = locked.clone();
                     entry_edit(&mut downgraded, |entry| entry["format"] = json!("pcbcraft-project/36"));
-                    assert!(persistence::decode_documents(&downgraded).unwrap_err().contains("Designator locks require project format 51"));
+                    assert!(persistence::decode_documents(&downgraded).unwrap_err().contains("designator_locked not allowed in pcbcraft-project/36"));
                     let mut empty = locked.clone();
                     entry_edit(&mut empty, |entry| entry["assembly_profiles"] = json!({"heads":[],"revisions":[]}));
-                    assert!(persistence::decode_documents(&empty).unwrap_err().contains("nonempty identity catalog"));
+                    assert!(persistence::decode_documents(&empty).unwrap_err().contains("assembly_profiles must be nonempty"));
                 }
                 if group_mode != 0 {
                     let mut empty = locked.clone();

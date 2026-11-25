@@ -1,11 +1,11 @@
 //! Resumable broad phase for board-wide contact and clearance checks.
-use super::geometry::Contour;
+use super::{arc::geometry::ArcGeometry, geometry::Contour};
 use std::ops::Range;
 
 /// Closed projection intervals on x, y, x+y and x−y. Diagonal axes stop long parallel tracks
 /// from becoming candidates merely because they cross the same axis-aligned rectangle.
 #[derive(Clone, Copy)]
-struct Bounds {
+pub(super) struct Bounds {
     min: [f64; 4],
     max: [f64; 4],
 }
@@ -18,7 +18,7 @@ fn diagonal_margin(distance: f64) -> f64 {
 
 impl Bounds {
     /// Enclose the integer core and its round expansion in all four directions.
-    fn new(contour: &Contour) -> Self {
+    pub(super) fn from_contour(contour: &Contour) -> Self {
         let xy = contour.bounds();
         let [first, rest @ ..] = contour.core;
         let plus = first.x_nm + first.y_nm;
@@ -34,6 +34,12 @@ impl Bounds {
         }
         let r = diagonal_margin(contour.radius);
         Self { min: [xy[0], xy[1], low_plus as f64 - r, low_minus as f64 - r], max: [xy[2], xy[3], high_plus as f64 + r, high_minus as f64 + r] }
+    }
+
+    /// Enclose a circular arc and its round copper expansion in all four directions.
+    pub(super) fn from_arc(arc: &ArcGeometry) -> Self {
+        let (min, max) = arc.four_axis_bounds();
+        Self { min, max }
     }
 
     /// Enclose both child bounds.
@@ -92,7 +98,11 @@ pub(super) enum Hit {
 impl PairIndex {
     /// Build one local snapshot index. The current checks do not mutate indexed shapes.
     pub(super) fn new<'a>(contours: impl Iterator<Item = &'a Contour>) -> Self {
-        let bounds: Vec<_> = contours.map(Bounds::new).collect();
+        Self::from_bounds(contours.map(Bounds::from_contour).collect())
+    }
+
+    /// Build one local snapshot index from precomputed four-axis bounds (contours and arcs).
+    pub(super) fn from_bounds(bounds: Vec<Bounds>) -> Self {
         let mut order: Vec<_> = (0..bounds.len()).collect();
         let mut nodes = Vec::new();
         let root = (!order.is_empty()).then(|| Self::build(&bounds, &mut order, 0, &mut nodes));

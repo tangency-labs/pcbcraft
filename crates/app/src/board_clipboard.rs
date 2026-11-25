@@ -394,6 +394,7 @@ impl PcbApp {
             view.filters,
             &self.board_appearance,
             true,
+            true,
             self.preferences.navigation,
             self.preferences.grid_opacity(true),
             self.preferences.board_grid_style,

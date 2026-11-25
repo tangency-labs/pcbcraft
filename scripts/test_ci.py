@@ -132,9 +132,11 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(check.failures(self.needs(selected)), [])
 
     def test_qualification_cannot_skip_a_platform_or_lose_its_stage(self):
-        needs = self.needs(select.full())
-        needs["changes"]["outputs"]["windows"] = "false"
-        self.assertTrue(check.failures(needs))
+        for platform in ("windows", "macos"):
+            with self.subTest(platform=platform):
+                needs = self.needs(select.full())
+                needs["changes"]["outputs"][platform] = "false"
+                self.assertIn("qualification requires every platform check", check.failures(needs))
         needs = self.needs(select.full())
         del needs["changes"]["outputs"]["mode"]
         self.assertTrue(check.failures(needs))

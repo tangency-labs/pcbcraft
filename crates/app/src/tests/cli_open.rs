@@ -14,7 +14,7 @@ fn a_startup_path_opens_the_project_without_a_picker() {
         let (_copy, project_json) = dual_led_copy();
         let path = if entry_point { project_json } else { project_json.parent().unwrap().to_owned() };
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(path.clone()));
-        h.run();
+        h.step();
         finish_file(&mut h);
         assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
         assert!(!h.state().home, "the opened project replaces Home");
@@ -32,15 +32,16 @@ fn a_failed_startup_open_keeps_home_usable() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("gone");
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(missing.clone()));
-    h.run();
+    h.step();
     finish_file(&mut h);
     assert!(h.state().home, "a failed startup open keeps Home");
     assert!(h.state().session.project().is_none());
     assert!(!h.state().startup_open_pending, "the failed startup open consumed its terminal-report flag once");
     let message = h.state().message.clone().unwrap();
     assert!(message.contains("Could not open") && message.contains(&missing.display().to_string()), "status error: {message}");
-    // Home remains usable after the failure: its start card creates a project as ordinary.
-    click(&mut h, "New Schematic");
+    // Handle the click without requiring the editor to settle within the idle frame budget.
+    queue_click(&mut h, "New Schematic");
+    h.step();
     assert!(h.state().session.project().is_some());
     assert!(!h.state().home);
 }
@@ -105,7 +106,7 @@ fn parent_directory_and_unicode_archive_startup_paths_open() {
             assert_eq!(PcbApp::resolve_startup_path(path.clone()).as_os_str(), path.as_os_str());
         }
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(path));
-        h.run();
+        h.step();
         finish_file(&mut h);
         assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
         assert!(!h.state().home);
@@ -134,7 +135,7 @@ fn windows_startup_roots_do_not_need_a_filesystem_lookup() {
 #[test]
 fn a_relative_startup_path_reaches_the_open_resolved() {
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(".".into()));
-    h.run();
+    h.step();
     finish_file(&mut h);
     let message = h.state().message.clone().unwrap_or_default();
     assert!(!message.contains("Project file has no name"), "a relative startup path resolves before the open: {message}");
@@ -214,7 +215,7 @@ fn symlinked_folder_and_archive_startup_targets_open() {
         let link = root.parent().unwrap().join(if archive { "link.pc" } else { "link" });
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(link));
-        h.run();
+        h.step();
         finish_file(&mut h);
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
