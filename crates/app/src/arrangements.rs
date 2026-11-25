@@ -63,6 +63,12 @@ pub(super) struct Arrangements {
 }
 
 impl Arrangements {
+    /// Drop the live arrangement binding, keeping persisted layouts available on reopen.
+    pub(super) fn release_project(&mut self) {
+        *self =
+            Self { store: std::mem::take(&mut self.store), frozen: self.frozen, dirty: self.dirty, last_flush: self.last_flush, ..Self::default() };
+    }
+
     /// Preserve malformed/newer storage instead of replacing it with startup defaults.
     pub(super) fn from_storage(text: Option<String>) -> Self {
         let Some(text) = text else {

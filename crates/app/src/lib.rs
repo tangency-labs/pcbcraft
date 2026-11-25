@@ -527,8 +527,13 @@ impl PcbApp {
 
     /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
     pub fn with_integrated_titlebar(mut self, enabled: bool) -> Self {
-        self.integrated_titlebar = enabled;
+        self.set_integrated_titlebar(enabled);
         self
+    }
+
+    /// Configure window controls in place, avoiding a whole-app move during desktop startup.
+    pub fn set_integrated_titlebar(&mut self, enabled: bool) {
+        self.integrated_titlebar = enabled;
     }
 
     /// Open `path` through the ordinary project-file worker when this window first draws,
@@ -539,8 +544,15 @@ impl PcbApp {
     /// way. Desktop only: the browser has no command line.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
-        self.startup_open = Some(path);
+        self.set_startup_project(path);
         self
+    }
+
+    /// Queue a project for the first frame without moving the application state.
+    /// The normal file worker opens it with the same error handling as `with_startup_project`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_startup_project(&mut self, path: std::path::PathBuf) {
+        self.startup_open = Some(path);
     }
 
     pub fn session(&self) -> &Session {
@@ -792,6 +804,9 @@ impl PcbApp {
         }
 
         menu::separator(ui);
+        if MenuItem::new("Close Project").enabled(self.can_close_document()).show(ui) {
+            self.message = self.request_close_document(ui.ctx()).err();
+        }
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
@@ -1395,7 +1410,7 @@ impl PcbApp {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
+            Action::CloseProject | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Inspection { source, .. } => match source {
                 pcbcraft_engine::board::correspondence::Source::Terminal(target) => {
@@ -1424,7 +1439,12 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_)
+            | Action::CloseProject
+            | Action::ManageSheet { .. }
+            | Action::SetPage { .. }
+            | Action::SetTemplate { .. }
+            | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;

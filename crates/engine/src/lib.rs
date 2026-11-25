@@ -3625,6 +3625,22 @@ impl Session {
         self.revision
     }
 
+    /// Unload the current project, retiring its history and revision-bound work while retaining
+    /// the session's scope and library catalog. The host owns any save decision before calling.
+    pub fn close_project(&mut self) {
+        if self.project.take().is_none() {
+            return;
+        }
+        self.revision += 1;
+        self.history_root_revision = self.revision;
+        self.undo.clear();
+        self.redo.clear();
+        self.local_history_step = None;
+        self.clearance_cache = std::sync::Mutex::new(None);
+        self.update_plan = None;
+        self.setup_preview = None;
+    }
+
     /// Adopt the name, storage layout and occurrence IDs of a completed save without an electrical
     /// edit or changing the revision. New names apply only to snapshots still bearing the
     /// captured name. Storage adoption remains across Undo, preserves each snapshot's board

@@ -6,6 +6,11 @@ covers the desktop and browser controls in more detail; the
 
 ## Home and recent projects
 
+Choose **Close Project** from the **File** menu, the Home rail, or the project
+row's context menu in the Browser to unload the project and return to Home.
+For unsaved changes, the desktop offers **Save**, **Don't Save**, and
+**Cancel**. On the web, download a copy first if you want to keep your changes.
+
 The app starts on **Home**, with compact **New Schematic**, **New PCB** and
 **Open Project** cards. New PCB opens an empty Untitled project in PCB layout;
 New Schematic opens its schematic. Both use the usual unsaved-changes prompt
