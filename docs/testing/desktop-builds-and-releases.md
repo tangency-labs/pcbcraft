@@ -7,7 +7,7 @@ jobs reuse this build.
 
 | Target | Package |
 | --- | --- |
-| Linux x86-64 | Tarball with `pcbcraft` and `pcbcraft-cli`, built on Ubuntu 22.04 |
+| Linux x86-64 | RPM, DEB, and portable tarball with the editor and CLI, built on Ubuntu 22.04 |
 | Windows x64 | Portable ZIP with `pcbcraft.exe` and `pcbcraft-cli.exe`, built with MSVC |
 | macOS Apple silicon | DMG with `PCBCraft.app` and its bundled CLI |
 
@@ -18,6 +18,12 @@ reuses the existing packaging script, which checks the bundle signature. The
 preview workflow uses ad-hoc signing on macOS. A broadly distributed macOS
 release needs Developer ID signing and notarization. Windows preview binaries
 are unsigned.
+
+Install the Linux RPM on Fedora with `sudo dnf install ./<downloaded-file>.rpm`
+or the DEB on Debian or Ubuntu with `sudo apt install ./<downloaded-file>.deb`.
+Both packages add a PCBcraft application menu entry and make `pcbcraft` and
+`pcbcraft-cli` available on `PATH`. To use the tarball, extract it and run
+`./pcbcraft` from the extracted directory.
 
 After moving `PCBCraft.app` to Applications, you can run the macOS CLI directly
 from the app bundle.
@@ -38,10 +44,12 @@ selected revisions.
 
 When all three platforms finish and the commit is still at the tip of
 `main`, CI updates the rolling [Nightly prerelease](https://github.com/tangency-labs/pcbcraft/releases/tag/nightly).
-Its notes link to the tested commit's CI run, the three packages and their
+Its notes link to the tested commit's CI run, the packages and their
 combined checksums. The page stays at the same address as the `nightly` tag
 moves forward. Nightly is marked as a prerelease so GitHub's Latest release
 continues to point to a stable version.
+Nightly RPMs and DEBs use a package revision tied to the CI run. The final
+release of the same workspace version has a higher package revision.
 
 ## Prepare a release
 
@@ -60,15 +68,16 @@ continues to point to a stable version.
 
 The workflow reads the version from the selected commit. After it verifies the
 packages, it creates the corresponding tag, such as `v0.1.0`, on that commit
-and attaches all three packages and `SHA256SUMS.txt` to the draft. A prerelease
+and attaches the packages and `SHA256SUMS.txt` to the draft. A prerelease
 version such as `0.1.0-rc.1` creates a prerelease draft. You can rerun a failed
 attempt from its Actions run. An existing tag must point to the same commit,
 and only a draft's assets can be refreshed.
 
 ## Build locally
 
-Run on the target platform with Rust, Cargo, and Python 3.11 or newer. macOS
-also needs the Xcode command-line tools. Set the macOS deployment target to
+Run on the target platform with Rust, Cargo, and Python 3.11 or newer. Linux
+also needs `readelf` from binutils and nFPM. macOS needs the Xcode command-line
+tools. Set the macOS deployment target to
 match [the bundle packaging script](../../packaging/macos/package.sh) before
 building on macOS.
 
@@ -84,12 +93,11 @@ a new output directory for each run.
 
 ## Qualify the downloads
 
-On each target, verify the checksum, then extract the ZIP or tarball or mount
-the DMG. Launch the editor from the extracted package or installed app and
-open a local project offline. You can use `examples/sensor-node.pc` from the
-source checkout. Save an edit
-to a separate path and reopen it. Make another edit and confirm that closing
-with unsaved changes prompts before discarding them.
+On each target, verify the checksum, then install the RPM or DEB, extract the
+ZIP or tarball, or mount the DMG. Launch the editor and open a local project
+offline. You can use `examples/sensor-node.pc` from the source checkout. Save
+an edit to a separate path and reopen it. Make another edit and confirm that
+closing with unsaved changes prompts before discarding them.
 
 Record the supported platform, build revision and qualification results before
 publishing a draft GitHub release or linking public downloads. Track preview

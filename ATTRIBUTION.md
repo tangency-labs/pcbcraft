@@ -1848,6 +1848,13 @@ is added, added absolute `CARGO_TARGET_DIR` resolution, added per-attempt
 keychain cleanup in `import-cert.sh`, and added input character validation
 for `VERSION` and `PCBCRAFT_BUILD_SHA` before `Info.plist` templating.
 
+## Linux DEB and RPM packaging
+
+The runtime dependency declarations in `packaging/linux/nfpm.yaml` are adapted
+from SolidCraft's `packaging/linux/nfpm.yaml` at revision
+`ec363a78f` (MIT OR Apache-2.0). PCBcraft declares the glibc version required
+by its own binaries and installs its own launcher, binaries, and notices.
+
 ## Directional pane splitting
 
 The edge-drop selection, projected split geometry and optional saved orientation

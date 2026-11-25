@@ -80,6 +80,8 @@ jobs:
           mkdir release
           cp -- \
             "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.tar.gz" \
+            "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.deb" \
+            "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.rpm" \
             "packages/pcbcraft-release-windows-x64/pcbcraft-$RELEASE_VERSION-windows-x64.zip" \
             "packages/pcbcraft-release-macos-aarch64/pcbcraft-$RELEASE_VERSION-macos-aarch64.dmg" \
             release/

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -109,6 +110,29 @@ def package_macos(work, artifacts, resources, desktop, cli):
     command("bash", "packaging/macos/package.sh", "--arch", "aarch64", "--skip-build", env=env)
 
 
+def package_linux(artifacts, resources, portable, version):
+    """Package the same Linux binaries as a DEB and RPM with runtime dependencies."""
+    glibc_versions = []
+    for program in PROGRAMS:
+        requirements = command("readelf", "--version-info", portable / program, capture=True)
+        glibc_versions.extend(re.findall(r"\bGLIBC_(\d+(?:\.\d+)+)\b", requirements))
+    if not glibc_versions:
+        raise ValueError("Could not determine the Linux binaries' glibc requirement")
+    glibc_minimum = max(glibc_versions, key=lambda value: tuple(map(int, value.split("."))))
+    env = dict(
+        os.environ,
+        PCBCRAFT_GLIBC_MIN=glibc_minimum,
+        PCBCRAFT_PACKAGE_VERSION=version,
+        PCBCRAFT_PACKAGE_RELEASE=os.environ.get("PCBCRAFT_PACKAGE_RELEASE", "1"),
+        PCBCRAFT_PACKAGE_BIN=str(portable),
+        PCBCRAFT_PACKAGE_RESOURCES=str(resources),
+    )
+    for packager in ("deb", "rpm"):
+        destination = artifacts / f"{portable.name}.{packager}"
+        command("nfpm", "package", "--config", "packaging/linux/nfpm.yaml",
+                "--packager", packager, "--target", destination, env=env)
+
+
 def package(platform, bin_dir, output):
     """Publish complete artifacts and checksums only after packaging and CLI smoke checks."""
     target = TARGETS[platform]
@@ -150,6 +174,8 @@ def package(platform, bin_dir, output):
             shutil.copy2(desktop, portable / desktop.name)
             archive_format = "zip" if suffix else "gztar"
             shutil.make_archive(str(artifacts / stem), archive_format, work, stem)
+            if platform == "linux-x86_64":
+                package_linux(artifacts, resources, portable, version)
 
         checksums = []
         for path in sorted(artifacts.iterdir()):
