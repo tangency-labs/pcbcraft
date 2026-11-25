@@ -165,6 +165,87 @@ fn bus_labels_cannot_end_wires() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
+/// An ordinary marker joins two routes at their crossing without being an endpoint.
+/// Refuse replacing that contact with a bus, even when the edit also moves the marker.
+#[test]
+fn label_at_wire_crossing_cannot_become_bus() {
+    let mut s = session();
+    for (from, bend, to) in [((0, 8 * G), (0, 10 * G), (20 * G, 10 * G)), ((10 * G, 5 * G), (10 * G, 15 * G), (12 * G, 15 * G))] {
+        apply(
+            &mut s,
+            DRAW_WIRE,
+            json!({"from":{"x_nm":from.0,"y_nm":from.1},"to":{"x_nm":to.0,"y_nm":to.1},"bends":[{"x_nm":bend.0,"y_nm":bend.1}]}),
+        );
+    }
+    let crossing = Point { x_nm: 10 * G, y_nm: 10 * G };
+    let routes = s.snapshot().unwrap();
+    assert_eq!(routes.wires().len(), 2);
+    assert!(routes.wires().iter().all(|w| matches!(wire::locate(&routes.wire_path(w), crossing), Ok(wire::OnPath::Leg(_)))));
+    let end_a = routes.wires()[0].endpoints()[0];
+    let end_b = routes.wires()[1].endpoints()[0];
+    let net_pair = |p: &Project| {
+        let graph = p.electrical_connectivity();
+        (graph.net_index_for_endpoint(end_a).unwrap(), graph.net_index_for_endpoint(end_b).unwrap())
+    };
+    let (a, b) = net_pair(&routes);
+    assert_ne!(a, b, "a geometric crossing alone does not join routes");
+
+    apply(&mut s, ADD, json!({"name":"JOIN","style":"local","x_nm":crossing.x_nm,"y_nm":crossing.y_nm}));
+    let before = s.snapshot().unwrap();
+    let label = &before.net_labels()[0];
+    assert_eq!(before.wires(), routes.wires(), "no wire names the newly placed label as an endpoint");
+    let (joined, other) = net_pair(&before);
+    assert_eq!(joined, other);
+    assert_eq!(before.electrical_connectivity().net_name(joined), "JOIN");
+    let revision = s.revision();
+    let unchanged = |s: &Session| {
+        let after = s.snapshot().unwrap();
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(net_pair(&after), (joined, joined));
+    };
+    let refusal = |error| matches!(error, CommandError::InvalidParams(reason) if reason == "a label touching a wire cannot become a bus label");
+    for at in [crossing, Point { x_nm: 30 * G, y_nm: 30 * G }] {
+        let mut params = json!({
+            "id":label.object_id(),"name":"D[0..7]","style":"bus","x_nm":at.x_nm,"y_nm":at.y_nm,
+            "keep_connected":true,"expected_revision":revision
+        });
+        assert!(s.apply(SET, &params).is_err_and(refusal), "converting to a bus would split JOIN");
+        unchanged(&s);
+        params["dry_run"] = json!(true);
+        assert!(s.execute(SET, &params).is_err_and(refusal));
+        unchanged(&s);
+        assert!(s.apply(SET, &params).is_err_and(refusal));
+        unchanged(&s);
+    }
+
+    s.apply("edit.undo", &Value::Null).unwrap();
+    let undone = s.snapshot().unwrap();
+    assert!(undone.net_labels().is_empty(), "Undo removes the placement, not a refused edit");
+    assert_eq!(undone.wires(), routes.wires());
+    let (a, b) = net_pair(&undone);
+    assert_ne!(a, b);
+}
+
+/// Cover the other side of the guard: a bus can overlap wires without making contact,
+/// including when a contact-free ordinary label becomes a bus and moves onto a wire.
+#[test]
+fn bus_labels_can_be_placed_and_moved_over_wires() {
+    let mut s = session();
+    apply(&mut s, DRAW_WIRE, json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":20*G,"y_nm":0},"bends":[]}));
+    let before = s.snapshot().unwrap();
+    apply(&mut s, ADD, json!({"name":"D[0..7]","style":"bus","x_nm":5*G,"y_nm":0}));
+    let bus = s.project().unwrap().net_labels()[0].object_id();
+    apply(&mut s, SET, json!({"id":bus,"name":"D[0..7]","style":"bus","x_nm":10*G,"y_nm":0,"keep_connected":true}));
+    apply(&mut s, ADD, json!({"name":"X","style":"local","x_nm":15*G,"y_nm":5*G}));
+    let free = s.project().unwrap().net_labels()[1].object_id();
+    apply(&mut s, SET, json!({"id":free,"name":"X[0..1]","style":"bus","x_nm":15*G,"y_nm":0,"keep_connected":true}));
+    let p = s.project().unwrap();
+    assert_eq!(p.wires(), before.wires());
+    assert_eq!((p.net_labels()[0].style, p.net_labels()[0].at), (Style::Bus, Point { x_nm: 10 * G, y_nm: 0 }));
+    assert_eq!((p.net_labels()[1].style, p.net_labels()[1].at), (Style::Bus, Point { x_nm: 15 * G, y_nm: 0 }));
+}
+
 /// A bus label is an optional record in a sheet's net-label array, never a format of its own.
 /// Current sheets round-trip unchanged, and reading the oldest sheet format with net labels (/3)
 /// preserves the bus when rewriting it in the current format. Removing the bus restores the

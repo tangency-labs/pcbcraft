@@ -57,6 +57,7 @@ touches no pin and cannot end a wire, and it creates no net named `D[0..7]`, so
 the netlist holds exactly the member nets. Renaming the bus to `D[0..3]` shrinks
 its members; D4 … D7 keep their own nets. A local or global label whose text is
 `D[0..7]` stays one ordinary net with that literal name.
+An ordinary label touching a wire cannot become a bus: even inside a wire segment, the label's anchor makes an electrical connection.
 
 Inspection lists a bus label's `members` with the net each one joins on the
 sheet, or `null` when no ordinary label, hierarchical label or power symbol of

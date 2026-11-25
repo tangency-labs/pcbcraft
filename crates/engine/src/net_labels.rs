@@ -247,6 +247,7 @@ impl Project {
 impl Session {
     /// Validate an isolated candidate before publishing one undoable edit. Unknown/foreign
     /// IDs and stale revisions leave state intact; unchanged properties do not advance history.
+    /// A marker with wire contact cannot become a bus, even when the edit also moves it.
     /// With keep_connected, moving captures the old marker's wire/pin contacts before updating
     /// metadata, committing the connected geometry and properties in one undo step.
     pub(crate) fn edit_net_label(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
@@ -294,9 +295,20 @@ impl Session {
             match index {
                 Some(index) if project.net_labels[index] == label => return Ok(()),
                 Some(index) => {
+                    let old = &project.net_labels[index];
+                    if old.style.contact() && label.style == Style::Bus {
+                        let endpoint = WireEndpoint::NetLabel(old.id);
+                        if project.wires().iter().any(|wire| wire.endpoints().contains(&endpoint)) {
+                            return Err(CommandError::InvalidParams(BUS_WIRE_ENDPOINT_REFUSAL.into()));
+                        }
+                        // The named graph also connects the old anchor to every route through it.
+                        if project.wires().iter().any(|wire| wire::path_contains_point(&project.wire_path(wire), old.at)) {
+                            return Err(CommandError::InvalidParams("a label touching a wire cannot become a bus label".into()));
+                        }
+                    }
                     // A bus label holds no contacts, so there is nothing to carry along.
-                    let contact = project.net_labels[index].style.contact() && label.style.contact();
-                    if contact && params["keep_connected"].as_bool().unwrap_or(false) && project.net_labels[index].at != label.at {
+                    let contact = old.style.contact() && label.style.contact();
+                    if contact && params["keep_connected"].as_bool().unwrap_or(false) && old.at != label.at {
                         project = project.dragged_net_label(label.id, label.at, label.rotation, self.revision(), wire::auto_heal(params))?;
                     }
                     Arc::make_mut(&mut project.sheet_mut().net_labels)[index] = label;
