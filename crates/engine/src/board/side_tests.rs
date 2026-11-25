@@ -49,7 +49,7 @@ fn flipping_mirrors_geometry_onto_back_layers_and_round_trips() {
     assert!(flipped.graphics.iter().all(|graphic| graphic.side == Side::Back));
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/14\"") && text.contains("\"bottom\":true"), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT) && text.contains("\"bottom\":true"), "{text}");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     assert_eq!(s.inspect()["project"]["board"]["footprints"][0]["side"], "back");
 
@@ -72,8 +72,12 @@ fn board_format_14_and_bottom_footprints_require_each_other() {
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     let mut older = saved.clone();
-    older.insert(crate::persistence::test_board_path(&older), text.replace("pcbcraft-board/14", "pcbcraft-board/11").into_bytes());
+    older.insert(
+        crate::persistence::test_board_path(&older),
+        text.replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/11").into_bytes(),
+    );
     assert!(decode_documents(&older).is_err());
+    let text = text.replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/14");
     let mut unflipped = saved;
     unflipped.insert(crate::persistence::test_board_path(&unflipped), text.replace(",\"bottom\":true", "").into_bytes());
     assert!(decode_documents(&unflipped).is_err());
@@ -91,10 +95,10 @@ fn outputs_and_drc_follow_the_side() {
     let outputs = view(&s).fabrication_outputs().unwrap();
     let file = |suffix: &str| outputs.iter().find(|o| o.name.ends_with(suffix)).unwrap().contents.clone();
     let total: usize = footprints.iter().map(|f| f.3).sum();
-    assert_eq!(file("-Bottom.gbr").matches("G36*").count(), pads);
-    assert_eq!(file("-Top.gbr").matches("G36*").count(), total - pads);
-    assert_eq!(file("-Paste_Bottom.gbr").matches("G36*").count(), pads);
-    assert_eq!(file("-Mask_Bottom.gbr").matches("G36*").count(), pads);
+    assert_eq!(file("-Bottom.gbr").matches("D03*").count(), pads);
+    assert_eq!(file("-Top.gbr").matches("D03*").count(), total - pads);
+    assert_eq!(file("-Paste_Bottom.gbr").matches("D03*").count(), pads);
+    assert_eq!(file("-Mask_Bottom.gbr").matches("D03*").count(), pads);
     assert!(file("-Silkscreen_Bottom.gbr").contains("%TF.FileFunction,Legend,Bot*%"));
     assert!(file("-Silkscreen_Bottom.gbr").contains("D01*"), "the bottom part's silkscreen is drawn");
 

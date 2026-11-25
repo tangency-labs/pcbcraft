@@ -48,6 +48,125 @@ fn only_board_exclusion_changes_physical_membership() {
     assert!(!legacy.project().unwrap().component_is_board_eligible(u64::MAX));
 }
 
+/// Last-unit deletion stages an accepted placement's removal without dropping its lock or placement.
+#[test]
+fn last_unit_delete_stages_locked_accepted_placement_removal() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let footprint = &mut Arc::make_mut(&mut project.board).footprints[0];
+    footprint.locked = true;
+    let (component, footprint_id) = (footprint.component, footprint.id);
+    let symbol = project.all_symbols().find(|symbol| symbol.component == component).unwrap().id();
+    session.open_snapshot(Arc::new(project));
+    edit(&mut session, crate::DELETE_ITEMS, json!({"items":{"symbols":[symbol],"wires":[]}}));
+
+    let staged = session.snapshot().unwrap();
+    assert!(!staged.all_symbols().any(|symbol| symbol.component == component));
+    let footprint = staged.board.footprint_for_part_instance(component).unwrap();
+    assert_eq!(footprint.id, footprint_id);
+    assert!(footprint.locked);
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Removed { component }]);
+    let params = json!({"plan_token":report["plan_token"],"expected_revision":session.revision()});
+    let error = session.apply(APPLY_UPDATE, &params).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains(&format!("footprint-{footprint_id}"))), "{error}");
+    assert!(Arc::ptr_eq(&staged, &session.snapshot().unwrap()));
+}
+
+/// Applying mixed locked and unlocked removals refuses the entire reviewed update.
+#[test]
+fn board_update_refuses_locked_removal_atomically() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let footprints = &mut Arc::make_mut(&mut project.board).footprints;
+    let removed = [footprints[0].component, footprints[1].component];
+    footprints[1].locked = true; // There is no public footprint-lock authoring command yet.
+    let locked_id = footprints[1].id;
+    let locked_name = format!("{} (footprint-{locked_id})", project.components[&removed[1]].reference());
+    session.open_snapshot(Arc::new(project));
+    for id in removed {
+        flag(&mut session, id, "exclude_from_board", true);
+    }
+    // Leave a real Redo entry without changing the removals submitted for review.
+    flag(&mut session, removed[0], "do_not_populate", true);
+    session.apply("edit.undo", &json!({})).unwrap();
+    let report = plan(&mut session);
+    let changes = &session.cached_board_update().unwrap().changes;
+    assert!(changes.blockers.is_empty());
+    assert_eq!(changes.components, removed.map(|component| ComponentChange::Removed { component }));
+    let snapshot = session.snapshot().unwrap();
+    let bytes = encode_documents(snapshot.clone()).unwrap();
+    let revision = session.revision();
+    let history = |session: &Session| {
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.project().map(Arc::as_ptr)).collect::<Vec<_>>())
+    };
+    let before_history = history(&session);
+    assert!(before_history.iter().all(|entries| !entries.is_empty()));
+    let params = json!({"plan_token":report["plan_token"],"expected_revision":revision});
+    let error = session.apply(APPLY_UPDATE, &params).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains(&locked_name)), "{error}");
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(session.revision(), revision);
+    assert_eq!(history(&session), before_history);
+
+    // The same proposed removals are valid when neither footprint is locked.
+    let mut unlocked = snapshot.as_ref().clone();
+    Arc::make_mut(&mut unlocked.board).footprints[1].locked = false;
+    session.open_snapshot(Arc::new(unlocked));
+    let report = plan(&mut session);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    let board = &session.project().unwrap().board;
+    assert!(board.footprints().is_empty());
+    assert!(removed.iter().all(|id| !board.by_component.contains_key(id)));
+    assert!(board.baseline.as_ref().unwrap().components.is_empty());
+}
+
+/// The removal guard looks up only proposed removals, even on a large populated board.
+#[test]
+fn board_update_lock_checks_only_proposed_removals() {
+    use crate::board::update::REMOVAL_PLACEMENT_LOOKUPS;
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    for index in 0..256 {
+        let (x_nm, y_nm) = (index % 16 * 5_000_000, index / 16 * 5_000_000);
+        edit(&mut session, PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":y_nm}));
+        let id = session.project().unwrap().symbols().last().unwrap().component;
+        assign(&mut session, id, "resistor-0402");
+        edit(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":format!("component-{id}"),"x_nm":x_nm,"y_nm":y_nm}));
+    }
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let mut project = session.project().unwrap().clone();
+    let footprints = &mut Arc::make_mut(&mut project.board).footprints;
+    assert_eq!(footprints.len(), 256);
+    footprints[0].locked = true;
+    let (retained, removed) = (footprints[0].component, footprints[255].component);
+    session.open_snapshot(Arc::new(project));
+
+    // Replacing a retained package is a non-noop, but should do no removal lookups.
+    assign(&mut session, retained, "resistor-0603");
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Package { component: retained }]);
+    REMOVAL_PLACEMENT_LOOKUPS.set(0);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    assert_eq!(REMOVAL_PLACEMENT_LOOKUPS.get(), 0);
+    let retained_footprint = &session.project().unwrap().board.footprints()[0];
+    assert!(retained_footprint.locked);
+    assert_eq!(retained_footprint.definition, "resistor-0603");
+
+    flag(&mut session, removed, "exclude_from_board", true);
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Removed { component: removed }]);
+    REMOVAL_PLACEMENT_LOOKUPS.set(0);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    assert_eq!(REMOVAL_PLACEMENT_LOOKUPS.get(), 1);
+    let board = &session.project().unwrap().board;
+    assert_eq!(board.footprints().len(), 255);
+    assert!(board.footprints()[0].locked);
+    assert!(!board.by_component.contains_key(&removed));
+}
+
 /// Excluded choices remain useful authored intent without becoming physical
 /// pending packages. Reviewed removal retains their assets and later unexclude
 /// accepts that choice as an unplaced addition, with exact save/Undo behavior.
@@ -77,7 +196,11 @@ fn excluded_desired_choices_survive_review_roundtrip_reset_and_unexclude() {
     assign(&mut session, id, "capacitor-0603");
     assert_eq!(session.project().unwrap().board.assignments[&id].inspect(session.project().unwrap())["pending_update"], false);
     let before_reset = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&before_reset[&crate::persistence::test_board_path(&before_reset)]).unwrap().contains("pcbcraft-board/10"));
+    assert!(
+        std::str::from_utf8(&before_reset[&crate::persistence::test_board_path(&before_reset)])
+            .unwrap()
+            .contains(crate::persistence::CURRENT_BOARD_FORMAT)
+    );
     assert_eq!(encode_documents(decode_documents(&before_reset).unwrap()).unwrap(), before_reset);
     let mut malformed = before_reset.clone();
     let mut board: Value = serde_json::from_slice(&malformed[&crate::persistence::test_board_path(&malformed)]).unwrap();
@@ -115,7 +238,9 @@ fn excluded_desired_choices_survive_review_roundtrip_reset_and_unexclude() {
     flag(&mut session, id, "exclude_from_board", false);
     assert!(session.project().unwrap().board.has_pending_package_intent(session.project().unwrap()));
     let pending = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&pending[&crate::persistence::test_board_path(&pending)]).unwrap().contains("pcbcraft-board/11"));
+    assert!(
+        std::str::from_utf8(&pending[&crate::persistence::test_board_path(&pending)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT)
+    );
     let report = plan(&mut session);
     assert!(session.cached_board_update().unwrap().changes.components.contains(&ComponentChange::Added { component: id }));
     edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));

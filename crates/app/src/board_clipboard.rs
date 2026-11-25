@@ -394,6 +394,7 @@ impl PcbApp {
             view.filters,
             &self.board_appearance,
             true,
+            true,
             self.preferences.navigation,
             self.preferences.grid_opacity(true),
             self.preferences.board_grid_style,
@@ -452,7 +453,13 @@ impl PcbApp {
         self.views.select_board(selected.footprints, &self.session, self.preferences.selection_follow);
         self.views.active.board.zones.select_many(selected.zones);
         self.views.active.board.drawing.select_many(selected.drawings);
-        self.views.active.board.tracks.selected = selected.tracks.union(&selected.vias).copied().collect();
+        let view = &mut self.views.active;
+        view.board.tracks.selected = selected.tracks.union(&selected.vias).copied().collect();
+        if !view.filters.include_locked
+            && let Some(board) = view.board.target.and_then(|target| self.session.project()?.board_view(target))
+        {
+            view.filters.retain_unlocked_copper(board, &mut view.board.tracks.selected);
+        }
     }
     /// Ctrl/Command+A selects visible supported geometry, respecting this view's filters.
     pub(super) fn select_all_board(&mut self) {

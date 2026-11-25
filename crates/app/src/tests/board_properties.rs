@@ -229,3 +229,19 @@ fn exact_lengths_survive_unit_switches_and_a_file_save_and_reopen() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "{format:?}");
     }
 }
+
+/// Backspace in a focused field edits its text and never deletes the selected footprint.
+#[test]
+fn backspace_in_a_focused_field_keeps_the_board_selection() {
+    let mut h = routable();
+    let id = first_footprint(&h);
+    h.state_mut().views.active.board.selection.insert(id.clone());
+    h.run();
+    let revision = h.state().session.revision();
+    type_into(&mut h, "Footprint X", "1");
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().any(|f| f.id == id));
+    assert!(h.state().views.active.board.selection.contains(&id));
+}

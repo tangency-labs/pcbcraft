@@ -105,6 +105,28 @@ class LibrarySchemaTests(unittest.TestCase):
             changed["units"] = [symbol["units"][0]] * count
             self.assertFalse(self.checks[checker.FORMATS["pcbcraft-symbol/4"]].is_valid(changed))
 
+    def test_alternate_pin_functions_are_versioned_and_bounded(self):
+        symbol = checker.read_json(ROOT / "examples/native-parts/symbols/dual-amplifier.json")
+        symbol["format"] = "pcbcraft-symbol/5"
+        validator = self.checks["urn:pcbcraft:schema:symbol"]
+        terminal = symbol["terminals"][0]
+        validator.validate(symbol)
+        terminal["alternates"] = [{"name": "ADC_IN", "electrical_type": "input"}]
+        validator.validate(symbol)
+        for invalid in ([], None, [{"name": "ADC_IN", "electrical_type": "unknown"}],
+                        [{"name": str(i), "electrical_type": "input"} for i in range(17)]):
+            broken = copy.deepcopy(symbol)
+            broken["terminals"][0]["alternates"] = invalid
+            self.assertFalse(validator.is_valid(broken))
+        large = copy.deepcopy(symbol)
+        count = len(large["terminals"])
+        large["terminals"].extend({"id": f"T{i}", "electrical_type": "input"} for i in range(count, 1024))
+        validator.validate(large)
+        large["terminals"].append({"id": "T1024", "electrical_type": "input"})
+        self.assertFalse(validator.is_valid(large))
+        symbol["format"] = "pcbcraft-symbol/4"
+        self.assertFalse(validator.is_valid(symbol))
+
     def test_units_are_canonical_and_bound_to_the_declared_quantity(self):
         validator = self.checks[checker.FORMATS["pcbcraft-category/1"]]
         for unit in ["mOhm", "Ω", "V", "ohms"]:
@@ -152,6 +174,42 @@ class LibrarySchemaTests(unittest.TestCase):
             package["mapping"]["1"] = pads
             self.assertFalse(validator.is_valid(value))
 
+    def test_model_record_holds_geometry_by_hash_and_only_a_canonical_source_frame(self):
+        validator = self.checks[checker.FORMATS["pcbcraft-model/1"]]
+        model = {"format": "pcbcraft-model/1", "library": "parts-demo", "id": "sot-23", "revision": 1,
+                 "name": "SOT-23 body", "license": "CC0-1.0",
+                 "source": {"kind": "original", "reference": "pcbcraft", "locator": "tests"},
+                 "redistribution": "allowed",
+                 "geometry": {"kind": "step", "sha256": "0" * 63 + "a", "size_bytes": 1024}}
+        validator.validate(model)
+        framed = copy.deepcopy(model)
+        framed["source_frame"] = {"up_axis": "y", "origin_offset": {"x_nm": 0, "y_nm": 0, "z_nm": -350000}}
+        validator.validate(framed)
+        invalid = [
+            ("placement", {"x_nm": 0}), ("bounds", [0, 0, 0]), ("unit", "mm"), ("scale", 1),
+            ("redistribution", "maybe"), ("geometry", {"kind": "glb", "sha256": "0" * 64, "size_bytes": 1}),
+            ("geometry", {"kind": "step", "sha256": "A" * 64, "size_bytes": 1}),
+            ("geometry", {"kind": "step", "sha256": "0" * 64, "size_bytes": 0}),
+            ("geometry", {"kind": "step", "sha256": "0" * 64, "size_bytes": 64 * 1024 * 1024 + 1}),
+            ("source_frame", {}), ("source_frame", {"up_axis": "z"}),
+            ("source_frame", {"origin_offset": {"x_nm": 0, "y_nm": 0, "z_nm": 0}}),
+            ("source_frame", {"origin_offset": {"x_nm": 100000001, "y_nm": 0, "z_nm": 0}}),
+            ("source_frame", {"unit": "mm"}),
+        ]
+        for field, value in invalid:
+            with self.subTest(field=field, value=value):
+                changed = copy.deepcopy(model)
+                changed[field] = value
+                self.assertFalse(validator.is_valid(changed))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "models").mkdir()
+            (source / "models" / "sot-23.r1.json").write_text(json.dumps(model))
+            checker.validate([], [source])
+            (source / "models" / "wrong-kind.json").write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in models/"):
+                checker.validate([], [source])
+
     def test_duplicate_keys_are_rejected_before_validation(self):
         with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
             json.loads('{"field":1,"field":2}', object_pairs_hook=checker.distinct_object)
@@ -172,6 +230,121 @@ class LibrarySchemaTests(unittest.TestCase):
         result = subprocess.run([sys.executable, "-S", str(ROOT / "scripts/check-library-schemas.py")], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn('pip install "jsonschema>=4.18"', result.stderr)
+
+    def part5(self):
+        """A valid /5 record built from the original /1 example, with one of each metadata field."""
+        value = copy.deepcopy(self.part)
+        value["format"] = "pcbcraft-part/5"
+        value["description"] = "Precision thin-film resistor"
+        value["keywords"] = ["precision", "thin film"]
+        value["links"] = [{"label": "Datasheet", "url": "https://example.invalid/ds.pdf"}]
+        return value
+
+    def test_part5_accepts_metadata_with_and_without_ratings(self):
+        self.assertIn("pcbcraft-part/5", checker.FORMATS)
+        part = self.part5()
+        validator = self.checks[checker.FORMATS["pcbcraft-part/5"]]
+        validator.validate(part)
+        part["terminal_ratings"] = {"1": {"supply_min": {"type": "quantity", "value": "4.5", "unit": "V"}}}
+        validator.validate(part)
+        # A metadata-only part needs no symbol, but its packages then carry no terminal map.
+        del part["terminal_ratings"]
+        del part["symbol"]
+        for package in part["packages"].values():
+            package["mapping"] = {}
+            package.pop("unconnected_pads", None)
+        validator.validate(part)
+        # Ratings still require the exact symbol they belong to.
+        part["terminal_ratings"] = {"1": {"supply_max": {"type": "quantity", "value": "36", "unit": "V"}}}
+        self.assertFalse(validator.is_valid(part))
+
+    def test_current_part_accepts_omitted_ratings_and_metadata(self):
+        validator = self.checks[checker.FORMATS["pcbcraft-part/6"]]
+        part = self.part5()
+        part["format"] = "pcbcraft-part/6"
+        part["terminal_ratings"] = {"1": {"supply_min": {"type": "quantity", "value": "4.5", "unit": "V"}}}
+        validator.validate(part)
+        for field in ("description", "keywords", "links"):
+            del part[field]
+            validator.validate(part)
+        invalid = copy.deepcopy(part)
+        del invalid["symbol"]
+        self.assertFalse(validator.is_valid(invalid))
+        invalid["packages"] = {}
+        self.assertFalse(validator.is_valid(invalid))
+        del part["terminal_ratings"]
+        validator.validate(part)
+        del part["symbol"]
+        self.assertFalse(validator.is_valid(part))
+        part["packages"] = {}
+        validator.validate(part)
+        part["keywords"] = []
+        self.assertFalse(validator.is_valid(part))
+
+    def test_legacy_part_schemas_still_reject_all_metadata(self):
+        for version in (1, 2, 4):
+            old = copy.deepcopy(self.part5())
+            old["format"] = f"pcbcraft-part/{version}"
+            if version == 4:
+                old["terminal_ratings"] = {"1": {"supply_min": {"type": "quantity", "value": "4.5", "unit": "V"}}}
+            validator = self.checks[checker.FORMATS[old["format"]]]
+            self.assertFalse(validator.is_valid(old), f"format {version} accepted metadata")
+            for field in ("description", "keywords", "links"):
+                del old[field]
+            validator.validate(old)
+            schema = checker.read_json(ROOT / f"docs/schemas/part-v{version}.schema.json")
+            self.assertFalse(schema["additionalProperties"])
+            for field in ("description", "keywords", "links"):
+                self.assertNotIn(field, schema["properties"])
+
+    def test_part5_bounds_and_metadata_ownership(self):
+        part = self.part5()
+        validator = self.checks[checker.FORMATS["pcbcraft-part/5"]]
+        for field in ("description", "keywords", "links"):
+            alone = copy.deepcopy(part)
+            for other in ("description", "keywords", "links"):
+                if other != field:
+                    del alone[other]
+            validator.validate(alone)
+        empty = copy.deepcopy(part)
+        for field in ("description", "keywords", "links"):
+            del empty[field]
+        self.assertFalse(validator.is_valid(empty))
+        for field, value in [
+            ("description", None), ("description", ""), ("description", "x" * 513),
+            ("description", "line\nbreak"),
+            ("keywords", None), ("keywords", []), ("keywords", [""]),
+            ("keywords", ["x" * 65]), ("keywords", ["k" for _ in range(17)]),
+            ("links", None), ("links", []),
+            ("links", [{"label": "", "url": "https://example.invalid"}]),
+            ("links", [{"label": "x" * 65, "url": "https://example.invalid"}]),
+            ("links", [{"label": f"L{i}", "url": "https://example.invalid"} for i in range(9)]),
+            ("links", [{"label": "Datasheet", "url": "https://example.invalid", "fetched": True}]),
+        ]:
+            with self.subTest(field=field, value=value):
+                changed = copy.deepcopy(part)
+                changed[field] = value
+                self.assertFalse(validator.is_valid(changed))
+        valid = copy.deepcopy(part)
+        valid["description"] = "x" * 512
+        valid["keywords"] = [f"k{i}" for i in range(16)]
+        valid["links"] = [{"label": f"L{i}", "url": "https://example.invalid"} for i in range(8)]
+        validator.validate(valid)
+
+    def test_part5_link_urls_are_http_only_and_whitespace_free(self):
+        part = self.part5()
+        validator = self.checks[checker.FORMATS["pcbcraft-part/5"]]
+        for url in ["ftp://example.invalid/x", "file:///tmp/x", "//example.invalid/x", "http://",
+                    "https://?x", "https://example.invalid/a b", "https://exa mple.invalid",
+                    "HTTP://example.invalid", "example.invalid", "x" * 2049]:
+            with self.subTest(url=url):
+                changed = copy.deepcopy(part)
+                changed["links"] = [{"label": "Datasheet", "url": url}]
+                self.assertFalse(validator.is_valid(changed))
+        for url in ["http://example.invalid", "https://example.invalid/a?b=1#c"]:
+            changed = copy.deepcopy(part)
+            changed["links"] = [{"label": "Datasheet", "url": url}]
+            validator.validate(changed)
 
 
 if __name__ == "__main__":

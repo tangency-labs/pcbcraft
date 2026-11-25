@@ -4,6 +4,7 @@ use crate::{Dialog, PcbApp, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{controls, properties, rule_form as form, shell, units};
 use pcbcraft_engine::{
     Project,
+    board::view::BoardTarget,
     net_classes::{self, ContributionStatus, Definition, Property, Resolution, Rules, Source},
     nets::{Anchor, ClassBinding, ClassTarget},
 };
@@ -104,7 +105,7 @@ impl ClassDraft {
 }
 
 /// Resolve actual selected object identities once when Rules opens. Mixed nets require a choice.
-fn selected_target(
+pub(super) fn selected_target(
     project: &Project,
     target: Option<DocumentTarget>,
     schematic: &pcbcraft_engine::selection::Selection,
@@ -171,8 +172,14 @@ impl Edit {
             let label = row["name"].as_str().unwrap_or("Unresolved net").to_owned();
             nets.push(NetChoice { label, target: ClassTarget::Derived { anchor } });
         }
-        let net_index =
-            selected.as_ref().ok().and_then(|selected| selected.as_ref()).and_then(|selected| nets.iter().position(|net| &net.target == selected));
+        let net_index = match selected.as_ref().ok().and_then(Option::as_ref) {
+            Some(target @ ClassTarget::Derived { .. }) => nets.iter().position(|net| &net.target == target),
+            Some(ClassTarget::Persistent { net, .. }) => {
+                let id = net.to_string();
+                rows.iter().position(|row| row["id"].as_str() == Some(&id))
+            }
+            None => None,
+        };
         let mut edit = Self {
             source,
             project,
@@ -229,6 +236,15 @@ impl Edit {
             Page::Classes => self.draft.as_ref().is_some_and(|draft| draft.changed(self.unit)),
             Page::Net => self.classes != self.original_classes,
         }
+    }
+
+    /// Only a saved, active identity can address the board's personal net palette.
+    fn net_color_target(&self, board: BoardTarget) -> Option<(Uuid, &str)> {
+        let ClassTarget::Persistent { project, net, .. } = self.target.as_ref()? else { return None };
+        if *project != board.project || self.project.board_view(board)?.zone_net_state(*net) != "active" {
+            return None;
+        }
+        Some((*net, &self.nets.get(self.net_index?)?.label))
     }
 }
 
@@ -433,6 +449,7 @@ pub(super) struct Actions {
     pick_class: Option<Uuid>,
     pick_net: Option<usize>,
     pub(super) board_defaults: bool,
+    net_color: Option<(BoardTarget, Uuid, String)>,
 }
 
 impl Edit {
@@ -457,8 +474,8 @@ impl Edit {
         self.source = source;
         self.project = project;
     }
-    /// Render reusable content inside the caller's scroll owner; return typed navigation intents.
-    pub(super) fn show(&mut self, ui: &mut egui::Ui, current: bool) -> Actions {
+    /// Render into the caller's scroll owner. A host with a board target can open its net palette.
+    pub(super) fn show(&mut self, ui: &mut egui::Ui, current: bool, color_board: Option<BoardTarget>) -> Actions {
         let edit = self;
         let page = edit.page;
         let dirty = edit.changed();
@@ -467,6 +484,7 @@ impl Edit {
         let mut pick_net = edit.net_index;
         let mut new_class = false;
         let mut board_defaults = false;
+        let mut net_color = None;
         let discard;
         ui.add_enabled_ui(!dirty, |ui| {
             properties::tabs(ui, &mut edit.page, &[(Page::Classes, "Class definitions"), (Page::Net, "Effective net rules")])
@@ -524,6 +542,12 @@ impl Edit {
                         .response
                         .accessible_name("Net");
                 });
+                if let Some(board) = color_board
+                    && let Some((net, label)) = edit.net_color_target(board)
+                    && controls::button(ui, "Net color…").clicked()
+                {
+                    net_color = Some((board, net, label.to_owned()));
+                }
                 discard = ui.add_enabled_ui(dirty, |ui| controls::button(ui, "Revert assignment changes")).inner.clicked();
                 if let Some(error) = &edit.selection_error {
                     ui.label(shell::error(error));
@@ -570,7 +594,7 @@ impl Edit {
             ui.label(shell::error(error));
         }
 
-        Actions { page, new_class, discard, pick_class, pick_net, board_defaults }
+        Actions { page, new_class, discard, pick_class, pick_net, board_defaults, net_color }
     }
 }
 
@@ -620,10 +644,13 @@ impl PcbApp {
     /// Host reusable Rules content in its standalone modal. The same content and command path
     /// are embedded in Board Setup without replacing that containing modal.
     pub(super) fn rules_dialog(&mut self, ctx: &egui::Context, mut edit: Box<Edit>) {
-        if self.views.view(edit.source.view()).is_none() {
-            return;
-        }
-        let current = self.views.view(edit.source.view()).is_some_and(|view| view.accepts(edit.source, &self.session));
+        let Some(view) = self.views.view(edit.source.view()) else { return };
+        let current = view.accepts(edit.source, &self.session);
+        let color_board = view.target().filter(|_| current).and_then(|target| match target {
+            DocumentTarget::Board(board) => Some(board),
+            DocumentTarget::Sheet(_) => edit.project.board_target(),
+            DocumentTarget::BoardWorkspace(_) => None,
+        });
         let primary = edit.primary();
         let valid = edit.can_apply();
         let mut actions = None;
@@ -631,16 +658,20 @@ impl PcbApp {
             form::body(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("class_rule_body").auto_shrink([false, false]).show(ui, |ui| {
                     pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
-                    actions = Some(edit.show(ui, current));
+                    actions = Some(edit.show(ui, current, color_board));
                 });
             });
         });
         if action.close {
             return;
         }
-        if let Some(actions) = actions {
+        if let Some(mut actions) = actions {
             if actions.board_defaults && current {
                 self.begin_board_rules_from(edit.source);
+                return;
+            }
+            if let Some((board, net, label)) = actions.net_color.take() {
+                self.begin_net_color_for(edit.source, board, net, label, None, Some(edit));
                 return;
             }
             self.apply_rule_actions(ctx, &mut edit, actions, action.primary);

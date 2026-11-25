@@ -1,7 +1,7 @@
 //! One fixed-geometry policy applies at the shared snapshot publication boundary.
 use super::*;
 
-/// Existing locked objects may change lock intent, but must retain all other fields and identity.
+/// Existing locked objects may change lock and test-point intent, but must retain all geometry and identity.
 /// New copied objects may be translated and remain locked; replacing the whole project is separate.
 pub(crate) fn protect_locked(before: &Project, after: &Project) -> Result<(), CommandError> {
     if std::sync::Arc::ptr_eq(&before.board, &after.board)
@@ -17,19 +17,25 @@ pub(crate) fn protect_locked(before: &Project, after: &Project) -> Result<(), Co
             geometry.locked = previous.locked;
             geometry == *previous
         }) {
-            return Err(CommandError::InvalidParams(format!("Track {} is locked; unlock it before editing or deleting it.", previous.id)));
+            return Err(locked("Track", previous.id));
         }
     }
     for previous in before.board.vias.iter().filter(|via| via.locked) {
         if !vias.get(&previous.id).is_some_and(|next| {
             let mut geometry = (*next).clone();
             geometry.locked = previous.locked;
+            geometry.test_points = previous.test_points;
             geometry == *previous
         }) {
-            return Err(CommandError::InvalidParams(format!("Via {} is locked; unlock it before editing or deleting it.", previous.id)));
+            return Err(locked("Via", previous.id));
         }
     }
     Ok(())
+}
+
+/// Refuse a change to one locked track or via, named by its kind.
+pub(super) fn locked(kind: &str, id: Uuid) -> CommandError {
+    CommandError::InvalidParams(format!("{kind} {id} is locked; unlock it before editing or deleting it."))
 }
 
 impl Session {

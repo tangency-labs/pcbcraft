@@ -18,6 +18,7 @@ pub(super) struct State {
     draft: Option<Edit>,
     pub(super) collapsed: bool,
     pub(super) net_draft: Option<crate::net_labels::Edit>,
+    pub(super) wire_appearance: Option<crate::net_appearance::Inspector>,
     /// Drafts for the sheet's Parameters table, shown while nothing is selected.
     parameters: crate::sheet_parameters::Drafts,
     pub(super) rect: Rect,
@@ -25,7 +26,7 @@ pub(super) struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { draft: None, collapsed: false, net_draft: None, parameters: Default::default(), rect: Rect::NOTHING }
+        Self { draft: None, collapsed: false, net_draft: None, wire_appearance: None, parameters: Default::default(), rect: Rect::NOTHING }
     }
 }
 
@@ -137,7 +138,7 @@ impl PcbApp {
         let source = self.views.active.input(&self.session)?;
         let id = self.views.active.schematic.selection.single_symbol()?;
         let project = self.views.active.snapshot(&self.session)?;
-        let symbol = project.symbols().iter().find(|symbol| symbol.id() == id)?;
+        let symbol = project.symbol(id)?;
         let component = project.component(symbol)?;
         let reference = component.reference().to_owned();
         let value = component.display_value().into_owned();
@@ -178,6 +179,10 @@ impl PcbApp {
             self.views.active.schematic.properties.rect = Rect::NOTHING;
             return Rect::NOTHING;
         }
+        let nets_selected = crate::net_appearance::has_net_selection(&self.views.active.schematic.selection);
+        if !nets_selected {
+            self.views.active.schematic.properties.wire_appearance = None;
+        }
         if self.views.active.schematic.selection.single_net_label().is_some() {
             self.views.active.schematic.properties.draft = None;
             if let Some(rect) = self.net_label_inspector(ui, canvas, area) {
@@ -194,15 +199,20 @@ impl PcbApp {
             let count = self.views.active.schematic.selection.len() + self.views.active.inspection.len();
             let enabled = matches!(self.dialog, Dialog::None);
             let mut net_rules = false;
+            let mut net_appearance = None;
             let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
-            let wires = !self.views.active.schematic.selection.wires.is_empty();
+            if nets_selected && enabled && !self.views.active.schematic.properties.collapsed {
+                self.sync_wire_appearance();
+            }
+            let appearance_enabled = enabled && !self.files.busy() && !self.project_action_pending();
             let sheet = match self.views.active.target() {
                 Some(crate::editor_view::DocumentTarget::Sheet(sheet)) if count == 0 => Some(sheet),
                 _ => None,
             };
             let project = self.session.snapshot();
             let revision = self.session.revision();
-            let drafts = &mut self.views.active.schematic.properties.parameters;
+            let properties = &mut self.views.active.schematic.properties;
+            let bulk = properties.wire_appearance.as_ref().is_some_and(crate::net_appearance::Inspector::is_bulk);
             let mut parameter_change = None;
             let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
@@ -210,14 +220,14 @@ impl PcbApp {
                 "Properties",
                 canvas,
                 area,
-                self.views.active.schematic.properties.collapsed,
+                properties.collapsed,
                 width,
                 |ui| {
                     chrome::inspector_body(ui);
                     if let (Some(sheet), Some(project)) = (sheet, project.as_deref())
                         && enabled
                     {
-                        parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, drafts);
+                        parameter_change = crate::sheet_parameters::show(ui, project, sheet, revision, &mut properties.parameters);
                         return;
                     }
                     if let [label] = inspection_labels.as_slice() {
@@ -228,8 +238,12 @@ impl PcbApp {
                     if inspection_labels.is_empty() || count > inspection_labels.len() {
                         ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
                     }
-                    if wires {
-                        net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
+                    if nets_selected {
+                        let rules_label = if bulk { "Manage net classes…" } else { "Net rules…" };
+                        net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, rules_label)).inner.clicked();
+                        if enabled && let Some(inspector) = &mut properties.wire_appearance {
+                            net_appearance = ui.add_enabled_ui(appearance_enabled, |ui| inspector.show(ui)).inner;
+                        }
                     }
                 },
             );
@@ -238,10 +252,29 @@ impl PcbApp {
             }
             self.views.active.schematic.properties.rect = rect;
             if net_rules {
-                self.begin_net_rules();
+                if bulk {
+                    self.begin_rules();
+                } else {
+                    self.begin_net_rules();
+                }
             }
-            if let (Some(change), Some(sheet)) = (parameter_change, sheet) {
-                self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));
+            if let Some((command, params)) = net_appearance {
+                self.run(command, &params);
+                if self.message.is_none() {
+                    self.views.active.schematic.properties.wire_appearance = None;
+                }
+            }
+            // A paper or frame pick takes the Browser's deferred path, so it is validated against
+            // this view and revision exactly like the sheet's context menu.
+            match (parameter_change, sheet) {
+                (Some(crate::sheet_parameters::Edit::Parameter(change)), Some(sheet)) => {
+                    self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));
+                }
+                (Some(crate::sheet_parameters::Edit::Page(action)), Some(_)) => {
+                    let view = self.views.active.id();
+                    self.queue_view_action(ui.ctx(), view, crate::editor_windows::ViewAction::Browse(action));
+                }
+                _ => {}
             }
             return rect;
         };
@@ -403,9 +436,11 @@ impl PcbApp {
         let mut apply = false;
         let mut choose = false;
         let mut library_action = None;
+        let mut pin_function = None;
         let can_choose = !edit.changed();
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
+        let project = self.views.active.snapshot(&self.session);
         let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
             ui.label(shell::dim(&edit.definition.name));
             chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
@@ -435,18 +470,14 @@ impl PcbApp {
                     apply |= position_apply;
                 }
                 Tab::Terminals => {
-                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
-                        ui.strong("Terminal");
-                        ui.strong("Name");
-                        ui.strong("Electrical type");
-                        ui.end_row();
-                        for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
-                            ui.label(&pin.number);
-                            ui.label(pin.name.as_deref().unwrap_or("—"));
-                            ui.label(format!("{:?}", pin.electrical_type));
-                            ui.end_row();
-                        }
-                    });
+                    if !can_choose {
+                        ui.label(shell::dim("Apply or cancel pending placement and field changes before selecting a pin function."));
+                    }
+                    if let Some(project) = project.as_deref()
+                        && let Some(part) = pin_function_owner(project, &edit.symbol)
+                    {
+                        pin_function = terminal_functions(ui, &edit, project, part, can_choose);
+                    }
                 }
                 Tab::Library => {
                     chrome::group(ui, "Pinned symbol", |ui| {
@@ -481,7 +512,26 @@ impl PcbApp {
             }
         });
         apply |= action.primary;
-        if apply {
+        if let Some((terminal, function)) = pin_function {
+            if !self.views.active.accepts(edit.source, &self.session) {
+                edit.error = Some("View or project changed; reopen symbol properties to continue.".into());
+                self.dialog = Dialog::EditFields(Box::new(edit));
+                return;
+            }
+            self.run(
+                pcbcraft_engine::pin_functions::SET,
+                &json!({
+                    "target":{"part":edit.component,"terminal":terminal},"function":function,"expected_revision":edit.source.revision
+                }),
+            );
+            if let Some(error) = self.message.take() {
+                edit.error = Some(error);
+                self.dialog = Dialog::EditFields(Box::new(edit));
+            } else if let Some(mut refreshed) = self.read_property_edit() {
+                refreshed.tab = Tab::Terminals;
+                self.dialog = Dialog::EditFields(Box::new(refreshed));
+            }
+        } else if apply {
             if !self.views.active.accepts(edit.source, &self.session) {
                 self.message = Some("View or project changed; reopen the symbol fields to continue editing.".into());
                 return;
@@ -518,10 +568,90 @@ impl PcbApp {
     }
 }
 
+/// Resolve a modal's addressed placement and logical part using the sheet and part indexes.
+fn pin_function_owner<'a>(project: &'a pcbcraft_engine::Project, symbol: &str) -> Option<&'a pcbcraft_engine::schematic::PartInstance> {
+    #[cfg(test)]
+    PIN_MODAL_LOOKUPS.set(PIN_MODAL_LOOKUPS.get() + 1);
+    project.component(project.symbol(symbol)?)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Count actual modal owner queries without mixing independent test frames.
+    static PIN_MODAL_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Render effective pin functions in the placed unit's pin list. A selection is a separate
+/// immediate edit rather than an uncommitted field on the placement draft. Supply ranges
+/// display the pinned part definition's ratings for the declared power inputs.
+fn terminal_functions(
+    ui: &mut Ui,
+    edit: &Edit,
+    project: &pcbcraft_engine::Project,
+    part: &pcbcraft_engine::schematic::PartInstance,
+    enabled: bool,
+) -> Option<(String, Option<String>)> {
+    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+
+    let pins = edit.definition.unit(&edit.unit).map_or(&[][..], |unit| unit.pins());
+    let definition = part.part.as_ref();
+    let show_supply = definition.is_some() && pins.iter().any(|pin| pin.electrical_type == PowerIn);
+    let mut selected = None;
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        egui::Grid::new("property_terminals").num_columns(if show_supply { 5 } else { 3 }).show(ui, |ui| {
+            ui.strong("Terminal");
+            ui.strong("Name");
+            ui.strong("Electrical type");
+            if show_supply {
+                ui.strong("Supply minimum");
+                ui.strong("Supply maximum");
+            }
+            ui.end_row();
+            for pin in pins {
+                ui.label(&pin.number);
+                let (name, kind) = project.effective_pin(part, pin);
+                if pin.alternates.is_empty() {
+                    ui.label(name.unwrap_or("—"));
+                } else {
+                    let mut current = project.pin_function(part, &pin.number).unwrap_or_default().to_owned();
+                    let mut options = vec![("", format!("{} (Primary)", pin.name.as_deref().unwrap_or("—")))];
+                    options.extend(pin.alternates.iter().map(|alternate| (alternate.name.as_str(), alternate.name.clone())));
+                    let prior = current.clone();
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let response = chrome::choice(ui, "", egui::IdSalt::new(("pin_function", &pin.number)), &mut current, &options);
+                        response.widget_info(|| {
+                            let mut info =
+                                egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), format!("Pin function for terminal {}", pin.number));
+                            info.current_text_value = options.iter().find(|(value, _)| *value == current.as_str()).map(|(_, label)| label.clone());
+                            info
+                        });
+                    });
+                    if current != prior {
+                        selected = Some((pin.number.clone(), (!current.is_empty()).then_some(current)));
+                    }
+                }
+                ui.label(kind.as_str().replace('_', " "));
+                if show_supply {
+                    let range = definition.and_then(|part| part.supply_range(&pin.number));
+                    let show = |bound: Option<&pcbcraft_engine::library::parts::Value>| {
+                        bound.map_or_else(|| if pin.electrical_type == PowerIn { "Unknown" } else { "—" }.into(), |value| value.display())
+                    };
+                    ui.label(show(range.and_then(|range| range.supply_min.as_ref())));
+                    ui.label(show(range.and_then(|range| range.supply_max.as_ref())));
+                }
+                ui.end_row();
+            }
+        });
+    });
+    selected
+}
+
 #[cfg(test)]
 mod coordinate_tests;
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod pin_function_projection_tests;
 
 #[cfg(test)]
 mod tests {

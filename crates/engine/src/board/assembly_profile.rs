@@ -482,7 +482,7 @@ pub(crate) fn integer(value: &Value) -> Option<i64> {
 }
 
 /// Normalize only the command's numeric fields; saved records retain their canonical syntax checks.
-fn normalize_number(value: &mut Value) {
+pub(crate) fn normalize_number(value: &mut Value) {
     if let Some(integer) = integer(value) {
         *value = json!(integer);
     }

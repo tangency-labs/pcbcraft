@@ -1,3 +1,4 @@
+mod contact;
 mod limits;
 mod reconciliation;
 
@@ -207,7 +208,9 @@ fn invalid_arcs_fail_atomically_on_the_shared_command_path() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Each supported entry point diagnoses missing circular geometry instead of a chord result.
+/// Connectivity and short detection handle circular arcs; every remaining unsupported geometry
+/// consumer still refuses curves instead of substituting a chord, while stackup inspection
+/// remains available.
 #[test]
 fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     let (mut s, arc) = fixture();
@@ -216,10 +219,12 @@ fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     s.apply(SET_ARCS, &params(&s, &[arc])).unwrap();
     let v = view(&s);
     let target = v.target;
-    assert_eq!(v.copper().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.copper_nets().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.copper_with_nets().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.ratsnest().unwrap_err(), UNSUPPORTED);
+    assert!(v.copper().is_ok());
+    assert!(v.copper_nets().is_ok());
+    assert!(v.copper_with_nets().is_ok());
+    assert!(v.ratsnest().is_ok());
+    assert!(v.copper_shorts().is_ok());
+    assert_eq!(v.require_linear_copper().unwrap_err(), UNSUPPORTED);
     assert_eq!(v.carried_tracks("footprint-1", Point { x_nm: 0, y_nm: 0 }, 0, false).unwrap_err(), UNSUPPORTED);
     assert_eq!(v.fabrication().err().unwrap(), UNSUPPORTED);
     assert_eq!(v.fabrication_outputs().err().unwrap(), UNSUPPORTED);
@@ -236,6 +241,11 @@ fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     assert_unavailable(super::super::clipboard::BoardFragment::capture(s.project().unwrap(), &selection, false).err().unwrap(), UNSUPPORTED);
     assert_unavailable(fragment.preview(s.project().unwrap(), 1_000, &Default::default()).err().unwrap(), UNSUPPORTED);
     let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    let groups = view(&s).setup().unwrap().layer_groups();
+    assert_eq!(
+        s.execute(crate::INSPECT_LAYER_GROUPS, &json!({"board":target.board})).unwrap(),
+        json!({"revision":s.revision(),"layer_groups":groups})
+    );
     assert_unavailable(
         s.apply(crate::ADD_VIA, &json!({"board":target.board,"at":{"x_nm":0,"y_nm":0},"expected_revision":s.revision()})).unwrap_err(),
         UNSUPPORTED,
@@ -252,9 +262,10 @@ fn format26_rejects_missing_null_empty_and_older_headers() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = s.project().unwrap().board_document_path().unwrap();
     let board: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/26");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     for replacement in [None, Some(Value::Null), Some(json!([]))] {
         let mut b = board.clone();
+        b["format"] = json!("pcbcraft-board/26");
         if let Some(value) = replacement {
             b["arcs"] = value;
         } else {

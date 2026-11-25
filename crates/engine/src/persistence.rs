@@ -19,16 +19,20 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub(crate) use documents::check_board_document_size;
+#[cfg(test)]
+pub(crate) use documents::historical_documents;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
-    project_registered_board_id,
+    CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, DocumentsEncoder, ENTRY_POINT,
+    MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents, encode_documents, is_document_path,
+    migrate_board_layout, project_board_path, project_instances_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
 mod power_migration;
-pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
+pub use packed::{
+    PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_deflated_packed_documents, encode_packed, encode_packed_documents,
+};
 pub use power_migration::migrate_power_markers;
 
 /// Prepare an opened native project for current bundled addresses without touching source bytes.
@@ -47,7 +51,7 @@ pub fn prepare_opened(project: Arc<Project>) -> Result<Arc<Project>, String> {
     Ok(adopt_paper(migrate_bundled_libraries(project)?))
 }
 
-/// Give every sheet without paper (decoded from before sheet/9) the smallest paper around its
+/// Give every sheet without paper the smallest paper around its
 /// drawing, centered on it. Nothing moves and no history is recorded. Returns the input `Arc`
 /// when every sheet already has paper.
 pub fn adopt_paper(project: Arc<Project>) -> Arc<Project> {
@@ -219,6 +223,8 @@ struct ComponentRecord<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     no_connects: Option<Vec<crate::no_connect::Intent>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pin_functions: Option<Vec<crate::pin_functions::Choice>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     designator_locked: Option<bool>,
 }
 
@@ -347,6 +353,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 locked: false,
                 reference_offset: None,
                 reference_text: None,
+                test_points: BTreeMap::new(),
             })
             .collect(),
     });
@@ -362,7 +369,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
 
 /// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
 }
 
@@ -401,6 +408,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             metadata: None,
             part: None,
             no_connects: None,
+            pin_functions: None,
             designator_locked: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
@@ -500,9 +508,12 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, active footprint and designator locks, occurrence IDs, sheet paper,
-    /// net classes, and part groups require split documents or an archive; refuse loss.
+    /// drawings, rotation, active footprint and designator locks, test-point marks, occurrence IDs,
+    /// sheet paper, net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.board.has_test_points() {
+            return Err("legacy diagnostic encoding cannot represent test-point marks; use split documents".into());
+        }
         if project.components.values().any(|part| part.designator_locked) {
             return Err("Designator locks require split project format 51 or a packed archive.".into());
         }
@@ -511,6 +522,9 @@ impl Encoder {
         }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());
+        }
+        if project.pin_function_count() != 0 {
+            return Err("Alternate pin functions require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -531,6 +545,9 @@ impl Encoder {
         }
         if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
+        }
+        if !project.output_recipes().is_empty() {
+            return Err("legacy single-file encoding cannot represent output recipes; use split documents or a packed archive".into());
         }
         if !project.schematic_packages.assignments.is_empty()
             || !project.board.assignments.is_empty()
@@ -645,6 +662,7 @@ impl Encoder {
                     metadata: None,
                     part: None,
                     no_connects: None,
+                    pin_functions: None,
                     designator_locked: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
@@ -853,8 +871,11 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.pin_functions.is_some() {
+            return Err("Alternate pin functions require native project format 48 or 56.".into());
+        }
         if record.designator_locked.is_some() {
-            return Err("Designator locks require split project format 51.".into());
+            return Err("Designator locks require split project format 51 or 56.".into());
         }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());
@@ -1069,11 +1090,13 @@ fn validate_with_hierarchy(
         sheet_index: 0,
         name,
         components: Arc::new(components),
+        pin_functions: Arc::default(),
         units: Arc::new(units),
         schematic_packages: Arc::default(),
         board: Arc::new(layout),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from,
         layout: None,
         circuit_use: None,
@@ -1081,6 +1104,7 @@ fn validate_with_hierarchy(
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: false,

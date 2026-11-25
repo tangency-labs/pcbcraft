@@ -6,6 +6,12 @@ use pcbcraft_engine::authoring::Kind;
 impl PcbApp {
     /// Identify the visible workspace in the bound host, including definition authoring.
     pub(super) fn workspace_key(&self) -> &'static str {
+        if self.views.active.render.is_some() {
+            return "render";
+        }
+        if self.views.active.manufacturing.is_some() {
+            return "manufacturing";
+        }
         if self.views.active.library.is_some() {
             return "library";
         }
@@ -46,6 +52,9 @@ impl PcbApp {
         }
         match key {
             "library" => self.place_library_workspace(ctx, placement)?,
+            "manufacturing" => self.place_manufacturing(ctx, placement)?,
+            #[cfg(not(target_arch = "wasm32"))]
+            "render" => self.place_render(ctx, placement)?,
             "symbol_editor" | "footprint_editor" => {
                 if placement == Placement::Window && crate::IN_BROWSER {
                     return Err("Native windows are unavailable in the browser.".into());

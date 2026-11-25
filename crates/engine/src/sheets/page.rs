@@ -324,7 +324,7 @@ impl TryFrom<Record> for Page {
 }
 
 impl SchematicSheet {
-    /// This sheet's paper. `None` only on a sheet decoded from a format older than sheet/9 that
+    /// This sheet's paper. `None` on a raw sheet without a page record that
     /// has not been through [`adopt`] yet.
     pub fn page(&self) -> Option<Page> {
         self.page
@@ -355,7 +355,7 @@ impl Project {
                 let (x, y) = crate::schematic::place(p.x_nm, p.y_nm, turns, mirrored);
                 add(Point { x_nm: at.x_nm + x, y_nm: at.y_nm + y });
             };
-            for shape in symbol.unit_definition().graphics() {
+            for shape in self.symbol_graphics(symbol) {
                 match &shape {
                     Shape::Graphic(graphic) => graphic.paths().iter().flatten().for_each(&mut local),
                     Shape::Line(a, b) | Shape::Rect(a, b) => [a, b].into_iter().for_each(&mut local),
@@ -383,7 +383,7 @@ impl Project {
 
 /// Give every sheet without paper the smallest paper around its drawing (see [`Page::around`]).
 /// Nothing moves and no history is recorded; the host keeps the original snapshot as its save
-/// baseline, so the next save writes sheet/9. Returns the same `Arc` when every sheet already
+/// baseline, so the next save writes the adopted paper. Returns the same `Arc` when every sheet already
 /// has paper.
 pub(crate) fn adopt(mut project: Arc<Project>) -> Arc<Project> {
     if project.sheets.iter().all(|sheet| sheet.page.is_some()) {

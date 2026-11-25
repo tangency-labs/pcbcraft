@@ -1,9 +1,10 @@
-//! Revision discovery for existing project instances; adoption remains a separate transaction.
+//! Revision discovery, footprint previews and reviewed non-geometric adoption for existing project instances.
 use super::{Catalog, Definition, Key, Kind, PartDefinition, Reference, inventory::Inventory, matches_pinned};
 use crate::{CommandError, Project, board::footprint_delta, part_groups::part_instance_key};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) mod adopt;
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]
@@ -110,7 +111,7 @@ pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: 
 }
 
 /// Present the same discovery fields for every update root without computing any geometry.
-fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
+pub(super) fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
     let (status, latest, digest, diagnostic) = revision_details(inventory, pinned, catalog);
     json!({"pinned":pinned.key,"status":status,"latest":latest,"latest_digest":digest,"diagnostic":diagnostic})
 }
@@ -119,15 +120,7 @@ fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catal
 /// Conflicting or unresolved latest revisions do not fall back to an older candidate.
 fn revision_details<'a>(inventory: &Inventory, pinned: &super::Item, catalog: &'a Catalog) -> (&'static str, Option<&'a Key>, Value, Option<String>) {
     let mut status = inventory.status(pinned, catalog);
-    let latest = if status == "Project-only" {
-        None
-    } else {
-        let mut first = pinned.key.clone();
-        first.revision = 0;
-        let mut last = pinned.key.clone();
-        last.revision = u32::MAX;
-        catalog.index.range(first..=last).next_back().map(|(key, _)| key)
-    };
+    let latest = (status != "Project-only").then(|| latest_key(&pinned.key, catalog)).flatten();
     let mut diagnostics = Vec::new();
     if status == "Conflict" {
         diagnostics.push("Pinned content conflicts with its loaded immutable address.".to_owned());
@@ -160,6 +153,13 @@ fn revision_details<'a>(inventory: &Inventory, pinned: &super::Item, catalog: &'
     }
     let diagnostic = (!diagnostics.is_empty()).then(|| diagnostics.join(" "));
     (status, latest, digest, diagnostic)
+}
+
+/// Highest loaded address of exactly this item; conflicts never fall back to older revisions.
+fn latest_key<'a>(pinned: &Key, catalog: &'a Catalog) -> Option<&'a Key> {
+    let first = Key { revision: 0, ..pinned.clone() };
+    let last = Key { revision: u32::MAX, ..pinned.clone() };
+    catalog.index.range(first..=last).next_back().map(|(key, _)| key)
 }
 
 /// Identify changed content at an exact address shared by this candidate and the saved project.

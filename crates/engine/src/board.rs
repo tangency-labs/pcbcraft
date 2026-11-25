@@ -18,16 +18,24 @@ pub mod definition;
 pub mod drawing;
 pub mod drc;
 pub mod fabrication;
+pub mod fill;
 pub(crate) mod footprint_delta;
 pub mod geometry;
 pub mod identity;
 mod library_migration;
 #[cfg(test)]
 mod lock_storage_tests;
+
+#[cfg(test)]
+std::thread_local! {
+    static PLACEMENT_LOOKUP_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_GEOMETRY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+pub mod output_recipe;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
@@ -37,7 +45,9 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
+pub mod test_points;
 pub mod track;
 pub(crate) mod transform;
 pub mod update;
@@ -105,7 +115,7 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
-    /// Board-local lock intent; omitted while false. Manipulation protection is a separate policy.
+    /// Board-local lock for direct placement transforms and footprint removal; omitted while false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
@@ -113,6 +123,9 @@ pub(crate) struct Footprint {
     pub(crate) reference_offset: Option<Point>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "reference::present")]
     pub(crate) reference_text: Option<reference::Text>,
+    /// Authored marks keyed by physical pad number, persisted only by the board document.
+    #[serde(skip)]
+    pub(crate) test_points: BTreeMap<String, test_points::Flags>,
 }
 
 /// Maximum displacement of a footprint reference along either local axis, in nanometers.
@@ -153,6 +166,7 @@ impl Footprint {
             locked: false,
             reference_offset: None,
             reference_text: None,
+            test_points: BTreeMap::new(),
         }
     }
     /// Validate placement vocabulary, bounded origin and whole-degree orientation; the board
@@ -279,7 +293,7 @@ impl Footprint {
     }
 
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
-    /// Always include the storage-only `locked` boolean, including when false.
+    /// Always include the `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let definition = project.board.definition_for(self);
         let pins = self.terminals_by_pad();
@@ -292,11 +306,21 @@ impl Footprint {
                 let terminal = pins.get(pad.as_str()).and_then(|pin| terminals.get(*pin)).copied();
                 let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
                     "terminal":terminal.map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                if let Some(flags) = self.test_points.get(pad.as_str()) {
+                    record["test_point"] = json!(flags);
+                }
                 if unconnected.contains(pad.as_str()) {
                     record["unconnected"] = json!(true);
                 }
                 if let Some(physical) = physical {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
+                    if let Some(slot) = physical.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 record
             }).collect::<Vec<_>>()});
@@ -367,7 +391,7 @@ pub(crate) struct Board {
     pub(crate) placement_origin: Option<origin::Origin>,
     /// Explicit pinned assembly output profile revisions, sorted by profile identity.
     pub(crate) assembly_profiles: Vec<assembly_profile::Adoption>,
-    /// Copper segments in stable ID order; empty boards keep their earlier saved format.
+    /// Copper segments in stable ID order; an empty array is omitted on save.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
     pub(crate) vias: Vec<track::Via>,
@@ -383,6 +407,18 @@ impl Board {
     /// Return placement records in stable ID order for independently diffable saves.
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
+    }
+    /// Find an authored placement by its stable ID without resolving pads or connectivity.
+    fn placement(&self, id: u64) -> Option<&Footprint> {
+        let index = self
+            .footprints
+            .binary_search_by_key(&id, |footprint| {
+                #[cfg(test)]
+                PLACEMENT_LOOKUP_PROBES.set(PLACEMENT_LOOKUP_PROBES.get() + 1);
+                footprint.id
+            })
+            .ok()?;
+        self.footprints.get(index)
     }
     /// Resolve only the exact pinned definition; missing revisions never use the current catalog.
     pub(crate) fn definition_for(&self, footprint: &Footprint) -> Option<&definition::FootprintDefinition> {
@@ -426,12 +462,32 @@ impl Board {
         self.footprints.push(footprint);
         Ok(())
     }
+    /// Whether retiring this component keeps its accepted physical placement for review.
+    pub(super) fn retains_retired_component(&self, component: u64) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component))
+    }
+
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format 3 and later also retain the last visible typed quantity; older history
-    /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
+        self.retain_component_display(component, display);
+        if self.retains_retired_component(component) {
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+            return;
+        }
+        if self.by_component.remove(&component).is_some() || assigned {
+            self.footprints.retain(|f| f.component != component);
+            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+        }
+    }
+
+    /// Preserve the last visible fields for pending removal without accepting other changes.
+    /// Format 3 and later retain the typed quantity; older history stays text-only.
+    pub(crate) fn retain_component_display(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
@@ -451,17 +507,6 @@ impl Board {
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
         }
-        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
-            return;
-        }
-        if self.by_component.remove(&component).is_some() || assigned {
-            self.footprints.retain(|f| f.component != component);
-            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
-        }
     }
 
     /// Keep live and accepted historical package assets through every save and
@@ -477,6 +522,7 @@ impl Board {
 
     /// Distinguish physically eligible desired intent from accepted packages;
     /// excluded live choices remain authored without requiring a physical update.
+    #[cfg(test)]
     pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
         self.baseline.as_ref().is_some_and(|baseline| {
             self.assignments

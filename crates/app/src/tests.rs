@@ -9,11 +9,15 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave;
 // The browser build has no Assistant, which both tests expect.
 #[cfg(not(target_arch = "wasm32"))]
 mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
+mod board_fill;
+pub(crate) use board_fill::board as fill_harness;
 mod board_layers;
 mod board_properties;
 mod board_ratsnest;
@@ -34,9 +38,12 @@ mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod inspection_selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod manufacturing;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;
+mod net_appearance;
 mod net_labels;
 mod no_connect;
 mod optional_board;
@@ -61,9 +68,6 @@ pub(crate) fn assert_same_content(expected: &Arc<pcbcraft_engine::Project>, actu
     let normalize = |documents: &mut pcbcraft_engine::persistence::Documents| {
         let mut entry: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
         let watermark = entry.as_object_mut().unwrap().remove("numeric_id_high_water").and_then(|value| value.as_u64()).unwrap_or(0);
-        if entry["format"] == "pcbcraft-project/7" {
-            entry["format"] = json!("pcbcraft-project/6");
-        }
         documents.insert("project.json".into(), serde_json::to_vec(&entry).unwrap());
         watermark
     };
@@ -126,6 +130,12 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
 /// ribbon's left edge, is first scrolled into view as a person would; fully visible controls are
 /// clicked at once, so no extra frame can change the UI.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    queue_click(harness, label);
+    harness.run();
+}
+
+/// Bring the named control into view and queue its click so the caller can wait for the result.
+pub(super) fn queue_click(harness: &mut Harness<'_, PcbApp>, label: &str) {
     let layout = label.strip_prefix("Arrangement ").filter(|name| *name != "name");
     if (layout.is_some() || label == "New arrangement") && harness.query_by_label(label).is_none() {
         harness.get_by_label("File").click();
@@ -145,7 +155,6 @@ pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
         harness.run();
     }
     harness.get_by_label(label).click();
-    harness.run();
 }
 
 /// Select an actual ribbon tab when a Browser row has the same visible label.
@@ -581,21 +590,21 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 }
 
 /// The workspace tile opens a picker that lists Schematic as current and the planned
-/// 3D/simulation workspaces as disabled rows. Clicking a planned row does nothing; Escape, a click outside and
+/// simulation workspace as a disabled row. Clicking it does nothing; Escape, a click outside and
 /// choosing Schematic each close the picker. Keys pressed in the picker don't reach the canvas.
 #[test]
 fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let mut harness = harness();
+    harness.set_size(egui::vec2(1000.0, 900.0));
+    harness.run();
     let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB Layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
     harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
-    for planned in ["3D render", "Simulate"] {
-        assert!(harness.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is planned");
-    }
+    assert!(harness.get_by_label("Simulate").accesskit_node().is_disabled());
     assert!(!harness.get_by_label("Schematic").accesskit_node().is_disabled());
 
-    harness.get_by_label("3D render").click();
+    harness.get_by_label("Simulate").click();
     harness.run();
     assert!(picker_open(&harness), "a planned row doesn't close the picker");
     harness.key_press(Key::Escape);
@@ -681,7 +690,7 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     let title = harness.query_all_by_label("Two resistors").find(|node| node.rect().bottom() <= bar_bottom).unwrap();
     assert!(title.rect().width() < 120.0);
     let report = harness.get_by_label("Report a bug");
-    assert!(report.rect().right() < harness.get_by_label(&format!("v{VERSION}")).rect().left());
+    assert!(report.rect().right() < harness.get_by_label(&format!("v{}", display_version())).rect().left());
     report.click();
     harness.step();
     assert!(
@@ -2004,6 +2013,107 @@ mod live_mcp {
         assert!(session.project().unwrap().components().all(|part| !part.designator_locked()));
         session.apply("edit.undo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&predecessor, &session.snapshot().unwrap()));
+    }
+
+    /// Preview, apply and undo a live sheet-scoped transfer with a large off-screen graph.
+    #[test]
+    fn package_completion_live_transfer_preserves_scope_and_history() {
+        use pcbcraft_engine::{COMPLETE_PACKAGES, CONNECT_PINS, library::sources, sheets::CREATE_SHEET};
+
+        const BACKGROUND_SYMBOLS: usize = 1_024;
+        const BACKGROUND_WIRES: usize = 256;
+        let mut h = harness();
+        new_project(&mut h);
+        let (sheet, host, donor) = {
+            let session = &mut h.state_mut().session;
+            session
+                .execute(
+                    sources::LOAD,
+                    &json!({"source":"completion-test","documents":{
+                        "library.json":include_str!("../../../examples/native-parts/library.json"),
+                        "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json"),
+                    }}),
+                )
+                .unwrap();
+            let definition = session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+            let digest = sources::symbol_digest(&definition).unwrap();
+            let sheet = session.project().unwrap().sheet_target();
+            for (unit, x) in [("a", 0), ("b", 25_400_000)] {
+                session
+                    .apply(
+                        PLACE_SYMBOL,
+                        &json!({"library":"parts-demo","definition":"dual-amplifier","definition_revision":1,
+                    "definition_digest":digest,"sheet":sheet.id(),"unit":unit,"x_nm":x,"y_nm":0,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let symbols = session.project().unwrap().symbols();
+            let host = symbols[0].clone();
+            let donor = symbols[1].clone();
+            session
+                .apply(
+                    CONNECT_PINS,
+                    &json!({"sheet":sheet.id(),"from":{"symbol":donor.id(),"terminal":"5"},
+                "to":{"symbol":donor.id(),"terminal":"6"},"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            session.apply(CREATE_SHEET, &json!({"name":"Background","expected_revision":session.revision()})).unwrap();
+            let background = session.project().unwrap().sheets().nth(1).unwrap().target;
+            for i in 0..BACKGROUND_SYMBOLS as i64 {
+                session
+                    .apply(
+                        PLACE_SYMBOL,
+                        &json!({"definition":"resistor","sheet":background.id(),"auto_heal":false,
+                    "x_nm":(i%32)*25_400_000,"y_nm":(i/32)*25_400_000,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let ids: Vec<_> = session.project().unwrap().for_sheet(background).unwrap().symbols().iter().map(|s| s.id()).collect();
+            assert_eq!(ids.len(), BACKGROUND_SYMBOLS);
+            for pair in ids.as_chunks::<2>().0.iter().take(BACKGROUND_WIRES) {
+                session
+                    .apply(
+                        CONNECT_PINS,
+                        &json!({"sheet":background.id(),"from":{"symbol":pair[0],"terminal":"2"},
+                    "to":{"symbol":pair[1],"terminal":"1"},"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(session.project().unwrap().for_sheet(background).unwrap().wires().len(), BACKGROUND_WIRES);
+            (sheet, host, donor)
+        };
+        h.run();
+        let (port, token) = connect(&mut h);
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let expected_net = before.electrical_connectivity();
+        let expected_pin = before.wires()[0].terminals()[0];
+        let expected_name = expected_net.net_name(expected_net.net_index_for(expected_pin).unwrap());
+        let request = |dry_run| {
+            json!({"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+            "scope":"sheet","sheet":sheet.id(),"dry_run":dry_run,"expected_revision":revision}})
+        };
+        let preview = payload(tool(&mut h, (port, &token), "execute", request(true)));
+        assert_eq!(preview["revision"], revision);
+        assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+        assert_eq!(preview["changes"][0]["symbol"], donor.id());
+        assert_eq!(preview["changes"][0]["to_part"], host.component_id());
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+
+        let apply = payload(tool(&mut h, (port, &token), "execute", request(false)));
+        assert_eq!(apply["revision"], revision + 1);
+        assert_eq!(apply["changes"], preview["changes"]);
+        let after = h.state().session.snapshot().unwrap();
+        assert_eq!(after.symbols()[1].id(), donor.id());
+        assert_eq!(after.symbols()[1].component_id(), host.component_id());
+        assert_eq!(after.wires(), before.wires());
+        let net = after.electrical_connectivity();
+        assert_eq!(net.net_name(net.net_index_for(expected_pin).unwrap()), expected_name);
+        let stale = tool(&mut h, (port, &token), "execute", request(false));
+        assert_eq!(stale["structuredContent"]["error"]["code"], "stale_revision");
+        assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+        h.state_mut().session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
 
     /// Run a window command over the live connection and return the editor inspection it answers.

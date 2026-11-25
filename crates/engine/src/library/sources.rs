@@ -3,6 +3,7 @@ mod deletion;
 mod export;
 pub mod inventory;
 mod updates;
+pub mod where_used;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
@@ -36,6 +37,16 @@ pub const LIST: &str = "library.list_sources";
 pub const SEARCH: &str = "library.search";
 /// Inspect later loaded revisions without changing project pins or history.
 pub const AVAILABLE_REVISIONS: &str = "library.available_revisions";
+/// Review selected instances' non-geometric updates without editing the project.
+pub const PREVIEW_ADOPTION: &str = "library.preview_adoption";
+/// Advance selected instances' immutable pins in one revision-checked edit.
+pub const APPLY_ADOPTION: &str = "library.apply_adoption";
+
+const ADOPTION_INSTANCES: Param =
+    Param { name: "instances", summary: "Unique part instance IDs from available revisions", required: true, kind: ParamKind::PartIds };
+
+/// List the current project's actual uses of one exact native item revision.
+pub const WHERE_USED: &str = "library.where_used";
 /// Read-only pad geometry and endpoint preview for one placed part instance.
 pub const PREVIEW_FOOTPRINT_REVISION: &str = "library.preview_footprint_revision";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
@@ -80,7 +91,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 11] = [
+pub(crate) const COMMANDS: [Command; 14] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -196,6 +207,22 @@ pub(crate) const COMMANDS: [Command; 11] = [
         params: &[],
     },
     Command {
+        id: PREVIEW_ADOPTION,
+        title: "Preview library adoption",
+        summary: "Review name and default-value changes for selected instances; no project edit.",
+        params: &[ADOPTION_INSTANCES, crate::EXPECTED_REVISION],
+    },
+    Command {
+        id: APPLY_ADOPTION,
+        title: "Apply library adoption",
+        summary: "Adopt the selected text-only updates in one project transaction.",
+        params: &[
+            ADOPTION_INSTANCES,
+            crate::EXPECTED_REVISION,
+            Param { name: "preview", summary: "Confirmation from library.preview_adoption", required: true, kind: ParamKind::LibraryDigest },
+        ],
+    },
+    Command {
         id: PREVIEW_FOOTPRINT_REVISION,
         title: "Preview footprint revision",
         summary: "Compare a placed footprint with its latest available library revision without editing the board or resolving pad maps.",
@@ -244,6 +271,17 @@ pub(crate) const COMMANDS: [Command; 11] = [
             },
             Param { name: "allow_older", summary: "Confirm publication without merging a newer revision", required: false, kind: ParamKind::Flag },
             Param { name: "copy", summary: "Publish a derivative under a fresh item identity", required: false, kind: ParamKind::Flag },
+        ],
+    },
+    Command {
+        id: WHERE_USED,
+        title: "Find library item uses",
+        summary: "List actual instances of one exact native item revision in the open project without editing it.",
+        params: &[
+            Param { name: "library", summary: "Exact library identity", required: true, kind: ParamKind::LibrarySource },
+            Param { name: "kind", summary: "Native item kind", required: true, kind: ParamKind::LibraryKind },
+            Param { name: "definition", summary: "Exact item identity", required: true, kind: ParamKind::LibrarySource },
+            Param { name: "definition_revision", summary: "Exact item revision", required: true, kind: ParamKind::DefinitionRevision },
         ],
     },
 ];
@@ -351,11 +389,13 @@ impl Item {
             _ => None,
         }
     }
-    /// Search stable identity, display name and symbol prefix, without interpreting names as IDs.
+    /// Search stable identity, display name, symbol prefix and a part's authored description and
+    /// keywords, without interpreting names as IDs. Link labels and URLs are not searchable.
     fn matches(&self, query: &str) -> bool {
         self.name.to_lowercase().contains(query)
             || self.key.id.contains(query)
             || self.key.library.contains(query)
+            || self.part().is_some_and(|part| part.search_text().contains(query))
             || self
                 .manufacturer_part()
                 .is_some_and(|part| part.manufacturer.to_lowercase().contains(query) || part.mpn.to_lowercase().contains(query))
@@ -697,6 +737,7 @@ impl Catalog {
             .transpose()?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
+        part.validate_rating_terminals(symbol.as_deref())?;
         let mut footprints = BTreeMap::new();
         for (id, package) in &part.packages {
             let footprint = self.exact(&package.footprint, Kind::Footprint)?.footprint().ok_or("Expected a footprint record.")?;
@@ -1028,7 +1069,7 @@ impl Session {
         Arc::make_mut(&mut self.libraries).mark_unavailable(id);
     }
 
-    /// Execute validated library commands without editing the project or its history.
+    /// Execute validated library commands. Adoption alone can edit the project and history.
     /// Revision discovery treats the saved dependency closure as input, so inconsistent pins
     /// are InvalidParams even when the command has no parameter fields.
     pub(crate) fn library_command(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
@@ -1126,6 +1167,17 @@ impl Session {
             AVAILABLE_REVISIONS => {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
                 updates::inspect(project, &self.libraries, self.revision()).map_err(CommandError::InvalidParams)
+            }
+            PREVIEW_ADOPTION | APPLY_ADOPTION => updates::adopt::run(self, params, id == APPLY_ADOPTION),
+            WHERE_USED => {
+                let kind = serde_json::from_value(params["kind"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+                let key = Key {
+                    library: params["library"].as_str().unwrap_or_default().into(),
+                    kind,
+                    id: params["definition"].as_str().unwrap_or_default().into(),
+                    revision: params["definition_revision"].as_u64().and_then(|revision| u32::try_from(revision).ok()).unwrap_or_default(),
+                };
+                serde_json::to_value(self.library_where_used(&key)?).map_err(|error| CommandError::InvalidParams(error.to_string()))
             }
             PREVIEW_FOOTPRINT_REVISION => {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;

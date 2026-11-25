@@ -2,12 +2,14 @@ use egui::{Color32, Painter, PointerButton, Pos2, Rect, Response, Shape, Stroke}
 use pcbcraft_chrome::{Tokens, theme};
 use pcbcraft_engine::{
     Project,
+    nets::Appearance,
     schematic::{Point, SymbolPlacement, WireEndpoint, orthogonal_path},
     wire::{Anchor, Reshape},
 };
 
 use super::Camera;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 mod departure;
 mod targets;
@@ -15,22 +17,78 @@ mod targets;
 #[cfg(test)]
 mod tests;
 
+/// Extra screen-space width painted on each side of emphasized wire ink. Because strokes are
+/// screen-space, the outline stays visible at every zoom level.
+const EMPHASIS_HALO: f32 = 2.0;
+
+/// The derived wire appearance map for one snapshot, shared by `Rc` so a cache hit copies only a
+/// reference, never the project-wide map.
+pub(crate) type Appearances = Rc<std::collections::BTreeMap<String, Appearance>>;
+
 /// Uncommitted route corners and elbow preference; this never changes a project snapshot.
 #[derive(Debug)]
 pub(crate) struct Draft {
     corners: Vec<Vec<Point>>,
     target_cache: RefCell<targets::Cache>,
+    /// Last wire-appearance derivation, reused across camera-only repaints of the same snapshot.
+    appearance_cache: RefCell<AppearanceCache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
 }
 
+/// One view's derived wire appearances, tied to the immutable snapshot they came from. Keeping
+/// a cloned snapshot alive also keeps its wire collection address from being reused by a later
+/// snapshot, so identity cannot accidentally hit a stale result. The map itself is reference
+/// counted: committed hits and safe preview borrows share one allocation.
+#[derive(Debug, Default)]
+struct AppearanceCache {
+    snapshot: Option<Project>,
+    revision: u64,
+    appearances: Appearances,
+}
+
 impl Default for Draft {
     fn default() -> Self {
-        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false }
+        Self {
+            target_cache: RefCell::default(),
+            appearance_cache: RefCell::default(),
+            corners: Vec::new(),
+            horizontal_first: true,
+            finish_requested: false,
+        }
     }
 }
 
 impl Draft {
+    /// Resolve wire appearance overrides for one paint. The last derivation is reused when
+    /// `project` is still the same immutable snapshot at the same revision, so camera-only
+    /// repaints skip rebuilding the electrical graph. A committed hit returns a clone of the
+    /// reference-counted map, not a copy of its entries. A preview borrows that same map when its
+    /// wire identities and endpoints are unchanged: the net registry cannot move without a
+    /// revision change, so net-wide appearances cannot differ. Previews that really do change
+    /// topology are derived fresh and are never stored in the committed cache. The engine's
+    /// no-override fast path inside `wire_appearances()` is preserved on every miss.
+    pub(crate) fn appearances(&self, project: &Project, revision: u64, preview: bool) -> Appearances {
+        let cache = self.appearance_cache.borrow();
+        if cache.revision == revision
+            && cache
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| std::ptr::eq(snapshot.wires(), project.wires()) || (preview && same_appearance_basis(snapshot, project)))
+        {
+            return Rc::clone(&cache.appearances);
+        }
+        drop(cache);
+        let appearances = Rc::new(project.wire_appearances().unwrap_or_default());
+        if !preview {
+            let mut cache = self.appearance_cache.borrow_mut();
+            cache.snapshot = Some(project.clone());
+            cache.revision = revision;
+            cache.appearances = Rc::clone(&appearances);
+        }
+        appearances
+    }
+
     /// Resolve the frozen corners and current leg, retracting self-overlap with the same
     /// normalization as commit when enabled. Invalid or overly complex previews are refused.
     pub(crate) fn path(&self, from: Point, to: Point, auto_heal: bool) -> Option<Vec<Point>> {
@@ -55,6 +113,19 @@ impl Draft {
     pub(crate) fn back(&mut self) -> bool {
         self.corners.pop().is_some()
     }
+}
+
+/// Whether a transient preview keeps the wire identities and endpoints that decide net-wide
+/// appearance. A reshape that only moves corners rebuilds the wire collection but keeps every
+/// endpoint identity, so the committed map still describes it. Net registry edits bump the
+/// revision, so at one revision equal endpoints are enough to borrow the committed derivation.
+/// Junction positions are checked too: a drag that slides a shared endpoint moves a junction and
+/// can regroup electrical nets, so it must derive a fresh map instead of borrowing.
+fn same_appearance_basis(committed: &Project, preview: &Project) -> bool {
+    let (before, after) = (committed.wires(), preview.wires());
+    before.len() == after.len()
+        && before.iter().zip(after).all(|(old, new)| old.id() == new.id() && old.endpoints() == new.endpoints())
+        && committed.junctions().eq(preview.junctions())
 }
 
 /// A reshape grabbed on a wire: what moves, the model point grabbed, and the snapped
@@ -268,11 +339,41 @@ pub(super) fn paint_handles(
     }
 }
 
+/// Effective screen-space strokes for emphasized wire ink, as `(width, color)` pairs painted in
+/// order: a wider underlay, then the ink itself. A wire matching its background must use an
+/// underlay that differs from its ink, even when both match the theme's text color.
+fn emphasis_strokes(color: Color32, width: f32) -> [(f32, Color32); 2] {
+    let text = Tokens::get().text;
+    let outline = if text == color { if egui::Rgba::from(color).intensity() < 0.18 { Color32::WHITE } else { Color32::BLACK } } else { text };
+    [(width + 2.0 * EMPHASIS_HALO, outline), (width, color)]
+}
+
+/// Whether `color` equals either surface a schematic wire can be drawn on. A route may cross the
+/// canvas/paper boundary, so checking both the canvas and the paper fill covers every portion; with
+/// a uniform paper [`Appearance::fill`] is the canvas, making this a single comparison.
+fn matches_any_surface(color: Color32, paper: pcbcraft_chrome::paper::Appearance) -> bool {
+    color == paper.canvas || color == paper.fill()
+}
+
+/// Paint a model-space polyline with the emphasis underlay and ink from [`emphasis_strokes`].
+fn paint_emphasized(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32, width: f32) {
+    let [(outline_width, outline_color), (ink_width, ink_color)] = emphasis_strokes(color, width);
+    paint_stroke(painter, rect, camera, points.clone(), Stroke::new(outline_width, outline_color));
+    paint_stroke(painter, rect, camera, points, Stroke::new(ink_width, ink_color));
+}
+
 /// Paint resolved paths, including a disposable symbol move, and free-point markers. As in
 /// KiCad, a free point on one wire end is unconnected and drawn as a small open square; where two
 /// wire ends meet the route reads as continuous, so nothing is drawn; three or more get a filled
 /// junction dot.
-/// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
+/// Local selection takes precedence over a counterpart highlight for the ink color; neither changes
+/// connectivity. A selected or highlighted wire gets the contrasting underlay from
+/// [`emphasis_strokes`] beneath its ink, so it stays distinguishable even when a net color matches
+/// the theme's selection accent and its drawn width is already the maximum. A plain wire whose saved
+/// color matches either resolved surface gets the same underlay, including when its route crosses
+/// the canvas/paper boundary (see [`matches_any_surface`]), so no portion disappears into the
+/// background in any paper mode.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
     rect: Rect,
@@ -281,6 +382,8 @@ pub(super) fn paint(
     moved: Option<(SymbolPlacement, Point)>,
     selected: &std::collections::BTreeSet<String>,
     highlighted: &std::collections::BTreeSet<String>,
+    appearances: &Appearances,
+    paper: pcbcraft_chrome::paper::Appearance,
 ) {
     let tokens = Tokens::get();
     let preview =
@@ -299,14 +402,30 @@ pub(super) fn paint(
         let [Some(from), Some(to)] = wire.endpoints().map(position) else {
             continue;
         };
-        let color = if selected.contains(&wire.id()) {
+        let override_ = appearances.get(&wire.id());
+        let is_selected = selected.contains(&wire.id());
+        let is_highlighted = highlighted.contains(&wire.id());
+        let color = if is_selected {
             tokens.accent
-        } else if highlighted.contains(&wire.id()) {
+        } else if is_highlighted {
             tokens.schematic_highlight
+        } else if let Some(appearance) = override_.and_then(|appearance| appearance.color) {
+            Color32::from_rgb(appearance[0], appearance[1], appearance[2])
         } else {
             tokens.schematic_wire
         };
-        paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
+        // A drawn width is a screen-space stroke, so it stays readable at every zoom level.
+        let width =
+            override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
+        let route = pcbcraft_engine::wire::wire_path(wire, from, to);
+        // A routed wire can cross the canvas/paper boundary; match against both resolved surfaces
+        // so no portion can vanish into a same-coloured background.
+        let matches_surface = matches_any_surface(color, paper);
+        if is_selected || is_highlighted || matches_surface {
+            paint_emphasized(painter, rect, camera, route, color, width);
+        } else {
+            paint_stroked_route(painter, rect, camera, route, color, width);
+        }
     }
     let mut ends = std::collections::BTreeMap::<u64, usize>::new();
     for endpoint in project.wires().iter().flat_map(|wire| wire.endpoints()) {
@@ -374,11 +493,13 @@ impl LegTarget {
 }
 
 /// Paint only the selected leg at its validated movement offset, including both axes for
-/// a detached piece. The rest keeps ordinary ink so Delete's scope is visible before use.
+/// a detached piece. The rest keeps ordinary ink so Delete's scope is visible before use. The
+/// accent leg is a narrower stroke of the same color as a selected wire, so it gets the same
+/// contrasting underlay to stay visible when the wire's net color is also the accent.
 pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset: Point) {
     let points =
         leg.route[leg.leg..=leg.leg + 1].iter().map(|point| Point { x_nm: point.x_nm + offset.x_nm, y_nm: point.y_nm + offset.y_nm }).collect();
-    paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().accent));
+    paint_emphasized(painter, rect, camera, points, Tokens::get().accent, 2.0 * theme::SCHEMATIC_SYMBOL_STROKE);
 }
 
 /// Find the wire leg nearest the pointer, within the wire hit radius, and the grid point on it
@@ -419,12 +540,12 @@ fn distance_sq(pointer: Pos2, a: Pos2, b: Pos2) -> f32 {
 /// What the hovered row of a wire's menu will change: the whole route or one leg in the error
 /// colour for deletion, a ring where Slice will split it, or the leg in the accent colour with
 /// unconnected-end squares where Break will separate it. With no row hovered, the leg under the
-/// click is drawn in the accent colour. Previews use a heavier stroke, so they stand out from
-/// the selection highlight the right-click also gives the wire.
+/// click is drawn in the accent colour. Previews use a heavier stroke and the same contrasting
+/// underlay as selection, so they stand out from a wire styled with that accent or error colour.
 pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, target: &LegTarget, hovered: Option<super::WireAction>) {
     let tokens = Tokens::get();
     let paint_route = |painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32| {
-        paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, color));
+        paint_emphasized(painter, rect, camera, points, color, 2.0 * theme::SCHEMATIC_SYMBOL_STROKE);
     };
     let leg = target.route[target.leg..=target.leg + 1].to_vec();
     match hovered {
@@ -487,7 +608,8 @@ pub(super) fn pick(
 }
 
 /// Highlight unambiguous endpoints and preview the full route. Read Ctrl each frame so
-/// pressing or releasing the grid override updates the target without a pointer move.
+/// pressing or releasing the grid override updates the target without a pointer move. The
+/// accent/error route keeps the emphasis underlay so it reads over a styled wire.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preview(
     painter: &Painter,
@@ -509,12 +631,13 @@ pub(super) fn preview(
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
         && let Some(path) = draft.path(from, to, auto_heal)
     {
-        paint_route(
+        paint_emphasized(
             painter,
             rect,
             camera,
             path,
             if target.is_some_and(|anchor| targets.connection_allowed(project, anchor)) { tokens.accent } else { tokens.error },
+            theme::SCHEMATIC_SYMBOL_STROKE,
         );
     }
     for &(endpoint, pos) in &targets.endpoints {
@@ -569,9 +692,9 @@ fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<W
     if ambiguous { Err(()) } else { Ok(nearest) }
 }
 
-/// Place a named anchor at an existing contact before falling back to the snap grid. This
-/// preserves off-grid pins and wire contacts, reusing the revision-bound target cache.
-pub(super) fn label_position(
+/// Keep the snapped contact identity so new labels can follow a terminal's lead direction.
+/// Free placement still falls back to the grid when no unambiguous contact was found.
+pub(super) fn label_anchor(
     project: &Project,
     camera: &Camera,
     rect: Rect,
@@ -579,14 +702,13 @@ pub(super) fn label_position(
     draft: &Draft,
     revision: u64,
     ignore: Option<WireEndpoint>,
-) -> Point {
+) -> Anchor {
     draft
         .target_cache
         .borrow_mut()
         .get(project, revision, camera, rect)
         .anchor(camera, rect, pointer, ignore, true)
-        .and_then(|anchor| anchor.position(project))
-        .unwrap_or_else(|| camera.snap(pointer, rect))
+        .unwrap_or_else(|| Anchor::Free(camera.snap(pointer, rect)))
 }
 
 /// Align the closest pin of any placement template with an explicit contact. Ambiguous
@@ -669,9 +791,9 @@ fn paint_pin(painter: &Painter, pos: Pos2, color: Color32) {
     painter.circle_stroke(pos, theme::SCHEMATIC_PIN_RADIUS, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
 }
 
-/// Paint a model-space polyline through the canvas clip using shared wire styling.
-fn paint_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32) {
-    paint_stroke(painter, rect, camera, points, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+/// Paint a model-space polyline with an explicit screen-space stroke width.
+fn paint_stroked_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32, width: f32) {
+    paint_stroke(painter, rect, camera, points, Stroke::new(width, color));
 }
 
 /// Paint a model-space polyline with `stroke`; fewer than two points paints nothing.

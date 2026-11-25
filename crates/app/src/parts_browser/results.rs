@@ -34,6 +34,9 @@ impl PartsBrowser {
                 let mut text = format!("{} {} {} {}", e.name(), e.0.id, e.0.reference_prefix(), e.0.library);
                 if let Some(part) = &e.1 {
                     text.push_str(&format!(" {} {}", part.definition.id, part.definition.library));
+                    // Canonical search text: description and keywords only, never link labels or URLs.
+                    text.push(' ');
+                    text.push_str(&part.definition.search_text());
                     for m in catalog.manufacturers_for(&part.definition.reference()) {
                         let candidate = pcbcraft_engine::part_instances::Selection {
                             resolved: part.clone(),

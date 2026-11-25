@@ -63,6 +63,22 @@ impl Contour {
         Self { core: [start, end, end, start], radius }
     }
 
+    /// Only straight, nondegenerate capsule cores describe track centerlines.
+    pub(super) fn track_centerline(&self) -> Option<[Point; 2]> {
+        let [a, b, c, d] = self.core;
+        (a == d && b == c && a != b).then_some([a, b])
+    }
+
+    /// Interval where a track would be too close to this convex copper core.
+    /// A line through the core meets it at edges or starts/ends inside it.
+    pub(super) fn track_proximity(&self, leg: [Point; 2], expansion: f64) -> Option<(f64, f64)> {
+        self.edges()
+            .filter_map(|(a, b)| proximity_interval(leg, [a, b], self.radius + expansion))
+            .chain(self.contains_core(leg[0]).then_some((0., 0.)))
+            .chain(self.contains_core(leg[1]).then_some((1., 1.)))
+            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+    }
+
     /// Copper separation in nanometers. Zero or negative means contact; containment returns
     /// zero, not a penetration depth. Equality with a required clearance passes. Distances use
     /// the existing floating predicates and rounded integer pad cores, without a new epsilon.
@@ -95,6 +111,14 @@ impl Contour {
         let [a, b, _, d] = self.core;
         let area = (b.x_nm - a.x_nm) as i128 * (d.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (d.x_nm - a.x_nm) as i128;
         area != 0 && inside(p, &self.core)
+    }
+
+    /// Signed distance from a point to the boundary, positive inside. Inside an area core,
+    /// the expansion adds to the nearest core edge distance; outside the core it subtracts
+    /// the distance back to the core. This also supports point and segment cores.
+    pub(super) fn boundary_margin_nm(&self, point: Point) -> f64 {
+        let distance = self.edges().map(|(a, b)| point_distance(point, a, b)).fold(f64::INFINITY, f64::min);
+        if self.contains_core(point) { self.radius + distance } else { self.radius - distance }
     }
 
     /// Test a round-ended segment against the pad, with a zero-length segment for an endpoint or via.
@@ -156,6 +180,15 @@ impl Contour {
     }
 }
 
+/// Whether a path from `a` through `b` to `c` runs straight on at `b`: both legs lie exactly on
+/// one line in integer nanometres (zero cross product, no tolerance) and point the same way.
+/// A repeated point or a reversal is not a straight continuation.
+pub(crate) fn continues_straight(a: Point, b: Point, c: Point) -> bool {
+    let cross = i128::from(b.x_nm - a.x_nm) * i128::from(c.y_nm - b.y_nm) - i128::from(b.y_nm - a.y_nm) * i128::from(c.x_nm - b.x_nm);
+    let forward = i128::from(b.x_nm - a.x_nm) * i128::from(c.x_nm - b.x_nm) + i128::from(b.y_nm - a.y_nm) * i128::from(c.y_nm - b.y_nm);
+    cross == 0 && forward > 0
+}
+
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
 pub(super) fn inside(point: Point, corners: &[Point; 4]) -> bool {
     let mut sign = 0i8;
@@ -190,4 +223,78 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     let length = dx * dx + dy * dy;
     let t = if length > 0. { (((px - ax) * dx + (py - ay) * dy) / length).clamp(0., 1.) } else { 0. };
     ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
+}
+
+/// Locate closest approach on the first closed segment. For a tied parallel
+/// overlap, prefer the station towards the incoming leg's tip.
+pub(super) fn closest_station([a, b]: [Point; 2], [c, d]: [Point; 2]) -> f64 {
+    let (u, v, w) = (delta(a, b), delta(c, d), delta(a, c));
+    let denominator = cross(u, v);
+    if denominator != 0. {
+        let (t, s) = (cross(w, v) / denominator, cross(w, u) / denominator);
+        if (0. ..=1.).contains(&t) && (0. ..=1.).contains(&s) {
+            return t;
+        }
+    }
+    let length2 = dot(u, u);
+    if length2 == 0. {
+        return 0.;
+    }
+    let project = |p| (dot(delta(a, p), u) / length2).clamp(0., 1.);
+    let tip = project(d);
+    [(point_distance(d, a, b), project(d)), (point_distance(c, a, b), project(c)), (point_distance(a, c, d), 0.), (point_distance(b, c, d), 1.)]
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| (a.1 - tip).abs().total_cmp(&(b.1 - tip).abs())))
+        .map_or(0., |(_, station)| station)
+}
+
+/// The parameter interval where a straight leg enters an expanded capsule.
+/// End discs and the central strip cover the same capsule as the exact gap check.
+pub(super) fn proximity_interval([a, b]: [Point; 2], [c, d]: [Point; 2], radius: f64) -> Option<(f64, f64)> {
+    let (u, v, w) = (delta(a, b), delta(c, d), delta(c, a));
+    let interval = |offset: f64, slope: f64, low: f64, high: f64| {
+        if slope == 0. {
+            return (low <= offset && offset <= high).then_some((0., 1.));
+        }
+        let (x, y) = ((low - offset) / slope, (high - offset) / slope);
+        let (start, end) = (x.min(y).max(0.), x.max(y).min(1.));
+        (start <= end).then_some((start, end))
+    };
+    let disc = |at| {
+        let w = delta(at, a);
+        let length2 = dot(u, u);
+        let depth = radius * radius - cross(u, w).powi(2) / length2;
+        (depth >= 0.).then(|| depth.sqrt() * length2.sqrt()).and_then(|r| interval(dot(w, u), length2, -r, r))
+    };
+    let strip = || {
+        let length2 = dot(v, v);
+        if length2 == 0. {
+            return None;
+        }
+        let height = radius * length2.sqrt();
+        let (x0, x1) = interval(dot(w, v), dot(u, v), 0., length2)?;
+        let (y0, y1) = interval(cross(v, w), cross(v, u), -height, height)?;
+        let (start, end) = (x0.max(y0), x1.min(y1));
+        (start <= end).then_some((start, end))
+    };
+    [disc(c), disc(d), strip()].into_iter().flatten().reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+}
+
+fn delta(a: Point, b: Point) -> (f64, f64) {
+    ((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64)
+}
+fn cross(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.0 * b.1 - a.1 * b.0
+}
+fn dot(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.0 * b.0 + a.1 * b.1
+}
+
+#[cfg(test)]
+#[test]
+fn closest_parallel_station_follows_the_tip() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let source = [p(0, 0), p(10, 0)];
+    assert_eq!(closest_station(source, [p(4, 1), p(20, 1)]), 1.);
+    assert_eq!(closest_station(source, [p(20, 1), p(4, 1)]), 0.4);
 }

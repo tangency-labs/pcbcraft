@@ -9,10 +9,13 @@ use std::{
 
 use pcbcraft_engine::{
     Project, UNTITLED,
-    persistence::{Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, read_bytes},
+    persistence::{
+        Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_deflated_packed_documents, encode_documents,
+        encode_packed_documents, read_bytes,
+    },
 };
 
-use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for};
+use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for, has_current_write_formats, retain_unchanged_documents};
 use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
@@ -22,7 +25,10 @@ pub(super) struct Target {
     encoding: Encoding,
     documents: Option<Arc<Documents>>,
     needs_manifest: bool,
+    needs_upgrade: bool,
     added_manifest: bool,
+    deflated: bool,
+    archive_cleanup: Option<Result<PathBuf, String>>,
 }
 
 impl Target {
@@ -34,6 +40,14 @@ impl Target {
     /// The normalized folder or archive that the worker successfully opened/saved.
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Resolve the project folder for external file dialogs without probing the filesystem.
+    pub(super) fn project_directory(&self) -> Option<&Path> {
+        match self.encoding {
+            Encoding::Json => Some(self.path()),
+            Encoding::Zip => self.path().parent(),
+        }
     }
 
     /// Explain the next save when an archive needs migration or a verified manifest.
@@ -50,6 +64,22 @@ impl Target {
     pub(super) fn added_manifest(&self) -> bool {
         self.added_manifest
     }
+
+    /// Whether the next Save to this location would perform a first-time container, entry-point,
+    /// layout or document-format upgrade.
+    pub(super) fn needs_upgrade(&self) -> bool {
+        self.needs_upgrade
+    }
+
+    /// Report the source disposition once, when the editor adopts the new archive.
+    pub(super) fn take_archive_cleanup(&mut self) -> Option<Result<PathBuf, String>> {
+        self.archive_cleanup.take()
+    }
+}
+
+/// Whether first Save would add missing storage layout or sheet-occurrence metadata.
+fn snapshot_needs_layout_upgrade(snapshot: &Project) -> bool {
+    snapshot.layout_root().is_none() || !snapshot.has_sheet_occurrences()
 }
 
 /// Pick and fully validate a project before making it available to the editor.
@@ -97,20 +127,33 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
     let packed = decode_packed(&bytes)?;
+    let needs_upgrade =
+        packed.needs_manifest || !has_current_write_formats(&packed.documents, &packed.project) || snapshot_needs_layout_upgrade(&packed.project);
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
     Saved {
         snapshot,
         opened: None,
         upgrades: Upgrades::default(),
-        target: Target { path, bytes: bytes.into(), encoding, documents, needs_manifest, added_manifest: false },
+        target: Target {
+            path,
+            bytes: bytes.into(),
+            encoding,
+            documents,
+            needs_manifest,
+            needs_upgrade,
+            added_manifest: false,
+            deflated: packed.deflated,
+            archive_cleanup: None,
+        },
     }
     .prepare_open()
 }
 
 /// Read and cross-validate all folder documents before returning an adoptable snapshot.
 fn load_folder(root: &Path) -> Result<Saved, String> {
-    let documents = folder::load(root)?;
+    let (documents, migrated_documents) = folder::load_with_upgrade(root)?;
     let snapshot = decode_documents(&documents)?;
+    let needs_upgrade = migrated_documents || !has_current_write_formats(&documents, &snapshot) || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
@@ -121,7 +164,10 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
             encoding: Encoding::Json,
             documents: Some(Arc::new(documents)),
             needs_manifest: false,
+            needs_upgrade,
             added_manifest: false,
+            deflated: false,
+            archive_cleanup: None,
         },
     }
     .prepare_open()
@@ -147,7 +193,9 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
     let format = format.unwrap_or_default();
     let path = match format {
         SaveFormat::Folder => dialog.set_title("Create project folder").set_file_name(suggestion).save_file(),
-        SaveFormat::Archive => dialog.add_filter("Packed PCBCraft project", &["pc"]).set_file_name(format!("{suggestion}.pc")).save_file(),
+        SaveFormat::Archive | SaveFormat::ArchiveFolder { .. } => {
+            dialog.add_filter("Packed PCBCraft project", &["pc"]).set_file_name(format!("{suggestion}.pc")).save_file()
+        }
     };
     let Some(path) = path else {
         return Ok(Outcome::Cancelled);
@@ -165,24 +213,63 @@ pub(super) fn save_new(
     format: SaveFormat,
     path: PathBuf,
 ) -> Result<Outcome, String> {
+    save_new_with(snapshot, previous, format, path, folder::trash_archived_folder)
+}
+
+/// Verify the published archive before performing any explicitly requested source cleanup.
+/// Inject Trash for tests without invoking the platform service.
+fn save_new_with(
+    snapshot: Arc<Project>,
+    previous: Option<&(Arc<Project>, Target)>,
+    format: SaveFormat,
+    path: PathBuf,
+    trash: impl FnOnce(&Path, &Documents) -> Result<(), String>,
+) -> Result<Outcome, String> {
     let path = normalize(&with_extension(format, path)?)?;
+    let archive_source = if let SaveFormat::ArchiveFolder { .. } = format {
+        let (_, source) = previous.filter(|(_, target)| target.encoding == Encoding::Json).ok_or("Open a project folder to archive it.")?;
+        let source_root = fs::canonicalize(&source.path).map_err(|error| error.to_string())?;
+        let parent = fs::canonicalize(path.parent().ok_or("Project file has no parent directory")?).map_err(|error| error.to_string())?;
+        if parent.starts_with(source_root) {
+            return Err("Save the archive outside the original project folder.".into());
+        }
+        Some(source)
+    } else {
+        None
+    };
     let original = snapshot.clone();
     let snapshot = name_for(&snapshot, previous.is_some(), &path).map_or(snapshot, Arc::new);
     let mut target = Target {
         path,
         bytes: Arc::from([]),
-        encoding: if format == SaveFormat::Archive { Encoding::Zip } else { Encoding::Json },
+        encoding: if format == SaveFormat::Folder { Encoding::Json } else { Encoding::Zip },
         documents: None,
         needs_manifest: false,
+        needs_upgrade: false,
         added_manifest: false,
+        deflated: archive_source.is_some(),
+        archive_cleanup: None,
     };
     let snapshot = folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), None)?;
     let documents = working_documents(&snapshot, previous.map(|(old, _)| old), previous.and_then(|(_, target)| target.documents.as_deref()))?;
     if target.encoding == Encoding::Zip {
-        target.bytes = encode_packed_documents(documents.clone())?.into();
+        target.bytes = pack(documents.clone(), target.deflated)?.into();
+        if archive_source.is_some() && decode_packed(&target.bytes)?.documents != documents {
+            return Err("The archive did not reproduce the saved project documents.".into());
+        }
         publish(&target.path, None, &target.bytes, || Ok(()))?;
     } else {
         folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
+    }
+    if let Some(source) = archive_source {
+        let _lock = lock_archive(&target.path)?;
+        if existing(&target.path)?.as_deref() != Some(target.bytes.as_ref()) {
+            return Err("The published archive changed before it could be verified. The original folder was kept.".into());
+        }
+        if matches!(format, SaveFormat::ArchiveFolder { trash_source: true }) {
+            let baseline = source.documents.as_deref().ok_or("Missing original project documents.")?;
+            target.archive_cleanup = Some(trash(&source.path, baseline).map(|()| source.path.clone()));
+        }
     }
     target.documents = Some(Arc::new(documents));
     Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))
@@ -190,12 +277,17 @@ pub(super) fn save_new(
 
 /// Add `.pc` to an archive destination without it (in any case); folders and `.pc` names are kept.
 pub(super) fn with_extension(format: SaveFormat, mut path: PathBuf) -> Result<PathBuf, String> {
-    if format == SaveFormat::Archive && !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
+    if format != SaveFormat::Folder && !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
         let mut name = path.file_name().ok_or("Missing project filename")?.to_os_string();
         name.push(".pc");
         path.set_file_name(name);
     }
     Ok(path)
+}
+
+/// Preserve the project's chosen ZIP encoding on subsequent saves.
+fn pack(documents: Documents, deflated: bool) -> Result<Vec<u8>, String> {
+    if deflated { encode_deflated_packed_documents(documents) } else { encode_packed_documents(documents) }
 }
 
 /// Strip a project extension from a folder or archive file name.
@@ -213,26 +305,24 @@ fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Proje
     snapshot.renamed(stem(path.file_name()?.to_str()?)).ok()
 }
 
-/// Keep exact source bytes for every logically unchanged document, including Save As conversion.
+/// Save with current headers and retain exact unaffected bytes, including on Save As.
 fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
     if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
         && let Some(original) = original
+        && has_current_write_formats(original, snapshot)
     {
         return Ok(original.clone());
     }
     let mut documents = encode_documents(snapshot.clone())?;
     if let (Some(old), Some(original)) = (previous, original) {
         let canonical = encode_documents(old.clone())?;
-        let old_board = old.board_document_path();
-        let new_board = snapshot.board_document_path();
-        for (path, bytes) in &mut documents {
-            let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
-            if canonical.get(source) == Some(bytes)
-                && let Some(original) = original.get(source)
-            {
-                bytes.clone_from(original);
-            }
-        }
+        retain_unchanged_documents(
+            &mut documents,
+            &canonical,
+            original,
+            old.board_document_path().as_deref(),
+            snapshot.board_document_path().as_deref(),
+        )?;
     }
     Ok(documents)
 }
@@ -252,21 +342,23 @@ fn save_target(
         folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), target.documents.as_deref())?;
     let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
     if target.encoding == Encoding::Zip {
-        let bytes = if unchanged && !target.needs_manifest {
+        let bytes = if unchanged && !target.needs_upgrade {
             target.bytes.clone()
         } else {
             let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;
-            let bytes = encode_packed_documents(documents.clone())?;
+            let bytes = pack(documents.clone(), target.deflated)?;
             target.documents = Some(Arc::new(documents));
             Arc::from(bytes)
         };
         publish(&target.path, previous.map(|_| target.bytes.as_ref()), &bytes, || checkpoint("staged"))?;
         target.added_manifest = target.needs_manifest;
         target.needs_manifest = false;
+        target.needs_upgrade = false;
         target.bytes = bytes;
     } else {
         let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
+        target.needs_upgrade = false;
         target.documents = Some(Arc::new(documents));
     }
     Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))
@@ -302,6 +394,13 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+/// Lock the archive's sibling lock file across publication or verified folder cleanup.
+fn lock_archive(path: &Path) -> Result<File, String> {
+    let lock = pcbcraft_storage::open_archive_save_lock(path).map_err(|error| format!("Could not open save lock: {error}"))?;
+    lock.try_lock().map_err(|error| format!("Could not lock project for saving: {error}"))?;
+    Ok(lock)
+}
+
 /// Serialize writers using a persistent sibling lock. Stage, flush, check the destination again,
 /// then atomically publish. Preserve Unix permissions on replacement and leave an unchanged file untouched.
 fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
@@ -320,12 +419,7 @@ fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: im
         return verify();
     }
     let parent = path.parent().ok_or("Project file has no parent directory")?;
-    let name = path.file_name().ok_or("Project file has no name")?;
-    let mut lock_name = std::ffi::OsString::from(".");
-    lock_name.push(name);
-    lock_name.push(".pcbcraft-lock");
-    let lock = pcbcraft_storage::open_lock_file(&parent.join(lock_name)).map_err(|error| format!("Could not open save lock: {error}"))?;
-    lock.try_lock().map_err(|error| format!("Could not lock project for saving: {error}"))?;
+    let _lock = lock_archive(path)?;
 
     let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     staged.write_all(bytes).and_then(|()| staged.as_file().sync_all()).map_err(|error| format!("Could not stage project: {error}"))?;

@@ -14,6 +14,8 @@ mod tests;
 pub(super) const RATSNEST_KEY: &str = "ratsnest";
 /// Local overlay state stored beside physical layer visibility, never in project history.
 pub(super) const NET_NAMES_KEY: &str = "net_names";
+/// A view-local switch back to the physical layer palette.
+pub(super) const NET_COLORS_KEY: &str = "net_colors";
 
 /// Runtime view identity, independent of its document or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -121,6 +123,10 @@ pub(super) struct ViewState {
     filters_collapsed: bool,
     #[serde(default = "filters_open_default")]
     filters_open: bool,
+    #[serde(default)]
+    router_settings_open: bool,
+    #[serde(default)]
+    router_settings_collapsed: bool,
     #[serde(default = "crate::workspace_panels::saved_defaults")]
     panels: crate::workspace_panels::SavedPanels,
 }
@@ -171,6 +177,8 @@ pub(super) struct CopperConnectivityCache {
     source: ViewInput,
     target: BoardTarget,
     connectivity: Arc<crate::board_appearance::Connectivity>,
+    include_ids: bool,
+    fill: Option<Arc<pcbcraft_engine::board::fill::Fill>>,
 }
 
 /// Schematic interaction state is separate from board selection and input handling.
@@ -199,12 +207,16 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) fills: crate::board_fills::State,
+    pub(super) footprints: crate::board_canvas::FootprintCache,
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) movement: crate::board_move::State,
-    pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
+    pub(super) ratsnest_cache: Option<(ViewInput, Arc<pcbcraft_engine::board::ratsnest::Ratsnest>, Option<Arc<pcbcraft_engine::board::fill::Fill>>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
+    pub(super) router_settings_open: bool,
+    pub(super) router_settings_collapsed: bool,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
     /// The view-only ruler and whether its tool is armed.
@@ -216,6 +228,7 @@ pub(super) struct BoardState {
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
     pub(super) context_menu_allowed: bool,
+    pub(super) vertex_menu: Option<crate::board_drawing::VertexMenu>,
     pub(super) move_requested: bool,
     /// Counterclockwise degrees on screen; the board camera converts this intent to model space.
     pub(super) rotate_requested: u16,
@@ -253,17 +266,21 @@ impl BoardState {
         &mut self,
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
+        include_ids: bool,
     ) -> Result<Arc<crate::board_appearance::Connectivity>, String> {
+        let fill = board.filled_zones().and_then(Result::ok);
         if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
+            && (!include_ids || cache.include_ids)
+            && cache.fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return Ok(cache.connectivity.clone());
         }
-        let (copper, nets) = board.copper_with_nets()?;
-        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
+        let pcbcraft_engine::board::track::CopperPresentation { copper, names, net_ids } = board.copper_presentation(include_ids)?;
+        let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets: names, net_ids, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
-            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
+            source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone(), include_ids, fill });
         Ok(connectivity)
     }
 
@@ -274,14 +291,16 @@ impl BoardState {
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
     ) -> Option<std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>> {
-        if let Some((previous, cached)) = &self.ratsnest_cache
+        let fill = board.filled_zones().and_then(Result::ok);
+        if let Some((previous, cached, previous_fill)) = &self.ratsnest_cache
             && Some(*previous) == source
             && cached.board == board.target
+            && previous_fill.as_ref().map(Arc::as_ptr) == fill.as_ref().map(Arc::as_ptr)
         {
             return Some(cached.clone());
         }
         let result = board.ratsnest().ok().map(std::sync::Arc::new);
-        self.ratsnest_cache = source.zip(result.clone());
+        self.ratsnest_cache = source.zip(result.clone()).map(|(input, ratsnest)| (input, ratsnest, fill));
         result
     }
 
@@ -303,6 +322,20 @@ impl BoardState {
         }
     }
 
+    /// Custom net colors are enabled by default, with per-view access to the layer palette.
+    pub(super) fn net_colors_visible(&self) -> bool {
+        !self.hidden_layers.contains(NET_COLORS_KEY)
+    }
+
+    /// Save the display toggle alongside the other per-view presentation settings.
+    pub(super) fn set_net_colors_visible(&mut self, visible: bool) {
+        if visible {
+            self.hidden_layers.remove(NET_COLORS_KEY);
+        } else {
+            self.hidden_layers.insert(NET_COLORS_KEY.into());
+        }
+    }
+
     /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
     /// Ratsnest visibility is independent of physical layer actions. Neither document revision
     /// nor saved files change, and unfinished drawing gestures expire.
@@ -310,7 +343,8 @@ impl BoardState {
         self.drawing.cancel();
         self.zones.cancel();
         self.tracks.cancel();
-        let overlays: Vec<_> = self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY)).cloned().collect();
+        let overlays: Vec<_> =
+            self.hidden_layers.iter().filter(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY | NET_COLORS_KEY)).cloned().collect();
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
         self.hidden_layers.extend(overlays);
     }
@@ -349,11 +383,15 @@ pub(super) struct EditorView {
     inspection_layers: std::collections::BTreeSet<String>,
     pub(super) filters_collapsed: bool,
     pub(super) filters_open: bool,
-    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
+    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; crate::workspace_panels::PANEL_COUNT],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
     /// Library browsing is a view-local service presentation, never a project target.
     pub(super) library: Option<crate::library_workspace::State>,
+    /// The review pane owns a read-only archive and an independent camera.
+    pub(super) manufacturing: Option<crate::manufacturing::State>,
+    /// Project-scoped read-only 3D inspection.
+    pub(super) render: Option<crate::render_workspace::State>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -376,7 +414,7 @@ impl Default for EditorView {
 impl EditorView {
     /// Service and definition panes own no project edit authority.
     pub(super) fn auxiliary(&self) -> bool {
-        self.definition.is_some() || self.library.is_some()
+        self.definition.is_some() || self.library.is_some() || self.manufacturing.is_some() || self.render.is_some()
     }
 
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
@@ -403,6 +441,7 @@ impl EditorView {
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
         let library = self.library.take();
+        let manufacturing = self.manufacturing.take();
         let workspace = self.workspace;
         let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -415,6 +454,7 @@ impl EditorView {
         self.sync(session);
         self.definition = definition;
         self.library = library;
+        self.manufacturing = manufacturing;
     }
 
     /// Explicitly retarget a view after the host validates the document's existence.
@@ -436,6 +476,24 @@ impl EditorView {
                 self.sync(session);
             }
         }
+    }
+
+    /// Point a fresh copy of a schematic view at another sheet for a counterpart reveal, keeping
+    /// the copied camera and parked workspace. Old-sheet edit state and input tokens must not apply.
+    pub(super) fn reveal_sheet(&mut self, sheet: SheetTarget, session: &Session) -> Option<Arc<pcbcraft_engine::Project>> {
+        if !matches!(self.target(), Some(DocumentTarget::Sheet(current)) if current != sheet) {
+            return None;
+        }
+        let root = session.snapshot()?;
+        let projection = root.for_sheet(sheet).map(Arc::new)?;
+        self.release_input();
+        self.schematic = SchematicState::default();
+        self.inspection.clear();
+        self.sheet = Some(sheet);
+        self.binding = Some(Binding { target: DocumentTarget::Sheet(sheet), history_root_revision: session.history_root_revision() });
+        self.sheet_snapshot = Some(projection.clone());
+        self.snapshot_root = Some(root);
+        Some(projection)
     }
 
     /// Read a project view's sheet from the current authoritative revision; definition panes return None.
@@ -485,6 +543,8 @@ impl EditorView {
             filters: self.filters,
             filters_collapsed: self.filters_collapsed,
             filters_open: self.filters_open,
+            router_settings_open: self.board.router_settings_open,
+            router_settings_collapsed: self.board.router_settings_collapsed,
             panels: crate::workspace_panels::SavedPanels::capture(&self.panels),
         }
     }
@@ -517,6 +577,8 @@ impl EditorView {
         view.filters = state.filters;
         view.filters_collapsed = state.filters_collapsed;
         view.filters_open = state.filters_open;
+        view.board.router_settings_open = state.router_settings_open;
+        view.board.router_settings_collapsed = state.router_settings_collapsed;
         view.panels = state.panels.restore();
         view
     }
@@ -551,6 +613,8 @@ impl EditorView {
             panels: crate::workspace_panels::defaults(),
             definition: None,
             library: None,
+            manufacturing: None,
+            render: None,
             camera,
             parked_camera,
             schematic: SchematicState::default(),
@@ -578,6 +642,8 @@ impl EditorView {
             panels: self.panels.clone(),
             definition: self.definition,
             library: self.library.clone(),
+            manufacturing: self.manufacturing.as_mut().map(crate::manufacturing::State::fork),
+            render: self.render.as_ref().map(crate::render_workspace::State::fork),
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -586,6 +652,8 @@ impl EditorView {
                 layers_collapsed: self.board.layers_collapsed,
                 browser_collapsed: self.board.browser_collapsed,
                 properties_collapsed: self.board.properties_collapsed,
+                router_settings_open: self.board.router_settings_open,
+                router_settings_collapsed: self.board.router_settings_collapsed,
                 hidden_layers: self.board.hidden_layers.clone(),
                 layer_defaults_applied: self.board.layer_defaults_applied,
                 active_layer: self.board.active_layer.clone(),
@@ -610,7 +678,9 @@ impl EditorView {
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
         let library = self.library.take().is_some();
-        if self.definition.take().is_some() || library {
+        let manufacturing = self.manufacturing.take().is_some();
+        let render = self.render.take().is_some();
+        if self.definition.take().is_some() || library || manufacturing || render {
             self.release_input();
             self.inspection.clear();
         }
@@ -680,7 +750,7 @@ impl EditorView {
     /// Permit layout controls for definition and unavailable views without granting project edit
     /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
-        if self.library.is_some() {
+        if self.library.is_some() || self.manufacturing.is_some() || self.render.is_some() {
             return Some(ViewInput { view: self.id, target: None, definition: None, input_epoch: self.input_epoch, revision: 0 });
         }
         if let Some(document) = self.definition {
@@ -828,9 +898,8 @@ impl EditorView {
         {
             self.board.highlight_net = None;
         }
-        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
-            || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
-        {
+        let snapshot_changed = !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new));
+        if snapshot_changed || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet {
             self.sheet_snapshot = root.as_ref().and_then(|p| {
                 let target = self.sheet?;
                 if p.sheet_target() == target { Some(p.clone()) } else { p.for_sheet(target).map(std::sync::Arc::new) }
@@ -877,7 +946,14 @@ impl EditorView {
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();
             }
-            let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
+            let board = self.board.target.and_then(|target| project.board_view(target));
+            if snapshot_changed
+                && !self.filters.include_locked
+                && let Some(board) = board
+            {
+                self.filters.prune_locked_board_selection(board, &mut self.board);
+            }
+            let setup = board.and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board
                 .target
@@ -899,7 +975,7 @@ impl EditorView {
                 );
                 self.board.layer_defaults_applied = true;
             }
-            self.board.hidden_layers.retain(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY) || layers.contains(id));
+            self.board.hidden_layers.retain(|id| matches!(id.as_str(), RATSNEST_KEY | NET_NAMES_KEY | NET_COLORS_KEY) || layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup
                     .and_then(|setup| {

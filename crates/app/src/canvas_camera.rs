@@ -21,6 +21,21 @@ const WHEEL_ZOOM_SECONDS: f32 = 0.14;
 /// How much a point of vertical middle-button drag zooms when that drag is set to zoom.
 const MIDDLE_DRAG_ZOOM_PER_POINT: f32 = 0.01;
 
+/// Get the active button's first release position in canvas coordinates. Later motion
+/// in the same frame must not change where an already-held gesture ends.
+pub(super) fn pointer_release(response: &Response, button: PointerButton) -> Option<Pos2> {
+    let position = response.ctx.input(|input| {
+        if !input.pointer.button_released(button) {
+            return None;
+        }
+        input.events.iter().find_map(|event| match event {
+            Event::PointerButton { pos, button: released, pressed: false, .. } if *released == button => Some(*pos),
+            _ => None,
+        })
+    })?;
+    Some(response.ctx.layer_transform_from_global(response.layer_id).map_or(position, |transform| transform * position))
+}
+
 /// Transient wheel motion belongs to one camera and is never saved in an arrangement.
 #[derive(Clone, Debug)]
 struct WheelZoom {
@@ -504,6 +519,7 @@ impl Camera {
         if response.ctx.input(|input| input.pointer.any_pressed()) {
             self.cancel_zoom();
         }
+        let start = self.offset;
         let middle_drag = response.dragged_by(PointerButton::Middle);
         let right_drag = !middle_drag && navigation.right_drag_pan && response.dragged_by(PointerButton::Secondary);
         if middle_drag || right_drag {
@@ -552,9 +568,12 @@ impl Camera {
         } else {
             self.cancel_zoom();
         }
-        // Keep the view center within reach of the full schematic coordinate range.
-        let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.unit_step());
-        self.offset = self.offset.clamp(-limit, limit);
+        // Keep navigation within reach of the full schematic coordinate range. A frame without
+        // pan or zoom leaves the camera alone, so hovering never moves a programmatic center.
+        if self.offset != start {
+            let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.unit_step());
+            self.offset = self.offset.clamp(-limit, limit);
+        }
     }
 
     /// Center the sheet's paper together with symbol and wire bounds, including free routes and a

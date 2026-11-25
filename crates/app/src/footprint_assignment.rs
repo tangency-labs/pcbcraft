@@ -1,7 +1,11 @@
 //! Revision-bound package selection works in either editor; assignment never creates geometry.
 use crate::{Dialog, PcbApp, ViewInput, Workspace};
 use pcbcraft_chrome::{shell, units};
-use pcbcraft_engine::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, board::definition::FootprintDefinition, library::parts::PadIds};
+use pcbcraft_engine::{
+    ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT,
+    board::definition::{CopperBinding, FootprintDefinition},
+    library::parts::PadIds,
+};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -35,6 +39,25 @@ enum Mounting {
     Through,
 }
 
+impl Mounting {
+    fn matches(self, d: &FootprintDefinition) -> bool {
+        match self {
+            Self::All => true,
+            Self::Through => is_through_hole(d),
+            Self::Surface => !is_through_hole(d),
+        }
+    }
+}
+
+/// Through-hole footprints have at least one all-copper pad (circular drill or plated slot).
+fn is_through_hole(definition: &FootprintDefinition) -> bool {
+    definition.pads.iter().any(|p| p.copper == CopperBinding::AllCopper)
+}
+
+fn mounting_label(definition: &FootprintDefinition) -> &'static str {
+    if is_through_hole(definition) { "Through hole" } else { "SMD" }
+}
+
 impl Edit {
     /// Restore an exact pinned choice; unassigned components start with an empty explicit map.
     fn select_component(&mut self, project: &pcbcraft_engine::Project) {
@@ -66,11 +89,7 @@ impl Edit {
         (self.library.is_empty() || self.library == d.library)
             && self.query.split_whitespace().all(|word| text.contains(&word.to_lowercase()))
             && (!self.compatible || pin_count == Some(d.pads.len()))
-            && match self.mounting {
-                Mounting::All => true,
-                Mounting::Through => d.pads.iter().any(|p| p.drill_nm.is_some()),
-                Mounting::Surface => d.pads.iter().all(|p| p.drill_nm.is_none()),
-            }
+            && self.mounting.matches(d)
     }
 
     /// Placement uses the exact assignment, never a different preview candidate or draft mapping.
@@ -314,7 +333,7 @@ impl PcbApp {
                                         "{} · {} pads · {} · r{}",
                                         definition.library,
                                         definition.pads.len(),
-                                        if definition.pads.iter().any(|p| p.drill_nm.is_some()) { "Through hole" } else { "SMD" },
+                                        mounting_label(&definition),
                                         definition.revision
                                     );
                                     let selected = edit.definition.as_ref().is_some_and(|d| d == &definition);
@@ -358,15 +377,17 @@ impl PcbApp {
                             form::group(ui, "Pin mapping", |ui| {
                                 if let Some(component) = project.components().find(|c| c.id() == edit.component) {
                                     ui.add_enabled_ui(editable, |ui| {
-                                        let pins = component.definition.pins();
+                                        let mut pins: Vec<_> = component.definition.pins().iter().collect();
+                                        pins.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(&a.number, &b.number));
                                         let numbers: std::collections::BTreeSet<_> = pins.iter().map(|p| p.number.as_str()).collect();
                                         let pads: std::collections::BTreeSet<_> = definition.pads.iter().map(|p| p.number.as_str()).collect();
                                         form::mapping_header(ui);
                                         let multiple = pads.len() > numbers.len()
                                             || !edit.unconnected_pads.is_empty()
                                             || edit.mapping.values().any(|ids| ids.pads().len() > 1);
-                                        let options: Vec<_> =
+                                        let mut options: Vec<_> =
                                             definition.pads.iter().map(|pad| (pad.number.as_str(), format!("Pad {}", pad.number))).collect();
+                                        options.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a.0, b.0));
                                         for pin in pins {
                                             let mapped = edit.mapping.entry(pin.number.clone()).or_insert_with(|| PadIds::Many(Vec::new()));
                                             let label = pin.name.as_ref().filter(|name| *name != &pin.number).map_or_else(
@@ -536,5 +557,34 @@ impl PcbApp {
         } else {
             self.dialog = Dialog::Footprint(Box::new(edit));
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use pcbcraft_engine::board::slot::PlatedSlot;
+
+    /// A footprint whose only plated pads are slotted classifies as through-hole, not SMD.
+    #[test]
+    fn slot_only_footprint_is_classified_as_through_hole() {
+        let smd: FootprintDefinition = serde_json::from_str(include_str!("../../../examples/native-parts/footprints/resistor-0603.json")).unwrap();
+        assert_eq!(mounting_label(&smd), "SMD");
+        assert!(Mounting::All.matches(&smd));
+        assert!(Mounting::Surface.matches(&smd));
+        assert!(!Mounting::Through.matches(&smd));
+
+        let mut slotted = smd;
+        slotted.format = "pcbcraft-footprint/5".into();
+        for pad in &mut slotted.pads {
+            pad.copper = CopperBinding::AllCopper;
+            pad.drill_nm = None;
+            pad.plated_slot = Some(PlatedSlot::new(300_000, 500_000, 90_000).unwrap());
+        }
+        assert_eq!(mounting_label(&slotted), "Through hole");
+        assert!(Mounting::All.matches(&slotted));
+        assert!(Mounting::Through.matches(&slotted));
+        assert!(!Mounting::Surface.matches(&slotted));
     }
 }

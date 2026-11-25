@@ -1,7 +1,7 @@
 //! Transactional continuation evidence comes from frozen before/after graphs, never saved members.
 
-use super::{Anchor, Lineage, MAX_RECORDS, Record, Registry, Retirement, Scope, State, graph::Graph};
-use crate::{CommandError, Project, board::update::SourceCapture};
+use super::{Anchor, Appearance, Lineage, MAX_RECORDS, Record, Registry, Retirement, Scope, State, graph::Graph};
+use crate::{CommandError, Project, Terminal, WireEndpoint, board::update::SourceCapture};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -63,6 +63,25 @@ fn unique(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
     ids.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
 }
 
+/// Choose the drawing appearance a rebuilt successor inherits from its contributing sources.
+///
+/// Appearance is net-owned presentation intent, so a successor keeps the effective override of
+/// any source it merges or splits from, even after that source retires: `wire_appearances` reads
+/// only active records, and leaving a fresh successor unset would silently drop the override.
+/// A single source override is inherited unchanged. Conflicting overrides resolve to the source
+/// with the lowest UUID, matching the UUID-sorted registry and `unique()` ordering so the result
+/// never depends on graph traversal or authoring order. Sources without an override contribute
+/// nothing, leaving an unstyled net unstyled. Retired records are not consulted for their state
+/// and always keep their own saved appearance as historical evidence.
+fn inherited_appearance(parents: &[usize], by_source: &BTreeMap<usize, Record>) -> Option<Appearance> {
+    parents
+        .iter()
+        .filter_map(|source| by_source.get(source))
+        .filter(|record| record.appearance.is_some())
+        .min_by_key(|record| record.id)
+        .and_then(|record| record.appearance)
+}
+
 /// Preserve source-qualified identity evidence even when first-board creation changes live scope.
 fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
     Anchor { scope, ..anchor.clone() }
@@ -100,6 +119,71 @@ fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering
 }
 
 impl Project {
+    /// Validate a unit transfer's exact electrical continuation, including connected appearances
+    /// of shared pins. Unlike an ordinary wire edit, a transfer may replace every anchor of a
+    /// net; identity follows the verified endpoint correspondence, not the old owner number.
+    pub(crate) fn rekey_nets(&mut self, before: &Project, pins: &BTreeMap<Terminal, Terminal>) -> Result<(), CommandError> {
+        let old = Graph::build(before).map_err(CommandError::InvalidParams)?;
+        let new = Graph::build(self).map_err(CommandError::InvalidParams)?;
+        let remap = |endpoint| match endpoint {
+            WireEndpoint::Terminal(pin) => WireEndpoint::Terminal(pins.get(&pin).copied().unwrap_or(pin)),
+            _ => endpoint,
+        };
+        let changed = || CommandError::InvalidParams("Completing these packages would change connectivity, including shared terminals.".into());
+        if old.endpoints.len() != new.endpoints.len() || old.networks.len() != new.networks.len() {
+            return Err(changed());
+        }
+        let mut forward = BTreeMap::new();
+        let mut reverse = BTreeMap::new();
+        let mut anchors = BTreeMap::new();
+        for (&(sheet, endpoint), source) in &old.endpoints {
+            let target = new.endpoints.get(&(sheet, remap(endpoint))).ok_or_else(changed)?;
+            let (old_net, new_net) = (old.by_anchor[source], new.by_anchor[target]);
+            if forward.insert(old_net, new_net).is_some_and(|previous| previous != new_net)
+                || reverse.insert(new_net, old_net).is_some_and(|previous| previous != old_net)
+                || anchors.insert(source, target).is_some_and(|previous| previous != target)
+            {
+                return Err(changed());
+            }
+        }
+        for (source, target) in forward {
+            let (source, target) = (&old.networks[source], &new.networks[target]);
+            if source.meaningful() != target.meaningful() || source.names != target.names {
+                return Err(changed());
+            }
+        }
+        if anchors.iter().all(|(source, target)| *source == *target) {
+            return Ok(());
+        }
+        before.net_registry.validate(before).map_err(CommandError::InvalidParams)?;
+        let mut registry = (*before.net_registry).clone();
+        let numbered: BTreeSet<_> = registry
+            .records
+            .iter()
+            .filter(|record| matches!(record.state, State::Active {}) && record.generated_number.is_some())
+            .filter_map(|record| old.network(&record.primary))
+            .collect();
+        if old.networks.iter().enumerate().any(|(index, network)| network.meaningful() && !numbered.contains(&index)) {
+            return Err(CommandError::InvalidParams("Package completion requires persisted net identities and numbers.".into()));
+        }
+        for record in &mut registry.records {
+            if matches!(record.state, State::Active {}) {
+                record.primary = (*anchors.get(&record.primary).ok_or_else(changed)?).clone();
+                let mut seen = BTreeSet::from([record.primary.clone()]);
+                for fallback in &mut record.fallbacks {
+                    *fallback = (*anchors.get(fallback).ok_or_else(changed)?).clone();
+                }
+                record.fallbacks.retain(|anchor| seen.insert(anchor.clone()));
+            }
+        }
+        if registry != *self.net_registry {
+            self.net_registry = Arc::new(registry);
+            self.invalidate_net_presentation();
+            self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
+        }
+        Ok(())
+    }
+
     /// Reconcile one canonical candidate before history publication. Non-anchor changes keep exact
     /// registry bytes; allocation/validation failure leaves the owning session untouched.
     /// Rebuilt records inherit the union of active source parents' class bindings, deduplicated
@@ -109,7 +193,9 @@ impl Project {
     /// Stored pair members and review intent are preserved, not retargeted or evaluated here.
     /// An explicit pair edit combined with a topology change is refused rather than discarded.
     /// Newly adopted registries and changed registries on unchanged topology also validate,
-    /// even when they contain pairs but no net records.
+    /// even when they contain pairs but no net records. Rebuilt successors carry forward the
+    /// effective appearance of their contributing sources; conflicting overrides resolve to the
+    /// lowest source UUID (see [`inherited_appearance`]).
     pub(crate) fn reconcile_nets(&mut self, before: Option<&Project>) -> Result<(), CommandError> {
         let Some(before) = before.filter(|before| before.same_document(self)) else {
             return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
@@ -239,6 +325,7 @@ impl Project {
                 }
             }
             record.class_bindings = inherited.into_iter().collect();
+            record.appearance = inherited_appearance(parents, &by_source);
             assigned[index] = Some(record.id);
             result.insert(record.id, record);
         }

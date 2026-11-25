@@ -31,7 +31,6 @@ impl MovePlan {
         let view = source.board_view(target).ok_or_else(|| invalid("Unknown board move target."))?;
         view.require_linear_copper().map_err(CommandError::Unavailable)?;
         if items.is_empty()
-            || view.footprint_ids().filter(|id| items.footprints.contains(id)).count() != items.footprints.len()
             || view.drawings().iter().filter(|d| items.drawings.contains(&d.id)).count() != items.drawings.len()
             || view.zones().iter().filter(|z| items.zones.contains(&z.id)).count() != items.zones.len()
             || view.tracks().iter().filter(|t| items.tracks.contains(&t.id)).count() != items.tracks.len()
@@ -39,6 +38,13 @@ impl MovePlan {
         {
             return Err(invalid("Select existing objects on this board to move."));
         }
+        super::transform::require_unlocked_placements(&source, items.footprints.iter().map(|id| view.placement(id))).map_err(
+            |error| match error {
+                // A missing footprint uses the same invalid-selection error as other missing move targets.
+                CommandError::NotFound(_) => invalid("Select existing objects on this board to move."),
+                error => error,
+            },
+        )?;
         let carried = super::track::carried_ends(view, &items.footprints);
         if view.tracks().iter().any(|t| t.locked && (items.tracks.contains(&t.id) || carried.contains_key(&t.id)))
             || view.vias().iter().any(|v| v.locked && items.vias.contains(&v.id))
@@ -125,7 +131,7 @@ impl Session {
         super::track::protect_locked(&source, &next)?;
         let affected: BTreeSet<_> = plan.items.tracks.union(&plan.items.vias).copied().chain(plan.carried.keys().copied()).collect();
         if (!affected.is_empty() || !plan.items.footprints.is_empty())
-            && let Some((a, b)) = super::track::short_for_copper_edit(&next, &affected, &plan.items.footprints)
+            && let Some((a, b)) = super::track::short_for_copper_edit(&next, &affected, &plan.items.footprints).map_err(invalid)?
         {
             return Err(invalid(format!("This move would connect nets {a} and {b}.")));
         }

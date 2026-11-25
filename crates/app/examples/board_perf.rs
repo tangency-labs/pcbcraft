@@ -5,6 +5,32 @@ use pcbcraft_app::performance::{Environment, generate, run};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [command, artifact, output] if command == "shove_render_fixture" || command == "held_drag_fixture" => {
+            let derive = if command == "held_drag_fixture" {
+                pcbcraft_app::performance::shove::held_drag_fixture
+            } else {
+                pcbcraft_app::performance::shove::rendered_fixture
+            };
+            let derived = derive(&std::fs::read_to_string(artifact)?)?;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+            std::io::Write::write_all(&mut file, derived.as_bytes())?;
+        }
+        [command, artifact, revision, output] if command == "shove_fixture" || command == "shove_joint_fixture" => {
+            let generate = if command == "shove_joint_fixture" {
+                pcbcraft_app::performance::shove::joint_fixture
+            } else {
+                pcbcraft_app::performance::shove::fixture
+            };
+            let derived = generate(&std::fs::read_to_string(artifact)?, revision)?;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+            std::io::Write::write_all(&mut file, derived.as_bytes())?;
+        }
+        [command, artifact, metadata, iterations, output] if command == "shove" => {
+            let environment: Environment = serde_json::from_slice(&std::fs::read(metadata)?)?;
+            let report = pcbcraft_app::performance::shove::run(&std::fs::read_to_string(artifact)?, environment, iterations.parse()?)?;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+            std::io::Write::write_all(&mut file, &serde_json::to_vec_pretty(&report)?)?;
+        }
         [command, artifact, output] if command == "commit_fixture" => {
             let derived = pcbcraft_app::performance::route_commit_artifact(&std::fs::read_to_string(artifact)?)?;
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
@@ -45,6 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
             std::io::Write::write_all(&mut file, &serde_json::to_vec_pretty(&report)?)?;
         }
+        [command, artifact, metadata, iterations, output] if command == "budgets" => {
+            let environment: Environment = serde_json::from_slice(&std::fs::read(metadata)?)?;
+            let report = pcbcraft_app::performance::budget::suite(&std::fs::read_to_string(artifact)?, environment, iterations.parse()?)?;
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
+            std::io::Write::write_all(&mut file, &serde_json::to_vec_pretty(&report)?)?;
+        }
         [command, artifact, metadata, iterations, output] if command == "run" => {
             let environment: Environment = serde_json::from_slice(&std::fs::read(metadata)?)?;
             let report = run(&std::fs::read_to_string(artifact)?, environment, iterations.parse()?)?;
@@ -53,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | commit_fixture ARTIFACT OUTPUT | (run|checks|routes|walkaround|walkaround_jobs|pointer_latency) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
+                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | (commit_fixture ARTIFACT OUTPUT | (shove_fixture|shove_joint_fixture) ARTIFACT GENERATOR_REV OUTPUT | (shove_render_fixture|held_drag_fixture) ARTIFACT OUTPUT) | (run|budgets|checks|routes|walkaround|walkaround_jobs|shove|pointer_latency) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
             );
         }
     }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     PLACE_FOOTPRINT, PLACE_RESISTOR, SET_FOOTPRINT_TRANSFORM,
+    error_codes::ErrorCode,
     persistence::{decode_documents, encode_documents},
 };
 use serde_json::json;
@@ -71,7 +72,7 @@ fn transforms_are_atomic_revision_checked_and_persistent() {
     assert!(session.apply(SET_FOOTPRINT_TRANSFORM, &transform).is_err());
     assert_eq!(session.inspect(), changed);
     let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/4"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(
         bytes.iter().filter(|(path, _)| !path.ends_with("board.json")).collect::<Vec<_>>(),
@@ -374,6 +375,173 @@ fn align_footprints_is_one_checked_edit() {
         s.apply("edit.undo", &json!({})).unwrap();
     }
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before, "each nudge and alignment is one undo step");
+}
+
+/// Author connector placements through the production commands, with one rotated back-side part.
+fn pitch_connectors(positions: &[Point]) -> Session {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    session.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()})).unwrap();
+    for (i, point) in positions.iter().enumerate() {
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":i as i64*20_000_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        let symbol = session.project().unwrap().symbols().last().unwrap().id();
+        session
+            .apply(
+                PLACE_FOOTPRINT,
+                &json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},
+                    "x_nm":point.x_nm,"y_nm":point.y_nm,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+    }
+    let first = crate::board::track::tests::view(&session).footprints().next().unwrap();
+    session
+        .apply(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":first.id,"x_nm":first.position.x_nm,"y_nm":first.position.y_nm,
+            "rotation":90,"side":"back","expected_revision":session.revision()}),
+        )
+        .unwrap();
+    session
+}
+
+/// Five connectors land on exact 5.08 mm origin pitch on either axis. The leading origin stays
+/// fixed, request order breaks coordinate ties, and perpendicular positions and poses survive.
+#[test]
+fn set_pitch_distributes_five_connectors_and_round_trips_one_edit() {
+    use crate::board::track::tests::view;
+    const PITCH: i64 = 5_080_000;
+    for (mode, horizontal) in [("distribute_x", true), ("distribute_y", false)] {
+        let point = |axis, cross| {
+            if horizontal { Point { x_nm: axis, y_nm: cross } } else { Point { x_nm: cross, y_nm: axis } }
+        };
+        let origins = [11_000_000, -4_000_000, -4_000_000, 18_000_000, 6_000_000];
+        let cross = |i: usize| i as i64 * 8_000_000;
+        let mut s = pitch_connectors(&std::array::from_fn::<_, 5, _>(|i| point(origins[i], cross(i))));
+        let before = encode_documents(s.snapshot().unwrap()).unwrap();
+        let placements = |session: &Session| view(session).footprints().map(|f| (f.id, f.position, f.rotation, f.bottom)).collect::<Vec<_>>();
+        let original = placements(&s);
+        let ids = [2, 4, 0, 1, 3].map(|i| &original[i].0);
+        let revision = s.revision();
+        let mut params = json!({"board":view(&s).target.board,"footprints":ids,"mode":mode,"pitch_nm":PITCH,"expected_revision":revision});
+        s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+        let result = placements(&s);
+        for (rank, i) in [2, 1, 4, 0, 3].into_iter().enumerate() {
+            let (id, _, rotation, bottom) = &original[i];
+            assert_eq!(result[i], (id.clone(), point(-4_000_000 + rank as i64 * PITCH, cross(i)), *rotation, *bottom), "{mode}, footprint {id}");
+        }
+        assert_eq!(s.revision(), revision + 1);
+        let after = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
+        params["expected_revision"] = json!(s.revision());
+        s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1, "repeating pitch creates no edit");
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
+/// Check the stable refusal code and message without changes to the snapshot, revision or history.
+fn assert_pitch_refused(s: &mut Session, params: &Value, code: ErrorCode, reason: &str) {
+    let before = s.snapshot().unwrap();
+    let history = (s.revision(), s.undo.len(), s.redo.len());
+    let error = s.execute(ALIGN_FOOTPRINTS, params).unwrap_err();
+    assert_eq!(error.code(), code, "{error} for {params}");
+    assert!(error.to_string().contains(reason), "expected {reason:?}, got {error:?} for {params}");
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert_eq!((s.revision(), s.undo.len(), s.redo.len()), history);
+}
+
+/// Invalid values, wrong modes and invalid placement targets are refused; one nanometer and the
+/// full placement span are accepted. A valid pitch with an out-of-range destination is refused.
+#[test]
+fn set_pitch_rejects_invalid_inputs_and_out_of_range_targets_atomically() {
+    use crate::board::track::tests::view;
+    let mut s = pitch_connectors(&[Point { x_nm: -MAX_CENTER_NM, y_nm: 0 }, Point { x_nm: 0, y_nm: 20_000_000 }]);
+    let ids: Vec<_> = view(&s).footprints().map(|f| f.id).collect();
+    let rev = s.revision();
+    let mut params = json!({"footprints":ids,"mode":"distribute_x","pitch_nm":1,"expected_revision":rev});
+    for (key, value, reason) in [
+        ("pitch_nm", json!(0), "requires pitch_nm"),
+        ("pitch_nm", json!(-1), "requires pitch_nm"),
+        ("pitch_nm", json!(1.5), "requires pitch_nm"),
+        ("pitch_nm", json!(null), "requires pitch_nm"),
+        ("pitch_nm", json!(MAX_FOOTPRINT_PITCH_NM + 1), "requires pitch_nm"),
+        ("mode", json!("top"), "pitch_nm requires"),
+        ("footprints", json!([ids[0]]), "at least 2"),
+        ("footprints", json!([ids[0], ids[0]]), "unique placed footprint IDs"),
+    ] {
+        let mut invalid = params.clone();
+        invalid[key] = value;
+        assert_pitch_refused(&mut s, &invalid, ErrorCode::InvalidParams, reason);
+    }
+    let mut unknown = params.clone();
+    unknown["footprints"] = json!([ids[0], "footprint-999"]);
+    assert_pitch_refused(&mut s, &unknown, ErrorCode::NotFound, "unknown footprint ID");
+    unknown["expected_revision"] = json!(rev - 1);
+    assert_pitch_refused(&mut s, &unknown, ErrorCode::StaleRevision, "project changed");
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(view(&s).footprint(&ids[1]).unwrap().position.x_nm, -MAX_CENTER_NM + 1);
+    params["expected_revision"] = json!(s.revision());
+    params["pitch_nm"] = json!(MAX_FOOTPRINT_PITCH_NM);
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(view(&s).footprint(&ids[1]).unwrap().position.x_nm, MAX_CENTER_NM);
+
+    params["expected_revision"] = json!(s.revision());
+    params["mode"] = json!("distribute_y");
+    params["pitch_nm"] = json!(MAX_CENTER_NM + 1);
+    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, "outside the coordinate range");
+    params["pitch_nm"] = json!(MAX_CENTER_NM);
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(view(&s).footprint(&ids[1]).unwrap().position.y_nm, MAX_CENTER_NM);
+}
+
+/// Pitch uses the same fixed-copper protection and carries an unlocked track in the same edit.
+#[test]
+fn set_pitch_refuses_locked_attached_copper_then_carries_it_unlocked() {
+    use crate::board::track::tests::{copper_layers, route, routed_fixture, view};
+    let mut s = routed_fixture();
+    let footprints: Vec<_> = view(&s).footprints().collect();
+    let (mover, anchor) = (footprints[0].id.clone(), footprints[2].id.clone());
+    let pad = footprints[0].pads[0].center;
+    let free = Point { x_nm: pad.x_nm, y_nm: pad.y_nm + 3_000_000 };
+    let layer = copper_layers(&s)[0];
+    route(&mut s, layer, &[pad, free]).unwrap();
+    let track = view(&s).tracks()[0].id;
+    let board = s.project().unwrap().board_target().unwrap().board;
+    let mut lock = json!({"board":board,"tracks":[track],"locked":true,"expected_revision":s.revision()});
+    s.apply(crate::SET_COPPER_LOCKED, &lock).unwrap();
+    let mut params = json!({"footprints":[mover, anchor],"mode":"distribute_x","pitch_nm":22_000_000,"expected_revision":s.revision()});
+    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, &format!("Track {track} is locked"));
+    lock["expected_revision"] = json!(s.revision());
+    lock["locked"] = json!(false);
+    s.apply(crate::SET_COPPER_LOCKED, &lock).unwrap();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    params["expected_revision"] = json!(revision);
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    let carried = &view(&s).tracks()[0];
+    assert_eq!((carried.id, carried.end), (track, free));
+    assert_eq!(carried.start, Point { x_nm: pad.x_nm + 6_000_000, y_nm: pad.y_nm });
+    assert_eq!(s.revision(), revision + 1);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Landing a moved conductive pad on a pad of another accepted net refuses the entire edit.
+#[test]
+fn set_pitch_refuses_new_shorts_atomically() {
+    use crate::board::track::tests::{routed_fixture, view};
+    let mut s = routed_fixture();
+    let footprints: Vec<_> = view(&s).footprints().collect();
+    let (obstacle, mover, anchor) = (&footprints[0], &footprints[1], &footprints[2]);
+    let obstacle_pad = obstacle.pads.iter().find(|p| p.net.is_some()).unwrap();
+    let mover_pad = mover.pads.iter().find(|p| p.net.is_some() && p.net != obstacle_pad.net).unwrap();
+    assert_eq!(obstacle_pad.center.y_nm, mover_pad.center.y_nm);
+    let pitch = mover.position.x_nm + obstacle_pad.center.x_nm - mover_pad.center.x_nm - anchor.position.x_nm;
+    let params = json!({"footprints":[mover.id, anchor.id],"mode":"distribute_x","pitch_nm":pitch,"expected_revision":s.revision()});
+    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, "would connect nets");
 }
 
 /// Moving, aligning and rotating a footprint carry the track end on its pad, one undo step each,

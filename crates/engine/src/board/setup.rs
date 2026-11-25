@@ -12,6 +12,7 @@ use crate::{CommandError, Session, fresh_id};
 #[cfg(test)]
 mod tests;
 
+pub mod groups;
 mod presets;
 pub mod preview;
 pub mod profile;
@@ -190,6 +191,9 @@ impl Stratum {
 pub struct Stackup {
     pub id: Uuid,
     pub strata: Vec<Stratum>,
+    /// Authored named memberships only; physical/role groups are computed on inspection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_groups: Vec<groups::UserLayerGroup>,
     /// Nominal finished board thickness.
     #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     pub finished_thickness_nm: Option<i64>,
@@ -204,12 +208,30 @@ pub struct Stackup {
 impl Stackup {
     /// A profile with no declared board thickness.
     pub fn new(id: Uuid, strata: Vec<Stratum>) -> Self {
-        Self { id, strata, finished_thickness_nm: None, finished_thickness_tolerance_nm: None, declared_minimum_thickness_nm: None }
+        Self {
+            id,
+            strata,
+            layer_groups: Vec::new(),
+            finished_thickness_nm: None,
+            finished_thickness_tolerance_nm: None,
+            declared_minimum_thickness_nm: None,
+        }
     }
 
-    /// The same board declarations around different strata.
+    /// Retain declarations and named groups around new strata, dropping only removed layer IDs.
     fn with_strata(&self, strata: Vec<Stratum>) -> Self {
-        Self { strata, ..self.clone() }
+        let copper: BTreeSet<_> = strata
+            .iter()
+            .filter_map(|s| match s {
+                Stratum::Copper { layer, .. } => Some(*layer),
+                _ => None,
+            })
+            .collect();
+        let mut next = Self { strata, ..self.clone() };
+        for group in &mut next.layer_groups {
+            group.layers.retain(|id| copper.contains(id));
+        }
+        next
     }
 }
 
@@ -387,6 +409,7 @@ impl TryFrom<SetupRecords> for BoardSetup {
         if records.layers.iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count() != copper.len() {
             return Err("every copper layer must occur in the stackup".to_owned());
         }
+        groups::validate(&mut records.stackup, &mut ids, &copper)?;
         records.layers.sort_unstable_by_key(|layer| layer.id);
         Ok(Self { materials: records.materials, layers: records.layers, stackup: records.stackup })
     }
@@ -518,22 +541,14 @@ impl BoardSetup {
         &self.materials
     }
 
-    /// Whether saving needs the material-aware board format instead of the legacy layer-only format.
-    pub(crate) fn requires_material_format(&self) -> bool {
-        !self.materials.is_empty()
-            || self.stackup.strata.iter().any(|stratum| {
-                matches!(stratum, Stratum::Dielectric { construction: Some(_), .. } | Stratum::Dielectric { thickness_tolerance_nm: Some(_), .. })
-            })
-    }
-
-    /// Whether saving needs the board format that carries thermal conductivity, thermal
-    /// expansion, dielectric strength or tracking reports on a material.
+    /// Whether this setup includes thermal conductivity, thermal expansion, dielectric
+    /// strength or tracking reports on a material.
     pub(crate) fn requires_report_format(&self) -> bool {
         self.materials.iter().any(Material::has_thermal_or_insulation_reports)
     }
 
-    /// Whether saving needs the board format that carries copper roles, base copper, copper
-    /// thickness qualifiers or the declared finished board thickness.
+    /// Whether this setup includes copper roles, base copper, copper thickness qualifiers
+    /// or declared finished board thickness.
     pub(crate) fn requires_stack_format(&self) -> bool {
         let stackup = &self.stackup;
         stackup.finished_thickness_nm.is_some()
@@ -702,6 +717,7 @@ impl BoardSetup {
                 }
             }},
             "stackup":{"type":"object", "additionalProperties":false, "required":["id","strata"], "properties":{
+                "layer_groups":groups::schema(),
                 "finished_thickness_nm":stack_thickness, "finished_thickness_tolerance_nm":stack_tolerance, "declared_minimum_thickness_nm":stack_thickness,
                 "id":id, "strata":{"type":"array", "minItems":3, "maxItems":2*MAX_COPPER-1, "items":{"oneOf":[
                     copper,
@@ -782,8 +798,8 @@ impl Session {
     /// Build the same candidate for Preview and Apply, checking setup-specific constraints.
     /// Shared edit preparation checks cross-project invariants before any publication.
     pub(super) fn board_setup_candidate(&self, params: &Value) -> Result<Option<crate::Project>, CommandError> {
-        let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         let project = self.open_project()?;
+        let (setup, _) = groups::candidate(project, &params["setup"])?;
         let before = project.board.setup.as_ref().ok_or_else(|| CommandError::Unavailable("initialize board setup first".to_owned()))?;
         if before.stackup.id != setup.stackup.id {
             return Err(CommandError::InvalidParams("editing board setup must retain its stackup profile ID".to_owned()));

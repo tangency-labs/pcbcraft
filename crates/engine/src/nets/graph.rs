@@ -35,6 +35,7 @@ impl Network {
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
             class_bindings: Vec::new(),
+            appearance: None,
             state: State::Active {},
         })
     }
@@ -51,6 +52,7 @@ impl Network {
                 generated_number: record.generated_number,
                 lineage: record.lineage.clone(),
                 class_bindings: record.class_bindings.clone(),
+                appearance: record.appearance,
                 ..next
             })
         }
@@ -64,7 +66,8 @@ pub(super) struct Graph {
     pub networks: Vec<Network>,
     /// Current logical anchor membership; never serialized in the registry.
     pub by_anchor: BTreeMap<Anchor, usize>,
-    endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
+    /// Connected appearance and named-interface addresses used to verify exact net continuation.
+    pub(super) endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
 }
 
 /// Construction keys distinguish actual graph groups from isolated logical terminals/interfaces.

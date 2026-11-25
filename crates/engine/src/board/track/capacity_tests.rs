@@ -24,12 +24,12 @@ fn at(x_nm: i64, y_nm: i64) -> Point {
 fn exhaustive(mut builder: IslandBuilder, end: usize) -> IslandBuilder {
     for i in builder.node..end {
         for j in 0..i {
-            let layers = match (builder.layers.get(i), builder.layers.get(j)) {
+            let layers = match (builder.layers.get(i).and_then(Option::as_ref), builder.layers.get(j).and_then(Option::as_ref)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
                 _ => true,
             };
-            if layers && builder.contours[i].touches(&builder.contours[j]) {
+            if layers && builder.shapes[i].touches(&builder.shapes[j]) {
                 join(&mut builder.parent, i, j);
             }
         }
@@ -51,6 +51,7 @@ fn crowded(tracks: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>, [Uuid; 2]) {
                 corners: [at(x, y), at(x + 800_000, y), at(x + 800_000, y + 800_000), at(x, y + 800_000)],
                 layers: if k % 3 == 0 { layers.to_vec() } else { vec![layers[k % 2]] },
                 net: None,
+                plated_slot: None,
                 center: at(x + 400_000, y + 400_000),
                 shape: if k % 4 == 0 { PadShape::Circle } else { PadShape::Rectangle },
                 corner_radius_nm: 0,
@@ -73,6 +74,7 @@ fn crowded(tracks: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>, [Uuid; 2]) {
         .collect();
     let vias = (0..tracks.len() / 8)
         .map(|k| Via {
+            test_points: Default::default(),
             id: Uuid::from_u128(100_000 + k as u128),
             locked: false,
             net_assignment: None,
@@ -122,6 +124,7 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
             corners: [at(x, y), at(x + 800_000, y), at(x + 800_000, y + 800_000), at(x, y + 800_000)],
             layers: vec![layers[0]],
             net: None,
+            plated_slot: None,
             center: at(x + 400_000, y + 400_000),
             shape: PadShape::Rectangle,
             corner_radius_nm: 0,
@@ -183,6 +186,7 @@ fn board_validation_names_the_track_and_via_limits() {
         end: at(MM, k as i64 * MM),
     };
     let via = |k: usize| Via {
+        test_points: Default::default(),
         id: Uuid::from_u128(1 << 64 | k as u128),
         locked: false,
         net_assignment: None,
@@ -447,6 +451,7 @@ fn classified_capacity_board(track_count: usize) -> (Project, Value, Point, [Uui
         Track { id: Uuid::from_u128(i as u128 + 1), locked: false, layer: front, width_nm: 200_000, start, end: at(start.x_nm + 200_000, start.y_nm) }
     }));
     board.vias.extend((0..MAX_VIAS - 1).map(|i| Via {
+        test_points: Default::default(),
         id: Uuid::from_u128((MAX_TRACKS + i + 1) as u128),
         locked: false,
         at: sparse_point(i, -500),
@@ -547,6 +552,52 @@ fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically(
                 byte_limit,
             ),
         ],
+    );
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// A pad mark must fit before publication even when the board has no routed copper.
+#[test]
+fn board_document_budget_refuses_pad_mark_on_unrouted_board_atomically() {
+    let mut s = routed_fixture();
+    let mut project = s.project().unwrap().clone();
+    let path = project.board_document_path().unwrap();
+    assert!(project.board.tracks.is_empty() && project.board.vias.is_empty() && project.board.arcs.is_empty());
+    let bytes = encode_documents(Arc::new(project.clone())).unwrap()[&path].len();
+    let pad = view(&s).footprints().next().unwrap().id;
+    let board = project.board_target().unwrap().board;
+
+    // Fill the document with bounded historical labels, not route geometry. Two accepted
+    // multi-terminal nets share the load so neither exceeds its per-net label limit.
+    let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
+    let nets: Vec<_> = baseline.nets.iter_mut().filter(|net| net.terminals.len() >= 2).take(2).collect();
+    let mut nets: [&mut crate::board::update::NetState; 2] = nets.try_into().unwrap();
+    let suffix = "🟦".repeat(185);
+    let mut remaining = MAX_DOCUMENT_BYTES - bytes - 32;
+    for i in 0.. {
+        let net = &mut nets[i % 2];
+        let name = format!("budget-{i:05}-{suffix}");
+        let framing = if net.names.is_empty() { 2 } else { 3 }; // quotes and optional comma
+        if remaining < name.len() + framing {
+            if remaining >= 4 {
+                let len = remaining - framing - 1;
+                net.names.push(format!("z{}{}", "🟦".repeat(len / 4), "x".repeat(len % 4)));
+            }
+            break;
+        }
+        remaining -= name.len() + framing;
+        net.names.push(name);
+    }
+    let saved = encode_documents(Arc::new(project)).unwrap();
+    assert!((32..36).contains(&(MAX_DOCUMENT_BYTES - saved[&path].len())));
+    s.open_snapshot(decode_documents(&saved).unwrap());
+    check_atomic_refusals(
+        &mut s,
+        &[(
+            crate::board::test_points::SET_TEST_POINT,
+            json!({"board":board,"target":{"kind":"pad","footprint":pad,"pad":"1"},"purpose":"assembly","sides":"top"}),
+            "board document exceeds the 16 MiB limit".to_owned(),
+        )],
     );
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }

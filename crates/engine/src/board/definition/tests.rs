@@ -36,8 +36,8 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
     assert!(legacy_value.get("non_plated_holes").is_none());
 
     definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }, diameter_nm: MAX_OFFSET_NM });
-    assert_eq!(write_saved(&definition).unwrap_err(), "footprint format does not match its non-plated hole content");
-    definition.format = FootprintDefinition::format_for(true).into();
+    assert_eq!(write_saved(&definition).unwrap_err(), "footprint format does not match its authored hole content");
+    definition.format = NPTH_FORMAT.into();
     let bytes = write_saved(&definition).unwrap();
     assert_eq!(*read_saved(&bytes).unwrap(), definition);
     let value: Value = serde_json::from_slice(&bytes).unwrap();
@@ -61,10 +61,10 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
     let mut empty = legacy_value;
     empty["format"] = json!(NPTH_FORMAT);
     for invalid in [downgraded, empty] {
-        assert_eq!(read_saved(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), "footprint format does not match its non-plated hole content");
+        assert_eq!(read_saved(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), "footprint format does not match its authored hole content");
     }
     definition.non_plated_holes.clear();
-    definition.format = FootprintDefinition::format_for(false).into();
+    definition.format = LEGACY_FORMAT.into();
     assert_eq!(write_saved(&definition).unwrap(), legacy);
 }
 
@@ -135,7 +135,7 @@ fn schematic_clipboard_roundtrips_npth_with_a_designator_lock() {
     let mut envelope: Value = serde_json::from_str(text).unwrap();
     assert_eq!(envelope["format"], "pcbcraft-clipboard/6");
     let fragment = crate::clipboard::Fragment::from_text(text).unwrap();
-    assert!(fragment.has_npth());
+    assert!(fragment.hole_content() == crate::clipboard::HoleContent::Npth);
     assert!(fragment.project.components().any(|part| part.designator_locked()));
     let mut target = Session::default();
     target.apply("project.new", &json!({"create_board":false})).unwrap();
@@ -145,7 +145,7 @@ fn schematic_clipboard_roundtrips_npth_with_a_designator_lock() {
     assert!(pasted.schematic_packages.definitions.values().any(|definition| !definition.non_plated_holes.is_empty()));
     envelope["format"] = json!("pcbcraft-clipboard/3");
     assert!(matches!(crate::clipboard::Fragment::from_text(&envelope.to_string()),
-        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned footprint holes")));
 }
 
 /// Make a legal thin track to a via on the right side of the opening. Optionally continue
@@ -280,7 +280,7 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     let board = original.board_view(target).unwrap();
     assert!(board.ratsnest().unwrap().lines.is_empty());
     assert_eq!(board.footprints().next().unwrap().pads.len(), 2);
-    assert!(board.fabrication_outputs().unwrap_err().contains("does not yet support non-plated holes"));
+    assert!(board.fabrication_outputs().unwrap_err().contains("Draw a closed Board Outline"));
     let query = s.clearance_query(target, 0).unwrap();
     let obstacles: Vec<_> = query.objects().iter().enumerate().filter(|(_, item)| item.mechanical).collect();
     assert_eq!(obstacles.len(), 2);
@@ -305,6 +305,9 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
             assert_eq!(err.code(), crate::error_codes::ErrorCode::NotFound);
         }
         let request = crate::board::route::Request {
+            mode: crate::board::route::Mode::Walkaround,
+            merge_same_net: false,
+            fixed: Vec::new(),
             head: item.at,
             target: Point { x_nm: item.at.x_nm + 10_000_000, y_nm: item.at.y_nm },
             layer: item.layers[0],
@@ -333,10 +336,10 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     assert_eq!(nested_envelope["format"], "pcbcraft-clipboard/6");
     nested_envelope["format"] = json!("pcbcraft-clipboard/1");
     assert!(matches!(crate::clipboard::Fragment::from_text(&nested_envelope.to_string()),
-        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned footprint holes")));
     envelope["format"] = json!("pcbcraft-clipboard/1");
     assert!(matches!(clipboard::BoardFragment::from_text(&envelope.to_string()),
-        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned footprint holes")));
     let fragment = clipboard::BoardFragment::from_text(text).unwrap();
     assert_eq!(fragment.to_text().unwrap(), text);
     let sheet = s.project().unwrap().sheet_target().id();
@@ -467,7 +470,7 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
     let bytes = encode_documents(snapshot.clone()).unwrap();
     assert!(bytes.contains_key("library/footprints/basic-components/resistor-0402.r4.json"));
     assert!(bytes.contains_key("library/footprints/basic-components/sot23.r4.json"));
-    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/5"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot.clone()).unwrap()).unwrap().project).unwrap(), bytes);
     let schematic = s.inspect()["project"]["schematic"].clone();
@@ -650,4 +653,76 @@ fn expanded_defaults_place_and_reopen_without_installed_sources() {
     assert_eq!(dual.pads[1].center, Point { x_nm: 1_270_000, y_nm: -2_540_000 });
     assert_eq!(dual.pads[0].shape, PadShape::Rectangle);
     assert_eq!(basic_components("sod123").unwrap().pads[0].number, "1");
+}
+
+/// The compound transaction must refuse exact track contact with a non-plated opening even
+/// at zero copper clearance, while a one-nanometre separation remains legal.
+#[test]
+fn compound_replacement_rejects_zero_clearance_hole_tangency() {
+    use crate::board::{
+        rules::SET_RULES,
+        track::tests::{copper_layers, view},
+    };
+    let mut s = mounting_route_fixture(false);
+    let mut rules = view(&s).effective_rules().values;
+    rules.clearance_nm = 0;
+    s.apply(SET_RULES, &json!({"board":view(&s).target.board,"rules":rules,"expected_revision":s.revision()})).unwrap();
+    let layer = copper_layers(&s)[0];
+    let point = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (start, end) = (point(-2_000_000, 8_000_000), point(8_000_000, 8_000_000));
+    s.apply(crate::ADD_TRACKS, &json!({"layer":layer,"points":[start,end],"width_nm":250_000,"expected_revision":s.revision()})).unwrap();
+    let track = view(&s).tracks()[0].id;
+    let revision = s.revision();
+    let before = s.snapshot().unwrap();
+    let params = |y| {
+        let path = [start, point(start.x_nm, y), point(end.x_nm, y), end];
+        json!({"layer":layer,"width_nm":250_000,"points":[point(10_000_000,8_000_000),point(12_000_000,8_000_000)],
+            "replacements":[{"track":track,"points":path}],"expected_revision":revision})
+    };
+    let error = s.apply(crate::ADD_TRACKS, &params(6_725_000)).unwrap_err();
+    assert!(error.to_string().contains("violates copper clearance"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &before));
+    s.apply(crate::ADD_TRACKS, &params(6_725_001)).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+}
+
+#[test]
+fn zone_fill_clears_non_plated_openings_without_electrical_contact() {
+    use crate::board::{
+        drc, fill,
+        track::tests::{copper_layers, view},
+        zones::Options,
+    };
+
+    let mut s = mounting_route_fixture(true);
+    drc::tests::outline(&mut s);
+    let v = view(&s);
+    let footprint = v.footprints().next().unwrap();
+    let hole = footprint.non_plated_holes[0];
+    let target = v.net_class_target_for_copper(&format!("{}:2", footprint.id)).unwrap().unwrap();
+    let bounds = [[-5_000_000, -5_000_000], [25_000_000, -5_000_000], [25_000_000, 35_000_000], [-5_000_000, 35_000_000]]
+        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
+    for layer in copper_layers(&s) {
+        s.apply(
+            crate::board::zones::ADD_ZONE,
+            &json!({"layer":layer,"target":target,"points":bounds,
+            "options":Options{connection:crate::board::zones::Connection::Solid,..Options::default()},
+            "expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    let v = view(&s);
+    let result = fill::compute(v).unwrap();
+    assert_eq!(result.zones.len(), 2);
+    let clearance = v.effective_rules().values.clearance_nm;
+    let edge = hole.center.x_nm + hole.diameter_nm / 2 + clearance;
+    let conductor_count = result.copper.pads.len() + result.copper.tracks.len() + result.copper.vias.len();
+    for zone in &result.zones {
+        assert_eq!(zone.islands.len(), 1);
+        let island = &zone.islands[0];
+        assert!(island.contacts.iter().all(|i| *i < conductor_count));
+        assert_eq!(island.region.contains([edge - 10_000, hole.center.y_nm]).unwrap(), Some(false));
+        assert_eq!(island.region.contains([edge + 10_000, hole.center.y_nm]).unwrap(), Some(true));
+    }
 }

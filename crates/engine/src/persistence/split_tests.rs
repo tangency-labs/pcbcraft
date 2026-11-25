@@ -42,6 +42,39 @@ fn sheet(d: &Documents) -> String {
     d.keys().find(|path| path.starts_with("sheets/")).unwrap().clone()
 }
 
+/// Resolve the physical document from its registered path.
+fn board_path(d: &Documents) -> String {
+    super::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap()
+}
+
+/// A bare legacy board retains its identity and absent setup through the first current save.
+#[test]
+fn bare_board_migrates_to_current_folder_and_archive_bytes() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let project = session.snapshot().unwrap();
+    let mut legacy = documents(&session);
+    let path = board_path(&legacy);
+    let current = legacy.clone();
+    edit(&mut legacy, &path, |board| {
+        assert_eq!(board["format"], CURRENT_BOARD_FORMAT);
+        assert!(board.get("setup").is_none());
+        assert_eq!(board["footprints"], json!([]));
+        board["format"] = json!("pcbcraft-board/1");
+    });
+    let reopened = decode_documents(&legacy).unwrap();
+    assert_eq!(reopened.board_target(), project.board_target());
+    assert_eq!(reopened.board_document_path().as_deref(), Some(path.as_str()));
+    assert!(reopened.board_setup().is_none());
+    let first_save = encode_documents(reopened.clone()).unwrap();
+    assert_eq!(first_save, current);
+    let archive = encode_packed(reopened).unwrap();
+    let unpacked = decode_packed(&archive).unwrap();
+    assert_eq!(unpacked.documents, first_save);
+    assert_eq!(encode_packed(unpacked.project).unwrap(), archive);
+    assert_eq!(encode_documents(decode_documents(&first_save).unwrap()).unwrap(), first_save);
+}
+
 /// Split and legacy forms retain identities, pin mappings, wire geometry and sheet names.
 #[test]
 fn round_trip_and_legacy_migrations_have_identical_documents() {
@@ -98,10 +131,14 @@ fn edit_to_file_boundaries_and_one_record_diffs() {
         let before = documents(&s);
         apply(&mut s, command, params);
         let after = documents(&s);
-        let path = if owner == "sheet" { sheet(&before) } else { owner.to_owned() };
+        let path = match owner {
+            "sheet" => sheet(&before),
+            "board.json" => board_path(&before),
+            _ => owner.to_owned(),
+        };
         let mut expected = BTreeSet::from([path.clone()]);
         if command == PLACE_FOOTPRINT {
-            // The first physical edit also persists the legacy board registration.
+            // Placement can advance the allocation watermark.
             expected.insert(ENTRY_POINT.to_owned());
         }
         assert_eq!(changed(&before, &after), expected);
@@ -168,7 +205,7 @@ fn reject_incomplete_or_inconsistent_document_sets() {
         (ENTRY_POINT, "sheets", Value::Null),
         (path.as_str(), "junctions", Value::Null),
         (path.as_str(), "id", json!(Uuid::nil())),
-        ("board.json", "footprints", Value::Null),
+        (board_path(&original).as_str(), "footprints", Value::Null),
     ] {
         let mut d = original.clone();
         edit(&mut d, name, |v| v[field] = value);
@@ -190,7 +227,8 @@ fn reject_incomplete_or_inconsistent_document_sets() {
     let mut s = session();
     apply(&mut s, PLACE_FOOTPRINT, json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0}));
     let mut d = documents(&s);
-    edit(&mut d, "board.json", |v| v["footprints"][0]["id"] = json!(2));
+    let path = board_path(&d);
+    edit(&mut d, &path, |v| v["footprints"][0]["id"] = json!(2));
     assert!(decode_documents(&d).unwrap_err().contains("duplicate"));
 }
 
@@ -348,7 +386,7 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
         assert!(decode_packed(&zip_files(&bad, "", false)).is_err());
     }
     let mut missing = d.clone();
-    missing.remove("board.json");
+    missing.remove(&board_path(&d));
     assert!(decode_packed(&zip_files(&missing, "", false)).is_err());
     let mut extra = d;
     extra.remove("manifest.json");

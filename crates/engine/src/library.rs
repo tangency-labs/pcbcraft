@@ -1,5 +1,5 @@
 //! Schematic symbol libraries. A library is a folder with a `library.json` manifest and one
-//! versioned JSON file per symbol in `symbols/`; see `docs/symbol-library.md` for the format.
+//! versioned JSON file per symbol in `symbols/`; see `docs/libraries/symbol-library.md` for the format.
 //! Symbols describe only what the schematic draws and connects. Layout footprints are separate
 //! definitions in their own libraries, linked to a symbol by assignment, so nothing here names
 //! a footprint or a pad.
@@ -61,6 +61,8 @@ pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
 
 /// Native symbols with independently placeable units sharing one logical terminal table.
 pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
+/// Current native symbol write format, with optional alternate functions on logical terminals.
+pub const SYMBOL_FORMAT_V5: &str = "pcbcraft-symbol/5";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +226,26 @@ struct TerminalFile {
     #[serde(default)]
     name: Option<String>,
     electrical_type: ElectricalType,
+    #[serde(default, deserialize_with = "alternate_list")]
+    alternates: Option<Vec<crate::schematic::AlternatePinFunction>>,
+}
+
+/// Preserve omission so older symbol envelopes can reject a present list.
+fn alternate_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<crate::schematic::AlternatePinFunction>>, D::Error> {
+    authored_alternates(d).map(Some)
+}
+
+/// A present list must contain one to sixteen unique, bounded names.
+pub(crate) fn authored_alternates<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<crate::schematic::AlternatePinFunction>, D::Error> {
+    let items = Vec::<crate::schematic::AlternatePinFunction>::deserialize(d)?;
+    let mut names = BTreeSet::new();
+    if items.is_empty()
+        || items.len() > crate::pin_functions::MAX_ALTERNATES
+        || items.iter().any(|item| !crate::pin_functions::valid_name(&item.name) || !names.insert(&item.name))
+    {
+        return Err(serde::de::Error::custom("Expected a nonempty bounded list of uniquely named alternate pin functions."));
+    }
+    Ok(items)
 }
 
 #[derive(Deserialize)]
@@ -256,11 +278,13 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must use one of formats 1–4 with no unknown fields.
-/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding. Terminals, 1 to 1024 of them, have
-/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. Formats 1–3 contain one unit; format 4 supports up to 32 units
-/// sharing a complete logical terminal table, with at most one appearance per terminal per unit. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
-/// center on each axis and apart from each other. Drawings have at most 256 strokes within
+/// The file must use one of formats 1–5 with no unknown fields.
+/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding.
+/// A symbol has up to 1,024 logical terminals, each with a unique ID of 1 to 8 letters, digits, `+`, `-` or `_`.
+/// Formats 1–3 contain one unit; formats 4–5 support up to 32 units sharing the logical terminal table.
+/// Format 5 adds alternate functions. Each unit has at most one appearance per terminal.
+/// Pins sit on the 1.27 mm grid, at most 12.7 mm from the center on each axis and apart from each other.
+/// Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid symbol JSON: {error}"))?;
@@ -281,6 +305,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         Some(SYMBOL_FORMAT_V2) => 2,
         Some(SYMBOL_FORMAT_V3) => 3,
         Some(SYMBOL_FORMAT_V4) => 4,
+        Some(SYMBOL_FORMAT_V5) => 5,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
@@ -317,6 +342,9 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
         return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals, not {}", file.terminals.len()));
     }
+    if format_version != 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
+        return Err("Alternate pin functions require pcbcraft-symbol/5.".into());
+    }
     let mut numbers = BTreeSet::new();
     for terminal in &file.terminals {
         check_pin_number(&terminal.id)?;
@@ -325,10 +353,13 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
         if let Some(name) = &terminal.name {
             check_text("terminal name", name, 32)?;
+            if terminal.alternates.as_ref().is_some_and(|list| list.iter().any(|function| &function.name == name)) {
+                return Err(format!("Terminal {} repeats its primary name as an alternate.", terminal.id));
+            }
         }
     }
     if file.units.is_empty() || file.units.len() > 32 || (format_version < 4 && file.units.len() != 1) {
-        return Err("formats 1–3 require one unit; format 4 supports 1 to 32 units".into());
+        return Err("formats 1–3 require one unit; formats 4–5 support 1 to 32 units".into());
     }
     let mut unit_ids = BTreeSet::new();
     let mut units = Vec::new();
@@ -364,6 +395,8 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
             }
             if let Some(appearance) = &pin.appearance {
                 appearance.validate(Point { x_nm, y_nm })?;
+            } else if terminal.alternates.is_some() {
+                return Err(format!("Terminal {} needs an integrated pin lead on every appearance to define alternate functions.", terminal.id));
             }
             pins.push(PinDefinition {
                 appearance: pin.appearance.clone(),
@@ -371,6 +404,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
                 offset: Point { x_nm, y_nm },
                 name: terminal.name.clone(),
                 electrical_type: terminal.electrical_type,
+                alternates: terminal.alternates.clone().unwrap_or_default(),
             });
         }
         if unit.drawing.len() > MAX_SHAPES {
@@ -546,7 +580,12 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
         terminals: definition
             .pins
             .iter()
-            .map(|pin| SavedTerminal { id: &pin.number, name: pin.name.as_deref(), electrical_type: pin.electrical_type })
+            .map(|pin| SavedTerminal {
+                id: &pin.number,
+                name: pin.name.as_deref(),
+                electrical_type: pin.electrical_type,
+                alternates: &pin.alternates,
+            })
             .collect(),
         units: definition
             .units
@@ -602,6 +641,8 @@ struct SavedTerminal<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
     electrical_type: ElectricalType,
+    #[serde(skip_serializing_if = "<[crate::schematic::AlternatePinFunction]>::is_empty")]
+    alternates: &'a [crate::schematic::AlternatePinFunction],
 }
 
 #[derive(Serialize)]
@@ -690,6 +731,42 @@ fn check_id(id: &str) -> Result<(), String> {
 fn check_text(field: &str, text: &str, limit: usize) -> Result<(), String> {
     if text.is_empty() || text.trim() != text || text.chars().count() > limit || text.chars().any(char::is_control) {
         return Err(format!("`{field}` must be 1 to {limit} characters on one line"));
+    }
+    Ok(())
+}
+
+/// Check that an HTTP(S) authority has a host and, if supplied, a numeric port in range.
+/// A bracketed host must be an IPv6 address, followed only by an optional port.
+fn http_authority_is_valid(authority: &str) -> bool {
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let (host, port) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let Some((address, suffix)) = after_bracket.split_once(']') else { return false };
+        if address.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        let port = if suffix.is_empty() {
+            ""
+        } else if let Some(port) = suffix.strip_prefix(':') {
+            port
+        } else {
+            return false;
+        };
+        (address, port)
+    } else {
+        host_port.split_once(':').unwrap_or((host_port, ""))
+    };
+    !host.is_empty()
+        && !host.contains(['[', ']', '\\'])
+        && (port.is_empty() || (port.bytes().all(|digit| digit.is_ascii_digit()) && port.parse::<u16>().is_ok()))
+}
+
+/// Check a bounded HTTP(S) reference with a host, validated IPv6 literals and port numbers, and
+/// no whitespace. Reading a native record never fetches the URL.
+pub(crate) fn check_http_url(field: &str, url: &str, limit: usize) -> Result<(), String> {
+    check_text(field, url, limit)?;
+    let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if !http_authority_is_valid(authority) || url.chars().any(char::is_whitespace) {
+        return Err(format!("{field} must be an HTTP(S) URL; loading performs no fetch."));
     }
     Ok(())
 }
@@ -837,6 +914,40 @@ mod tests {
         let weak = Arc::downgrade(&copy);
         drop(copy);
         assert!(weak.upgrade().is_none(), "nothing keeps a copy alive once it is dropped");
+    }
+
+    /// HTTP(S) references need a nonempty host in the authority; userinfo, ports, IPv6 literals,
+    /// paths, queries and fragments are preserved, while malformed authorities are refused.
+    #[test]
+    fn http_url_validation_requires_a_nonempty_host() {
+        for url in [
+            "https://example.com:8443/a?b#c",
+            "http://user@example.com/path",
+            "http://user:pass@example.com:8443/a?b#c",
+            "https://[::1]:8443/a",
+            "https://example.com",
+        ] {
+            assert!(check_http_url("Link URL", url, 2048).is_ok(), "{url}");
+        }
+        for url in [
+            "https://:8080/x",
+            "https:///path",
+            "https://user@/x",
+            "https://[]/x",
+            "https://[bogus]/x",
+            "https://[::1]suffix/x",
+            "https://example.com:abc/x",
+            "https://example.com:65536/x",
+            "https://example.com/a b",
+            "https://exa mple.invalid",
+            "file:///tmp/x.pdf",
+            "ftp://example.invalid/x",
+            "//example.invalid/x",
+            "example.invalid/x",
+        ] {
+            let error = check_http_url("Link URL", url, 2048).unwrap_err();
+            assert!(error.contains("HTTP(S) URL"), "{url}: {error}");
+        }
     }
 
     /// Extreme coordinates report a file error without preventing later valid files from loading.

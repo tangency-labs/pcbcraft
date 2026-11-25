@@ -354,6 +354,16 @@ fn unknown_probe_bridging_two_nets_agrees_with_commit_short_rejection() {
     let result = q.probe(&contour, &[layer], None).unwrap();
     assert!(result.decisions.iter().filter(|d| d.conflicting_nets).count() >= 2);
     assert!(result.decisions.iter().all(|d| !d.clearance_violation), "zero rule does not replace short detection");
+    let source = result.decisions.iter().find(|d| d.conflicting_nets).unwrap().second;
+    let retained_nets = &q.objects()[source].intended_nets;
+    let current = q
+        .probe_membership_excluding(&contour, &[layer], retained_nets, |index| {
+            let candidate = &q.objects()[index].intended_nets;
+            !candidate.is_empty() && candidate != retained_nets
+        })
+        .unwrap();
+    assert!(current.decisions.iter().any(|d| d.second == source && d.touches));
+    assert!(current.decisions.iter().all(|d| !d.conflicting_nets));
     let bytes = encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
     assert!(
@@ -436,4 +446,26 @@ fn routed_membership_includes_conflicts_reached_through_direct_pad_contact() {
     let q = query(&s, 0);
     assert_eq!(q.objects().iter().find(|item| item.name.parse::<Uuid>().is_ok()).unwrap().intended_nets.len(), 2);
     compare(&s, 0);
+}
+
+/// Bounded per-object exhaustive findings must match the full exhaustive pair set filtered to
+/// those objects, deduplicating pairs where both endpoints are sampled and ignoring out-of-range
+/// indices.
+#[test]
+fn exhaustive_findings_for_matches_filtered_exhaustive_pairs() {
+    let s = coincident_named_pads(2, "global", false);
+    for rule in [0, 200_000] {
+        let q = query(&s, rule);
+        let total = q.objects().len();
+        assert!(total >= 3);
+        let subset = [0, 2, 0, total, total + 10];
+        let selected: BTreeSet<usize> = subset.into_iter().filter(|&index| index < total).collect();
+        let expected: Vec<_> = q
+            .exhaustive_pairs()
+            .decisions
+            .into_iter()
+            .filter(|d| (d.touches || d.clearance_violation) && (d.first.is_some_and(|i| selected.contains(&i)) || selected.contains(&d.second)))
+            .collect();
+        assert_eq!(q.exhaustive_findings_for(&subset).decisions, expected);
+    }
 }

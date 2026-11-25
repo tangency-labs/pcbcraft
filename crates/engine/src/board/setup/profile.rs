@@ -2,7 +2,7 @@
 use super::{BoardSetup, LayerPurpose, SetupRecords, Stackup, Stratum};
 use crate::{CommandError, board::silkscreen::Settings};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 use uuid::Uuid;
 
 /// Maximum portable profile payload, bounded before parsing or writing.
@@ -13,10 +13,16 @@ const STACK_FORMAT: &str = "pcbcraft-setup-profile/2";
 /// Adds thermal conductivity, thermal expansion, dielectric strength and tracking reports and
 /// may carry every version 2 field.
 const REPORT_FORMAT: &str = "pcbcraft-setup-profile/3";
+/// Authored layer groups; derived physical and role groups remain computed.
+const GROUP_FORMAT: &str = "pcbcraft-setup-profile/5";
+/// Portable exports use one format with optional stack fields, reports and named groups.
+pub const CURRENT_FORMAT: &str = "pcbcraft-setup-profile/6";
 
-/// The lowest profile version that holds this setup, so older readers keep opening the rest.
-fn format_for(setup: &BoardSetup) -> &'static str {
-    if setup.requires_report_format() {
+/// Identify the historical format that required this setup vocabulary.
+fn historical_format_for(setup: &BoardSetup) -> &'static str {
+    if setup.requires_group_format() {
+        GROUP_FORMAT
+    } else if setup.requires_report_format() {
         REPORT_FORMAT
     } else if setup.requires_stack_format() {
         STACK_FORMAT
@@ -40,8 +46,7 @@ pub struct SetupProfile {
 impl SetupProfile {
     /// Capture a new shareable snapshot without changing board or material identities.
     pub fn new(name: String, setup: BoardSetup, silkscreen: Settings) -> Result<Self, String> {
-        let profile =
-            Self { format: format_for(&setup).into(), id: crate::fresh_id().map_err(|e| e.to_string())?, revision: 1, name, setup, silkscreen };
+        let profile = Self { format: CURRENT_FORMAT.into(), id: crate::fresh_id().map_err(|e| e.to_string())?, revision: 1, name, setup, silkscreen };
         profile.validate()?;
         Ok(profile)
     }
@@ -51,28 +56,46 @@ impl SetupProfile {
             return Err("Setup profile exceeds 1 MiB.".into());
         }
         let profile: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let raw: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        if let Some(groups) = raw["setup"]["stackup"].get("layer_groups") {
+            match profile.format.as_str() {
+                CURRENT_FORMAT if groups.as_array().is_some_and(Vec::is_empty) => {
+                    return Err("Setup profile layer_groups must be omitted when empty.".into());
+                }
+                CURRENT_FORMAT | GROUP_FORMAT => {}
+                _ => return Err("The layer_groups field requires setup profile version 5 or 6.".into()),
+            }
+        }
         profile.validate()?;
         Ok(profile)
     }
-    /// Encode deterministic, human-readable canonical-unit data with all material pins embedded.
+    /// Export the current format in canonical units, preserving the profile identity and material pins.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
         self.validate()?;
-        let mut bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        let mut profile = Cow::Borrowed(self);
+        if self.format != CURRENT_FORMAT {
+            profile.to_mut().format = CURRENT_FORMAT.into();
+        }
+        let mut bytes = serde_json::to_vec_pretty(profile.as_ref()).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
         if bytes.len() > MAX_PROFILE_BYTES {
             return Err("Setup profile exceeds 1 MiB.".into());
         }
         Ok(bytes)
     }
-    /// In-memory construction receives the same validation as a decoded profile. Version 1 cannot
-    /// carry the stack fields, and version 2 is written only for a setup that uses them. Version 3
-    /// is written only for a setup whose materials carry thermal or insulation reports.
+    /// Validate typed setup and silkscreen for every profile. Historical headers also enforce their
+    /// released requirements for stack fields, reports and named groups.
     fn validate(&self) -> Result<(), String> {
-        if ![FORMAT, STACK_FORMAT, REPORT_FORMAT].contains(&self.format.as_str()) || self.id.is_nil() || self.revision == 0 {
+        if !matches!(self.format.as_str(), FORMAT | STACK_FORMAT | REPORT_FORMAT | GROUP_FORMAT | CURRENT_FORMAT)
+            || self.id.is_nil()
+            || self.revision == 0
+        {
             return Err("Unsupported or invalid setup profile identity/version.".into());
         }
-        if self.format != format_for(&self.setup) {
-            return Err(if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
+        if self.format != CURRENT_FORMAT && self.format != historical_format_for(&self.setup) {
+            return Err(if self.setup.requires_group_format() || self.format == GROUP_FORMAT {
+                "User layer groups require setup profile version 5, which requires at least one group."
+            } else if self.setup.requires_report_format() || self.format == REPORT_FORMAT {
                 "Thermal conductivity, thermal expansion, dielectric strength and tracking reports require setup profile version 3, which requires at least one of them."
             } else {
                 "Copper roles, base copper, copper thickness qualifiers and finished board thickness require setup profile version 2, which requires at least one of them."
@@ -93,6 +116,7 @@ impl BoardSetup {
     /// Existing material pins cannot be rewritten; ambiguity/name collisions fail through ordinary
     /// setup validation. Copper-count changes use the ordinary authored-stratum/removal checks.
     /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
+    /// The profile replaces the target group's list with its own (even if empty) and rebases member IDs.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
         let incoming = &profile.setup;
@@ -147,7 +171,12 @@ impl BoardSetup {
                 materials.push(material.clone());
             }
         }
-        let stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
+        let mut stackup = Stackup { id: target.stackup.id, strata, ..incoming.stackup.clone() };
+        for group in &mut stackup.layer_groups {
+            for layer in &mut group.layers {
+                *layer = ids.get(layer).copied().unwrap_or(*layer);
+            }
+        }
         Self::try_from(SetupRecords { materials, layers, stackup }).map_err(CommandError::InvalidParams)
     }
 }
@@ -183,10 +212,9 @@ mod tests {
         assert!(SetupProfile::decode(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(SetupProfile::decode(&vec![b' '; MAX_PROFILE_BYTES + 1]).is_err());
     }
-    /// Version 2 is written only for setups with copper roles, base copper, copper thickness
-    /// qualifiers or finished board thickness; each version refuses the other's content.
+    /// Stack fields are optional in current exports. Historical /1 and /2 retain their vocabulary.
     #[test]
-    fn stack_fields_select_profile_version_2() {
+    fn stack_fields_share_the_current_profile_format() {
         let s = session();
         let plain = s.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4OneOz).unwrap();
         let mut value = serde_json::to_value(&plain).unwrap();
@@ -196,8 +224,14 @@ mod tests {
         let stacked: BoardSetup = serde_json::from_value(value).unwrap();
         let old = SetupProfile::new("Plain".into(), plain, Settings::default()).unwrap();
         let new = SetupProfile::new("Stack".into(), stacked.clone(), Settings::default()).unwrap();
-        assert_eq!(old.format, FORMAT);
-        assert_eq!(new.format, STACK_FORMAT);
+        assert_eq!(old.format, CURRENT_FORMAT);
+        assert_eq!(new.format, CURRENT_FORMAT);
+        for (profile, historical) in [(&old, FORMAT), (&new, STACK_FORMAT)] {
+            let mut legacy = serde_json::to_value(profile).unwrap();
+            legacy["format"] = json!(historical);
+            let legacy = SetupProfile::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert_eq!(legacy.encode().unwrap(), profile.encode().unwrap());
+        }
         let bytes = new.encode().unwrap();
         assert_eq!(SetupProfile::decode(&bytes).unwrap(), new);
         assert_eq!(SetupProfile::decode(&bytes).unwrap().encode().unwrap(), bytes);
@@ -213,10 +247,9 @@ mod tests {
         let error = SetupProfile::decode(&serde_json::to_vec(&upgraded).unwrap()).unwrap_err();
         assert!(error.contains(version_refusal), "{error}");
     }
-    /// Version 3 is written only when a material carries thermal or insulation reports; it
-    /// carries version 2's stack fields, and the reports travel into the target board.
+    /// Reports survive import and re-export under the current format. Historical /3 requires reports.
     #[test]
-    fn material_reports_select_profile_version_3() {
+    fn material_reports_remain_optional_in_the_current_profile_format() {
         let s = session();
         let plain = s.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4OneOz).unwrap();
         let mut value = serde_json::to_value(&plain).unwrap();
@@ -231,8 +264,12 @@ mod tests {
         let both: BoardSetup = serde_json::from_value(value).unwrap();
         for setup in [reported, both] {
             let profile = SetupProfile::new("Reports".into(), setup, Settings::default()).unwrap();
-            assert_eq!(profile.format, REPORT_FORMAT);
+            assert_eq!(profile.format, CURRENT_FORMAT);
             let bytes = profile.encode().unwrap();
+            let mut legacy = serde_json::to_value(&profile).unwrap();
+            legacy["format"] = json!(REPORT_FORMAT);
+            let legacy = SetupProfile::decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert_eq!(legacy.encode().unwrap(), bytes);
             assert_eq!(SetupProfile::decode(&bytes).unwrap().encode().unwrap(), bytes);
             let adopted = s.project().unwrap().board_setup().unwrap().with_profile(&profile).unwrap();
             let reports = |setup: &BoardSetup| setup.materials().iter().find(|m| m.id == uuid::Uuid::from_u128(77)).map(|m| m.cti.clone());
@@ -254,10 +291,37 @@ mod tests {
     /// through the same revision-bound command as manual edits and supports exact undo.
     #[test]
     fn profile_rebases_layer_ownership_and_preserves_material_pins() {
-        let source = session();
+        let mut source = session();
         let mut target = session();
-        let source_setup = source.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4TwoOz).unwrap();
-        let profile = SetupProfile::new("Heavy copper".into(), source_setup, Settings::default()).unwrap();
+        let plain = source.project().unwrap().board_setup().unwrap().with_starting_stackup(StackupPreset::Fr4TwoOz).unwrap();
+        source.apply(SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":source.revision()})).unwrap();
+        let mut combined = serde_json::to_value(&plain).unwrap();
+        let material = Uuid::from_u128(77);
+        let pin = json!({"id":material,"revision":7});
+        combined["materials"].as_array_mut().unwrap().push(json!({
+            "id":material,"revision":7,"name":"Synthetic core",
+            "cti":[{"cti_v":175,"material_group":"IIIa","basis":"minimum","source":{"document":"Synthetic"}}]
+        }));
+        combined["stackup"]["strata"][1]["construction"]["material"] = pin.clone();
+        combined["stackup"]["strata"][0]["role"] = json!("plane");
+        combined["stackup"]["finished_thickness_nm"] = json!(1_600_001);
+        let front = plain.copper_stack().next().unwrap().layer;
+        let group = Uuid::from_u128(79);
+        combined["stackup"]["layer_groups"] = json!([{"id":group,"name":"Return","layers":[front]}]);
+        source.apply(SET_BOARD_SETUP, &json!({"setup":combined,"expected_revision":source.revision()})).unwrap();
+        let export = |session: &Session| {
+            let setup = session.project().unwrap().board_setup().unwrap().clone();
+            let profile = SetupProfile::new("Heavy copper".into(), setup, Settings::default()).unwrap();
+            SetupProfile::decode(&profile.encode().unwrap()).unwrap()
+        };
+        let profile = export(&source);
+        assert_eq!(profile.format, CURRENT_FORMAT);
+        source.apply("edit.undo", &json!({})).unwrap();
+        let cleared = export(&source);
+        assert_eq!(cleared.format, CURRENT_FORMAT);
+        assert_eq!(cleared.setup, plain);
+        assert!(cleared.setup.stackup().layer_groups.is_empty());
+        assert!(cleared.setup.materials().iter().all(|definition| definition.cti.is_empty()));
         let edge = target.project().unwrap().board_setup().unwrap().layers().iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
         target
             .apply(
@@ -271,11 +335,22 @@ mod tests {
         let adopted = setup.with_profile(&profile).unwrap();
         assert_eq!(adopted.stackup().id, identity);
         assert!(adopted.layers().iter().any(|l| l.id == edge));
+        let target_front = setup.copper_stack().next().unwrap().layer;
+        assert_ne!(front, target_front);
+        assert_eq!(adopted.stackup().layer_groups[0].id, group);
+        assert_eq!(adopted.stackup().layer_groups[0].layers, vec![target_front]);
         assert_eq!(crate::persistence::encode_documents(target.snapshot().unwrap()).unwrap(), before);
         target.apply(SET_BOARD_SETUP, &json!({"setup":adopted,"silkscreen":profile.silkscreen,"expected_revision":target.revision()})).unwrap();
-        assert_eq!(target.project().unwrap().board_setup().unwrap().laminate_thickness_nm(), Some(1600000));
+        let applied = target.project().unwrap().board_setup().unwrap();
+        assert_eq!(applied.laminate_thickness_nm(), Some(1_600_000));
+        assert_eq!(applied.stackup().finished_thickness_nm, Some(1_600_001));
+        assert_eq!(applied.stackup().layer_groups[0].layers, vec![target_front]);
+        let applied_json = serde_json::to_value(applied).unwrap();
+        assert_eq!(applied_json["stackup"]["strata"][1]["construction"]["material"], pin);
+        let definition = |setup: &BoardSetup| setup.materials().iter().find(|m| m.id == material).cloned().unwrap();
+        assert_eq!(definition(applied), definition(&profile.setup));
         let mut conflicting = profile.clone();
-        conflicting.setup.materials[0].name = "Altered pin".into();
+        conflicting.setup.materials.iter_mut().find(|m| m.id == material).unwrap().name = "Altered pin".into();
         assert!(target.project().unwrap().board_setup().unwrap().with_profile(&conflicting).is_err());
         target.apply("edit.undo", &json!({})).unwrap();
         assert_eq!(crate::persistence::encode_documents(target.snapshot().unwrap()).unwrap(), before);

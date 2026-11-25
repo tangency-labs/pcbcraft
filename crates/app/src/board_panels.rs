@@ -2,7 +2,10 @@
 use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
-use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
+use pcbcraft_engine::board::{
+    correspondence::Source,
+    setup::{Layer, LayerPurpose, Stratum},
+};
 pub(super) mod properties;
 use properties::{copper_properties, footprint_transform};
 
@@ -10,11 +13,11 @@ impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
     /// Browser picks, layer color and the Board Setup draft remain available without derived copper connectivity.
-    /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
-    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
+    /// Dock slots keep Layers, Properties, Router Settings and Selection filters separate on either edge.
+    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 4], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
         let Some(project) = self.session.snapshot() else {
-            return ([Rect::NOTHING; 3], Rect::NOTHING);
+            return ([Rect::NOTHING; 4], Rect::NOTHING);
         };
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
@@ -22,12 +25,13 @@ impl PcbApp {
         let state = &mut self.views.active.board;
         let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
-            return ([Rect::NOTHING; 3], Rect::NOTHING);
+            return ([Rect::NOTHING; 4], Rect::NOTHING);
         };
         let host = Id::unique(("board_panels", self.views.host));
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut color_pick = None;
+        let mut net_color_pick = None;
         let mut setup_open = false;
         let (mut show_all, mut isolate) = (false, false);
         let mut pick = None;
@@ -50,10 +54,17 @@ impl PcbApp {
         if collapse {
             state.browser_collapsed = !state.browser_collapsed;
         }
-        let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
+        let slots = crate::workspace_panels::areas(
+            area,
+            browser,
+            &self.views.active.panels,
+            [true, true, self.views.active.filters_open, state.router_settings_open],
+            false,
+        );
         let compact = self.preferences.panel_style == workspace::PanelStyle::Compact;
         let can_isolate = state.active_layer.is_some();
         let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
+        let mut net_colors_visible = state.net_colors_visible();
         let mut net_names_visible = !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY);
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
             ui,
@@ -68,6 +79,7 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     setup_open = pcbcraft_chrome::board_setup::open_button(ui, settings_enabled).clicked();
                     pcbcraft_chrome::controls::checkbox(ui, &mut net_names_visible, "Net names");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut net_colors_visible, "Net colors");
                 });
                 ui.horizontal(|ui| {
                     show_all = pcbcraft_chrome::controls::small_button(ui, "Show all").clicked();
@@ -77,19 +89,24 @@ impl PcbApp {
                     }
                 });
             },
-            |ui| {
-                layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick);
-            },
+            |ui| layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick),
         );
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
         }
         state.set_ratsnest_visibility(ratsnest_visible);
         state.set_net_names_visibility(net_names_visible);
+        state.set_net_colors_visible(net_colors_visible);
         if show_all || isolate {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
-        let net_presentation = state.copper_connectivity(target, input);
+        let pad = match self.views.active.inspection.as_slice() {
+            [Source::Pad(pad)] if pad.board == target.target => Some(pad.pad),
+            _ => None,
+        };
+        let with_net_ids =
+            self.board_appearance.net_palette(target.target, net_colors_visible).is_some() || !state.tracks.selected.is_empty() || pad.is_some();
+        let net_presentation = state.copper_connectivity(target, input, with_net_ids);
         let net_presentation = match net_presentation {
             Ok(value) => value,
             Err(error) => {
@@ -104,10 +121,19 @@ impl PcbApp {
                 if setup_open {
                     self.begin_board_setup(view_id);
                 }
-                return ([browser, layers, Rect::NOTHING], Rect::NOTHING);
+                let router = self.router_settings_panel(ui, area, slots[crate::workspace_panels::ROUTER]);
+                return ([browser, layers, Rect::NOTHING, router], Rect::NOTHING);
             }
         };
         let names_pending = net_presentation.names_pending;
+        let selected_net = if let Some(first) = state.tracks.selected.first() {
+            net_presentation.copper_net(first).filter(|id| state.tracks.selected.iter().all(|item| net_presentation.copper_net(item) == Some(*id)))
+        } else if let Some(pad) = pad {
+            let address = pad.inspect();
+            address["footprint"].as_str().and_then(|footprint| net_presentation.pad_net(footprint, address["pad"].as_str()?))
+        } else {
+            None
+        };
         let unit = self.preferences.units;
         let revision = self.session.revision();
         if target.vias().iter().any(|v| state.tracks.selected.contains(&v.id)) {
@@ -147,6 +173,16 @@ impl PcbApp {
                         .max_height(pcbcraft_chrome::properties::form_body_height(area))
                         .show(ui, |ui| {
                             ui.add_enabled_ui(settings_enabled && !state.editing_footprint(), |ui| {
+                                if let Some(zone) = target.zones().iter().find(|zone| state.zones.selected.as_deref() == Some(&zone.id.to_string()))
+                                    && ui
+                                        .add_enabled_ui(target.zone_net_state(zone.net) == "active", |ui| {
+                                            pcbcraft_chrome::controls::button(ui, "Net color…")
+                                        })
+                                        .inner
+                                        .clicked()
+                                {
+                                    net_color_pick = Some((zone.net, Some(zone.layer)));
+                                }
                                 crate::board_zones::properties(ui, target, &mut state.zones, unit, revision)
                             })
                             .inner
@@ -157,10 +193,10 @@ impl PcbApp {
                 let selected: Vec<_> = target.footprints_for_ids(&state.selection).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
-                        property(ui, "Reference", footprint.reference);
+                        property(ui, "Reference", &footprint.reference);
                         property(ui, "Value", &footprint.value);
                         property(ui, "Board", target.name());
-                        property(ui, "Footprint", footprint.definition);
+                        property(ui, "Footprint", &footprint.definition);
                         ui.label("Silkscreen");
                         if ui.button("Edit silkscreen text").clicked() {
                             reference_pick = Some(footprint.id.clone());
@@ -238,6 +274,15 @@ impl PcbApp {
                 if names_pending {
                     property(ui, "Net names", "Schematic update pending");
                 }
+                if state.selection.is_empty()
+                    && let Some(net) = selected_net
+                    && ui
+                        .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net color…"))
+                        .inner
+                        .clicked()
+                {
+                    net_color_pick = Some((net, None));
+                }
                 if !state.tracks.selected.is_empty() {
                     net_rules = ui
                         .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net rules…"))
@@ -284,18 +329,31 @@ impl PcbApp {
             self.begin_layer_color(view_id, layer);
             self.repaint_editors(ui.ctx());
         }
+        if let Some((net, layer)) = net_color_pick {
+            self.begin_board_net_color(view_id, net, layer);
+            self.repaint_editors(ui.ctx());
+        }
         if net_rules {
             self.begin_net_rules();
         }
         if setup_open {
             self.begin_board_setup(view_id);
         }
-        let filters = {
-            use crate::workspace_panels::{FILTERS, LAYERS, PROPERTIES, follow, on_side};
-            let (panels, side) = (&self.views.active.panels, self.views.active.panels[FILTERS].position());
-            follow(slots[FILTERS], [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties)], compact)
+        use crate::workspace_panels::{FILTERS, LAYERS, PROPERTIES, ROUTER, follow, on_side};
+        let router_dock = {
+            let (panels, side) = (&self.views.active.panels, self.views.active.panels[ROUTER].position());
+            follow(slots[ROUTER], [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties)], compact)
         };
-        ([browser, layers, properties], filters)
+        let router = self.router_settings_panel(ui, area, router_dock);
+        let filters = {
+            let (panels, side) = (&self.views.active.panels, self.views.active.panels[FILTERS].position());
+            follow(
+                slots[FILTERS],
+                [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties), on_side(panels, ROUTER, side, router)],
+                compact,
+            )
+        };
+        ([browser, layers, properties, router], filters)
     }
 }
 

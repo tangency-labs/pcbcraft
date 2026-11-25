@@ -1,0 +1,40 @@
+{
+  "browser": "156.0.8078.79",
+  "wasm": [
+    "pcbcraft-web-e4162e05d9794bb_bg.wasm"
+  ],
+  "source_revision": "0639964 on 1128e3e plus recovery-observer regression",
+  "workers": {
+    "started": 2,
+    "completed": [
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      },
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      }
+    ]
+  },
+  "errors": [],
+  "pixel_oracle": {
+    "at": [
+      1200,
+      550
+    ],
+    "unfilled_rgb": [
+      0,
+      16,
+      32
+    ],
+    "repoured_rgb": [
+      82,
+      26,
+      37
+    ],
+    "pass": true
+  }
+}

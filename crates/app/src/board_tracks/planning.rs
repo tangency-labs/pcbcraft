@@ -3,7 +3,7 @@ use super::*;
 use crate::board_drc::jobs::{Queue, Request as Queued};
 use pcbcraft_engine::{
     Session,
-    board::route::{DEFAULT_BUDGET, Outcome, Plan, PlanningContext, PlanningJob, Posture, Request},
+    board::route::{Outcome, Plan, PlanningContext, PlanningJob, Posture, Request},
 };
 
 /// A click fixes one target; pointer motion cannot replace it before its plan is adopted.
@@ -22,10 +22,20 @@ struct Key {
     changes: Vec<(usize, String)>,
     sizes: (i64, i64, i64),
 }
+/// A fully planned and validated local step, ready for adoption by its owning gesture.
+#[derive(Debug)]
+pub(super) struct Adoption {
+    pub points: Vec<Point>,
+    pub replacements: Vec<Replacement>,
+    pub via_moves: Vec<ViaMove>,
+    pub action: Action,
+}
 struct Wanted {
     key: Key,
     generation: u64,
     action: Option<Action>,
+    /// Explicit finish arriving while the captured vertex is still validating.
+    finish_requested: bool,
 }
 #[derive(Clone)]
 struct Ready {
@@ -54,6 +64,8 @@ pub(super) struct Planning {
     /// Last drawable legal path survives a blocked/exhausted replacement under the same source.
     visible: Option<Ready>,
     generation: u64,
+    /// Generation whose displayed geometry was submitted for full command preparation.
+    prepared_generation: Option<u64>,
     submitted: bool,
     error: Option<String>,
     retryable: bool,
@@ -72,6 +84,7 @@ impl Planning {
         self.wanted = None;
         self.ready = None;
         self.visible = None;
+        self.prepared_generation = None;
         self.submitted = false;
         self.error = None;
         self.retryable = false;
@@ -88,6 +101,32 @@ impl Planning {
         };
         let head = draft.points.last().copied().unwrap_or(at);
         let request = Request {
+            mode: draft.mode,
+            merge_same_net: draft.merge_same_net,
+            fixed: if draft.mode != Mode::Walkaround {
+                let mut pieces: Vec<_> = draft
+                    .points
+                    .windows(2)
+                    .zip(segment_layers(&draft.start, &draft.changes, draft.points.len()))
+                    .filter_map(|(p, layer)| {
+                        Uuid::parse_str(layer).ok().map(|layer| pcbcraft_engine::board::route::FixedCopper::Segment {
+                            start: p[0],
+                            end: p[1],
+                            layer,
+                            width_nm: sizes.0,
+                        })
+                    })
+                    .collect();
+                pieces.extend(
+                    draft
+                        .changes
+                        .iter()
+                        .map(|(at, _)| pcbcraft_engine::board::route::FixedCopper::Via { at: draft.points[*at], diameter_nm: sizes.1 }),
+                );
+                pieces
+            } else {
+                Vec::new()
+            },
             head,
             target: at,
             layer,
@@ -126,7 +165,8 @@ impl Planning {
         }
         self.queue.cancel();
         self.generation = self.generation.wrapping_add(1);
-        self.wanted = Some(Wanted { key, generation: self.generation, action });
+        self.wanted = Some(Wanted { key, generation: self.generation, action, finish_requested: false });
+        self.prepared_generation = None;
         self.submitted = false;
         self.error = None;
         self.retryable = false;
@@ -137,7 +177,7 @@ impl Planning {
             && context.source().target() == wanted.key.board
             && context.source().revision() == wanted.key.source.revision
         {
-            match context.try_prepare_cached(wanted.key.request.clone(), DEFAULT_BUDGET) {
+            match context.try_prepare_cached(wanted.key.request.clone(), wanted.key.request.mode.default_probe_budget()) {
                 Ok(Some(mut job)) => {
                     self.submitted = true;
                     if job.step(8) {
@@ -159,15 +199,47 @@ impl Planning {
     pub(super) fn committing(&self) -> bool {
         self.wanted.as_ref().is_some_and(|w| w.action.is_some())
     }
-    /// Whether the current request is reached, independently of retained display geometry.
+    /// Retain Enter/double-click finishing while an already captured vertex is still pending.
+    /// Via actions keep their separate layer-transition intent.
+    pub(super) fn finish_pending_vertex(&mut self) {
+        if let Some(wanted) = &mut self.wanted
+            && matches!(wanted.action, Some(Action::Vertex { .. }))
+        {
+            wanted.finish_requested = true;
+        }
+    }
+    /// Whether the displayed path resolves the current target or its explicit legal adjustment.
+    /// Adjusted endpoints can fix ordinary vertices; they cannot authorize a via at the cursor.
     pub(super) fn current_ready(&self) -> bool {
-        matches!((&self.wanted, &self.ready), (Some(w), Some(r)) if w.key == r.key && r.plan.outcome == Outcome::Reached)
+        matches!((&self.wanted, &self.ready), (Some(w), Some(r)) if w.key == r.key
+            && (r.plan.outcome == Outcome::Reached || r.plan.adjusted_target.is_some() && !matches!(w.action.as_ref(), Some(Action::Via(_)))))
+    }
+    /// Bind validation to the current planning generation after its exact geometry is submitted.
+    pub(super) fn mark_preparation_requested(&mut self) {
+        if self.current_ready() {
+            self.prepared_generation = self.wanted.as_ref().map(|wanted| wanted.generation);
+        }
+    }
+    /// Older prepared geometry cannot validate a newly solved pointer or latched click.
+    pub(super) fn validation_current(&self) -> bool {
+        self.current_ready() && self.wanted.as_ref().is_some_and(|wanted| self.prepared_generation == Some(wanted.generation))
+    }
+    /// Distinguish an invalid pickup from a legal start whose current target is obstructed.
+    /// Only a current terminal result can revoke the initial click, never a stale preview.
+    pub(super) fn start_blocked(&self) -> bool {
+        matches!((&self.wanted,&self.ready),(Some(w),Some(r)) if w.key==r.key && r.plan.start_blocked && matches!(r.plan.outcome,Outcome::Blocked {..}))
     }
     /// Exact points a current reached request will adopt, including a one-point plan at
     /// the fixed head. Retained display geometry never supplies validation authority.
     pub(super) fn current_path(&self) -> Option<Vec<Point>> {
         self.ready.as_ref().filter(|_| self.current_ready()).map(Ready::points)
     }
+    /// Validate the same replacements the current result will adopt, including a
+    /// reached plan at the fixed head whose old visible preview is still on screen.
+    pub(super) fn current_plan(&self) -> Option<&Plan> {
+        self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| &ready.plan)
+    }
+
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(error) = &self.error {
@@ -185,19 +257,40 @@ impl Planning {
             .into(),
         )
     }
-    /// Retain the previous legal geometry during longer solves only under its original prefix.
+    /// Retain displayed geometry under its captured source and fixed prefix.
     pub(super) fn preview(&self, draft: &Draft, width: i64) -> Vec<Point> {
         let mut path = draft.points.clone();
-        if let Some(ready) = &self.visible
-            && ready.key.source == draft.source
-            && ready.key.prefix == path
-            && ready.key.changes == draft.changes
-            && ready.key.request.width_nm == width
-            && ready.key.request.layer.to_string() == draft.layer
-        {
-            path.extend(ready.plan.points.iter().copied().skip(1));
+        if let Some(plan) = self.displayed(draft, width) {
+            path.extend(plan.points.iter().copied().skip(1));
         }
         path
+    }
+
+    /// A superseded result may still draw a path while replanning but cannot flag old blockers.
+    pub(super) fn collisions(&self) -> Option<&BTreeSet<String>> {
+        let ready = self.ready.as_ref()?;
+        self.wanted.as_ref().filter(|wanted| wanted.key == ready.key && !ready.plan.collisions.is_empty())?;
+        Some(&ready.plan.collisions)
+    }
+    /// Return displacement geometry only for the displayed route's source, prefix and sizes.
+    /// Retained geometry cannot authorize placement without current full-path validation.
+    fn displayed(&self, draft: &Draft, width: i64) -> Option<&Plan> {
+        self.visible
+            .as_ref()
+            .filter(|ready| {
+                ready.key.source == draft.source
+                    && ready.key.prefix == draft.points
+                    && ready.key.changes == draft.changes
+                    && ready.key.request.width_nm == width
+                    && ready.key.request.layer.to_string() == draft.layer
+                    && ready.key.request.mode == draft.mode
+                    && ready.key.request.merge_same_net == draft.merge_same_net
+            })
+            .map(|ready| &ready.plan)
+    }
+    /// Track and via previews share the same source and gesture eligibility.
+    pub(super) fn displacements<'a>(&'a self, draft: &'a Draft, width: i64) -> (&'a [Replacement], &'a [ViaMove]) {
+        self.displayed(draft, width).map_or((&draft.replacements, &draft.via_moves), |plan| (&plan.replacements, &plan.via_moves))
     }
     /// Consume only completed read-only results before paint, preserving input cancellation
     /// priority over placement. No candidate is adopted and no project mutation occurs here.
@@ -230,7 +323,9 @@ impl Planning {
         match result {
             Ok(Some(plan)) => {
                 let ready = Ready { key, plan };
-                if ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. }) {
+                let draws_leg = ready.plan.points.len() >= 2 && matches!(ready.plan.outcome, Outcome::Reached | Outcome::Blocked { .. });
+                let clear_highlight = ready.key.request.mode == Mode::Highlight && ready.plan.outcome == Outcome::Reached;
+                if draws_leg || clear_highlight {
                     self.visible = Some(ready.clone());
                 }
                 self.ready = Some(ready);
@@ -247,8 +342,9 @@ impl Planning {
         layer: Option<&str>,
         sizes: (i64, i64, i64),
         validation: Option<Result<(), String>>,
-    ) -> Option<Result<(Vec<Point>, Action), String>> {
+    ) -> Option<Result<Adoption, String>> {
         self.poll_preview(session, source, layer, sizes);
+        let validation = validation.filter(|_| self.validation_current());
         let wanted = self.wanted.as_mut()?;
         if let Some(error) = &self.error {
             return wanted.action.take().map(|_| Err(error.clone()));
@@ -257,7 +353,8 @@ impl Planning {
             && ready.key == wanted.key
         {
             wanted.action.as_ref()?;
-            if ready.plan.outcome != Outcome::Reached {
+            let adjusted = ready.plan.adjusted_target.is_some() && matches!(wanted.action.as_ref(), Some(Action::Vertex { .. }));
+            if ready.plan.outcome != Outcome::Reached && !adjusted {
                 wanted.action = None;
                 return Some(Err(self.status().unwrap_or_default()));
             }
@@ -276,9 +373,16 @@ impl Planning {
                     Some(Ok(())) => {}
                 }
             }
-            let action = wanted.action.take()?;
+            let mut action = wanted.action.take()?;
+            if adjusted {
+                // The actual endpoint is clear of the contacted object, so this fixes a bend
+                // without automatically terminating on copper beneath the blocked cursor.
+                action = Action::Vertex { finish: wanted.finish_requested };
+            } else if wanted.finish_requested {
+                action = Action::Vertex { finish: true };
+            }
             self.wanted = None;
-            return Some(Ok((points, action)));
+            return Some(Ok(Adoption { points, replacements: ready.plan.replacements.clone(), via_moves: ready.plan.via_moves.clone(), action }));
         }
         if !self.submitted && !self.queue.busy() {
             let result = (|| {
@@ -287,7 +391,9 @@ impl Planning {
                     self.inline_source = Some(wanted.key.source);
                 }
                 let context = self.context.as_ref().ok_or("Route source unavailable")?;
-                session.prepare_route_plan(context, wanted.key.request.clone(), DEFAULT_BUDGET).map_err(|e| e.to_string())
+                session
+                    .prepare_route_plan(context, wanted.key.request.clone(), wanted.key.request.mode.default_probe_budget())
+                    .map_err(|e| e.to_string())
             })();
             match result {
                 Ok(job) => {
@@ -309,6 +415,11 @@ impl Planning {
     /// Request frames while searching or retiring a superseded worker, never after an error.
     pub(super) fn busy(&self) -> bool {
         self.queue.busy() || (self.wanted.is_some() && !self.submitted && self.error.is_none())
+    }
+    /// Whether an incremental or background planning job is currently queued or running.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(super) fn queue_busy(&self) -> bool {
+        self.queue.busy()
     }
 }
 
@@ -339,6 +450,11 @@ mod tests {
         view.board.active_layer = Some(layer.clone());
         let draft = Draft {
             source: view.input(&s).unwrap(),
+            mode: Default::default(),
+            shove_prefix_dirty: false,
+            merge_same_net: false,
+            via_moves: Vec::new(),
+            replacements: Vec::new(),
             contact: None,
             start: layer.clone(),
             layer,
@@ -348,6 +464,29 @@ mod tests {
             via_rules: None,
         };
         (s, view, draft)
+    }
+
+    /// The checkbox revokes old previews, follows the request/commit, and cannot alter fixed vertices.
+    #[test]
+    fn same_net_merge_policy_is_captured_and_locked_with_the_gesture() {
+        let (_, view, mut draft) = fixture();
+        draft.mode = Mode::Shove;
+        let mut state = State { draft: Some(draft), ..Default::default() };
+        assert!(!state.merge_same_net);
+        let sizes = (250_000, 600_000, 300_000);
+        let at = Point { x_nm: 5_000_000, y_nm: 0 };
+        state.planning.request(state.draft.as_ref().unwrap(), view.board.target.unwrap(), at, false, sizes, None);
+        assert!(!state.planning.wanted.as_ref().unwrap().key.request.merge_same_net);
+        assert!(state.select_same_net_merge(true));
+        assert!(state.planning.wanted.is_none());
+        state.planning.request(state.draft.as_ref().unwrap(), view.board.target.unwrap(), at, false, sizes, None);
+        assert!(state.planning.wanted.as_ref().unwrap().key.request.merge_same_net);
+        state.draft.as_mut().unwrap().points.push(at);
+        assert!(!state.select_same_net_merge(false));
+        assert!(state.draft.as_ref().unwrap().merge_same_net);
+        let draft = state.draft.take().unwrap();
+        let command = add(&mut state, draft).unwrap();
+        assert_eq!(command.params["merge_same_net"], true);
     }
 
     /// Replacements keep only the latest target; a click freezes it even before preparation.
@@ -366,21 +505,25 @@ mod tests {
             }
         }
         assert!(p.current_ready());
+        p.mark_preparation_requested();
+        assert!(p.validation_current());
         assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
         // Exercise the deferred branch even when this clear target could finish inline.
         p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), b, false, sizes, Some(Action::Vertex { finish: true }));
         assert!(!p.current_ready());
+        assert!(!p.validation_current());
         assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 9_000_000, y_nm: 0 }, false, sizes, None);
         let mut result = None;
         for _ in 0..100 {
+            p.mark_preparation_requested();
             if let Some(done) = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))) {
                 result = Some(done);
                 break;
             }
         }
-        let (points, action) = result.unwrap().unwrap();
+        let Adoption { points, action, .. } = result.unwrap().unwrap();
         assert_eq!(points.last(), Some(&b));
         assert!(matches!(action, Action::Vertex { finish: true }));
         assert_eq!(s.revision(), draft.source.revision);
@@ -420,6 +563,7 @@ mod tests {
                 }
             }
             for _ in 0..100 {
+                p.mark_preparation_requested();
                 assert!(
                     p.poll(
                         &s,
@@ -449,6 +593,8 @@ mod tests {
         }
         assert!(p.current_ready());
         assert!(p.committing());
+        assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).is_none(), "unbound old validation cannot fix this target");
+        p.mark_preparation_requested();
         let failure = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Err("Class conflict".into()))).unwrap().unwrap_err();
         assert_eq!(failure, "Class conflict");
         assert!(!p.committing());
@@ -504,6 +650,7 @@ mod tests {
         let (s, view, mut draft) = fixture();
         let head = Point { x_nm: 2_000_000, y_nm: 0 };
         draft.points.push(head);
+        draft.mode = Mode::Shove;
         let mut p = Planning::default();
         let sizes = (250_000, 600_000, 300_000);
         let target = Point { x_nm: 5_000_000, y_nm: 0 };
@@ -517,7 +664,19 @@ mod tests {
         }
         assert_eq!(p.current_path().unwrap().last(), Some(&target));
         let visible = p.preview(&draft, sizes.0);
-        p.request(&draft, view.board.target.unwrap(), head, false, sizes, Some(Action::Vertex { finish: false }));
+        p.visible.as_mut().unwrap().plan.replacements.push(Replacement { track: Uuid::from_u128(1), points: vec![head, target] });
+        let next = s
+            .project()
+            .unwrap()
+            .board_view(view.board.target.unwrap())
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper && layer.id.to_string() != draft.layer)
+            .unwrap()
+            .id
+            .to_string();
+        p.request(&draft, view.board.target.unwrap(), head, false, sizes, Some(Action::Via(next.clone())));
         for _ in 0..100 {
             assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None).is_none());
             if p.current_ready() {
@@ -528,8 +687,14 @@ mod tests {
         assert_eq!(p.ready.as_ref().unwrap().plan.points, vec![head]);
         assert_eq!(p.preview(&draft, sizes.0), visible);
         assert_eq!(p.current_path(), Some(draft.points.clone()));
-        let (adopted, _) = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap();
-        assert_eq!(adopted, draft.points);
+        assert_eq!(p.displacements(&draft, sizes.0).0.len(), 1);
+        let validation_replacements = p.current_plan().unwrap().replacements.clone();
+        assert!(validation_replacements.is_empty());
+        p.mark_preparation_requested();
+        let adopted = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap();
+        assert_eq!(adopted.points, draft.points);
+        assert_eq!(adopted.replacements, validation_replacements);
+        assert!(matches!(adopted.action, Action::Via(layer) if layer == next));
         assert!(p.current_path().is_none());
     }
 }

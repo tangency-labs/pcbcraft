@@ -51,8 +51,8 @@ fn coordinates(output: &Output) -> Vec<(i64, i64, String)> {
 }
 
 /// Moving the origin 10 mm right and 10 mm up (Y up, seen from the top) moves every Gerber and
-/// Excellon coordinate by exactly -10.0000 mm on both axes and changes nothing else. The result
-/// names the origin it used.
+/// Excellon coordinate by exactly -10.0000 mm on both axes and updates `.SameCoordinates`,
+/// changing nothing else. The result names the origin it used.
 #[test]
 fn moving_the_origin_shifts_every_output_coordinate_exactly() {
     let mut s = board();
@@ -63,9 +63,31 @@ fn moving_the_origin_shifts_every_output_coordinate_exactly() {
     set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":-10 * MM})).unwrap();
     let after = view(&s).fabrication().unwrap();
     assert_eq!(before.files.len(), after.files.len());
+    let same_coordinates = |output: &Output| -> String {
+        if output.name.ends_with(".drl") {
+            output
+                .contents
+                .lines()
+                .find_map(|line| line.strip_prefix("; #@! TF.SameCoordinates,"))
+                .unwrap_or_else(|| panic!("{}: missing XNC TF.SameCoordinates", output.name))
+                .to_owned()
+        } else {
+            output
+                .contents
+                .lines()
+                .find_map(|line| line.strip_prefix("%TF.SameCoordinates,")?.strip_suffix("*%"))
+                .unwrap_or_else(|| panic!("{}: missing TF.SameCoordinates", output.name))
+                .to_owned()
+        }
+    };
+    let before_id = same_coordinates(&before.files[0]);
+    let after_id = same_coordinates(&after.files[0]);
+    assert_ne!(before_id, after_id, "moving the origin must change TF.SameCoordinates");
     let mut checked = 0;
     for (old, new) in before.files.iter().zip(&after.files) {
         assert_eq!(old.name, new.name);
+        assert_eq!(same_coordinates(old), before_id, "{}: same export shares one TF.SameCoordinates", old.name);
+        assert_eq!(same_coordinates(new), after_id, "{}: same export shares one TF.SameCoordinates", new.name);
         let (old_xy, new_xy) = (coordinates(old), coordinates(new));
         assert_eq!(old_xy.len(), new_xy.len(), "{}", old.name);
         let step = if old.name.ends_with(".drl") { 10_000 } else { 10 * MM };
@@ -73,8 +95,13 @@ fn moving_the_origin_shifts_every_output_coordinate_exactly() {
             assert_eq!((b.0, b.1, &b.2), (a.0 - step, a.1 - step, &a.2), "{}", old.name);
             checked += 1;
         }
-        let strip = |text: &str| text.lines().filter(|line| !line.starts_with('X')).map(str::to_owned).collect::<Vec<_>>();
-        assert_eq!(strip(&old.contents), strip(&new.contents), "{}: only coordinates change", old.name);
+        let strip = |text: &str| {
+            text.lines()
+                .filter(|line| !line.starts_with('X') && !line.starts_with("%TF.SameCoordinates,") && !line.starts_with("; #@! TF.SameCoordinates,"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(&old.contents), strip(&new.contents), "{}: only coordinates and SameCoordinates change", old.name);
     }
     assert!(checked > 20, "the fixture exercises pads, tracks, vias, silk, outline and holes");
     assert!(coordinates(after.files.iter().find(|f| f.name.ends_with("-PTH.drl")).unwrap()).iter().any(|(x, _, _)| *x == -3_000));
@@ -161,8 +188,7 @@ fn setting_the_origin_is_addressed_atomic_and_undoable() {
     crate::assert_same_content(&original, &s.snapshot().unwrap());
 }
 
-/// Format 21 is written only while an origin is saved, carries rules and every earlier field,
-/// reopens to the same bytes, and removing the origin restores the earlier encoding.
+/// Origins and rules round-trip together, and clearing both restores the original bytes.
 #[test]
 fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     let mut s = board();
@@ -173,14 +199,14 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/21");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     assert!(saved["rules"].is_object() && saved["vias"].is_array() && saved["tracks"].is_array());
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(encode_documents(reopened).unwrap(), documents);
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    for (from, to) in [("pcbcraft-board/21", "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
+    for (from, to) in [(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
         let mut altered = documents.clone();
         altered.insert(path.clone(), text.replacen(from, to, 1).into_bytes());
         assert!(decode_documents(&altered).is_err(), "{to}");
@@ -196,11 +222,9 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
 
-/// Format 23 carries the stack fields together with a placement origin: a board with an origin,
-/// a copper role and a finished thickness saves as format 23, reopens with every value and
-/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
-/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
-/// keeps format 23; removing the stack fields instead falls back to format 21.
+/// A placement origin, copper role and finished thickness reopen with every value and
+/// re-encode to the same bytes. Historical format 21 accepts the origin and rejects the stack
+/// fields. Removing either optional record keeps the current write format.
 #[test]
 fn stack_format_carries_the_placement_origin() {
     let mut s = board();
@@ -214,7 +238,7 @@ fn stack_format_carries_the_placement_origin() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
@@ -225,7 +249,7 @@ fn stack_format_carries_the_placement_origin() {
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
     let mut altered = documents.clone();
-    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    altered.insert(path.clone(), text.replacen(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/21", 1).into_bytes());
     match decode_documents(&altered) {
         Ok(_) => panic!("format 21 opened the stack fields"),
         Err(error) => assert!(error.contains("require board format 23"), "{error}"),
@@ -236,10 +260,10 @@ fn stack_format_carries_the_placement_origin() {
         serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
     };
     set(&mut s, Value::Null).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/23");
+    assert_eq!(format(&s), crate::persistence::CURRENT_BOARD_FORMAT);
     set(&mut s, json!({"kind":"board_zero"})).unwrap();
     s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/21");
+    assert_eq!(format(&s), crate::persistence::CURRENT_BOARD_FORMAT);
 }
 
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.

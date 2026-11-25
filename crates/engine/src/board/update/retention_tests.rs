@@ -23,7 +23,7 @@ fn initialization_is_explicit_versioned_atomic_and_a_repeat_is_noop() {
     session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":revision})).unwrap();
     assert_eq!(session.revision(), revision + 1);
     let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/10"));
+    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains(crate::persistence::CURRENT_BOARD_FORMAT));
     let source = session.project().unwrap().board.baseline.as_ref().unwrap().source.clone();
     source.validate().unwrap();
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
@@ -282,7 +282,7 @@ fn deleting_after_shared_field_edits_keeps_last_visible_display_metadata() {
         let restored = decode_documents(&pending).unwrap();
         let view = restored.boards().next().unwrap();
         let retained = view.footprints().find(|footprint| footprint.component == format!("component-{component}")).unwrap();
-        assert_eq!((retained.reference, &*retained.value), ("R20", "33k"));
+        assert_eq!((retained.reference.as_ref(), retained.value.as_ref()), ("R20", "33k"));
         assert!(retained.pending_removal);
         assert_eq!(encode_documents(restored).unwrap(), pending);
         session.apply("edit.undo", &json!({})).unwrap();

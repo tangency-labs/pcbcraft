@@ -30,7 +30,7 @@ fn finish(app: &mut PcbApp, result: Result<Outcome, String>) {
 }
 
 /// Deliver explicit Quit, which ends the project even while several editor windows survive.
-fn request_close(app: &mut PcbApp, ctx: &egui::Context) {
+pub(super) fn request_close(app: &mut PcbApp, ctx: &egui::Context) {
     app.request_project_close(ctx);
     let mut input = egui::RawInput::default();
     input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
