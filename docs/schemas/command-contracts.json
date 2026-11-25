@@ -12991,6 +12991,31 @@
     }
   },
   "window_commands": {
+    "app.board_image": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "render",
+              "cancel",
+              "preview"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.library_browse": {
       "params": {
         "additionalProperties": false,

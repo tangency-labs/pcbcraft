@@ -67,3 +67,27 @@ pub fn compass_rect(canvas: Rect) -> Rect {
     let size = 122.0;
     Rect::from_min_size(Pos2::new(canvas.right() - size - 8.0, canvas.top() + 8.0), egui::vec2(size, size)).intersect(canvas)
 }
+
+/// Show the active render step over the canvas using the app's panel surface and spinner.
+pub fn render_notice(ui: &mut Ui, canvas: Rect, message: &str, busy: bool) {
+    let t = crate::Tokens::get();
+    let font = egui::FontId::proportional(t.font_body);
+    let text_width = ui.painter().layout_no_wrap(message.to_owned(), font.clone(), t.text).size().x;
+    let width = (text_width + if busy { 44.0 } else { 20.0 }).min(canvas.width());
+    let rect = Rect::from_center_size(egui::pos2(canvas.center().x, (canvas.bottom() - 28.0).max(canvas.center().y)), egui::vec2(width, 30.0));
+    let mut notice = ui.new_child(egui::UiBuilder::new().id_salt("render_notice").max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
+    notice.set_clip_rect(ui.clip_rect().intersect(canvas));
+    egui::Frame::new()
+        .fill(t.panel)
+        .stroke(egui::Stroke::new(1.0, t.border))
+        .corner_radius(t.radius_lg)
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(&mut notice, |ui| {
+            ui.horizontal(|ui| {
+                if busy {
+                    ui.add(egui::Spinner::new().size(14.0).color(t.text_dim));
+                }
+                ui.label(egui::RichText::new(message).font(font).color(t.text));
+            });
+        });
+}

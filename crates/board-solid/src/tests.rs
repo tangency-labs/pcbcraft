@@ -288,3 +288,18 @@ fn display_board_keeps_edge_and_overlapping_drill_cuts() {
     assert_eq!(frame_hits(&mesh, [1_450_000, 5_000_000]), [false; 2]);
     assert_eq!(frame_hits(&mesh, [1_800_000, 5_000_000]), [true; 2]);
 }
+
+/// A dense board keeps its drill mouths open without a large solid Boolean.
+#[test]
+fn display_board_keeps_dense_interior_drills_open() {
+    let outline = OutlinePath { points: [[0, 0], [33_000_000, 0], [33_000_000, 21_000_000], [0, 21_000_000]].map(BoardPoint).to_vec(), closed: true };
+    let drills: Vec<_> = (1..=32)
+        .flat_map(|x| (1..=20).map(move |y| RoundDrill { center: BoardPoint([x * 1_000_000, y * 1_000_000]), diameter_nm: 220_000 }))
+        .collect();
+    let mesh = substrate::display_board(&[outline], &drills, 1_600_000, 10_000).unwrap();
+    for drill in [drills[0], drills[319], drills[639]] {
+        let [x, y] = drill.center.0;
+        assert_eq!(frame_hits(&mesh, [x, y]), [false; 2]);
+        assert_eq!(frame_hits(&mesh, [x + 200_000, y]), [true; 2]);
+    }
+}

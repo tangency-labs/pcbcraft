@@ -1918,3 +1918,8 @@ Spade 2.15.1 (MIT OR Apache-2.0), already used by the pinned SolidCore
 display tessellator, also triangulates the preview's bounded,
 non-intersecting board outlines and drill loops. The board's exact solid
 continues to use SolidCore.
+
+The 3D workspace uses the pinned SolidCraft `solidcraft-gpu` hardware
+path tracer, `solidcraft-render` image host and `solidcraft-geom` scene types
+(MIT OR Apache-2.0). PCBcraft supplies the board geometry, studio lighting,
+material settings and render controls.

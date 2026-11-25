@@ -72,12 +72,32 @@ Drag to orbit, middle-drag to pan, and scroll to zoom. Use the compass to look
 along a board axis or return to the isometric view. **Fit** frames the board in
 the current orientation.
 
+**Ray tracing** toggles live GPU path tracing. Orbit, pan, zoom and Fit work
+in both modes. The raster preview follows the camera during navigation.
+When the camera has been still for 650 ms, the viewer starts a new ray-traced
+frame. The canvas shows progress while the renderer prepares shaders, builds
+the board scene, or traces the frame. Ray tracing needs a compatible hardware
+Vulkan or Metal adapter.
+
 The preview shows the substrate from a closed Board Outline, including cutouts
 and supported round through holes. It uses the declared finished stackup
 thickness or displays a nominal 1.6 mm when no thickness is specified.
 Exterior tracks and through-via rings are visible on the corresponding
 board faces. Pads, silkscreen, component models and STEP export are later parts of
 [#86](https://github.com/tangency-labs/pcbcraft/issues/86).
+
+The preview and STEP substrate use the same board/1 frame, with Z = 0 at
+the finished top surface. The [3D model record and frame contract](design/3d-model-records.md)
+from [PR #504](https://github.com/tangency-labs/pcbcraft/pull/504) defines how future
+STEP model bindings attach to this frame. Package models seat on the board
+surface on their placement side, with a half-turn about Y on the bottom.
+The model record and package-binding codecs are still pending.
+
+To refresh a linked SolidCraft assembly after
+saving an outline edit, see the [parametric outline exchange prototype](RFC/parametric-outline-prototype.md)
+from [PR #594](https://github.com/tangency-labs/pcbcraft/pull/594). The prototype
+publishes the exact substrate from the saved archive. Both viewport modes
+use the open board geometry, including edits before Save.
 
 ## PCB operations
 

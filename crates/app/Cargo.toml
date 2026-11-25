@@ -44,6 +44,10 @@ sha2 = { version = "=0.10.9", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pcbcraft-board-solid = { path = "../board-solid" }
 pcbcraft-geometry = { path = "../geometry" }
+solidcraft-geom = { workspace = true }
+solidcraft-gpu = { workspace = true }
+solidcraft-render = { workspace = true }
+image = { version = "=0.25.10", default-features = false, features = ["hdr", "png"] }
 solidcraft-viewport = { workspace = true }
 solidcraft-viewport-egui = { workspace = true }
 solidcraft-viewport-gpu = { workspace = true }

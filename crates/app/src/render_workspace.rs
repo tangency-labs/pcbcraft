@@ -7,6 +7,10 @@ mod gpu;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
+mod raytrace;
+#[cfg(not(target_arch = "wasm32"))]
+mod scene;
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) use native::{Browse, State, Worker};
 
 /// The browser build keeps the workspace unavailable until its geometry backend is qualified.

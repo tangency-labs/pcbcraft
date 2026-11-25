@@ -95,10 +95,15 @@ fn board_profile(board: BoardView<'_>) -> (Thickness, Vec<OutlinePath>, Vec<Roun
     (thickness, outline, drills)
 }
 
-/// A board point in the board/1 frame's XY plane: X unchanged, Y negated. Exact; a value out of
-/// the geometry range stays out of range and is refused by the substrate builder.
+/// Convert an editor point to board/1 XY in nanometres. Exchange and display share the
+/// same board origin, with X unchanged and Y negated.
+pub fn board1_xy(point: Point) -> [i64; 2] {
+    [point.x_nm, point.y_nm.saturating_neg()]
+}
+
+/// Wrap board/1 XY in the substrate coordinate type without changing its units.
 fn board1_point(point: Point) -> BoardPoint {
-    BoardPoint([point.x_nm, point.y_nm.saturating_neg()])
+    BoardPoint(board1_xy(point))
 }
 
 #[cfg(test)]

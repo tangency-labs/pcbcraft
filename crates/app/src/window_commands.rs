@@ -537,6 +537,15 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "app.board_image",
+            title: "Board Ray Tracing",
+            summary: "Enable or disable live GPU ray tracing in a 3D render pane.",
+            params: &[
+                VIEW,
+                Param { name: "action", summary: "Ray-tracing mode action", required: true, kind: Kind::Choice(&["render", "cancel", "preview"]) },
+            ],
+        },
+        WindowCommand {
             id: "app.set_render_board",
             title: "Choose 3D Render Board",
             summary: "Show a board from the open project in the addressed 3D render pane. Layout and project history are unchanged.",
@@ -1695,6 +1704,10 @@ mod live {
                 )?;
                 self.repaint_editors(ctx);
                 return Ok(());
+            }
+            if id == "app.board_image" {
+                let view = ViewId(params["view"].as_u64().ok_or("Choose a 3D render pane.")?);
+                return self.board_image_action(ctx, view, params["action"].as_str().ok_or("Choose a board render action.")?);
             }
             if id == "app.set_render_board" {
                 let view = ViewId(params["view"].as_u64().ok_or("Choose a 3D render pane.")?);

@@ -221,6 +221,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `app.set_workspace` | Choose a workspace in an addressed pane, here, beside it or in a native window. Use `render` for the desktop board preview. |
 | `app.set_render_board` | **Browse…** in 3D render. Takes the view ID and a board UUID from the open project. |
+| `app.board_image` | In a 3D render pane, enable GPU ray tracing (`render`) or return to the raster preview (`preview` or `cancel`). `inspect_editor` reports the pane's `ray_tracing` status. |
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
