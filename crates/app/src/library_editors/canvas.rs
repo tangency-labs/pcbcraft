@@ -838,7 +838,22 @@ impl Document {
                     // click: it never selects, toggles or inserts at the release point.
                     Tool::Select if !response.clicked() => Ok(()),
                     Tool::Select => {
-                        let modify = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+                        // Extend/toggle follows the release event's own modifiers — a
+                        // modifier released or arriving in the same batch cannot swap
+                        // the click's meaning after the fact.
+                        let release_modifiers = ui.input(|i| {
+                            i.events
+                                .iter()
+                                .rev()
+                                .find_map(|event| match event {
+                                    egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => {
+                                        Some(*modifiers)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(i.modifiers)
+                        });
+                        let modify = release_modifiers.shift || release_modifiers.command;
                         if show_courtyard
                             && !modify
                             && let Some((_, pts, _)) = self.selected_courtyard(&item)
