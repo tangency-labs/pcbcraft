@@ -770,7 +770,10 @@ impl Document {
                 };
             }
         }
-        let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input();
+        // Keyboard commands follow the same rule as the tool reset above: a batch from an
+        // unfocused viewport carries no key intent the canvas may act on, so no handler —
+        // including the destructive M/E/Delete/Enter keys and Escape — may read key_pressed.
+        let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.focused);
         if keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.tool = Tool::Select;
         }

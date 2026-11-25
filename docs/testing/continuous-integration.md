@@ -15,10 +15,10 @@ for the affected packages and their dependents. A passing selected stage reports
 | Code PR without `approved-for-ci` | Repository checks, formatting and quick native compile |
 | Code PR with `approved-for-ci` | Repository checks, formatting, affected-package Clippy and unit/integration tests, plus command-contract comparison |
 | PR changing Cargo manifests, Cargo.lock or deny.toml | Dependency license/source/ban checks in addition to its selected stage |
-| Main code push, merge group, nightly or manual workflow | Full native workspace suite, doctests and opt-in harness; Windows, browser packaging, WASI and dependency checks |
+| Main code push, merge group, nightly or manual workflow | Full native workspace suite, doctests and opt-in harness; Windows and macOS tests, browser packaging, WASI and dependency checks |
 | Unrelated label change on an approved PR | Repository checks and reuse of an actual approved native pass for the identical head and merge commit; no new native build |
 
-Windows, browser packaging, WASI, doctests and the opt-in performance harness do
+Windows and macOS tests, browser packaging, WASI, doctests and the opt-in performance harness do
 not run on ordinary PR events, even after approval. Removing `approved-for-ci`
 returns later pushes to quick feedback. Adding it enables affected native tests;
 it does not start the broad platform suite. Use Actions → CI → Run workflow on a
@@ -56,7 +56,7 @@ existing run, never starts a build, and fails closed on API errors, revoked
 approval, stale revisions or missing results. Approval-label events and new
 pushes supersede prior PR work; unrelated labels cannot cancel a real build.
 
-## Full builds, Windows and caches
+## Full builds, desktop platforms and caches
 
 Pages builds and deploys run inside CI after the aggregate `checks` job succeeds
 in full-validation mode. Only public-repository main pushes and manual CI runs
@@ -80,15 +80,19 @@ and a 180-second deadline. Zero tests or a nonzero exit fail, and only the owned
 process is killed on timeout. This checks frame delivery, window lifetimes and
 close cancellation, not endurance or physical input latency.
 
+The macOS job runs the Rust workspace suite, including the desktop launcher and
+app title-bar tests. Visual and pointer-interaction checks on a macOS desktop
+still require a separate run.
+
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping
 release and ordinary development profiles are unchanged. Platforms have separate
 cache keys; only main saves caches and PRs restore them. New keys initially build
-cold. Default runners remain `ubuntu-latest` and `windows-latest`; `CI_RUNNER` and
-`CI_RUNNER_WINDOWS` can select provisioned runners. Custom Windows builds must be
-x64 MSVC executables compatible with the presenting `windows-latest` desktop.
-`CI_BUILD_JOBS` defaults to four, and `CI_BUILD_JOBS_WINDOWS` to two. No runner
-subscriptions, credentials or branch settings are changed here.
+cold. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
+`CI_RUNNER`, `CI_RUNNER_WINDOWS` and `CI_RUNNER_MACOS` select provisioned runners.
+Custom Windows builds must be x64 MSVC executables compatible with the presenting
+`windows-latest` desktop. `CI_BUILD_JOBS` defaults to four on Linux, and
+`CI_BUILD_JOBS_WINDOWS` and `CI_BUILD_JOBS_MACOS` default to two.
 
 ## Evidence and scope
 
