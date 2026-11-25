@@ -186,6 +186,18 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
                 }
                 continue;
             }
+            sources::PREVIEW_ADOPTION => {
+                // A read: the built-in resistor has no newer loaded revision, so both hosts must give
+                // the same refusal, never a scope refusal. The successful read-only preview is in
+                // library::sources::updates::tests.
+                let params = json!({"instances":[project.components().next().unwrap().id()],"expected_revision":revision});
+                let expected = control.execute(id, &params).unwrap_err();
+                assert_ne!(expected.code(), ErrorCode::OutOfScope, "{id}: {expected}");
+                for error in [reader.execute(id, &params).unwrap_err(), reader.apply(id, &params).unwrap_err()] {
+                    assert_eq!((error.code(), error.to_string()), (expected.code(), expected.to_string()), "{id}");
+                }
+                continue;
+            }
             sources::PREPARE_PART_PUBLICATION => part_publication.clone(),
             sources::PREPARE_PUBLICATION => item_publication.clone(),
             check::CHECK => json!({"documents":part_publication["documents"],"record":part_publication["record"]}),

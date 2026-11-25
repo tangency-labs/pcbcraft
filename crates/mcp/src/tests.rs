@@ -791,6 +791,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
     let commands = commands.as_array().expect("library command list");
     for id in [
+        "library.apply_adoption",
         "library.available_revisions",
         "library.check",
         "library.list_sources",
@@ -798,6 +799,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
         "library.parse_quantity",
         "library.prepare_part_publication",
         "library.prepare_publication",
+        "library.preview_adoption",
         "library.preview_footprint_revision",
         "library.preview_pin_remap",
         "library.remove_source",

@@ -19,3 +19,6 @@ wasm-kernel = ["pcbcraft-geometry/wasm-kernel"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
+pcbcraft-storage = { workspace = true }
+pcbcraft-units = { workspace = true }
+tempfile = "=3.27.0"
