@@ -49,7 +49,7 @@ pub struct Request {
     /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
     /// False preserves spacing between source objects that were not directly touching.
     pub merge_same_net: bool,
-    /// Already fixed gesture copper, checked together with each new shove plan.
+    /// Already fixed gesture copper, checked together with Highlight and shove continuations.
     pub fixed: Vec<FixedCopper>,
     pub head: Point,
     pub target: Point,
@@ -105,8 +105,35 @@ pub struct Plan {
     pub outcome: Outcome,
     /// Query address of the copper that stopped a blocked route, absent for the board edge.
     pub blocker: Option<String>,
+    /// Source addresses of the existing obstacles touched by a Highlight proposal.
+    #[serde(skip)]
+    pub collisions: std::collections::BTreeSet<String>,
     /// Exact probes charged, never more than the budget.
     pub probes: usize,
+}
+
+/// Check a continuation against the contiguous fixed stroke on its layer, using each leg's width.
+async fn legal_incoming(request: &Request, points: &[Point], clearance_nm: i64) -> bool {
+    if points.len() < 2 {
+        return true;
+    }
+    let mut prefix = Vec::new();
+    let mut widths = Vec::new();
+    let mut head = points[0];
+    for piece in request.fixed.iter().rev() {
+        let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
+        if *end != head || *layer != request.layer {
+            break;
+        }
+        prefix.push(*start);
+        widths.push(*width_nm);
+        head = *start;
+    }
+    prefix.reverse();
+    widths.reverse();
+    prefix.extend_from_slice(points);
+    widths.resize(prefix.len() - 1, request.width_nm);
+    super::track::chains::legal_stroke_with_spacing(&prefix, |a, b| (widths[a] + widths[b]) as f64 / 2. + clearance_nm as f64).await
 }
 
 /// Plan a route over a captured board. Validates the request first: bounded endpoints and previous hints, a supported
@@ -159,6 +186,7 @@ impl Session {
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             });
         }
@@ -202,6 +230,7 @@ impl Session {
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             }
         } else {

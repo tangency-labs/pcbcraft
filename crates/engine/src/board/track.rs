@@ -41,9 +41,15 @@ pub use unroute::UNROUTE_CONNECTION;
 pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
+/// Merge addressed collinear and stacked duplicate track segments in one undo step.
+pub const MERGE_TRACKS: &str = "pcb.merge_tracks";
+/// Largest encoded `merge_tracks` report, checked before anything is published. It leaves
+/// 1 MiB of the 16 MiB live editor reply limit for the reply wrapper and the revision.
+pub const MERGE_REPORT_MAX_BYTES: usize = 15 << 20;
 
 pub(crate) mod chains;
 mod locks;
+mod merge;
 pub mod preparation;
 pub mod replacements;
 /// A directly dragged segment retains its source UUID, layer and width.
@@ -60,6 +66,8 @@ pub(crate) use locks::protect_locked;
 mod capacity_tests;
 #[cfg(test)]
 mod lock_tests;
+#[cfg(test)]
+mod merge_tests;
 
 /// The width the PCB route tool starts with, 0.25 mm.
 pub const DEFAULT_WIDTH_NM: i64 = 250_000;

@@ -35,7 +35,7 @@ Each edit is one undo step.
 | Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Layout › Place / Modify, Properties |
 | Draw | Active-layer lines and rectangle outlines: conductive copper segments or non-copper graphics with physical strokes; Board Outline vertex, segment and whole-shape edits | Draw |
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
-| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
+| Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M and selection moves, held track drags and D with the [active router policy](pcb/route-planning.md#track-shove), width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
 | Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](manufacturing/drill-files.md#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
@@ -75,19 +75,17 @@ grouped by snapshot-local net index. Those indices must not be used as saved bin
 | Slice | Stored formats | Stored |
 | --- | --- | --- |
 | 1. Footprint moves carry copper | none | — |
-| 2. Board rules (implemented) | board/19 | Board-scoped rule records |
+| 2. Board rules (implemented) | board/42 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
+| 4. Zones | board/42 | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/34](formats/native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
-| Named layer groups | [board/41](formats/native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
+| Placed-footprint lock metadata | [board/42](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
+| Named layer groups | [board/42](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
 
-These are selected layout formats, not a consecutive version list. Canonical
-saves use the highest supported format required by the authored data; compatible
-extensions keep their validation rules. Older readers refuse unsupported formats.
-Canonical no-op saves preserve encoding; accepted noncanonical input can be
-normalized, for example by omitting an explicit `locked: false`.
+Current saves use one board header for every supported combination of records.
+Historical boards adopt that header on Save. Subsequent no-op saves preserve
+current bytes. See the [native board format](formats/native-project-storage.md#current-board-records).
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](pcb/via-net-assignments.md) for automatic inheritance, physical

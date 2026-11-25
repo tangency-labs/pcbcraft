@@ -110,8 +110,8 @@ fn registry_codec_refuses_invalid_authority_and_preserves_the_input_snapshot() {
     }
 }
 
-/// Project/16 cannot carry registry data, project/17 cannot omit it, and board instance headers
-/// must select instances/2. Explicit null never serves as an older-vocabulary omission.
+/// Current storage can omit the registry in either home. Historical headers still reject
+/// incompatible registry data, and duplicate homes are invalid.
 #[test]
 fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
     for board in [false, true] {
@@ -139,7 +139,12 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
                 *registry(&mut value) = Value::Null;
             }
             missing.insert(path.clone(), serde_json::to_vec(&value).unwrap());
-            assert!(decode_documents(&missing).is_err());
+            assert_eq!(decode_documents(&missing).is_err(), !absent);
+            if board && absent {
+                value["format"] = json!("pcbcraft-instances/4");
+                missing.insert(path.clone(), serde_json::to_vec(&value).unwrap());
+                assert!(decode_documents(&missing).unwrap_err().contains("unsupported instances format"));
+            }
         }
         if board {
             let mut bad = docs.clone();

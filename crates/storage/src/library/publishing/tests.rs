@@ -3,6 +3,7 @@ use pcbcraft_engine::authoring::{
     Action, Item, Kind as EditorKind, Session,
     publishing::{new_library, prepare},
 };
+use serde_json::json;
 use std::sync::Arc;
 
 /// Native publication survives a fresh load and retains every immutable revision and item identity.
@@ -16,11 +17,16 @@ fn publish_restart_reopen_and_publish_again_preserves_older_revisions() {
         let first = prepare(Arc::new(Item::new(kind).unwrap()), &manifest, 0, None, false).unwrap();
         publish(&root, &first).unwrap();
         confirm(&root, &first).unwrap();
+        if kind == EditorKind::Symbol {
+            assert_eq!(first.item().export_native().unwrap()["format"], "pcbcraft-symbol/5");
+        }
         let first_bytes = first.documents().keys().map(|path| (path.clone(), std::fs::read(root.join(path)).unwrap())).collect::<Vec<_>>();
         let loaded = super::super::load(&root).unwrap();
         let record = &loaded.items()[0];
         let reopened = if kind == EditorKind::Symbol {
-            Item::edit_symbol(&record.symbol().unwrap()).unwrap()
+            let symbol = record.symbol().unwrap();
+            assert_eq!(symbol.format(), "pcbcraft-symbol/5");
+            Item::edit_symbol(&symbol).unwrap()
         } else {
             Item::edit_footprint(&record.footprint().unwrap()).unwrap()
         };
@@ -42,6 +48,106 @@ fn publish_restart_reopen_and_publish_again_preserves_older_revisions() {
         assert!(publish(&root, &first).is_err());
         assert!(create(&root, &manifest).is_err());
     }
+}
+
+/// Publishing an edited historical symbol preserves its old file and existing project pin.
+#[test]
+fn publish_legacy_symbol_as_current_and_reopen_both_revisions() {
+    use pcbcraft_engine::{
+        PLACE_SYMBOL, Session as ProjectSession,
+        library::{
+            SYMBOL_FORMAT_V5,
+            sources::{Documents, symbol_digest},
+        },
+        persistence::{decode_documents, encode_documents},
+    };
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("library");
+    let manifest = new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();
+    create(&root, &manifest).unwrap();
+    let path = "symbols/gnd.json";
+    let original = include_str!("../../../../../libraries/power/symbols/gnd.json");
+    std::fs::create_dir(root.join("symbols")).unwrap();
+    std::fs::write(root.join(path), original).unwrap();
+    let mut documents = Documents::from([("library.json".into(), manifest.clone()), (path.into(), original.into())]);
+    let mut project = ProjectSession::default();
+    project.apply("project.new", &json!({"create_board":false})).unwrap();
+    project.execute("library.load_source", &json!({"source":"workshop","documents":documents})).unwrap();
+    let old = project.libraries().symbol("workshop", "gnd", 1).unwrap();
+    project
+        .apply(
+            PLACE_SYMBOL,
+            &json!({"library":"workshop","definition":"gnd","definition_revision":1,
+        "definition_digest":symbol_digest(&old).unwrap(),"x_nm":0,"y_nm":0,"expected_revision":project.revision()}),
+        )
+        .unwrap();
+
+    let mut item = Item::edit_symbol(&old).unwrap();
+    item.name = "Local ground".into();
+    let prepared = prepare(Arc::new(item), &manifest, 1, Some(1), false).unwrap();
+    publish(&root, &prepared).unwrap();
+    assert_eq!(std::fs::read_to_string(root.join(path)).unwrap(), original);
+    let loaded = super::super::load(&root).unwrap();
+    assert!(loaded.problems().is_empty());
+    let revision = prepared.item().revision;
+    let new = loaded.items().iter().find(|record| record.key.revision == revision).unwrap().symbol().unwrap();
+    assert_eq!(new.format(), SYMBOL_FORMAT_V5);
+    assert_eq!(new.name, "Local ground");
+    assert_eq!(new.units(), old.units());
+    assert_eq!(new.pins(), old.pins());
+    assert_eq!(new.power_terminal(), Some("1"));
+    assert_eq!(new.defaults, old.defaults);
+
+    documents.extend(prepared.documents().clone());
+    project.execute("library.load_source", &json!({"source":"workshop","documents":documents})).unwrap();
+    project
+        .apply(
+            PLACE_SYMBOL,
+            &json!({"library":"workshop","definition":"gnd","definition_revision":revision,
+        "definition_digest":symbol_digest(&new).unwrap(),"x_nm":25_400_000,"y_nm":0,"expected_revision":project.revision()}),
+        )
+        .unwrap();
+    let saved = encode_documents(project.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let pins: Vec<_> = reopened.components().map(|part| part.definition.clone()).collect();
+    assert_eq!(old.format(), "pcbcraft-symbol/2");
+    assert_eq!(pins, [old, new]);
+}
+
+/// Republishing an older footprint retains its exact file and publishes matching land geometry.
+#[test]
+fn footprint_publication_keeps_legacy_revision_and_uses_current_format() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("library");
+    let manifest = new_library("workshop", "Workshop", "MIT OR Apache-2.0").unwrap();
+    create(&root, &manifest).unwrap();
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../libraries/basic-components/footprints/resistor-0402.json")).unwrap();
+    legacy["library"] = json!("workshop");
+    let bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+    let path = root.join("footprints/resistor-0402.json");
+    std::fs::create_dir(root.join("footprints")).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let source = super::super::load(&root).unwrap();
+    let old = source.items()[0].footprint().unwrap();
+    assert_eq!(old.format, "pcbcraft-footprint/1");
+
+    let mut item = Item::edit_footprint(&old).unwrap();
+    item.name = "Workshop resistor".into();
+    let prepared = prepare(Arc::new(item), &manifest, old.revision, Some(old.revision), false).unwrap();
+    publish(&root, &prepared).unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+
+    let source = super::super::load(&root).unwrap();
+    assert!(source.problems().is_empty());
+    let mut catalog = pcbcraft_engine::library::sources::Catalog::default();
+    catalog.install("workshop", Arc::new(source)).unwrap();
+    let retained = catalog.footprint("workshop", &old.id, old.revision).unwrap();
+    let new = catalog.footprint("workshop", &old.id, prepared.item().revision).unwrap();
+    assert_eq!(retained, old);
+    assert_eq!(new.format, "pcbcraft-footprint/6");
+    assert_eq!(new.pads, old.pads);
 }
 
 /// A revision created after preparation is never overwritten, including after a second publisher races.

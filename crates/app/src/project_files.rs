@@ -11,7 +11,12 @@ use std::{
 use inspection::Finished;
 #[cfg(target_arch = "wasm32")]
 use pcbcraft_engine::persistence::Encoding;
-use pcbcraft_engine::{Project, Session};
+use pcbcraft_engine::{
+    Project, Session,
+    persistence::{
+        CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, ENTRY_POINT, project_board_path,
+    },
+};
 
 /// Desktop working folders and portable archives use the same split documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,6 +36,59 @@ mod native;
 mod stand_in;
 #[cfg(target_arch = "wasm32")]
 mod web;
+
+/// Check a stored header before retaining raw bytes during a save.
+fn has_document_format(documents: &Documents, path: &str, expected: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        format: String,
+    }
+    documents.get(path).and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok()).is_some_and(|header| header.format == expected)
+}
+
+/// Reuse the full source only when its managed documents use current write formats.
+fn has_current_write_formats(documents: &Documents, snapshot: &Project) -> bool {
+    has_document_format(documents, ENTRY_POINT, CURRENT_PROJECT_FORMAT)
+        && snapshot.board_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_BOARD_FORMAT))
+        && snapshot.instances_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_INSTANCES_FORMAT))
+        && snapshot.sheets().all(|sheet| has_document_format(documents, &format!("sheets/{}.json", sheet.target.id()), CURRENT_SHEET_FORMAT))
+}
+
+/// Keep exact unaffected bytes by comparing the snapshots' current encodings and looking up
+/// the corresponding source path. Upgrade managed document headers on Save even when
+/// their authored data is unchanged.
+fn retain_unchanged_documents(
+    documents: &mut Documents,
+    canonical: &Documents,
+    original: &Documents,
+    old_board: Option<&str>,
+    new_board: Option<&str>,
+) -> Result<(), String> {
+    let current = has_document_format(original, ENTRY_POINT, CURRENT_PROJECT_FORMAT);
+    let canonical_board = project_board_path(&canonical[ENTRY_POINT])?;
+    for (path, bytes) in documents {
+        if path == ENTRY_POINT && !current {
+            continue;
+        }
+        let (comparison, source) = if Some(path.as_str()) == new_board {
+            let source = old_board.unwrap_or(path);
+            if !has_document_format(original, source, CURRENT_BOARD_FORMAT) {
+                continue;
+            }
+            (canonical_board.as_deref().unwrap_or(path), source)
+        } else {
+            (path.as_str(), path.as_str())
+        };
+        if canonical.get(comparison) == Some(bytes)
+            && let Some(retained) = original.get(source)
+            && (!path.starts_with("sheets/") || has_document_format(original, source, CURRENT_SHEET_FORMAT))
+            && (!path.ends_with("/instances.json") || has_document_format(original, source, CURRENT_INSTANCES_FORMAT))
+        {
+            bytes.clone_from(retained);
+        }
+    }
+    Ok(())
+}
 
 /// Suggest a file name, without extension, for a project's first desktop save or a browser
 /// download. Characters that can't appear in a file name on common desktops become `-`; a name
@@ -108,6 +166,8 @@ struct Saved {
     #[cfg(target_arch = "wasm32")]
     needs_manifest: bool,
     #[cfg(target_arch = "wasm32")]
+    needs_project_upgrade: bool,
+    #[cfg(target_arch = "wasm32")]
     documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
 }
 
@@ -129,7 +189,7 @@ impl Saved {
 struct Upgrades {
     /// Bundled library references moved to their current addresses.
     libraries: bool,
-    /// Sheets from before paper got paper around their drawing.
+    /// Sheets without paper got paper around their drawing.
     paper: bool,
 }
 
@@ -361,7 +421,9 @@ impl ProjectFiles {
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest)
+                .filter(|saved| {
+                    saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest && !saved.needs_project_upgrade
+                })
                 .map(|saved| Arc::clone(&saved.bytes));
             let original =
                 self.saved.as_ref().and_then(|saved| download::Original::for_project(saved.snapshot.clone(), saved.documents.clone()?, &snapshot));

@@ -278,7 +278,7 @@ fn native_format_boundary_rejects_invalid_catalogs_and_preserves_other_documents
         }
     }
     let entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/20");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     for format in ["pcbcraft-project/16", "pcbcraft-project/17", "pcbcraft-project/19"] {
         let mut value = entry.clone();
         value["format"] = json!(format);
@@ -319,6 +319,9 @@ fn native_format_boundary_rejects_invalid_catalogs_and_preserves_other_documents
     missing.as_object_mut().unwrap().remove("net_classes");
     let mut bad = documents.clone();
     bad.insert(ENTRY_POINT.into(), serde_json::to_vec(&missing).unwrap());
+    assert!(decode_documents(&bad).unwrap().net_classes().definitions.is_empty());
+    missing["format"] = json!("pcbcraft-project/20");
+    bad.insert(ENTRY_POINT.into(), serde_json::to_vec(&missing).unwrap());
     assert!(decode_documents(&bad).is_err());
     let raw = String::from_utf8(documents[ENTRY_POINT].clone()).unwrap();
     let repeated = raw.replace("\"clearance_nm\":500000", "\"clearance_nm\":500000,\"clearance_nm\":100000");
@@ -341,7 +344,7 @@ fn classes_round_trip_with_board_rules_net_registry_and_no_connects() {
     edit(&mut session, crate::no_connect::SET, json!({"target":{"part":"component-2","terminal":"2"},"marked":true})).unwrap();
     round_trip(&session);
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(String::from_utf8(documents[ENTRY_POINT].clone()).unwrap().contains("pcbcraft-project/23"));
+    assert!(String::from_utf8(documents[ENTRY_POINT].clone()).unwrap().contains(crate::persistence::CURRENT_PROJECT_FORMAT));
 }
 
 /// Geometry vocabulary/ranges stay aligned with board defaults, with no new unit convention.

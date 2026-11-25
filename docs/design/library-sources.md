@@ -500,6 +500,10 @@ override it:
   content doesn't match the pinned hash is rejected, never substituted.
 - **Caching** a linked model never changes the project's mode or marks it dirty.
 
+[3D model records, bindings and frames](3d-model-records.md) proposes the
+record, the package-variant binding, the model and board frames and the
+storage paths for this design.
+
 ## Related designs
 
 These need their own documents and must respect the boundaries above:

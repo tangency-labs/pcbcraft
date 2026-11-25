@@ -683,7 +683,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
-    let (mut openings, mut slots) = (Vec::new(), Vec::new());
+    let (mut openings, mut slots, mut collision_pads) = (Vec::new(), Vec::new(), Vec::new());
     let marquee = state.box_drag.as_ref().and_then(|drag| {
         let release = pointer_release(&response, drag.button);
         let pointer = rect.clamp(release.or_else(|| ui.input(|i| i.pointer.interact_pos()))?);
@@ -746,6 +746,15 @@ pub(super) fn show(
                 } else if let Some(focus) = focus {
                     let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
                     pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                }
+            }
+        }
+        if let Some(collisions) = state.tracks.routing_collisions() {
+            for pad in &mut pads {
+                if pad.copper.is_some() && collisions.contains(&format!("{}:{}", footprint.id, pad.number)) {
+                    let color = pcbcraft_chrome::Tokens::get().route_collision;
+                    pad.color = Some(color);
+                    collision_pads.push(egui::Shape::closed_line(board::pad_contour(pad), egui::Stroke::new(1.5, color)));
                 }
             }
         }
@@ -817,6 +826,10 @@ pub(super) fn show(
     }
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
+    }
+    crate::board_tracks::paint_collisions(&p, rect, camera, project, &state.tracks, &state.hidden_layers);
+    if !collision_pads.is_empty() {
+        p.extend(collision_pads);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if footprints.is_empty()

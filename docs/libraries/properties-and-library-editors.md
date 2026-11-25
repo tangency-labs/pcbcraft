@@ -42,6 +42,27 @@ applied atomically; typing in a draft does not change the project. Expanding the
 form does not create another draft or undo history. Invalid input stays editable,
 Cancel leaves the document unchanged and stale view/project revisions are refused.
 
+A schematic wire selection offers **Net rules…** and inline **Net appearance** fields.
+Appearance follows the whole logical net across supported sheets: wires joined
+into one net by matching global labels all repaint, while same-named local labels
+on different sheets remain separate nets. The fields edit optional RGB color
+and stroke width, with `100%` representing the default stroke. The shared
+`nets.set_appearance` and `nets.inspect_appearance` commands
+back the fields, so MCP uses the same edit path with width in hundredths of a
+point. Stroke width is a screen-space width and stays readable at every zoom. Color is
+presentation only; selection, hover and error indicators keep their own colors and
+a contrasting screen-space underlay, so a selected wire stays readable even when its
+net color matches the active theme's selection accent or its stroke is at the maximum
+width. Handles still appear only for a single selected wire with an interior corner
+or a junction end. Repeated instances are not supported; appearance across them is
+tracked in [#441](https://github.com/tangency-labs/pcbcraft/issues/441).
+
+Selecting wires or net labels on distinct nets shows the selection’s appearance and class
+assignments. Mixed values are preserved until a field is set for all or reset to
+the theme default. **Assign class** and **Remove class** change membership in the
+selected rule class. **Apply changes** commits the pending fields together so one
+Undo restores the previous values on each net.
+
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without
 placing copper. Initial board placement stays a separate command. A placed
@@ -150,11 +171,13 @@ not perform manufacturing DRC. Drafts can temporarily have no terminals or pads
 and still save/reopen. Native export requires a terminal for a symbol, or a pad
 or circular non-plated hole for a footprint.
 
-The editable JSON envelope uses `pcbcraft-library-item/1` for single-unit symbols
-and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-unit
-symbols, `pcbcraft-library-item/3` for footprints with non-plated holes, and
-`pcbcraft-library-item/5` for symbols with alternate pin functions, single- or
-multi-unit; removing the last alternate keeps format 5. It records definition identity,
+The editable JSON envelope has its own versions. Plain single-unit and multi-unit
+symbol drafts start at `pcbcraft-library-item/1` and `pcbcraft-library-item/2`,
+respectively. Adding an alternate pin function or opening a version-5 native
+symbol for editing uses `pcbcraft-library-item/5`. Removing the last alternate
+keeps that version. Footprint drafts use `pcbcraft-library-item/1` by default,
+`pcbcraft-library-item/3` with non-plated holes, and `pcbcraft-library-item/4` with
+plated slots. The envelope records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
@@ -173,11 +196,13 @@ refuses replacing an already open identity. A cancelled picker or failed write
 leaves documents intact. Browser downloads and native-definition exports do not
 confirm a durable editor save, so they retain the unsaved state.
 
-Export Native Definition writes the existing standalone symbol/footprint schema
-to a new file. Keep the editor item as the provenance-bearing authoring master;
-the existing standalone symbol format does not carry its license or stable
-editor primitive IDs. Unknown symbol provenance requires recording its license
-before saving or exporting. Native source registration/search is available through
+Export Native Definition writes a new standalone file. Exports and new
+published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) for symbols and
+[`pcbcraft-footprint/6`](footprint-schema.md) for footprints, including after
+optional records are removed. Older published and project-pinned revisions
+keep their original formats and addresses. Keep the editor item for the symbol's license
+and stable editor primitive IDs. If the license is unknown, record it before
+saving or exporting. Native source registration/search is available through
 the **Library** workspace (also reached through **Libraries → Sources**), as described in the [source guide](native-library-sources.md).
 Deliberate application of an authored definition to a project remains follow-up
 work; desktop **Library → Publish…** adds validated native revisions to a writable

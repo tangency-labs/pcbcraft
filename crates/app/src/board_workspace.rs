@@ -34,6 +34,28 @@ impl PcbApp {
         self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
     }
 
+    /// The focused view's selected track segments, without vias or stale ids, in board order.
+    /// Lazy, so the ribbon's enable check can stop at the second match.
+    fn selected_track_ids(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
+        let board = self.views.active.board.target.and_then(|target| self.session.project()?.board_view(target));
+        let tracks = board.map_or(&[][..], |board| board.tracks());
+        self.views.active.board.tracks.selected.iter().filter(move |id| tracks.binary_search_by_key(*id, |t| t.id).is_ok()).copied()
+    }
+
+    /// Merge the focused view's selected track segments through the shared `pcb.merge_tracks`
+    /// command. Like other canvas copper edits, it is validated by background copper preparation
+    /// and published as one undo step; refusals appear in the status bar.
+    pub(super) fn merge_selected_tracks(&mut self) {
+        let Some(source) = self.views.active.input(&self.session) else { return };
+        let Some(target) = self.views.active.board.target else { return };
+        let tracks: Vec<_> = self.selected_track_ids().collect();
+        if tracks.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({"board": target.board, "tracks": tracks, "expected_revision": source.revision});
+        self.prepare_canvas_copper(crate::board_drawing::Command::new(source, pcbcraft_engine::MERGE_TRACKS, params));
+    }
+
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -209,6 +231,15 @@ impl PcbApp {
             active: false,
             menu_check: None,
         };
+        let merge = RibbonTool {
+            icon: ToolIcon::Track,
+            label: "Merge Tracks",
+            description: "Merge selected straight track segments",
+            shortcut: "",
+            enabled: idle && !editing && !self.views.active.board.tracks.committing() && self.selected_track_ids().nth(1).is_some(),
+            active: false,
+            menu_check: None,
+        };
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
             .iter()
@@ -222,13 +253,14 @@ impl PcbApp {
                 menu_check: None,
             })
             .collect();
-        let menu: Vec<_> = std::iter::once(delete).chain(aligns).collect();
+        let menu: Vec<_> = [delete, merge].into_iter().chain(aligns).collect();
         match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
             Some(2) => self.views.active.board.flip_requested = true,
             Some(3) => self.delete_board_items(),
-            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
+            Some(4) => self.merge_selected_tracks(),
+            Some(index) if (5..5 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 5].1),
             _ => {}
         }
     }
@@ -316,13 +348,95 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
-        let planned =
-            [planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"), planned(ToolIcon::Tune, "Tune", "Tune track length (planned)")];
-        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
+        let menu = [
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Router Settings",
+                description: "Interactive Router Settings",
+                shortcut: "",
+                enabled,
+                active: self.views.active.board.router_settings_open,
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
+            },
+            planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
+            planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
+        ];
+        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &menu) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
+            Some(2) => {
+                let view = &mut self.views.active;
+                view.board.router_settings_open = !view.board.router_settings_open;
+                if !view.board.router_settings_open {
+                    view.panels[crate::workspace_panels::ROUTER].cancel_drag();
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Draw live, view-local controls in the same movable shell as Layers and Properties.
+    /// An in-progress edit keeps its captured policy and may continue outside the card.
+    pub(super) fn router_settings_panel(&mut self, ui: &Ui, area: egui::Rect, dock: egui::Rect) -> egui::Rect {
+        use pcbcraft_chrome::{controls, settings, workspace::panels::Position};
+        use pcbcraft_engine::board::route::Mode;
+
+        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        let view = &mut self.views.active;
+        if !view.board.router_settings_open {
+            return egui::Rect::NOTHING;
+        }
+        let id = egui::Id::unique(("router_settings", self.views.host, view.id()));
+        let state = &mut view.board;
+        let panel = &mut view.panels[crate::workspace_panels::ROUTER];
+        let width = workspace::panels::card_width(area, false);
+        if panel.position() == Position::Floating && panel.saved_state().at.is_none() {
+            panel.set_position(Position::Floating, Some([(area.width() - width) / 2.0, 20.0]));
+        }
+        let available = enabled && !state.editing_footprint() && state.tracks.can_change_policy();
+        let (original, original_merge) = state.tracks.policy();
+        let (mut mode, mut merge) = (original, original_merge);
+        let mut close = false;
+        let (rect, toggle) = panel.show(ui, id, "Router Settings", area, dock, state.router_settings_collapsed, width, |ui| {
+            ui.add_enabled_ui(available, |ui| {
+                let mut policy = if mode == Mode::ShoveVias { Mode::Shove } else { mode };
+                ui.label("Policy");
+                if settings::choice(
+                    ui,
+                    "Router policy",
+                    &mut policy,
+                    &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
+                ) {
+                    mode = policy;
+                }
+                if policy == Mode::Shove {
+                    let mut vias = mode == Mode::ShoveVias;
+                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
+                        mode = if vias { Mode::ShoveVias } else { Mode::Shove };
+                    }
+                    settings::checkbox(ui, "Merge same-net copper", "Merge same-net copper", &mut merge);
+                }
+            })
+            .response
+            .on_disabled_hover_text("Finish or cancel the current edit to change router policy.");
+            let dismiss = controls::button(ui, "Close");
+            dismiss.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close Router Settings"));
+            close = dismiss.clicked();
+        });
+        if available {
+            if mode != original {
+                state.tracks.select_mode(mode);
+            }
+            if merge != original_merge {
+                state.tracks.select_same_net_merge(merge);
+            }
+        }
+        state.router_settings_collapsed ^= toggle;
+        if close {
+            state.router_settings_open = false;
+            panel.cancel_drag();
+        }
+        rect
     }
 
     /// Draw graphic paths on the active layer; routing and editing remain in Layout.

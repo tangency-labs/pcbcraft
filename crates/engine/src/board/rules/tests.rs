@@ -46,7 +46,7 @@ fn board_rules_are_addressed_atomic_and_undoable() {
     crate::assert_same_content(&original, &session.snapshot().unwrap());
 }
 
-/// New formats are selected only for authored rules, including existing copper locks.
+/// Authored rules keep the current header, including on boards with copper locks.
 #[test]
 fn rules_format_round_trips_and_reset_restores_previous_bytes() {
     let mut session = routed_fixture();
@@ -55,13 +55,13 @@ fn rules_format_round_trips_and_reset_restores_previous_bytes() {
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
     let path = crate::persistence::test_board_path(&documents);
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    assert!(text.contains("pcbcraft-board/19"));
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT));
     assert_eq!(documents, encode_documents(decode_documents(&documents).unwrap()).unwrap());
     let packed = encode_packed(session.snapshot().unwrap()).unwrap();
     assert_eq!(packed, encode_packed(decode_packed(&packed).unwrap().project).unwrap());
     for old in ["pcbcraft-board/13", "pcbcraft-board/18"] {
         let mut bad = documents.clone();
-        bad.insert(path.clone(), text.replace("pcbcraft-board/19", old).into_bytes());
+        bad.insert(path.clone(), text.replace(crate::persistence::CURRENT_BOARD_FORMAT, old).into_bytes());
         assert!(decode_documents(&bad).is_err());
     }
     set(&mut session, Value::Null).unwrap();
@@ -90,6 +90,7 @@ fn malformed_rules_never_adopt_and_old_boards_keep_their_encoding() {
         assert!(decode_documents(&bad).is_err());
     }
     let mut missing = value.clone();
+    missing["format"] = json!("pcbcraft-board/19");
     missing.as_object_mut().unwrap().remove("rules");
     let mut bad = docs.clone();
     bad.insert(path, serde_json::to_vec(&missing).unwrap());
