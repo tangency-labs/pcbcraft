@@ -32,12 +32,19 @@ pub(crate) const COMMAND: Command = Command {
     ],
 };
 
+/// The acceptance digest authorizes the footprint revision, not a relation loss or remap.
+pub(crate) const WOULD_LOSE: &str = "This footprint revision would lose board relation references. \
+    Delete the relations listed in the details, apply the revision, then add them again.";
+pub(crate) const REMAP_REQUIRED: &str = "This footprint revision changes the definition that board relations reference. \
+    Delete the relations listed in the details, apply the revision, then add them again.";
+
 /// Work against one immutable project and catalog. The editor captures this job without
 /// resolving library inventory, copying the board, or running a save encoder.
 pub struct FootprintRevisionJob {
     source: Source,
     catalog: Arc<Catalog>,
     defer_net_reconciliation: bool,
+    relation_stage: crate::board::relations::RelationStage,
     params: Value,
     pending: Option<(Arc<Project>, u64, DocumentsEncoder)>,
     result: Option<Result<PreparedFootprintRevision, CommandError>>,
@@ -92,6 +99,7 @@ impl Session {
             source,
             catalog: self.libraries.clone(),
             defer_net_reconciliation: self.defer_net_reconciliation,
+            relation_stage: self.relation_stage,
             params: params.clone(),
             pending: None,
             result: None,
@@ -180,7 +188,16 @@ impl FootprintRevisionJob {
         }
         let project = &self.source.snapshot;
         let candidate = self.candidate(project, &self.params)?;
-        let (candidate, highest) = Session::prepare_snapshot_change(Some(project), self.defer_net_reconciliation, candidate)?;
+        // Finalize relation references on the worker, as ordinary edits do, before the exact
+        // encoder sees the candidate. No review here can accept a staged loss or remap.
+        let (candidate, highest) = Session::prepare_snapshot_change(
+            Some(project),
+            self.source.revision(),
+            self.defer_net_reconciliation,
+            self.relation_stage,
+            candidate,
+            |disclosure| disclosure.refuse_decisions(WOULD_LOSE, REMAP_REQUIRED),
+        )?;
         let candidate = Project::with_allocation_watermark(Arc::new(candidate), project.numeric_id_high_water);
         self.pending = Some((candidate.clone(), highest, DocumentsEncoder::new(candidate)));
         Ok(None)

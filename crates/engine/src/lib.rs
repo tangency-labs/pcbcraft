@@ -5137,13 +5137,27 @@ impl Session {
         Ok(prepared)
     }
 
-    /// Run the same transaction preparation on an immutable source, including on a worker.
+    /// Run the same transaction preparation on an immutable source, including on a worker, with
+    /// the Outer relation finalization of `prepare_with`. A deferred job carries no review token,
+    /// so `refuse` must reject any staged loss or remap before the candidate is encoded.
     fn prepare_snapshot_change(
         source: Option<&Arc<Project>>,
+        revision: u64,
         defer_net_reconciliation: bool,
+        relation_stage: board::relations::RelationStage,
         project: Project,
+        refuse: impl FnOnce(&board::relations::Disclosure) -> Result<(), CommandError>,
     ) -> Result<(Project, u64), CommandError> {
-        Self::prepare_change_from_snapshot(source, defer_net_reconciliation, project, Project::reconcile_nets)
+        use board::relations::{RelationInput, RelationStage};
+        let (mut project, highest) =
+            Self::prepare_core_from_snapshot(source, defer_net_reconciliation, relation_stage, project, Project::reconcile_nets)?;
+        let outer = relation_stage == RelationStage::Outer;
+        if outer {
+            let previous = source.map(Arc::as_ref).filter(|p| p.same_document(&project));
+            refuse(&Self::finalize_relations(previous, &mut project, (revision + 1).max(highest), &RelationInput::default())?)?;
+        }
+        Self::check_snapshot_size(source, &project, outer)?;
+        Ok((project, highest))
     }
 
     /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
@@ -5156,21 +5170,57 @@ impl Session {
     ) -> Result<(Project, u64), CommandError> {
         let (project, highest) =
             Self::prepare_core_from_snapshot(previous, defer_net_reconciliation, board::relations::RelationStage::Outer, project, reconcile)?;
-        // Copper, package maps and test-point marks can exhaust the native board document even
-        // before the record-count limits. Check the changed board before publishing snapshot or history.
+        Self::check_snapshot_size(previous, &project, false)?;
+        Ok((project, highest))
+    }
+
+    /// Copper, package maps, test-point marks and (when finalized) relations can exhaust the
+    /// native board document even before the record-count limits. Check the changed board
+    /// before publishing snapshot or history.
+    fn check_snapshot_size(previous: Option<&Arc<Project>>, project: &Project, relations: bool) -> Result<(), CommandError> {
         if previous.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()
                 || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some())
-                || project.board.has_test_points())
+                || project.board.has_test_points()
+                || relations && project.board.relations.is_some())
         {
-            persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
+            persistence::check_board_document_size(project).map_err(CommandError::InvalidParams)
         } else {
-            board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
-            board::teardrop::validate(&project).map_err(CommandError::InvalidParams)?;
+            board::zones::validate(project).map_err(CommandError::InvalidParams)?;
+            board::teardrop::validate(project).map_err(CommandError::InvalidParams)
         }
-        Ok((project, highest))
+    }
+
+    /// Outer relation finalization shared by `prepare_with` and deferred jobs: verify relation
+    /// references on the reconciled candidate against its base, then recheck the native guards
+    /// that relation edits report with their own reasons.
+    fn finalize_relations(
+        previous: Option<&Project>,
+        project: &mut Project,
+        revision: u64,
+        input: &board::relations::RelationInput,
+    ) -> Result<board::relations::Disclosure, CommandError> {
+        use board::relations;
+        let had_relations = previous.is_some_and(|p| p.board.relations.is_some());
+        let disclosure = if had_relations || project.board.relations.is_some() || !input.choices.is_empty() || input.review {
+            relations::verify_final(previous, project, revision, input)?
+        } else {
+            relations::Disclosure::default()
+        };
+        if (had_relations || project.board.relations.is_some())
+            && let Some(previous) = previous
+        {
+            board::track::protect_locked(previous, project)?;
+            if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
+                return Err(relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null));
+            }
+            if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
+                return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
+            }
+        }
+        Ok(disclosure)
     }
 
     /// Shared pre-relation preparation and reconciliation against an immutable previous snapshot.
@@ -5283,23 +5333,11 @@ impl Session {
         let previous = self.project.as_deref().filter(|p| p.same_document(&project));
         let outer = self.relation_stage == RelationStage::Outer;
         let had_relations = previous.is_some_and(|p| p.board.relations.is_some());
-        let disclosure = if outer && (had_relations || project.board.relations.is_some() || !input.choices.is_empty() || input.review) {
-            relations::verify_final(previous, &mut project, (self.revision + 1).max(highest), input)?
+        let disclosure = if outer {
+            Self::finalize_relations(previous, &mut project, (self.revision + 1).max(highest), input)?
         } else {
             relations::Disclosure::default()
         };
-        if outer
-            && (had_relations || project.board.relations.is_some())
-            && let Some(previous) = previous
-        {
-            board::track::protect_locked(previous, &project)?;
-            if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
-                return Err(relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null));
-            }
-            if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
-                return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
-            }
-        }
         let certify = input.review || disclosure.affected;
         // Copper, package maps, test-point marks and relations can exhaust the native board
         // document before the record-count limits. Check the board before publishing it.

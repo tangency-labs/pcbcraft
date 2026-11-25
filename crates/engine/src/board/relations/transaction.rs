@@ -99,15 +99,20 @@ impl Disclosure {
 
     /// Direct callers never get a token and cannot resubmit bare approvals.
     pub(crate) fn require_no_decisions(&self) -> Result<(), CommandError> {
+        self.refuse_decisions(
+            "This edit would lose relation references. Preview it to review the loss.",
+            "This edit changes pinned references. Preview it to review the correspondence.",
+        )
+    }
+
+    /// Refuse staged decisions with the same structured reasons and rows, using a message for a
+    /// caller that cannot be previewed for consent.
+    pub(crate) fn refuse_decisions(&self, would_lose: &str, remap_required: &str) -> Result<(), CommandError> {
         if !self.losses.is_empty() {
-            return Err(reason("would_lose", "This edit would lose relation references. Preview it to review the loss.", json!(self.losses)));
+            return Err(reason("would_lose", would_lose, json!(self.losses)));
         }
         if !self.remaps.is_empty() {
-            return Err(reason(
-                "remap_required",
-                "This edit changes pinned references. Preview it to review the correspondence.",
-                json!(self.remaps),
-            ));
+            return Err(reason("remap_required", remap_required, json!(self.remaps)));
         }
         Ok(())
     }

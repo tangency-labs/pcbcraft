@@ -663,6 +663,130 @@ fn footprint_revision_of_native_part_refuses_terminal_rating_changes() {
     );
 }
 
+/// Check the structured relation refusal: its reason, its message for a command that cannot be
+/// previewed for consent, and exactly the one disclosed row of the named relation.
+fn assert_relation_refusal(error: &crate::CommandError, reason: &str, relation: &Value) {
+    use super::super::adoption::{REMAP_REQUIRED, WOULD_LOSE};
+    assert_eq!(error.code(), ErrorCode::Unavailable, "{error}");
+    let details = error.details();
+    assert_eq!(details["reason"], reason, "{error}");
+    let rows = details["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    match reason {
+        "would_lose" => {
+            assert_eq!(error.to_string(), WOULD_LOSE);
+            assert_eq!(&rows[0]["id"], relation);
+        }
+        _ => {
+            assert_eq!(error.to_string(), REMAP_REQUIRED);
+            assert_eq!(&rows[0]["relation"], relation);
+        }
+    }
+}
+
+/// Relate the board datum to one offered feature of a placed footprint.
+fn relate_to_board_origin(session: &mut Session, index: usize, tag: &str, pad: Option<&str>) -> Value {
+    use crate::board::relations::tests::{add, origin, pick};
+    let reference = pick(session, index, tag, pad);
+    add(session, "aligned", origin(), reference)
+}
+
+/// A footprint revision changes the definition every relation pick on that placement pins.
+/// An offered correspondence (the origin) needs a remap and a changed land (pad 2) is lost;
+/// the reviewed acceptance authorizes neither. Both `execute` and the deferred job refuse
+/// before encoding, with a structured disclosure, and leave bytes, revision, history and edit
+/// notifications unchanged. Deleting the relation, as the refusal says, lets the revision apply.
+#[test]
+fn footprint_revision_refuses_relation_remap_or_loss_without_editing() {
+    let remap: fn(&mut RectPad) = |pad| pad.center.x_nm += 200_000;
+    let reshape: fn(&mut RectPad) = |pad| pad.width_nm += 100_000;
+    for (edit_pad, tag, pad, reason) in [(remap, "fp.origin", None, "remap_required"), (reshape, "pad.center", Some("2"), "would_lose")] {
+        let (mut session, _, target) = package_fixture(edit_pad, false, true);
+        let id = session.project().unwrap().boards().next().unwrap().footprint_ids().next().unwrap();
+        // Keep the aligned span nonzero: the board datum is at board zero.
+        edit(&mut session, SET_FOOTPRINT_TRANSFORM, json!({"footprint":id,"rotation":0,"x_nm":5_000_000,"y_nm":3_000_000}));
+        let relation = relate_to_board_origin(&mut session, 0, tag, pad);
+        let mut params = reviewed(&mut session, &target);
+        params["mapping"] = json!({"1":"1","2":["2","9"]});
+        let log = Arc::new(EditLog::default());
+        session.observe_edits(Some(log.clone()));
+        let before = session.snapshot().unwrap();
+        let before_history = history(&session);
+        let bytes = encode_documents(before.clone()).unwrap();
+
+        let error = session.execute(APPLY_FOOTPRINT_REVISION, &params).unwrap_err();
+        assert_relation_refusal(&error, reason, &relation);
+        assert_history_unchanged(&session, &before, before_history);
+
+        let mut job = session.prepare_footprint_revision(&params).unwrap();
+        assert!(job.step(32), "the relation refusal must precede the batched encoder");
+        let error = job.take_result().err().expect("the deferred job must refuse the relation change");
+        assert_relation_refusal(&error, reason, &relation);
+        assert_history_unchanged(&session, &before, before_history);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+        assert!(log.0.lock().unwrap().is_empty());
+        session.observe_edits(None);
+
+        edit(&mut session, crate::board::relations::commands::DELETE, json!({"ids":[relation]}));
+        let mut params = reviewed(&mut session, &target);
+        params["mapping"] = json!({"1":"1","2":["2","9"]});
+        session.execute(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+        let adopted = session.snapshot().unwrap();
+        assert_eq!(adopted.board.footprints()[0].definition_revision, 2);
+        assert!(adopted.board.relations.is_none());
+    }
+}
+
+/// Place a second, unrelated instance of the original package beside the reviewed one.
+fn place_unrelated_footprint(session: &mut Session) {
+    let project = session.snapshot().unwrap();
+    let symbol = project.all_symbols().next().unwrap();
+    edit(
+        session,
+        PLACE_SYMBOL,
+        json!({"library":symbol.definition.library,"definition":symbol.definition.id,"definition_revision":1,
+        "definition_digest":symbol_digest(&symbol.definition).unwrap(),"x_nm":0,"y_nm":10_160_000}),
+    );
+    let part = session.project().unwrap().components().last().unwrap().id();
+    let package = project.package_assignments().values().next().unwrap();
+    edit(
+        session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":part,"library":package.library,"definition":package.definition,
+        "definition_revision":package.definition_revision,"mapping":{"1":"1","2":"2"}}),
+    );
+    edit(session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":part,"x_nm":8_000_000,"y_nm":0}));
+}
+
+/// Positive control: a relation on another placement still resolves on its unchanged pinned
+/// definition, so the revision publishes once, keeps that relation as it was, and undoes in one step.
+#[test]
+fn footprint_revision_beside_unrelated_relation_publishes_once() {
+    let (mut session, _, target) = package_fixture(|_| {}, false, true);
+    place_unrelated_footprint(&mut session);
+    relate_to_board_origin(&mut session, 1, "fp.origin", None);
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    let log = Arc::new(EditLog::default());
+    session.observe_edits(Some(log.clone()));
+    let before = session.snapshot().unwrap();
+    let (revision, undo, _) = history(&session);
+    let bytes = encode_documents(before.clone()).unwrap();
+    session.execute(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+    assert_eq!(log.0.lock().unwrap().len(), 1);
+    session.observe_edits(None);
+    let (adopted_revision, adopted_undo, adopted_redo) = history(&session);
+    assert!(adopted_revision > revision);
+    assert_eq!((adopted_undo, adopted_redo), (undo + 1, 0));
+    let adopted = session.snapshot().unwrap();
+    assert_eq!(adopted.board.footprints()[0].definition_revision, 2);
+    assert_eq!(adopted.board.footprints()[1].definition_revision, 1);
+    assert!(adopted.board.relations.is_some());
+    assert_eq!(adopted.board.relations, before.board.relations);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
 /// Board replacement guards reject mismatched keys, conflicting pinned content and invalid footprints.
 #[test]
 fn replace_reviewed_footprint_refuses_key_content_and_bounds_errors() {
