@@ -147,8 +147,8 @@ fn footprint_revision_refuses_marked_pad_without_editing() {
         let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
         let path = crate::persistence::test_board_path(&bytes);
         let text = std::str::from_utf8(&bytes[&path]).unwrap();
-        let fields = ["tracks", "vias", "test_points", "assignments", "footprints"]
-            .map(|key| text.find(format!("\n  \"{key}\": [").as_str()).unwrap());
+        let fields =
+            ["tracks", "vias", "test_points", "assignments", "footprints"].map(|key| text.find(format!("\n  \"{key}\": [").as_str()).unwrap());
         assert!(fields.windows(2).all(|pair| pair[0] < pair[1]));
         let board: Value = serde_json::from_str(text).unwrap();
         assert_eq!(&board["test_points"], marks);

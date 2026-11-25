@@ -11,7 +11,9 @@ use pcbcraft_engine::{
         publishing::{new_library, prepare},
     },
     error_codes::ErrorCode,
-    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, Documents, LOAD, PREVIEW_ADOPTION, PREVIEW_FOOTPRINT_REVISION, WHERE_USED, symbol_digest},
+    library::sources::{
+        APPLY_ADOPTION, AVAILABLE_REVISIONS, Documents, LOAD, PREVIEW_ADOPTION, PREVIEW_FOOTPRINT_REVISION, WHERE_USED, symbol_digest,
+    },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
