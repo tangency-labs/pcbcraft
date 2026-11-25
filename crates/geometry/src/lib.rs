@@ -426,7 +426,7 @@ pub struct Occurrence<'a> {
 /// next-assembly-usage occurrence per entry of `occurrences`, in the order given. A part placed
 /// twice is written once. Parts no occurrence places are not written. As with [`write_step`],
 /// the header carries no time stamp, so the same input always gives the same bytes, and
-/// [`read_step`] returns one placement per occurrence.
+/// [`read_step`] returns one placement per body per occurrence.
 ///
 /// # Errors
 ///

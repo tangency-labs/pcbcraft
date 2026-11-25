@@ -1,10 +1,11 @@
 //! The board solid and its placed component models as one STEP assembly, which SolidCraft
-//! inserts with Insert STEP: one product for the board, one per model, and one occurrence per
-//! placed footprint at its component pose.
+//! inserts with Insert STEP: one product for the board, one per used model, and one occurrence
+//! per bound footprint at its component pose.
 //!
 //! The caller supplies the models and binds them to footprints; nothing here reads or stores a
 //! model record. The assembly is derived from one immutable board snapshot and the same input
-//! gives the same bytes, so writing it again after an edit changes only what the edit moved.
+//! gives the same bytes. A placement-only move that leaves the substrate unchanged moves only
+//! the affected model occurrence; moving a footprint with drills can change the substrate too.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -91,7 +92,8 @@ impl BoardAssembly {
     /// Make the assembly `name` of the explicitly addressed immutable board: its board solid
     /// ([`BoardSolid::build`]) and, for each placed footprint with a binding, its model at the
     /// component pose ([`component_pose`]). Each model is written once, however often it is
-    /// placed; models no binding uses are not written. Building changes no board state or undo.
+    /// placed; models no binding uses are neither validated nor written. Building changes no
+    /// board state or undo.
     ///
     /// # Errors
     ///
@@ -121,12 +123,22 @@ impl BoardAssembly {
 
         let solid = BoardSolid::build(board)?;
         let board_bodies = [&solid.body];
-        let model_bodies: Vec<[&Body; 1]> = models.iter().map(|body| [*body]).collect();
+        // Only pass bound models to the STEP writer, in caller order. Keep caller indices in
+        // `components`, and remap only the STEP occurrences (whose part 0 is the board).
+        let mut part_indices: BTreeMap<_, _> = components.iter().map(|c| (c.model, 0)).collect();
+        let model_bodies: Vec<[&Body; 1]> = part_indices
+            .iter_mut()
+            .enumerate()
+            .map(|(i, (&model, part))| {
+                *part = i + 1;
+                [models[model]]
+            })
+            .collect();
         let mut parts = vec![AssemblyPart { name: BOARD_NAME, bodies: &board_bodies }];
-        parts.extend(models.iter().zip(&model_bodies).map(|(body, bodies)| AssemblyPart { name: body.name(), bodies }));
+        parts.extend(model_bodies.iter().map(|bodies| AssemblyPart { name: bodies[0].name(), bodies }));
         let names: Vec<String> = components.iter().map(|c| format!("component:{}", c.footprint)).collect();
         let mut occurrences = vec![Occurrence { part: 0, name: BOARD_NAME, transform: Transform::IDENTITY }];
-        occurrences.extend(components.iter().zip(&names).map(|(c, name)| Occurrence { part: c.model + 1, name, transform: c.transform }));
+        occurrences.extend(components.iter().zip(&names).map(|(c, name)| Occurrence { part: part_indices[&c.model], name, transform: c.transform }));
         let step = write_step_assembly(name, &parts, &occurrences)?;
         Ok(Self { target: solid.target, thickness_nm, components, unbound, step })
     }

@@ -10,7 +10,7 @@ use pcbcraft_engine::{
     library::{LIBRARY_FORMAT, sources::LOAD},
     schematic::Point,
 };
-use pcbcraft_geometry::{BoundingBox, ErrorCode, read_step};
+use pcbcraft_geometry::{BoundingBox, ErrorCode, read_step, write_step};
 use serde_json::{Value, json};
 
 use super::*;
@@ -469,6 +469,35 @@ fn lists_unbound_footprints_without_a_body() {
     let assembly = BoardAssembly::build(view(&session), "two-sided", &[&a], &only_top).unwrap();
     assert_eq!(assembly.unbound, [ids[1].clone()]);
     assert_eq!(read_back(&assembly.step).keys().collect::<Vec<_>>(), ["Board substrate", "model-a"]);
+}
+
+/// An unused model that STEP export would refuse does not block export or leak into the assembly.
+#[test]
+fn ignores_an_unused_model_that_step_cannot_export() {
+    if no_kernel() {
+        return;
+    }
+    let (session, ids) = two_sided_board();
+    let [valid, unused] = models();
+    // STEP import accepts a tab encoded in a B-rep name; export refuses control characters.
+    let step = String::from_utf8(write_step("fixture", &[unused]).unwrap()).unwrap();
+    let step = step.replacen("MANIFOLD_SOLID_BREP('model-b'", r"MANIFOLD_SOLID_BREP('model-\X2\0009\X0\b'", 1);
+    let read = read_step(step.as_bytes()).unwrap();
+    assert!(read.refused.is_empty());
+    assert_eq!(read.bodies[0].name(), "model-\tb");
+    let non_exportable = &read.bodies[0];
+    let models = [non_exportable, &valid];
+
+    let top = |model| BTreeMap::from([(ids[0].clone(), Binding { model, alignment: Transform::IDENTITY })]);
+    let baseline = BoardAssembly::build(view(&session), "two-sided", &[&valid], &top(0)).unwrap();
+    let assembly = BoardAssembly::build(view(&session), "two-sided", &models, &top(1)).unwrap();
+    assert_eq!(assembly.components[0].model, 1);
+    assert_eq!(assembly.step, baseline.step);
+    assert_eq!(read_back(&assembly.step).keys().collect::<Vec<_>>(), ["Board substrate", "model-a"]);
+    let Err(AssemblyError::Geometry(error)) = BoardAssembly::build(view(&session), "two-sided", &models, &top(0)) else {
+        panic!("the same model must be refused when bound");
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
 }
 
 /// No nominal thickness stands in for an undeclared one, and a binding must name a placed

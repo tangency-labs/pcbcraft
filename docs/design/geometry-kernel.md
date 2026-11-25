@@ -116,7 +116,7 @@ build without the optional browser kernel, valid substrate inputs return
 and component models as one AP242 STEP assembly, which SolidCraft's Insert STEP
 opens as a component per part. The caller supplies the models and binds each to
 a placed footprint with an alignment in the model frame. The board is one
-product at the identity, each model one product written once, and each bound
+product at the identity, each used model one product written once, and each bound
 footprint one occurrence named `component:<footprint>` at the component pose
 in the board/1 frame:
 
@@ -128,10 +128,12 @@ S = T(0, 0, −t) · Ry(180°)    on the bottom side
 
 A bottom part is turned over about Y, not mirrored. The assembly needs a
 declared finished thickness; no nominal value stands in for it. A footprint
-without a binding is listed and gets no body. The same board and models give the
-same bytes, so exporting again after an edit changes only the occurrences the
-edit moved. Nothing is stored: the bound-model record, the Craft bridge exchange
-file and refreshing a linked board in place in SolidCraft are later work.
+without a binding is listed and gets no body. Unused models are ignored. The
+same input gives the same bytes. If a move leaves the substrate geometry
+unchanged, only the moved model occurrences change geometrically. Moving a
+footprint with drills can also move its openings in the substrate. Nothing is
+stored: the bound-model record, the Craft bridge exchange file and refreshing a
+linked board in place in SolidCraft are later work.
 
 ### Later integrations
 
