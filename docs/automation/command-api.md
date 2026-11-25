@@ -114,7 +114,7 @@ The MCP bridge and raw live clients that need a guarantee across editor versions
 use `engine.execute_versioned` with a required non-null `params.version` beside
 `params.command`. Use the `command_api_version` reported by the serving
 editor's command discovery (`list_commands` over MCP, `engine.commands` on the
-raw live endpoint). For example, if the editor reports version 1:
+raw live endpoint). For example, if the editor reports version 2:
 
 ```json
 {"method":"engine.execute_versioned","params":{"command":"edit.undo","version":2}}
