@@ -347,6 +347,37 @@
         "type": "object"
       }
     },
+    "library.apply_adoption": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "pattern": "^component-[1-9][0-9]*$",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "preview": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instances",
+          "expected_revision",
+          "preview"
+        ],
+        "type": "object"
+      }
+    },
     "library.available_revisions": {
       "params": {
         "additionalProperties": false,
@@ -484,6 +515,32 @@
         "required": [
           "item",
           "documents"
+        ],
+        "type": "object"
+      }
+    },
+    "library.preview_adoption": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "pattern": "^component-[1-9][0-9]*$",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "instances",
+          "expected_revision"
         ],
         "type": "object"
       }

@@ -230,6 +230,8 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::clipboard_text::LABELS
                         | pcbcraft_engine::clipboard_text::OUTLINE
                         | pcbcraft_engine::library::sources::AVAILABLE_REVISIONS
+                        | pcbcraft_engine::library::sources::PREVIEW_ADOPTION
+                        | pcbcraft_engine::library::sources::APPLY_ADOPTION
                         | pcbcraft_engine::library::sources::WHERE_USED
                         | pcbcraft_engine::library::sources::PREVIEW_FOOTPRINT_REVISION
                         | pcbcraft_engine::library::sources::RESOLVE_PART
