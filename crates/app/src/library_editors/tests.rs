@@ -1821,3 +1821,69 @@ fn unfocused_batches_ignore_library_canvas_keyboard_commands() {
         }
     }
 }
+
+/// Tool-start keys resolve against a same-batch Escape in event order: a press before
+/// Escape stays cancelled, a press after it still arms — the same ordered resolution
+/// the paste/duplicate preview chords use.
+#[test]
+fn library_tool_keys_resolve_against_same_batch_escape() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (batch, armed) in [
+            (vec![egui::Key::P, egui::Key::Escape], false),
+            (vec![egui::Key::Escape, egui::Key::P], true),
+            (vec![egui::Key::P, egui::Key::Escape, egui::Key::P], true),
+            (vec![egui::Key::L, egui::Key::Escape], false),
+            (vec![egui::Key::M, egui::Key::Escape], false),
+        ] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection =
+                h.state().library_editors.documents[&id].session.snapshot().objects.keys().copied().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            for key in &batch {
+                h.input_mut().events.push(egui::Event::Key {
+                    key: *key,
+                    physical_key: Some(*key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            h.run();
+            let tool = &h.state().library_editors.documents[&id].tool;
+            assert_eq!(matches!(tool, canvas::Tool::Select), !armed, "{kind:?} {batch:?}: tool={tool:?}");
+            assert_eq!(armed, matches!(tool, canvas::Tool::Draw { .. } | canvas::Tool::Move { .. } | canvas::Tool::MoveGroup { .. }));
+        }
+        // The footprint courtyard letter resolves the same way.
+        if kind == Kind::Footprint {
+            for (batch, armed) in [(vec![egui::Key::C, egui::Key::Escape], false), (vec![egui::Key::Escape, egui::Key::C], true)] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                for key in &batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key: *key,
+                        physical_key: Some(*key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let tool = &h.state().library_editors.documents[&id].tool;
+                assert_eq!(matches!(tool, canvas::Tool::Select), !armed, "{batch:?}: tool={tool:?}");
+                assert_eq!(armed, matches!(tool, canvas::Tool::Draw { kind: canvas::Place::Courtyard, .. }));
+            }
+        }
+    }
+}

@@ -1084,42 +1084,37 @@ impl Document {
             // Tool letters and R's direction read the pressed event's own modifiers,
             // like the command chords above: a command released before batch end
             // cannot leak a chord into a tool start, and a shift released early
-            // cannot flip the rotation direction.
-            let tool_key = |key: egui::Key| {
+            // cannot flip the rotation direction. Tool starts also resolve against a
+            // same-batch Escape in event order: a letter pressed before the Escape
+            // stays cancelled, and one pressed after it still arms.
+            let tool_key = |key: egui::Key, modifiers_ok: fn(&egui::Modifiers) -> bool| {
                 ui.input(|i| {
-                    i.focused
-                        && i.events.iter().any(|event| {
-                            matches!(
-                                event,
-                                egui::Event::Key { key: letter, pressed: true, modifiers, .. }
-                                    if *letter == key && !modifiers.command
-                            )
-                        })
+                    if !i.focused {
+                        return false;
+                    }
+                    i.events.iter().fold(false, |armed, event| match event {
+                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => false,
+                        egui::Event::Key { key: letter, pressed: true, modifiers, .. } if *letter == key && modifiers_ok(modifiers) => true,
+                        _ => armed,
+                    })
                 })
             };
-            if tool_key(egui::Key::P) {
+            if tool_key(egui::Key::P, |modifiers| !modifiers.command) {
                 self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
             }
-            if tool_key(egui::Key::L) {
+            if tool_key(egui::Key::L, |modifiers| !modifiers.command) {
                 self.start_tool(Place::Line);
             }
-            if tool_key(egui::Key::T) {
+            if tool_key(egui::Key::T, |modifiers| !modifiers.command) {
                 self.start_tool(Place::Text);
             }
-            if item.kind == Kind::Footprint
-                && ui.input(|i| {
-                    i.focused
-                        && i.events
-                            .iter()
-                            .any(|event| matches!(event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.is_none()))
-                })
-            {
+            if item.kind == Kind::Footprint && tool_key(egui::Key::C, |modifiers| modifiers.is_none()) {
                 self.start_tool(Place::Courtyard);
                 if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
                     self.set_show_courtyard(true);
                 }
             }
-            if ui.input(|i| i.key_pressed(egui::Key::M)) {
+            if tool_key(egui::Key::M, |_| true) {
                 self.begin_move();
             }
             if let Some(shifted) = ui.input(|i| {
