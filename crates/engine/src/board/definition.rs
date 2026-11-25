@@ -13,10 +13,10 @@ pub(crate) const MAX_ARTWORK: usize = 256;
 pub(crate) const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
 pub(crate) const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
-/// Native format for all newly authored footprints without an orientation statement, with any supported mix of holes.
-pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/6";
-/// Requires an orientation statement and can carry any supported mix of holes.
-pub(crate) const ORIENTATION_FORMAT: &str = "pcbcraft-footprint/7";
+/// Historical format for any supported mix of holes, without an orientation statement.
+pub(crate) const MIXED_HOLES_FORMAT: &str = "pcbcraft-footprint/6";
+/// Native format for all newly authored footprints: format 6 plus an optional orientation statement.
+pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/7";
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -207,8 +207,8 @@ pub struct FootprintDefinition {
     /// Optional local displacement of the default reference from the automatic anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
-    /// Optional assembly orientation statement. Its presence selects format 7; without it,
-    /// format 6 or a historical format matching the authored holes applies.
+    /// Optional assembly orientation statement. Only format 7 can carry it; historical formats
+    /// read without one keep their format and bytes.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
     pub orientation: Option<Orientation>,
 }
@@ -379,19 +379,16 @@ impl FootprintDefinition {
         self.pads.iter().any(|pad| pad.plated_slot.is_some())
     }
 
-    /// Keep the historical feature requirements while allowing any supported mix in format 6.
-    /// An orientation statement requires format 7, which also allows any supported mix, and
-    /// format 7 requires one. Pad and hole dimensions are validated separately.
+    /// Keep the historical feature requirements while allowing any supported mix in formats 6
+    /// and 7. Only the current format 7 can carry an orientation statement, which stays
+    /// optional there. Pad and hole dimensions are validated separately.
     fn validate_format(&self) -> Result<(), String> {
         let matches_content = match self.format.as_str() {
-            ORIENTATION_FORMAT if self.orientation.is_none() => {
-                return Err(format!("footprint format must be {CURRENT_FORMAT} for a definition without an orientation statement"));
-            }
-            ORIENTATION_FORMAT => true,
-            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | CURRENT_FORMAT if self.orientation.is_some() => {
-                return Err(format!("footprint format must be {ORIENTATION_FORMAT} for a definition with an orientation statement"));
-            }
             CURRENT_FORMAT => true,
+            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | MIXED_HOLES_FORMAT if self.orientation.is_some() => {
+                return Err(format!("footprint format must be {CURRENT_FORMAT} for a definition with an orientation statement"));
+            }
+            MIXED_HOLES_FORMAT => true,
             LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             NPTH_FORMAT => !self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             SLOT_FORMAT => self.has_plated_slots(),

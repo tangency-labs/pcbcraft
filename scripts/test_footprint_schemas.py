@@ -39,8 +39,8 @@ class FootprintSchemaTests(unittest.TestCase):
         for invalid in ([], None, [dict(hole, number="1")], [dict(hole, diameter_nm=0)], [hole] * 129):
             self.assertFalse(validator.is_valid(dict(value, non_plated_holes=invalid)))
 
-    def test_current_footprint_schema_accepts_any_supported_mix(self):
-        """Keep one native format for pads and mechanical holes while retaining format 5's slot rule."""
+    def test_format_6_schema_accepts_any_supported_mix(self):
+        """Historical format 6 reads any supported pad and hole mix while format 5 keeps its slot rule."""
         npth, slots, current = [
             json.loads((ROOT / f"docs/schemas/footprint-v{version}.schema.json").read_text())
             for version in (4, 5, 6)
@@ -139,15 +139,17 @@ for (const item of cases) {
             with self.subTest(invalid=value):
                 self.assertFalse(validator.is_valid(value))
 
-    def test_orientation_statement_selects_format_7(self):
-        """Format 7 requires a closed orientation object and can carry round holes or slots."""
-        npth = json.loads((ROOT / "docs/schemas/footprint-v4.schema.json").read_text())
-        slots = json.loads((ROOT / "docs/schemas/footprint-v5.schema.json").read_text())
-        schema = json.loads((ROOT / "docs/schemas/footprint-v7.schema.json").read_text())
+    def test_format_7_is_format_6_with_an_optional_orientation(self):
+        """Format 7 accepts a plain definition or a closed orientation object, with round holes or slots."""
+        npth, slots, historical, schema = [
+            json.loads((ROOT / f"docs/schemas/footprint-v{version}.schema.json").read_text())
+            for version in (4, 5, 6, 7)
+        ]
         registry = Registry().with_resources(
-            (item["$id"], Resource.from_contents(item)) for item in (self.schema, npth, slots)
+            (item["$id"], Resource.from_contents(item)) for item in (self.schema, npth, slots, historical)
         )
         validator = Draft202012Validator(schema, registry=registry)
+        historical = Draft202012Validator(historical, registry=registry)
         value = copy.deepcopy(self.definition)
         value["format"] = "pcbcraft-footprint/7"
         value["orientation"] = {"polarized": True, "pin_1": "1", "zero": "ipc-7351"}
@@ -163,6 +165,7 @@ for (const item of cases) {
         self.assertFalse(validator.is_valid(dict(value, pads=[])), "a package needs a pad or a hole")
         self.assertFalse(validator.is_valid(dict(value, non_plated_holes=[])))
         self.assertFalse(Draft202012Validator(npth, registry=registry).is_valid(dict(value, format="pcbcraft-footprint/4", non_plated_holes=[hole])))
+        self.assertFalse(historical.is_valid(dict(value, format="pcbcraft-footprint/6")), "format 6 has no orientation")
         for orientation in [
             None, {}, [True, "1", "ipc-7351"], {"polarized": None},
             {"polarized": True, "zero": "ipc-7350"}, {"polarized": True, "zero": {"ipc-7351": None}},
@@ -172,10 +175,13 @@ for (const item of cases) {
                 value["orientation"] = orientation
                 self.assertFalse(validator.is_valid(value))
         del value["orientation"]
-        self.assertFalse(validator.is_valid(value), "format 7 needs the statement")
+        validator.validate(value)
+        validator.validate(dict(value, non_plated_holes=[hole]))
+        historical.validate(dict(value, format="pcbcraft-footprint/6", non_plated_holes=[hole]))
+        self.assertFalse(validator.is_valid(dict(value, format="pcbcraft-footprint/6")))
 
     def test_checker_selects_the_schema_by_format(self):
-        """A supplied format-7 definition passes; the same object as format 1, 4 or 2 fails."""
+        """Supplied format-7 definitions pass with or without a statement; an oriented one as format 1, 4, 6 or 2 fails."""
         import tempfile
         value = copy.deepcopy(self.definition)
         value["format"] = "pcbcraft-footprint/7"
@@ -186,7 +192,12 @@ for (const item of cases) {
             path.write_text(json.dumps(value))
             result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for other in ["pcbcraft-footprint/1", "pcbcraft-footprint/4", "pcbcraft-footprint/2"]:
+            plain = dict(value)
+            del plain["orientation"]
+            path.write_text(json.dumps(plain))
+            result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for other in ["pcbcraft-footprint/1", "pcbcraft-footprint/4", "pcbcraft-footprint/6", "pcbcraft-footprint/2"]:
                 with self.subTest(format=other):
                     value["format"] = other
                     path.write_text(json.dumps(value))

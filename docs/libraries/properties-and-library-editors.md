@@ -199,7 +199,7 @@ confirm a durable editor save, so they retain the unsaved state.
 
 Export Native Definition writes a new standalone file. Exports and new
 published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) for symbols and
-[`pcbcraft-footprint/6`](footprint-schema.md) for footprints, including after
+[`pcbcraft-footprint/7`](footprint-schema.md) for footprints, including after
 optional records are removed. Older published and project-pinned revisions
 keep their original formats and addresses. Keep the editor item for the symbol's license
 and stable editor primitive IDs. If the license is unknown, record it before

@@ -4184,8 +4184,10 @@ impl Session {
 
     /// Check catalog parameters, board identity and availability without generating query data
     /// or changing the session. Layer-group inspection and output-recipe edits read or store only
-    /// metadata, and the assembly check reads only package pads and drawings, so they can run
-    /// regardless of copper geometry. State-specific setup diagnostics remain with handlers.
+    /// metadata, and the assembly check does not interpret stored copper arcs or teardrops (it
+    /// reads package definitions with their orientation statements, the board's silkscreen
+    /// settings, and placements with their references and positions), so they can run regardless
+    /// of copper geometry. State-specific setup diagnostics remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
