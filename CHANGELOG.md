@@ -2,6 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
+- `pcbcraft-cli --help` reports the [oldest readable split project entry-point format](docs/formats/native-project-storage.md#compatibility-and-fixtures), `pcbcraft-project/5`.
 - Add shared exact circular arc contact geometry (`board::arc::geometry::ArcGeometry`) and wire circular arcs into board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`), ratsnest, via inspection and the engine `copper_shorts` primitive. Clearance queries, DRC, copper preparation, transforms, clipboard, fabrication and PCB editing keep refusing arc boards until follow-up PRs account for arcs.
 
 Pane headers support explicit up/down and left/right splits, with previews and

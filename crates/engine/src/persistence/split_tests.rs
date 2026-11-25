@@ -76,6 +76,7 @@ fn bare_board_migrates_to_current_folder_and_archive_bytes() {
 }
 
 /// Split and legacy forms retain identities, pin mappings, wire geometry and sheet names.
+/// The oldest split fixture opens; its entry point with the preceding format is refused.
 #[test]
 fn round_trip_and_legacy_migrations_have_identical_documents() {
     let expected = documents(&session());
@@ -91,8 +92,14 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
             include_bytes!("../../../app/tests/fixtures/split/two-resistors/library/symbols/starter/resistor.r1.json").as_slice(),
         ),
     ];
-    let old_documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
+    let old_documents: Documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
     assert_eq!(expected, encode_documents(decode_documents(&old_documents).unwrap()).unwrap());
+    let mut too_old = old_documents;
+    edit(&mut too_old, ENTRY_POINT, |entry| {
+        assert_eq!(entry["format"], OLDEST_READABLE_PROJECT_FORMAT);
+        entry["format"] = json!("pcbcraft-project/4");
+    });
+    assert!(matches!(decode_documents(&too_old), Err(refusal) if refusal == "project.json: unsupported project format pcbcraft-project/4"));
     let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap();
     assert_eq!(expected, encode_documents(old_archive.project).unwrap());
     for bytes in [

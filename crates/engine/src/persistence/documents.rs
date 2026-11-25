@@ -93,6 +93,8 @@ const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
 const OPTIONAL_BOARD_PROJECT_FORMAT: &str = "pcbcraft-project/9";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
+/// The oldest entry-point format accepted by the split project reader. This is not the write format.
+pub const OLDEST_READABLE_PROJECT_FORMAT: &str = PREVIOUS_PROJECT_FORMAT;
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
