@@ -411,6 +411,28 @@ fn malformed_document_is_an_error_not_a_clean_report() {
     }
 }
 
+/// Category and manufacturer-part contents do not affect the report; malformed files the check
+/// actually reads are refused with the file name.
+#[test]
+fn library_check_only_decodes_inspected_document_kinds() -> Result<(), crate::CommandError> {
+    let mut fixture = fixture();
+    let baseline = fixture.session.execute(CHECK, &json!({"documents":fixture.documents}))?;
+    assert_eq!(baseline["findings"], json!([]));
+    let truncated = "{";
+    for path in ["categories/truncated.json", "manufacturer-parts/truncated.json"] {
+        let mut documents = fixture.documents.clone();
+        documents.insert(path.into(), truncated.into());
+        assert_eq!(fixture.session.execute(CHECK, &json!({"documents":documents}))?, baseline, "{path}");
+    }
+    for path in ["library.json", "footprints/truncated.json", "symbols/truncated.json", "parts/truncated.json"] {
+        let mut documents = fixture.documents.clone();
+        documents.insert(path.into(), truncated.into());
+        let result = fixture.session.execute(CHECK, &json!({"documents":documents}));
+        assert!(matches!(&result, Err(crate::CommandError::InvalidParams(reason)) if reason.starts_with(path)), "{path}: {result:?}");
+    }
+    Ok(())
+}
+
 /// An unknown format, and a known one that does not match the authored holes, are errors.
 #[test]
 fn unsupported_or_mismatched_format_is_an_error() {

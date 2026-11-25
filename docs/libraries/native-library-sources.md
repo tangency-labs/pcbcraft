@@ -304,10 +304,14 @@ relative-path map as `library.load_source`), an optional footprint authoring
 writes no file, changes no project, source registration or history, and runs in
 read-only sessions and through MCP with `inspect: false`.
 
-The check decodes footprint, symbol and part documents structurally, so a
-document that strict loading rejects for a semantic defect can still be
-explained. Every footprint format this build reads is accepted, including
-footprints with plated slots. The current footprint format accepts any supported
+The check reads `library.json` and decodes footprint, symbol and part
+files structurally, so it can explain defects that strict loading rejects.
+It checks path and size limits for every file, but does not parse the contents
+of `categories/*.json` or `manufacturer-parts/*.json`. A clean report does not
+validate those files; use `library.load_source` to validate the whole source.
+
+Every footprint format this build reads is accepted, including footprints with
+plated slots. The current footprint format accepts any supported
 mix of holes; an older format must match the authored holes. Part documents and
 drafts must meet the [native format requirements](part-schema.md#native-format-requirements),
 including the format-specific rules for symbols, ratings and descriptive metadata.
@@ -318,12 +322,12 @@ deduplication; slotted pads are pads, and non-plated holes are not. Exact symbol
 references resolve in the transported documents first and then in the loaded
 catalog. A map entry for an unknown symbol terminal is refused, as is any mapping
 or unconnected-pad list on a package without a symbol. Missing assignments for
-real terminals still produce findings. Invalid JSON, unknown fields, repeated
-keys, invalid assignments, an unsupported or mismatched format, an unresolved
-reference, more than 1024 pads in one footprint,
-more than 64 packages in one part or 1024 terminals or pads in one package, and
-documents over the 1 MiB file limit are `invalid_params` errors, never a clean
-report.
+real terminals still produce findings. Invalid JSON, unknown fields and
+repeated keys in the files the check reads are `invalid_params` errors, never a
+clean report. Invalid assignments, an unsupported or mismatched format, an
+unresolved reference, more than 1024 pads in one footprint, or more than 64
+packages in one part or 1024 terminals or pads in one package also return
+`invalid_params`, as does any document over the 1 MiB file limit.
 
 The result has `capture_digest`, the SHA-256 of the canonical capture, the
 `stage` that ran, `findings`, `counts` of findings per severity (`error`,
