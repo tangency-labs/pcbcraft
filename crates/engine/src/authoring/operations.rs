@@ -79,8 +79,9 @@ impl Primitive {
 }
 /// Resolve a nonempty, distinct selection before mutating the candidate document.
 pub(super) fn selected(item: &Item, objects: &[u64]) -> Result<Vec<Primitive>, String> {
-    if objects.is_empty() || objects.len() > 512 {
-        return Err("Choose between one and 512 primitives.".into());
+    let limit = item.max_objects();
+    if objects.is_empty() || objects.len() > limit {
+        return Err(format!("Choose between one and {limit} primitives."));
     }
     let mut seen = std::collections::BTreeSet::new();
     objects
@@ -95,8 +96,9 @@ pub(super) fn selected(item: &Item, objects: &[u64]) -> Result<Vec<Primitive>, S
 }
 /// Allocate a bounded batch into a temporary candidate, giving copied electrical objects unused numbers.
 pub(super) fn paste(item: &mut Item, primitives: &[Primitive], offset: Point, cursor: &mut u64) -> Result<(), String> {
-    if primitives.is_empty() || item.objects.len().saturating_add(primitives.len()) > 512 {
-        return Err("A definition can contain at most 512 primitives.".into());
+    let limit = item.max_objects();
+    if primitives.is_empty() || item.objects.len().saturating_add(primitives.len()) > limit {
+        return Err(format!("A definition can contain at most {limit} primitives."));
     }
     for original in primitives {
         let mut primitive = original.translated(offset)?;
@@ -108,6 +110,83 @@ pub(super) fn paste(item: &mut Item, primitives: &[Primitive], offset: Point, cu
         let id = *cursor;
         *cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
         item.objects.insert(id, primitive);
+    }
+    Ok(())
+}
+
+/// Parameters for generating a ball-grid pad array from one seed pad.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BallGridSpec {
+    pub(super) columns: u16,
+    pub(super) rows: u16,
+    pub(super) column_step: Point,
+    pub(super) row_step: Point,
+    pub(super) skip_jedec: bool,
+}
+
+/// Generate a ball-grid pad array from one seed pad, naming rows with letters and columns with 1-based numbers.
+///
+/// The seed pad becomes cell `(0, 0)` (`A1`) and the remaining `rows * columns - 1` pads are allocated
+/// into `item`. Rejections leave the caller's committed session untouched because `item` is a candidate clone.
+pub(super) fn ball_grid_array(item: &mut Item, objects: &[u64], spec: BallGridSpec, cursor: &mut u64) -> Result<(), String> {
+    let BallGridSpec { columns, rows, column_step, row_step, skip_jedec } = spec;
+    if item.kind != Kind::Footprint {
+        return Err("Ball-grid numbering is only supported for footprint definitions.".into());
+    }
+    let [seed_id] = objects else {
+        return Err("Ball-grid numbering requires selecting a single pad.".into());
+    };
+    let Some(Primitive::Pad { pad: seed_pad }) = item.objects.get(seed_id).cloned() else {
+        return Err("Ball-grid numbering requires selecting a single pad.".into());
+    };
+    let zero = Point { x_nm: 0, y_nm: 0 };
+    if (columns > 1 && column_step == zero) || (rows > 1 && row_step == zero) {
+        return Err("Ball-grid array step must be nonzero along any axis with more than one cell.".into());
+    }
+    let names = ball_grid::generate_identifiers(rows, columns, skip_jedec)?;
+    let count = names.len();
+    let limit = item.max_objects();
+    if item.objects.len().saturating_add(count.saturating_sub(1)) > limit {
+        return Err(format!("Array exceeds the definition's {limit} primitive limit."));
+    }
+    let existing_pads = item.objects.values().filter(|p| matches!(p, Primitive::Pad { .. })).count();
+    if existing_pads.saturating_add(count.saturating_sub(1)) > footprint::MAX_PADS {
+        return Err(format!("Array exceeds the footprint's {} pad limit.", footprint::MAX_PADS));
+    }
+    let existing_other: std::collections::BTreeSet<&str> = item
+        .objects
+        .iter()
+        .filter(|(id, _)| *id != seed_id)
+        .filter_map(|(_, primitive)| match primitive {
+            Primitive::Pad { pad } => Some(pad.number.as_str()),
+            _ => None,
+        })
+        .collect();
+    if let Some(collision) = names.iter().find(|name| existing_other.contains(name.as_str())) {
+        return Err(format!("Ball-grid pad identifier `{collision}` is already used by another pad."));
+    }
+    let mut name_iter = names.into_iter();
+    for row in 0..rows {
+        for column in 0..columns {
+            let number = name_iter.next().ok_or("Ball-grid identifier count mismatch.")?;
+            if row == 0 && column == 0 {
+                if let Some(Primitive::Pad { pad }) = item.objects.get_mut(seed_id) {
+                    pad.number = number;
+                }
+                continue;
+            }
+            let axis = |a: i64, b: i64| {
+                i64::try_from(i128::from(a) * i128::from(column) + i128::from(b) * i128::from(row)).map_err(|_| "Array offset overflow.")
+            };
+            let offset = Point { x_nm: axis(column_step.x_nm, row_step.x_nm)?, y_nm: axis(column_step.y_nm, row_step.y_nm)? };
+            let mut primitive = Primitive::Pad { pad: seed_pad.clone() }.translated(offset)?;
+            if let Primitive::Pad { pad } = &mut primitive {
+                pad.number = number;
+            }
+            let id = *cursor;
+            *cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
+            item.objects.insert(id, primitive);
+        }
     }
     Ok(())
 }

@@ -531,7 +531,7 @@ staging, timeout/result checks and policy regressions are independently authored
 for this repository. The workflow retains existing pinned actions and adds the
 same pinned GitHub artifact upload/download actions used by that reference.
 
-`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so that notices file must include it.
+`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. The desktop preview packager generates `THIRD-PARTY-LICENSES.txt` from the platform-specific Cargo metadata and dependency license files. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so the packager includes its license text when the platform dependency graph contains that crate.
 
 The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspace.rs`,
 `picker` and `workspace_row`) follows SolidCraft's `workspace_menu` in
@@ -650,6 +650,15 @@ an opt-in WGPU root-window retirement request so a surviving editor keeps its
 native window when the original closes. The patch boundary and upgrade procedure
 are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
 ownership and the close/save policy remain in PCBcraft.
+
+## macOS Metal presentation
+
+PCBcraft's `surface_config` helper in `apps/pcbcraft/src/main.rs` comes from
+Warmbird's `apps/solidcraft/src/main.rs` change in SolidCraft at revision
+`28300caeab1a11ab2914a112ac33405e151c33dc` (MIT OR Apache-2.0). PCBcraft calls
+it when constructing its desktop window options, selecting the high-throughput
+surface preset on macOS and the low-latency preset on Windows and Linux.
+[SolidCraft PR #20572](https://github.com/tangency-labs/solidcraft/pull/20572)
 
 ## Wire endpoint attachment
 
@@ -1830,8 +1839,7 @@ are adapted from:
   `codesign` + `notarytool` workflow, and `hdiutil` retry loop.
 - `UCS-Care-Group/mailcraft` at commit
   `b1e2d1ce0aa9b1e780dcec57e658df261b5bc452` (MIT OR Apache-2.0): minimal
-  hardened-runtime `entitlements.plist`, DMG layout hooks, and CLI archive
-  packaging flow.
+  hardened-runtime `entitlements.plist` and DMG layout hooks.
 
 Changes for PCBCraft: set bundle identifier `io.tangencylabs.pcbcraft`,
 adapted desktop/CLI target names (`pcbcraft`, `pcbcraft-cli`) and `.pc`
@@ -1839,6 +1847,13 @@ document association, made `.icns` icon embedding optional until artwork
 is added, added absolute `CARGO_TARGET_DIR` resolution, added per-attempt
 keychain cleanup in `import-cert.sh`, and added input character validation
 for `VERSION` and `PCBCRAFT_BUILD_SHA` before `Info.plist` templating.
+
+## Linux DEB and RPM packaging
+
+The runtime dependency declarations in `packaging/linux/nfpm.yaml` are adapted
+from SolidCraft's `packaging/linux/nfpm.yaml` at revision
+`ec363a78f` (MIT OR Apache-2.0). PCBcraft declares the glibc version required
+by its own binaries and installs its own launcher, binaries, and notices.
 
 ## Directional pane splitting
 
@@ -1901,3 +1916,25 @@ The degree-two trace-chain graph, cooperative per-query topology preparation,
 soft bend hints, source-preserving path partitioning and independent chain/contact
 validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
 implementation, dependency or saved-format change was introduced.
+
+## Board substrate preview
+
+The desktop 3D render workspace uses the SolidCraft camera, shaded GPU
+viewport and egui background painter at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright
+2026 SolidCraft contributors). The view compass and board picker chrome use
+the existing licensed Craft UI toolkit in the same revision. PCBcraft owns
+the board-to-triangle conversion, the pane-local egui callback and board
+addressing. Separate callbacks are required because the shared egui
+callback holds one prepared picture per renderer. No component models or
+other external 3D assets are included.
+
+Spade 2.15.1 (MIT OR Apache-2.0), already used by the pinned SolidCore
+display tessellator, also triangulates the preview's bounded,
+non-intersecting board outlines and drill loops. The board's exact solid
+continues to use SolidCore.
+
+The 3D workspace uses the pinned SolidCraft `solidcraft-gpu` hardware
+path tracer, `solidcraft-render` image host and `solidcraft-geom` scene types
+(MIT OR Apache-2.0). PCBcraft supplies the board geometry, studio lighting,
+material settings and render controls.

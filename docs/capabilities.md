@@ -18,7 +18,7 @@ task guides, format references, design plans and verification records.
 - Full ERC/DRC [#47](https://github.com/tangency-labs/pcbcraft/issues/47)/#58, remaining copper-zone
   output [#57](https://github.com/tangency-labs/pcbcraft/issues/57), fabrication
   [#59](https://github.com/tangency-labs/pcbcraft/issues/59), advanced routing
-  [#85](https://github.com/tangency-labs/pcbcraft/issues/85) and 3D/STEP
+  [#85](https://github.com/tangency-labs/pcbcraft/issues/85) and assembled 3D models/STEP
   [#86](https://github.com/tangency-labs/pcbcraft/issues/86) are outside the first MVP.
 
 Issue numbers above refer to the

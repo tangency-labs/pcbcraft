@@ -127,7 +127,7 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         let reserved_format =
             crate::persistence::historical_documents(crate::persistence::diagnostic_snapshot(project.clone()), "pcbcraft-project/14");
         let error = decode_documents(&reserved_format).unwrap_err();
-        assert!(error.contains("Pinned part selections require project format"), "unexpected rejection: {error}");
+        assert!(error.contains("pinned part selections are not allowed in pcbcraft-project/14"), "unexpected rejection: {error}");
         assert!(docs.keys().any(|path| path.starts_with("library/parts/")));
         assert!(docs.keys().any(|path| path.starts_with("library/categories/")));
         assert!(docs.keys().any(|path| path.starts_with("library/manufacturer-parts/")));

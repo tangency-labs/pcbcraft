@@ -161,7 +161,7 @@ a document undo entry.
 
 ## Storage and limits
 
-Current board files use [format 42](../formats/native-project-storage.md#current-board-records).
+Current board files use [format 43](../formats/native-project-storage.md#current-board-records).
 Each zone is one JSON line in UUID order and contains only authored intent.
 Removing the final zone omits the array. Historical format 20 requires a
 nonempty `zones` array. Folder and archive codecs, recovery, and Undo/Redo

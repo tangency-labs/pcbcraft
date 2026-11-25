@@ -67,13 +67,13 @@ supported versions and deferred work before extending a format or consumer.
 | Object identities | [Identity inventory](formats/object-identity.md) |
 | Object-query parsing | [Syntax, trees and byte-offset diagnostics](design/object-queries.md), without evaluation or UI |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](formats/pin-pad-correspondence.md) |
-| Dimensional net classes | [Catalog and resolver](formats/net-classes.md) · [Assignments and topology reconciliation](formats/net-class-assignments.md) · [Routing and checking consumers](formats/net-class-consumers.md) |
+| Dimensional net classes | [Catalog and resolver](formats/net-classes.md) · [Assignments and topology reconciliation](formats/net-class-assignments.md) · [Routing and checking consumers](formats/net-class-consumers.md) · [Authored electrical intent](formats/electrical-intent.md) |
 | Part groups | [Catalog, membership and storage](formats/part-groups.md) |
 | Library records | [Symbol schema](libraries/symbol-schema.md) · [Footprint and placement schema](libraries/footprint-schema.md) · [Parts, categories and manufacturer records](libraries/part-schema.md), with [format-5 descriptive metadata](libraries/part-schema.md#descriptive-metadata-and-search) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](formats/quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](formats/hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](pcb/copper-clearance-query.md) · [Exact circular copper records](pcb/circular-copper-records.md) · [Straight via teardrop records](pcb/teardrop-records.md) · [Walkaround route planning](pcb/route-planning.md) |
-| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](design/geometry-kernel.md) |
+| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](design/geometry-kernel.md) · [3D model records, bindings and frames](design/3d-model-records.md) (proposed) · [Model record schema](schemas/model-v1.schema.json) |
 | Shared interface toolkit | [Craft UI migration and current pin](design/shared-ui-migration.md) |
 | Automation contracts | [MCP command API and errors](automation/command-api.md) · [Part commands](automation/part-commands.md) · [Board and connectivity commands](automation/board-commands.md) · [Craft control protocol](../crates/craft-control/README.md) |
 
@@ -81,6 +81,8 @@ supported versions and deferred work before extending a format or consumer.
 
 [Continuous integration](testing/continuous-integration.md) describes quick PR feedback,
 approval and affected native checks, deferred platform coverage and build caches.
+[Desktop builds and releases](testing/desktop-builds-and-releases.md)
+covers nightly downloads and the release checklist.
 
 These documents explain design decisions and staged work. Several combine
 delivered foundations with proposed extensions; they do not establish feature
@@ -90,6 +92,7 @@ availability by themselves.
 | --- | --- |
 | PCB hosting and physical representation | [Board workspace plan](design/board-workspace-plan.md) · [PCB representation and shared rules](design/pcb-representation.md) · [PCB layout design plan](design/pcb-layout-gaps.md) |
 | Library/provider architecture | [Library sources model](design/library-sources.md); native source behavior is documented in the guide above |
+| Team catalog and supplier data | [Read-only team catalog and provider records](design/team-catalog.md), a proposal for [#94](https://github.com/tangency-labs/pcbcraft/issues/94) |
 | Net identity policy | [Persistent net identity](design/net-identity.md), including broader multiboard requirements |
 | Earlier net-registry rollout | [Path to the registry](design/net-registry-path.md), retained as a planning record; implemented slices are linked under Reference and formats |
 | Sheet paper, title blocks and parameters | [Sheet frames, parameters and templates](design/sheet-frames-and-parameters.md), a proposal for [#46](https://github.com/tangency-labs/pcbcraft/issues/46) |

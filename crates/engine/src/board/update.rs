@@ -810,6 +810,10 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
     for footprint in &mut board.footprints {
         let package =
             proposed.components.get(&footprint.component).and_then(|component| component.package.as_ref()).ok_or("missing accepted package")?;
+        // A different physical definition must be marked again; matching pad labels are not proof of equal probe access.
+        if footprint.library != package.library || footprint.definition != package.definition || footprint.definition_revision != package.revision {
+            footprint.test_points.clear();
+        }
         footprint.library = package.library.clone();
         footprint.definition = package.definition.clone();
         footprint.definition_revision = package.revision;

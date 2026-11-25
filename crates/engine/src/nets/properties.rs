@@ -169,8 +169,7 @@ impl Session {
                     return Err(CommandError::InvalidParams("A derived net needs a current anchor.".into()));
                 };
                 let id = allocate(registry.records.len(), &mut ids)?;
-                registry.records.push(graph.networks[network].record(id, Some(anchor)).map_err(CommandError::InvalidParams)?);
-                registry.records.last_mut().expect("the net record was just appended")
+                registry.records.push_mut(graph.networks[network].record(id, Some(anchor)).map_err(CommandError::InvalidParams)?)
             };
             bindings.extend(additions.into_iter().map(|class| ClassBinding { class: *class, origin: record.id }));
             bindings.sort();

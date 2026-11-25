@@ -15,11 +15,14 @@ Board projects place `instances.json` beside the registered `board.json`.
 The instance document's `board` header must match the registered board UUID,
 and the reader rejects a second storage home.
 
-Current board-owned records use [instances/9](native-project-storage.md#board-instance-records).
-Historical instances/1 stores occurrences only. Instances/2–4 add support for
-the sparse net registry, class bindings and generated numbers. Instances/5 and
-/7 store expanded and compact memberships, respectively. Instances/8 requires
-pairs and allows either membership representation. All remain readable.
+Current board-owned records use [instances/12](native-project-storage.md#board-instance-records),
+with optional net wire appearance and [authored electrical intent](electrical-intent.md)
+on registry records. Historical instances/1 stores occurrences only. Instances/2–4
+add support for the sparse net registry, class bindings and generated numbers.
+Instances/5 and /7 store expanded and compact memberships, respectively.
+Instances/8 requires pairs and allows either membership representation.
+Instances/9 makes pairs optional and allows either membership representation.
+These historical formats remain readable with their supported project headers.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet

@@ -11,9 +11,10 @@ named anchors and hierarchy; the registry records identity and reconciliation.
 
 The current project entry point permits an optional registry in either
 instance home. Board-owned records use
-[instances/9](native-project-storage.md#board-instance-records) with optional
-[class bindings](net-class-assignments.md), numbers, pairs and either membership
-representation. Historical instances/2–5, /7 and /8 retain their existing
+[instances/12](native-project-storage.md#board-instance-records) with optional
+[class bindings](net-class-assignments.md), numbers, pairs, wire appearance,
+[authored electrical intent](electrical-intent.md) and either membership
+representation. Historical instances/2–5 and /7–/10 retain their existing
 validation rules. A numbered registry under the current format has a positive,
 unique `generated_number` on every record. Active, ambiguous and retired records
 reserve their numbers. An explicitly empty or malformed `net_registry` is
@@ -68,6 +69,10 @@ nonempty. Registries can be fully numbered or fully unnumbered. Existing class
 bindings, parameters, no-connect intent, membership and assembly profiles keep
 their validation rules. Removing the last pair omits the array and retains both
 current headers.
+
+[Authored electrical intent](native-project-storage.md#authored-electrical-intent)
+is an optional field on a net registry record in the current project format;
+it does not select a different instance header or affect wire appearance.
 
 At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one
