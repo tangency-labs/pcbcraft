@@ -6,17 +6,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
 };
-
-struct Scratch(PathBuf);
-
-impl Drop for Scratch {
-    /// Remove this test's private directory, including after an assertion failure.
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 /// Fingerprint the entire archive, including the files inside it and their metadata.
 fn fingerprint(bytes: &[u8]) -> u64 {
@@ -29,14 +19,14 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 /// The archive remains byte-identical after both operations, not just equivalent on decode.
 #[test]
 fn read_only_cli_leaves_the_archive_unchanged() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = scratch()?;
-    let project = dir.0.join("--review.pc");
+    let dir = tempfile::tempdir()?;
+    let project = dir.path().join("--review.pc");
     let mut editor = pcbcraft_engine::Session::default();
     editor.apply("project.new", &Default::default())?;
     let bytes = pcbcraft_engine::persistence::encode_packed(editor.snapshot().ok_or("missing synthetic project")?)?;
     fs::write(&project, &bytes)?;
 
-    let requests = dir.0.join("requests.jsonl");
+    let requests = dir.path().join("requests.jsonl");
     fs::write(
         &requests,
         concat!(
@@ -47,10 +37,10 @@ fn read_only_cli_leaves_the_archive_unchanged() -> Result<(), Box<dyn std::error
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_project\",\"arguments\":{}}}\n",
         ),
     )?;
-    let editable = Command::new(env!("CARGO_BIN_EXE_pcbcraft-cli")).current_dir(&dir.0).args(["mcp", "--project", "--review.pc"]).output()?;
+    let editable = Command::new(env!("CARGO_BIN_EXE_pcbcraft-cli")).current_dir(dir.path()).args(["mcp", "--project", "--review.pc"]).output()?;
     assert!(editable.status.success(), "{}", String::from_utf8_lossy(&editable.stderr));
     let reply = Command::new(env!("CARGO_BIN_EXE_pcbcraft-cli"))
-        .current_dir(&dir.0)
+        .current_dir(dir.path())
         .args(["mcp", "--read-only", "--project", "--review.pc"])
         .stdin(File::open(requests)?)
         .output()?;
@@ -66,14 +56,6 @@ fn read_only_cli_leaves_the_archive_unchanged() -> Result<(), Box<dyn std::error
     assert_eq!(fingerprint(&readback), fingerprint(&bytes));
     assert_eq!(readback, bytes);
     Ok(())
-}
-
-/// Create a private test directory without depending on platform-specific file APIs.
-fn scratch() -> std::io::Result<Scratch> {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map_err(std::io::Error::other)?.as_nanos();
-    let dir = std::env::temp_dir().join(format!("pcbcraft-read-only-{}-{nonce}", std::process::id()));
-    fs::create_dir(&dir)?;
-    Ok(Scratch(dir))
 }
 
 /// Include empty directories, every file name, and the bytes of every file (including locks).
@@ -98,8 +80,8 @@ fn inventory(root: &Path) -> std::io::Result<BTreeMap<PathBuf, Option<Vec<u8>>>>
 fn read_only_cli_does_not_lock_or_recover_a_split_project() -> Result<(), Box<dyn std::error::Error>> {
     use pcbcraft_engine::persistence::encode_documents;
 
-    let dir = scratch()?;
-    let root = dir.0.join("split");
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("split");
     let mut editor = pcbcraft_engine::Session::default();
     editor.apply("project.new", &Default::default())?;
     let original = encode_documents(editor.snapshot().ok_or("missing synthetic project")?)?;
@@ -109,11 +91,11 @@ fn read_only_cli_does_not_lock_or_recover_a_split_project() -> Result<(), Box<dy
         fs::write(file, bytes)?;
     }
     let run = |path: &Path| Command::new(env!("CARGO_BIN_EXE_pcbcraft-cli")).args(["mcp", "--read-only", "--project"]).arg(path).output();
-    let before = inventory(&dir.0)?;
-    assert!(!dir.0.join(".split.pcbcraft-lock").exists());
+    let before = inventory(dir.path())?;
+    assert!(!dir.path().join(".split.pcbcraft-lock").exists());
     let reply = run(&root.join("project.json"))?;
     assert!(reply.status.success(), "{}", String::from_utf8_lossy(&reply.stderr));
-    assert_eq!(inventory(&dir.0)?, before);
+    assert_eq!(inventory(dir.path())?, before);
 
     let changed = std::sync::Arc::new(editor.project().ok_or("missing synthetic project")?.renamed("After recovery")?);
     let changed = encode_documents(changed)?;
@@ -121,12 +103,12 @@ fn read_only_cli_does_not_lock_or_recover_a_split_project() -> Result<(), Box<dy
         if phase == "journal" { Err("simulated interruption".to_owned()) } else { Ok(()) }
     });
     assert!(matches!(interrupted, Err(ref message) if message.contains("simulated interruption")), "{interrupted:?}");
-    let pending = inventory(&dir.0)?;
+    let pending = inventory(dir.path())?;
     for path in [&root, &root.join("project.json")] {
         let refusal = run(path)?;
         assert!(!refusal.status.success());
         assert!(String::from_utf8_lossy(&refusal.stderr).contains("needs recovery"));
-        assert_eq!(inventory(&dir.0)?, pending);
+        assert_eq!(inventory(dir.path())?, pending);
     }
     assert_eq!(pcbcraft_storage::load(&root)?, changed);
     Ok(())

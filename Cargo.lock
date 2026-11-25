@@ -3007,6 +3007,7 @@ dependencies = [
  "pcbcraft-engine",
  "pcbcraft-mcp",
  "pcbcraft-storage",
+ "tempfile",
 ]
 
 [[package]]
