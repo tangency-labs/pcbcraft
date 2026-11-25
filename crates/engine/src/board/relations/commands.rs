@@ -468,17 +468,24 @@ impl Session {
     }
 
     /// Prepare once on a private Outer capture session. None of the allowlisted handlers
-    /// can publish to the live session or write the external clipboard.
+    /// can publish to the live session or write the external clipboard. Validate the client
+    /// intent before resolving or defaulting addresses so required targets cannot be inferred.
     fn preview_relation(&mut self, params: &Value, limit: usize) -> Result<Value, CommandError> {
         self.check_revision(params)?;
-        let Intent { command, params: mut args } = serde_json::from_value(params["intent"].clone()).map_err(invalid)?;
+        let Intent { command, params: args } = serde_json::from_value(params["intent"].clone()).map_err(invalid)?;
         let command = command.id();
+        let native = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?;
+        let mut args = Value::Object(args);
+        args["expected_revision"] = json!(self.revision);
+        crate::check_params(native, &args)?;
+        let Value::Object(mut args) = args else { return Err(invalid("intent params must be an object")) };
+        // Keep the outer revision out of the canonical intent digest.
+        args.remove("expected_revision");
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let target = snapshot.resolve_board(args.get("board").and_then(Value::as_str))?;
         if !snapshot.board.arcs.is_empty() {
             return Err(transaction::reason("arc_board", crate::board::arc::UNSUPPORTED, Value::Null));
         }
-        let native = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?;
         if native.params.iter().any(|p| p.name == "board") && args.get("board").is_none_or(Value::is_string) {
             args.insert("board".into(), json!(target.board));
         }
@@ -496,7 +503,6 @@ impl Session {
             )
         );
         args["expected_revision"] = json!(self.revision);
-        crate::check_params(native, &args)?;
         let mut capture = Session {
             libraries: self.libraries.clone(),
             project: Some(snapshot.clone()),

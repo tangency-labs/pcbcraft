@@ -544,6 +544,32 @@ impl crate::edits::EditObserver for Observe {
     }
 }
 
+/// Revision-only dispatch must not create an inaccessible token or displace a known one.
+#[test]
+fn a_generic_preview_requires_execute_and_preserves_current_token() -> Result<(), CommandError> {
+    let mut s = fixture(false);
+    let revision = s.revision();
+    let preview_request =
+        |fp| json!({"expected_revision":revision,"intent":{"command":crate::DELETE_FOOTPRINTS,"params":{"footprints":[format!("footprint-{fp}")]}}});
+    let [first, second] = {
+        let project = s.open_project()?;
+        [project.board.footprints()[0].id, project.board.footprints()[1].id].map(preview_request)
+    };
+
+    let original = s.execute(PREVIEW, &first)?;
+    let token = &original["relation_preview"]["token"];
+    let error = unchanged(&mut s, |s| s.apply(PREVIEW, &second).map(Value::from));
+    assert!(matches!(error, CommandError::Unavailable(message) if message.contains("Session::execute")));
+    s.execute(CANCEL, &json!({"token":token}))?;
+
+    let replacement = s.execute(PREVIEW, &second)?;
+    let replacement_token = &replacement["relation_preview"]["token"];
+    assert_ne!(replacement_token, token);
+    s.execute(CANCEL, &json!({"token":replacement_token}))?;
+    assert_eq!(s.revision(), revision);
+    Ok(())
+}
+
 /// Before approval there is no clipboard result, publication or observer event. Invalid, cancelled,
 /// wrong-route and replaced capabilities cannot publish and cannot revoke the current review.
 #[test]
@@ -819,13 +845,41 @@ fn a_eco_compat_lazy_checked_and_target() {
             let id = add(&mut s, "horizontal", origin(), a);
             run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
         }
-        let sy = s.project().unwrap().symbols.last().unwrap().id();
-        run(&mut s, crate::DELETE_SYMBOL, json!({"symbol":sy})).unwrap();
+        let removed = s.project().unwrap().symbols.last().unwrap();
+        let (symbol, component) = (removed.id(), removed.component);
+        run(&mut s, crate::DELETE_SYMBOL, json!({"symbol":symbol})).unwrap();
         let before = s.snapshot().unwrap();
         let target = before.board_target().unwrap();
-        let report = run(&mut s, update::PREVIEW_UPDATE, json!({"board":target.board})).unwrap()["board_update_preview"].clone();
+        let revision = s.revision();
+        let response = run(&mut s, update::PREVIEW_UPDATE, json!({"board":target.board})).unwrap();
+        let report = &response["board_update_preview"];
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
-        assert_eq!(report.get("candidate_digest").is_some(), related);
+        if related {
+            assert!(report.get("candidate_digest").is_some());
+        } else {
+            // Only the two freshly minted UUIDs come from the response. Bind the
+            // source digest to the pre-preview snapshot and pin the entire wire shape.
+            let fresh_uuid = |field: &Value| field.as_str().and_then(|text| text.parse::<Uuid>().ok()).filter(|id| !id.is_nil());
+            let plan_token = fresh_uuid(&report["plan_token"]);
+            let capture_id = fresh_uuid(&report["source"]["capture_id"]);
+            assert!(plan_token.is_some() && capture_id.is_some(), "missing or invalid preview or capture UUID");
+            let content_digest = update::capture_source(&before).unwrap().content_digest;
+            assert_eq!(
+                response,
+                json!({"revision":revision,"board_update_preview":{
+                    "plan_token":plan_token,"revision":revision,"project":target.project,"board":target.board,
+                    "source":{"capture_id":capture_id,"content_digest":content_digest},
+                    "changes":{"components":[{"kind":"removed","component":component}],"removed_nets":[],"added_nets":[],"blockers":[]},
+                    "can_apply":true,
+                    "component_details":{(format!("component-{component}")):{
+                        "accepted":{"library":"basic-components","definition":"resistor","revision":3,"reference":"R3","value":"R",
+                            "terminals":["1","2"],"package":{"library":"basic-components","definition":"resistor-0603","revision":4,
+                                "mapping":{"1":"1","2":"2"}}},
+                        "proposed":null
+                    }}
+                }})
+            );
+        }
         unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, json!({"board":Uuid::from_u128(42),"plan_token":report["plan_token"]})));
         unchanged(&mut s, |s| run(s, CANCEL, json!({"token":report["plan_token"]})));
         run(&mut s, update::CANCEL_UPDATE, json!({"plan_token":report["plan_token"]})).unwrap();
@@ -1578,6 +1632,27 @@ fn a_nest_raw_sites_are_explicit_and_unadvertised() {
     let error = unchanged(&mut s, |s| run(s, PREVIEW, request));
     assert!(matches!(&error, CommandError::InvalidParams(message) if message == "`pcb.cut` has no parameter `relation_stage`"), "{error:?}");
     run(&mut s, CANCEL, json!({"token":control["relation_preview"]["token"]})).unwrap();
+}
+
+/// A required board is rejected on omission even when the sole board is unambiguous.
+/// An optional board still defaults to the same canonical intent as an explicit address.
+#[test]
+fn a_preview_requires_declared_board_before_defaulting() -> Result<(), CommandError> {
+    let mut s = fixture(false);
+    let project = s.open_project()?;
+    let board = project.resolve_board(None)?.board;
+    let footprints = json!([format!("footprint-{}", project.board.footprints()[0].id)]);
+    let origin = json!({"kind":"point","x_nm":100,"y_nm":200});
+    let error = unchanged(&mut s, |s| run(s, PREVIEW, json!({"intent":{"command":crate::SET_PLACEMENT_ORIGIN,"params":{"origin":origin}}})));
+    assert!(matches!(error, CommandError::InvalidParams(message) if message == "`pcb.set_placement_origin` needs `board`"));
+    let explicit_origin = reviewed(&mut s, crate::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":origin}));
+    assert_eq!(explicit_origin["board"], json!(board));
+
+    let implicit = reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"footprints":footprints}));
+    let explicit = reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"board":board,"footprints":footprints}));
+    assert_eq!(implicit["board"], json!(board));
+    assert_eq!(implicit["intent_digest"], explicit["intent_digest"]);
+    Ok(())
 }
 
 /// F1 validation rejects `Kind::Gap` rows whose saved witness segments are perpendicular,

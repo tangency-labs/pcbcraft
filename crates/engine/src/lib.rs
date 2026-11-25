@@ -4080,6 +4080,8 @@ impl Session {
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
     /// Preview commands may replace runtime-only cached authority without an authored edit.
+    /// `pcb.preview_relation` requires [`Self::execute`] to return its token; `apply` refuses
+    /// it without replacing the current preview.
     /// Property and package dry runs validate a candidate without notifying the edit observer.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
@@ -4095,6 +4097,9 @@ impl Session {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
         if board::relations::commands::handles(id) {
+            if id == board::relations::commands::PREVIEW {
+                return Err(CommandError::Unavailable("Use Session::execute to preview a relation edit and receive its token.".into()));
+            }
             if id == board::relations::commands::APPLY && self.checked_relation_apply_has_clipboard(params) {
                 return Err(CommandError::Unavailable("Use the result-bearing execute entry point to apply a checked Cut.".into()));
             }
