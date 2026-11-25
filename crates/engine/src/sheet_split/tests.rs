@@ -425,6 +425,42 @@ fn sheet_named(s: &Session, name: &str) -> SheetTarget {
     s.project().unwrap().sheets().find(|sheet| sheet.name == name).unwrap().target
 }
 
+/// A third sheet's GND label cannot reconnect the parent resistor after its wire is cut.
+#[test]
+fn a_third_sheet_ground_needs_a_port_for_the_cut_parent_wire() -> Result<(), CommandError> {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({}))?;
+    let part = resistor(&mut s, 0, 0);
+    let gnd = ground(&mut s, 40 * GRID_NM, 0);
+    let parent = s.open_project()?.sheet_target();
+    connect(&mut s, pin(&part, "2"), pin(&gnd, "1"));
+    apply(&mut s, CREATE_SHEET, json!({"name":"Other"}));
+    let other = sheet_named(&s, "Other");
+    apply(&mut s, net_labels::ADD, json!({"sheet":other.id(),"name":"GND","style":"global","x_nm":0,"y_nm":0}));
+
+    let Some(before) = s.snapshot() else { panic!("expected an open project") };
+    let params = json!({"sheet":parent.id(),"items":{"symbols":[gnd],"wires":[]},"name":"Split","expected_revision":s.revision()});
+    let report = s.execute(PREVIEW, &params)?;
+    let preview = &report["split_preview"];
+    assert_eq!(preview["cut_wires"].as_array().map(Vec::len), Some(1));
+    let Some([port]) = preview["ports"].as_array().map(Vec::as_slice) else { panic!("expected one GND port: {preview}") };
+    assert_eq!(port["name"], "GND");
+    assert_eq!(port["generated"], false);
+    assert_eq!(preview["global_nets"], json!([]));
+
+    s.apply(SPLIT, &params)?;
+    let Some(after) = s.snapshot() else { panic!("expected the split project") };
+    let Some(child) = after.for_sheet(sheet_named(&s, "Split")) else { panic!("expected the new child sheet") };
+    let [label] = child.hierarchical_labels() else { panic!("expected the previewed GND port") };
+    assert_eq!(port["name"], label.name.as_str());
+    let resistor_net = net_of(&s, terminal(&part, "2"));
+    assert!(resistor_net.is_some());
+    assert_eq!(resistor_net, net_of(&s, WireEndpoint::SheetPin(label.id)));
+    assert_eq!(resistor_net, net_of(&s, terminal(&gnd, "1")));
+    assert!(same_netlist(before.borrowed_electrical_connectivity(), after.borrowed_electrical_connectivity()));
+    Ok(())
+}
+
 /// Splitting the fixture moves exactly the previewed symbols onto a new child sheet with their
 /// IDs, references and positions, adds one hierarchical label and sheet pin per previewed port,
 /// keeps every terminal on its net, and is one undo step that undo and redo replay exactly.
