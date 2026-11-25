@@ -566,6 +566,54 @@ mod native {
     #[cfg(test)]
     mod failure_tests {
         use super::*;
+        use pcbcraft_engine::board::track::preparation::CopperEditJob;
+
+        /// Cancel after the worker has entered its first batch, then wait for completion.
+        /// The gate holds the real job in its current phase until the cancellation is sent.
+        fn cancel_copper_worker(job: CopperEditJob) -> Completion<<CopperEditJob as Work>::Output> {
+            struct Gated {
+                job: CopperEditJob,
+                first_batch: Option<(mpsc::SyncSender<()>, Receiver<()>)>,
+            }
+            impl Work for Gated {
+                type Output = <CopperEditJob as Work>::Output;
+                fn source(&self) -> &CheckSource {
+                    Work::source(&self.job)
+                }
+                fn progress(&self) -> CheckProgress {
+                    Work::progress(&self.job)
+                }
+                /// The first batch parks until released and does no work, returning to the
+                /// worker's cancellation check. Later batches run the real edit preparation.
+                fn step(&mut self, budget: usize) -> bool {
+                    if let Some((entered, release)) = self.first_batch.take() {
+                        entered.send(()).unwrap();
+                        release.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                        return false;
+                    }
+                    Work::step(&mut self.job, budget)
+                }
+                fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+                    Work::take_output(&mut self.job)
+                }
+            }
+            let (entered_tx, entered) = mpsc::sync_channel(1);
+            let (release, release_rx) = mpsc::sync_channel(1);
+            let mut cancelled = Running::start(Request { id: 1, job: Gated { job, first_batch: Some((entered_tx, release_rx)) } });
+            entered.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            assert!(cancelled.poll().is_none());
+            cancelled.cancel();
+            release.send(()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Some(done) = cancelled.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+
         /// A disconnected completion channel cannot be mistaken for a clean report.
         #[test]
         fn disconnected_worker_reports_failure() {
@@ -674,54 +722,8 @@ mod native {
             let revision = session.revision();
             let params = serde_json::json!({"board":target.board,"tracks":tracks,"dry_run":false,"expected_revision":revision});
 
-            // Cancel a running native worker and confirm the board stays untouched and slots clear.
-            // The gate holds the worker inside its first batch until cancellation is signalled,
-            // so a worker that ignored cancellation would return the prepared edit instead.
-            struct Gated {
-                job: pcbcraft_engine::board::track::preparation::CopperEditJob,
-                entered: Option<mpsc::SyncSender<()>>,
-                release: Option<Receiver<()>>,
-            }
-            impl Work for Gated {
-                type Output = <pcbcraft_engine::board::track::preparation::CopperEditJob as Work>::Output;
-                fn source(&self) -> &CheckSource {
-                    Work::source(&self.job)
-                }
-                fn progress(&self) -> CheckProgress {
-                    Work::progress(&self.job)
-                }
-                /// The first batch parks until released and does no work, returning to the
-                /// worker's cancellation check; later batches run the real merge preparation.
-                fn step(&mut self, budget: usize) -> bool {
-                    if let Some(release) = self.release.take() {
-                        if let Some(entered) = self.entered.take() {
-                            entered.send(()).unwrap();
-                        }
-                        release.recv().unwrap();
-                        return false;
-                    }
-                    Work::step(&mut self.job, budget)
-                }
-                fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
-                    Work::take_output(&mut self.job)
-                }
-            }
             let job = session.prepare_copper_edit(pcbcraft_engine::MERGE_TRACKS, &params).unwrap();
-            let (entered_tx, entered) = mpsc::sync_channel(1);
-            let (release, release_rx) = mpsc::sync_channel(1);
-            let mut cancelled = Running::start(Request { id: 1, job: Gated { job, entered: Some(entered_tx), release: Some(release_rx) } });
-            entered.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-            assert!(cancelled.poll().is_none());
-            cancelled.cancel();
-            release.send(()).unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            let completion = loop {
-                if let Some(done) = cancelled.poll() {
-                    break done;
-                }
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::yield_now();
-            };
+            let completion = cancel_copper_worker(job);
             assert!(!completion.retryable());
             assert!(matches!(completion.report, Ok(None)));
             assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
@@ -846,15 +848,7 @@ mod native {
             assert!(job.progress().completed > 0);
             assert!(job.progress().completed < job.progress().total);
 
-            let mut running = Running::start(Request { id: 1, job });
-            running.cancel();
-            let completion = loop {
-                if let Some(done) = running.poll() {
-                    break done;
-                }
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::yield_now();
-            };
+            let completion = cancel_copper_worker(job);
             assert!(matches!(completion.report, Ok(None)));
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
             let reacquired = WorkerSlot::acquire();
