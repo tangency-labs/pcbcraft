@@ -425,6 +425,68 @@ fn sheet_named(s: &Session, name: &str) -> SheetTarget {
     s.project().unwrap().sheets().find(|sheet| sheet.name == name).unwrap().target
 }
 
+/// A port without a cut wire must stay in range even at the left edge of the sheet.
+#[test]
+fn split_places_a_port_with_no_cut_wire_inside_the_coordinate_boundary() -> Result<(), CommandError> {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({}))?;
+    let part = resistor(&mut s, 0, 0);
+    let sheet = s.open_project()?.sheet_target();
+    local_label(&mut s, sheet, terminal(&part, "1"), "EDGE");
+    apply(&mut s, net_labels::ADD, json!({"name":"EDGE","style":"local","x_nm":-MAX_CENTER_NM,"y_nm":0}));
+    let Some(label) = s.open_project()?.net_labels().last() else { panic!("expected the boundary label") };
+    assert_eq!(label.at.x_nm, -MAX_CENTER_NM);
+    let mut params = json!({"items":{"symbols":[],"wires":[],"net_labels":[label.object_id()]},"name":"Edge","expected_revision":s.revision()});
+    let report = s.execute(PREVIEW, &params)?;
+    assert_eq!(report["split_preview"]["cut_wires"], json!([]));
+    assert_eq!(report["split_preview"]["ports"][0]["name"], "EDGE");
+    params["x_nm"] = json!(0);
+    params["y_nm"] = json!(20 * GRID_NM);
+    s.apply(SPLIT, &params)?;
+    let Some(child) = s.open_project()?.for_sheet(sheet_named(&s, "Edge")) else { panic!("expected the new child sheet") };
+    let [port] = child.hierarchical_labels() else { panic!("expected the EDGE port") };
+    assert_eq!(port.at.x_nm, -MAX_CENTER_NM + 2 * GRID_NM);
+    assert!(crate::wire::valid_point(&port.at));
+    let net = net_of(&s, terminal(&part, "1"));
+    assert!(net.is_some());
+    assert_eq!(net, net_of(&s, WireEndpoint::SheetPin(port.id)));
+    Ok(())
+}
+
+/// Only the selected markers whose owners move are listed as moving; an identity that
+/// does not exist on this sheet is still refused before either preview or apply.
+#[test]
+fn split_reports_selected_pin_markers_on_both_sides() -> Result<(), CommandError> {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({}))?;
+    let moving = resistor(&mut s, 0, 0);
+    resistor(&mut s, 40 * GRID_NM, 0);
+    let project = s.open_project()?;
+    let [a, b] = project.symbols() else { panic!("expected two symbols") };
+    let targets = [json!({"part":a.component_id(),"terminal":"1"}), json!({"part":b.component_id(),"terminal":"1"})];
+    let parent = project.sheet_target();
+    for target in &targets {
+        apply(&mut s, crate::no_connect::SET, json!({"target":target,"marked":true}));
+    }
+    let params = json!({"items":{"symbols":[moving],"wires":[],"no_connects":targets},"name":"Split","expected_revision":s.revision()});
+    let mut unknown = params.clone();
+    unknown["items"]["no_connects"][0]["part"] = json!("component-999999");
+    assert!(s.execute(PREVIEW, &unknown).is_err());
+    assert!(s.apply(SPLIT, &unknown).is_err());
+    let report = s.execute(PREVIEW, &params)?;
+    assert_eq!(report["split_preview"]["no_connects"], json!([targets[0]]));
+    assert_eq!(report["split_preview"]["staying_no_connects"], json!([targets[1]]));
+    s.apply(SPLIT, &params)?;
+    let after = s.open_project()?;
+    let child = sheet_named(&s, "Split");
+    for (target, sheet) in targets.iter().zip([child, parent]) {
+        let Some(view) = after.for_sheet(sheet) else { panic!("expected both sheets") };
+        let Some(target) = Attachment::parse(target) else { panic!("expected a pin marker") };
+        assert!(view.has_no_connect_attachment(&target));
+    }
+    Ok(())
+}
+
 /// A third sheet's GND label cannot reconnect the parent resistor after its wire is cut.
 #[test]
 fn a_third_sheet_ground_needs_a_port_for_the_cut_parent_wire() -> Result<(), CommandError> {
@@ -674,6 +736,12 @@ fn split_places_the_sheet_symbol_and_refuses_bad_requests() {
             "at least one symbol or net label",
         ),
         (json!({"items":items,"name":"Filter","x_nm":0,"expected_revision":revision}), ErrorCode::InvalidParams, "must be given together"),
+        (json!({"items":items,"name":"Filter","y_nm":0,"expected_revision":revision}), ErrorCode::InvalidParams, "must be given together"),
+        (
+            json!({"items":items,"name":"Filter","x_nm":null,"y_nm":null,"expected_revision":revision}),
+            ErrorCode::InvalidParams,
+            "must be given together",
+        ),
         (json!({"items":items,"name":"Filter","expected_revision":revision + 1}), ErrorCode::StaleRevision, "revision"),
         (json!({"items":items,"name":taken,"expected_revision":revision}), ErrorCode::InvalidParams, "already exists"),
         (json!({"items":{"symbols":[],"wires":[]},"name":"Filter","expected_revision":revision}), ErrorCode::InvalidParams, "selection must contain"),

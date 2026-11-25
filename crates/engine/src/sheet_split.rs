@@ -19,7 +19,7 @@ use crate::{
     clipboard::allocate,
     hierarchy::{self, Direction, MAX_LABELS, SheetSymbol},
     no_connect::Attachment,
-    schematic::{Connectivity, ElectricalType, GRID_NM, Point, Wire, WireEndpoint, wiring::Terminal},
+    schematic::{Connectivity, ElectricalType, GRID_NM, MAX_CENTER_NM, Point, Wire, WireEndpoint, wiring::Terminal},
     selection::Selection,
     sheets::MAX_SHEETS,
 };
@@ -417,7 +417,7 @@ fn on_sheet(project: &Project, index: usize, end: WireEndpoint) -> bool {
         return false;
     };
     match end {
-        WireEndpoint::Terminal(terminal) => sheet.symbols.iter().any(|symbol| symbol.ordinal == terminal.symbol),
+        WireEndpoint::Terminal(terminal) => sheet.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).is_ok(),
         WireEndpoint::Junction(id) => sheet.junctions.contains_key(&id),
         WireEndpoint::NetLabel(id) => sheet.net_labels.iter().any(|label| label.id == id),
         WireEndpoint::Label(id) => sheet.labels.iter().any(|label| label.id == id),
@@ -497,7 +497,9 @@ fn split(project: &Project, plan: &Preview, anchor: Option<Point>, cursor: &mut 
             .or_else(|| {
                 let [inside, _] = &port.members;
                 let first = inside.iter().find_map(|end| project.endpoint_position(*end))?;
-                Some(Point { x_nm: first.x_nm.saturating_sub(2 * GRID_NM), y_nm: first.y_nm })
+                let left = first.x_nm.saturating_sub(2 * GRID_NM);
+                let x_nm = if left < -MAX_CENTER_NM { first.x_nm.saturating_add(2 * GRID_NM) } else { left };
+                Some(Point { x_nm: x_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM), y_nm: first.y_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM) })
             })
             .ok_or_else(|| CommandError::Unavailable(format!("port {} has no position on this sheet", port.name)))?;
         labels.push(hierarchy::Label { id: allocate(cursor)?, name: port.name.clone(), direction: port.direction, at, slot: free });
@@ -593,7 +595,6 @@ impl Session {
         let name = check_new_sheet(project, params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".into()))?;
         items.validate(&view)?;
-        items.validate_marker_owners(&view)?;
         let preview = plan(&view, &items, name)?;
         Ok(json!({"revision":self.revision(), "split_preview":preview}))
     }
@@ -608,11 +609,14 @@ impl Session {
         let name = check_new_sheet(&view, params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".into()))?;
         items.validate(&view)?;
-        items.validate_marker_owners(&view)?;
-        let anchor = match (params.get("x_nm").and_then(Value::as_i64), params.get("y_nm").and_then(Value::as_i64)) {
-            (Some(x_nm), Some(y_nm)) => Some(Point { x_nm, y_nm }),
+        let anchor = match (params.get("x_nm"), params.get("y_nm")) {
             (None, None) => None,
-            _ => return Err(CommandError::InvalidParams("`x_nm` and `y_nm` must be given together".into())),
+            (x, y) => {
+                let (Some(x_nm), Some(y_nm)) = (x.and_then(Value::as_i64), y.and_then(Value::as_i64)) else {
+                    return Err(CommandError::InvalidParams("`x_nm` and `y_nm` must be given together as integers".into()));
+                };
+                Some(Point { x_nm, y_nm })
+            }
         };
         let plan = plan(&view, &items, name)?;
         let mut cursor = self.next_object_id()?;

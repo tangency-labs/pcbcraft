@@ -22,6 +22,8 @@ pub(super) struct Plan {
     net_labels: Vec<Value>,
     /// Selected wires with neither end moving; they stay on this sheet.
     staying_wires: Vec<Value>,
+    /// Selected no-connect markers whose pin or wire end stays on this sheet.
+    staying_no_connects: Vec<Value>,
     ports: Vec<PortRow>,
     global_nets: Vec<GlobalRow>,
     split_part_instances: Vec<SplitRow>,
@@ -76,6 +78,11 @@ fn count(n: usize, one: &str, many: &str) -> String {
 impl PcbApp {
     /// Open the form for the active view's current selection. Nothing changes until Move to Sheet.
     pub(super) fn begin_split_sheet(&mut self) {
+        self.begin_split_sheet_with_items(self.views.active.schematic.selection.clone());
+    }
+
+    /// Open the split form for the supplied items; a context action can name its own target.
+    pub(super) fn begin_split_sheet_with_items(&mut self, items: Selection) {
         if !matches!(self.dialog, Dialog::None) || self.views.active.schematic.tool.is_some() {
             return;
         }
@@ -85,7 +92,6 @@ impl PcbApp {
         let Some(project) = self.views.active.snapshot(&self.session) else {
             return;
         };
-        let items = self.views.active.schematic.selection.clone();
         // Wires and markers follow what they attach to, so they cannot be moved on their own.
         if items.symbols.is_empty() && items.net_labels.is_empty() {
             return;
@@ -164,6 +170,10 @@ impl PcbApp {
                     if !plan.staying_wires.is_empty() {
                         let wires = count(plan.staying_wires.len(), "selected wire stays", "selected wires stay");
                         ui.label(format!("{wires} on this sheet; a wire moves only with an end that moves."));
+                    }
+                    if !plan.staying_no_connects.is_empty() {
+                        let markers = count(plan.staying_no_connects.len(), "selected no-connect marker stays", "selected no-connect markers stay");
+                        ui.label(format!("{markers} on this sheet."));
                     }
                     if plan.ports.is_empty() {
                         ui.label("No net crosses the new sheet's edge, so it needs no ports.");

@@ -1824,6 +1824,7 @@ impl PcbApp {
                 self.message = Some("No-connect marks attach to a pin lead or an open wire end.".into())
             }
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
+            (None, Click::SplitNetLabel(id)) => self.begin_split_sheet_with_items(Selection::one_net_label(id)),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
                 self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });

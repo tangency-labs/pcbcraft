@@ -12070,6 +12070,14 @@
     "schematic.split_sheet": {
       "params": {
         "additionalProperties": false,
+        "dependentRequired": {
+          "x_nm": [
+            "y_nm"
+          ],
+          "y_nm": [
+            "x_nm"
+          ]
+        },
         "properties": {
           "expected_revision": {
             "minimum": 0,

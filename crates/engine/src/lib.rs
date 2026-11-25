@@ -940,6 +940,9 @@ impl Command {
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == sheet_split::SPLIT {
+            schema["dependentRequired"] = json!({"x_nm":["y_nm"], "y_nm":["x_nm"]});
+        }
         if self.id == RESHAPE_TRACKS {
             schema["if"] = json!({"required":["mode"]});
             schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});

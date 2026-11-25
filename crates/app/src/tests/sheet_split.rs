@@ -179,6 +179,56 @@ fn open_from_canvas(h: &mut Harness<'_, PcbApp>) {
     assert!(matches!(h.state().dialog, Dialog::SplitSheet(_)));
 }
 
+/// Right-clicking a label targets that label, even when a different object was selected.
+#[test]
+fn split_form_opens_for_the_net_label_under_the_context_menu() {
+    let mut h = split_harness();
+    let app = h.state_mut();
+    let previous = app.views.active.schematic.selection.clone();
+    app.run(
+        pcbcraft_engine::net_labels::ADD,
+        &json!({"name":"MOVE_ME","style":"local","x_nm":0,"y_nm":25_400_000,"expected_revision":app.session.revision()}),
+    );
+    app.select(previous);
+    let Some(label) = app.session.project().and_then(|project| project.net_labels().last()) else { panic!("expected a net label") };
+    let (id, position) = (label.id, label.at);
+    h.run();
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    let at = h.state().views.active.camera.screen(position, canvas);
+    h.hover_at(at);
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    click(&mut h, "Move to New Sheet…");
+    let Dialog::SplitSheet(edit) = &h.state().dialog else { panic!("expected the split form") };
+    assert_eq!(edit.items, Selection::one_net_label(id));
+    h.get_by_label("Moves 1 net label to a new sheet; a sheet symbol takes its place here.");
+}
+
+/// Show the marker notice even when no selected wire stays, and omit it otherwise.
+#[test]
+fn split_form_counts_a_selected_no_connect_marker_that_stays() {
+    let mut h = split_harness();
+    const NOTICE: &str = "1 selected no-connect marker stays on this sheet.";
+    open(&mut h);
+    assert!(h.query_by_label(NOTICE).is_none());
+    click(&mut h, "Cancel");
+
+    let app = h.state_mut();
+    let Some(other) = app.session.project().and_then(|project| project.symbols().get(1)) else { panic!("expected the second resistor") };
+    let target = pcbcraft_engine::no_connect::Target { part: other.component_id(), terminal: "2".into() };
+    let mut items = app.views.active.schematic.selection.clone();
+    app.run(pcbcraft_engine::no_connect::SET, &json!({"target":target,"marked":true,"expected_revision":app.session.revision()}));
+    items.no_connects.insert(target.into());
+    app.select(items);
+    h.run();
+    open(&mut h);
+    h.get_by_label(NOTICE);
+    assert!(h.query_by_label_contains("selected wire stays").is_none());
+}
+
 /// Wires and markers follow what they attach to, so with only a wire selected, or nothing,
 /// Move to New Sheet… is unavailable in the Sheets menu and the form does not open.
 #[test]

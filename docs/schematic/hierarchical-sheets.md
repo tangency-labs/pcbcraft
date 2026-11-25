@@ -101,18 +101,23 @@ group's menu. The form suggests a free sheet name and shows the preview for the
 name in the field: how many symbols, wires, junctions and net labels move, the
 ports with their names and directions (generated names are marked), the nets
 that stay connected by a global or power name, and any part whose units end up
-on two sheets. Selected wires that stay behind are counted. Without a selected
-symbol or net label the command is unavailable. A taken or empty name shows the reason and offers no move. Nothing
+on two sheets. Selected wires and no-connect markers that stay behind are
+counted. You can also right-click a net label to move that label. Without a
+symbol or net label to move, the command is unavailable. A taken or empty name shows the reason and offers no move. Nothing
 changes until **Move to Sheet**; Cancel leaves the project as it was.
 
 `schematic.split_sheet` applies the same plan with the same parameters plus
 `expected_revision`, and optionally `x_nm` and `y_nm` (given together) for the
 new sheet symbol; by default it sits where the moved objects were. Symbols, part
-instances, wires, junctions and net labels keep their IDs, references and
-positions on the new child sheet. Each port becomes a hierarchical label in the
-child, wired to the inside members, and a pin on the sheet symbol, wired to the
-outside members; a cut wire's outside end becomes the label's place. Global and
-power nets keep connecting by name. The split is one undo step, and it is
+instances, junctions and net labels keep their IDs, references and positions on
+the new child sheet. Wires that move whole keep their IDs and routes. Each port
+becomes a hierarchical label in the child and a matching pin on the sheet
+symbol. When a net has cut wires, the label is placed at the first cut wire's
+outside endpoint. Cut wires on that net keep their IDs but are redirected to
+that label; bends may be cleared if an endpoint moves. New parent wires connect
+the outside members to the sheet pin. Cut wires on global or power nets that
+need no port are removed; the two sides reconnect through their named anchors.
+The split is one undo step, and it is
 refused, leaving the project and revision unchanged, if the resulting netlist
 would group any terminals differently or drop a net name. A net that had only
 a generated number gains the port name, so a later board update reports it as

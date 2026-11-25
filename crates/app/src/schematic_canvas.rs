@@ -143,6 +143,7 @@ pub(crate) enum Click {
     EditField(fields::Drag),
     FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
+    SplitNetLabel(u64),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
