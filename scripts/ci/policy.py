@@ -7,14 +7,14 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 
-OUTPUTS = ("native", "windows", "windows_full", "web", "wasi", "licenses")
+OUTPUTS = ("native", "windows", "windows_full", "macos", "web", "wasi", "licenses")
 APPROVAL = "approved-for-ci"
 LIGHT_ROOT = frozenset({"README.md", "CONTRIBUTING.md", "VISION.md", "AGENTS.md",
                         "ATTRIBUTION.md", "CHANGELOG.md", "LICENSE-MIT", "LICENSE-APACHE"})
 
 
 def full() -> dict[str, bool]:
-    """Every check, including the complete Windows suite, for qualification or uncertainty."""
+    """Every platform check for qualification or uncertainty."""
     return dict.fromkeys(OUTPUTS, True)
 
 

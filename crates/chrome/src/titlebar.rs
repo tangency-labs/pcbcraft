@@ -113,7 +113,8 @@ pub fn resize_window_edges(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     finish_native_grab(&ctx);
     ctx.move_to_top(interaction_layer());
-    if is_maximized(ui) || ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
+    // The macOS viewport retains AppKit's resize frame around its full-size content.
+    if cfg!(target_os = "macos") || is_maximized(ui) || ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
         return;
     }
     let window = ctx.content_rect();

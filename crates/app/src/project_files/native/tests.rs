@@ -89,14 +89,16 @@ fn archive_folder_publishes_before_cleanup_and_preserves_deflate() {
         panic!("must never attempt cleanup without opt-in")
     });
     assert!(matches!(complete(&mut files, &mut session, kept), Some(Update::Message(notice)) if notice == "Project saved"));
-    assert_eq!(files.previous(&session.snapshot().unwrap()).unwrap().1.path(), kept_archive);
+    let saved_target = files.previous(&session.snapshot().unwrap()).unwrap().1;
+    // The temporary directory may use an alias that the file worker expands.
+    assert_eq!(fs::canonicalize(saved_target.path()).unwrap(), fs::canonicalize(&kept_archive).unwrap());
     let kept_archive = decode_packed(&fs::read(kept_archive).unwrap()).unwrap();
     assert!(kept_archive.deflated);
     assert_eq!(positions(&kept_archive.project)[1].x_nm, R2_X + STEP);
     assert_eq!(fs::read(source.join(ENTRY_POINT)).unwrap(), original_bytes);
 
     let blocked = save_new_with(session.snapshot().unwrap(), Some(&old), retire, destination.clone(), |root, baseline| {
-        assert_eq!(root, source);
+        assert_eq!(fs::canonicalize(root).unwrap(), fs::canonicalize(&source).unwrap());
         assert_eq!(baseline[ENTRY_POINT], original_bytes);
         let published = decode_packed(&fs::read(&destination).unwrap()).unwrap();
         assert!(published.deflated);
