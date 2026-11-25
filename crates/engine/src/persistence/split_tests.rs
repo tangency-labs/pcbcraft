@@ -121,7 +121,9 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
         assert_eq!(entry["format"], OLDEST_READABLE_PROJECT_FORMAT);
         entry["format"] = json!("pcbcraft-project/4");
     });
-    assert!(matches!(decode_documents(&too_old), Err(refusal) if refusal == "project.json: unsupported project format pcbcraft-project/4"));
+    assert!(
+        matches!(decode_documents(&too_old), Err(refusal) if refusal == "project.json: unsupported project format or incompatible board registration for pcbcraft-project/4.")
+    );
     let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap();
     assert_eq!(expected, encode_documents(old_archive.project).unwrap());
     for bytes in [
