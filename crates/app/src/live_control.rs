@@ -861,6 +861,7 @@ impl Editor for LiveEditor<'_> {
     /// Hold commands while an inline edit, dialog, file operation or project close owns the editor, as the
     /// GUI disables its controls. Catalog mode/panel commands can use its own modal controls,
     /// including closing the catalog through the same panel command that opened it.
+    /// The ERC dialog also permits reading its report, without bypassing other owners.
     /// New Project waits for unsaved changes to be saved or
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
@@ -888,10 +889,10 @@ impl Editor for LiveEditor<'_> {
         #[cfg(target_arch = "wasm32")]
         let item_delete_review = false;
         let pin_remap_review = command == "app.library_pin_remap" && matches!(app.dialog, Dialog::LibraryPinRemap(_));
+        let erc_report = command == pcbcraft_engine::erc::REPORT && matches!(app.dialog, Dialog::NoConnects(_));
+        let dialog_blocks = !matches!(app.dialog, Dialog::None) && !item_delete_review && !pin_remap_review && !erc_report;
         // file.abandon is how a client releases the editor from a stalled file job.
-        if command != "file.abandon"
-            && ((!matches!(app.dialog, Dialog::None) && !item_delete_review && !pin_remap_review) || app.files.busy() || app.project_action_pending())
-        {
+        if command != "file.abandon" && (dialog_blocks || app.files.busy() || app.project_action_pending()) {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }
         if app.parts.is_modal() && !matches!(command, "window.set_catalog_mode" | "window.set_panel") {

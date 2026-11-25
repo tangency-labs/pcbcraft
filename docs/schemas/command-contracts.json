@@ -11578,6 +11578,14 @@
         "type": "object"
       }
     },
+    "schematic.erc_report": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
     "schematic.heal_wires": {
       "params": {
         "additionalProperties": false,
@@ -12987,6 +12995,14 @@
           "symbol",
           "expected_revision"
         ],
+        "type": "object"
+      }
+    },
+    "schematic.run_erc": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
         "type": "object"
       }
     },

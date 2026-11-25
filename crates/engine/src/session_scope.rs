@@ -2,7 +2,7 @@
 
 use crate::{
     CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS, PREVIEW_ASSEMBLY_PROFILE,
-    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources, net_classes, netlist,
+    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, erc, library::sources, net_classes, netlist,
     nets, no_connect, parameters, part_groups, sheet_split, sheets,
 };
 
@@ -52,11 +52,14 @@ impl Session {
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard. Export/publication preparation does
 /// not write files, netlist comparison only reads the text it is given, and the annotation
-/// and split previews cache no proposal. Loading/removing library sources and Cut are not reads.
+/// and split previews cache no proposal. Running ERC replaces only the session's runtime report.
+/// Loading/removing library sources and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
         no_connect::CHECK
+            | erc::RUN
+            | erc::REPORT
             | clipboard_text::LABELS
             | clipboard_text::OUTLINE
             | clipboard::COPY

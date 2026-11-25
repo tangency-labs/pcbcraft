@@ -351,6 +351,35 @@ fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
     assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
+/// MCP runs and reads the one session ERC report with inspect:false: the run equals the engine's,
+/// a read returns it without rerunning, the no-connect rule result is the focused check's, and
+/// an MCP edit makes the report stale without findings.
+#[test]
+fn erc_run_and_report_are_shared_with_mcp() {
+    use pcbcraft_engine::{erc, no_connect};
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let call = |s: &mut Session, command: &str| {
+        crate::backend::call_session(s, "engine.execute", &json!({"command":command,"params":{},"inspect":false})).unwrap()
+    };
+    assert_eq!(call(&mut s, erc::REPORT)["status"], "not_run");
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let ran = call(&mut s, erc::RUN);
+    assert_eq!(s.revision(), revision);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    let (report, _) = s.erc_report().unwrap();
+    assert_eq!(ran, json!({"revision":revision,"status":"current","erc_report":serde_json::to_value(&*report).unwrap()}));
+    assert_eq!(ran["erc_report"], serde_json::to_value(erc::run(s.project().unwrap(), revision)).unwrap());
+    assert_eq!(call(&mut s, erc::REPORT), ran);
+    assert!(std::sync::Arc::ptr_eq(&report, &s.erc_report().unwrap().0));
+    assert_eq!(ran["erc_report"]["rules"][0]["rule"], "no_connect");
+    assert_eq!(ran["erc_report"]["rules"][0]["result"]["no_connect_check"], call(&mut s, no_connect::CHECK)["no_connect_check"]);
+    crate::backend::call_session(&mut s, "engine.execute", &json!({"command":"project.rename","params":{"name":"Changed"},"inspect":false})).unwrap();
+    assert_eq!(call(&mut s, erc::REPORT), json!({"revision":s.revision(),"status":"stale","report_revision":revision,"rerun":erc::RUN}));
+}
+
 /// The same public command accepts wire-end identity and returns termination findings even
 /// when callers omit the general inspection payload. No private GUI-only edit is involved.
 #[test]

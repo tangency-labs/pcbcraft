@@ -111,6 +111,27 @@ arrays describe pins and `wire_markers`/`wire_findings` describe wire ends.
 Totals and truncation cover both. These markers record intent without changing
 the real netlist or physical DRC. See the [contract](../schematic/no-connect-markers.md).
 
+## Electrical rules check
+
+`schematic.run_erc` runs every rule in the ERC registry, in a fixed order, on
+the open project and keeps the result as the session's ERC report. It takes no
+parameters, changes no project data, revision or undo history, and works with
+`inspect:false`. The reply is `{"revision","status":"current","erc_report"}`.
+`erc_report` holds `project`, the `revision` it ran on, `total_findings` and a
+`rules` array; each entry has the rule's stable `rule` id, `title`,
+`total_findings`, `truncated` and a `result` keyed by the result kind. The only
+rule so far is `no_connect`; its result is `{"no_connect_check": ...}`, exactly
+the object `schematic.check_no_connects` returns under that key, with the same
+finding keys. Two runs on one
+revision return identical bytes.
+
+`schematic.erc_report` reads the kept report without running anything. Before
+any run it returns `status: "not_run"`. After a project edit, or an Undo or Redo of one, the report
+is `status: "stale"`: the reply gives `report_revision` and no findings, and
+`rerun` names the command to run again. Opening another project discards it.
+The schematic ERC dialog shows this same report and asks you to run it again
+when it is stale. `schematic.check_no_connects` keeps its original response.
+
 Schematic selections may include an optional `no_connects` array of the same
 pin/wire target objects. `view.select` exposes marker selection and
 `view.set_selection_filters` accepts `no_connects`. Passing these targets to

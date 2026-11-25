@@ -65,7 +65,9 @@ named contact at an unmarked endpoint already supplies an electrical termination
 `schematic.check_no_connects` is a read-only project query,
 including when MCP requests `inspect:false`; both commands use project-owned
 terminal or junction addresses. GUI and MCP share the same engine edits and
-check implementation.
+check implementation. The check is also the first rule of the ERC rule registry:
+`schematic.run_erc` evaluates it unchanged, with the same finding keys, and
+`schematic.check_no_connects` evaluates only that rule with its original response.
 
 ## Native format review
 
@@ -95,7 +97,9 @@ projects without markers omit the field and keep the current project format.
 The intent check returns source revision, stable rule/address keys and navigable
 terminal/sheet positions. It distinguishes valid intentional disconnection,
 unmarked unconnected terminals and dangling wire ends, connected marked targets,
-missing targets and incompatible electrical types. It does not claim the complete type-conflict or
+missing targets and incompatible electrical types. The **Analyze → ERC** dialog shows
+the session's ERC report, the same one MCP reads, and hides its rows once the
+schematic changes until it is rerun. It does not claim the complete type-conflict or
 power-driver checks tracked by #47, or incremental scheduling under #245/#243.
 Marking a wire end suppresses only that endpoint's `dangling_wire` warning;
 `no_connect_not_dangling` reports retained connected ends from older projects. Normal netlist inspection

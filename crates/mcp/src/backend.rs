@@ -212,6 +212,8 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::INSPECT_LAYER_GROUPS
                         | pcbcraft_engine::COMPLETE_PACKAGES
                         | pcbcraft_engine::no_connect::CHECK
+                        | pcbcraft_engine::erc::RUN
+                        | pcbcraft_engine::erc::REPORT
                         | pcbcraft_engine::pin_functions::SET
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::REFILL_ZONES

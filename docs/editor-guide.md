@@ -242,7 +242,7 @@ connection is refused while the mark remains. Q/Capture clears the previous
 selection and highlights. These edits support Undo/Redo and travel with copied
 parts and wires. Normal marks use dedicated blue theme ink; conflicts remain red.
 
-**Analyze → Electrical menu → No-connect check** lists intentional no-connects,
+**Analyze → ERC** runs the electrical rules check and lists intentional no-connects,
 unmarked unconnected pins and open wire ends, plus connected, missing or
 type-changed marker targets. Use **Show** to navigate to a target. Error ink
 identifies conflicting intent. A marker suppresses only its own unconnected-pin
@@ -250,8 +250,11 @@ or dangling-end warning; it never removes wires, changes the netlist or clears
 physical DRC violations. New wires and endpoint attachments at an X are blocked,
 including with **W**; remove the mark first. Hovering or quickly clicking near
 an X does not start a wire. Older saved conflicts remain visible in the check.
-This focused check does not implement the remaining type-conflict and power-driver
-ERC rules. See the [identity and storage contract](schematic/no-connect-markers.md).
+The check is a snapshot of one revision: after a project edit, or an Undo or Redo of one, the
+dialog hides its rows and says the schematic changed until you choose **Run again**.
+MCP reads the same report. The no-connect rule is the only ERC rule so far; it
+does not implement type-conflict or power-driver checks.
+See the [identity and storage contract](schematic/no-connect-markers.md).
 
 ### Wires
 
