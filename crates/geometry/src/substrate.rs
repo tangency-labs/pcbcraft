@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Body, ErrorCode, GeometryError, MAX_LENGTH_NM, Result, kernel};
 
+mod preview;
+
 /// A point in the PCB's XY plane, in authored board coordinates and whole nanometres.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BoardPoint(pub [i64; 2]);
@@ -39,6 +41,31 @@ pub struct BoardMesh {
 /// A build without a kernel returns [`ErrorCode::KernelUnavailable`] for valid inputs.
 /// Kernel modelling tolerances can refuse features that are too small or close to resolve.
 pub fn build(paths: &[OutlinePath], drills: &[RoundDrill], thickness_nm: i64) -> Result<Body> {
+    let (regions, unique) = inputs(paths, drills, thickness_nm)?;
+    let solid = kernel::substrate(&regions, unique, thickness_nm)?;
+    Ok(Body { name: "Board substrate".into(), solid })
+}
+
+/// Mesh the board with Z = 0 at the top. Use direct profile triangulation for separated
+/// holes and fall back to the solid kernel when a drill crosses a boundary or another drill.
+pub fn display_board(paths: &[OutlinePath], drills: &[RoundDrill], thickness_nm: i64, chord_nm: i64) -> Result<BoardMesh> {
+    if !(1..=MAX_LENGTH_NM).contains(&chord_nm) {
+        return Err(invalid("mesh chord tolerance must be positive and within the geometry range"));
+    }
+    let (regions, drills) = inputs(paths, drills, thickness_nm)?;
+    if let Some(mesh) = preview::mesh(&regions, &drills, thickness_nm, chord_nm) {
+        return Ok(mesh);
+    }
+    let solid = kernel::substrate(&regions, drills, thickness_nm)?;
+    let mut mesh = kernel::substrate_mesh(&solid, chord_nm)?;
+    for point in &mut mesh.positions_nm {
+        point[2] -= thickness_nm;
+    }
+    Ok(mesh)
+}
+
+/// Share contour nesting and drill validation between display and solid construction.
+fn inputs(paths: &[OutlinePath], drills: &[RoundDrill], thickness_nm: i64) -> Result<(Vec<Region>, BTreeSet<RoundDrill>)> {
     if !(1..=MAX_LENGTH_NM).contains(&thickness_nm) {
         return Err(invalid("substrate thickness must be positive and within the geometry range"));
     }
@@ -55,8 +82,7 @@ pub fn build(paths: &[OutlinePath], drills: &[RoundDrill], thickness_nm: i64) ->
         }
         unique.insert(drill);
     }
-    let solid = kernel::substrate(&regions, unique, thickness_nm)?;
-    Ok(Body { name: "Board substrate".into(), solid })
+    Ok((regions, unique))
 }
 
 /// Tessellate a substrate body using the same kernel family that constructed it. The tolerance

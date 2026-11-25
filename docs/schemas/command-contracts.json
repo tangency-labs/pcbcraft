@@ -12604,6 +12604,87 @@
         "type": "object"
       }
     },
+    "pcb.set_test_point": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "purpose": {
+            "enum": [
+              "assembly",
+              "fabrication"
+            ],
+            "type": "string"
+          },
+          "sides": {
+            "enum": [
+              "top",
+              "bottom",
+              "both",
+              null
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "footprint": {
+                    "pattern": "^footprint-[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "pad"
+                  },
+                  "pad": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "footprint",
+                  "pad"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "via"
+                  },
+                  "via": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "via"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "board",
+          "expected_revision",
+          "target",
+          "purpose",
+          "sides"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.set_track_width": {
       "params": {
         "additionalProperties": false,
@@ -16279,6 +16360,31 @@
     }
   },
   "window_commands": {
+    "app.board_image": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "render",
+              "cancel",
+              "preview"
+            ],
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.library_browse": {
       "params": {
         "additionalProperties": false,
@@ -17379,6 +17485,28 @@
       },
       "scope": "window"
     },
+    "app.set_render_board": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "board",
+          "view"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "app.set_workspace": {
       "params": {
         "additionalProperties": false,
@@ -17402,7 +17530,8 @@
               "symbol_editor",
               "footprint_editor",
               "library",
-              "manufacturing"
+              "manufacturing",
+              "render"
             ],
             "type": "string"
           }
@@ -17521,6 +17650,26 @@
         },
         "required": [
           "operation"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "file.archive_folder": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trash_source": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },

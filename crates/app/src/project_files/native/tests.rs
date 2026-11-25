@@ -60,6 +60,110 @@ fn move_symbol(session: &mut Session, id: &str, x_nm: i64, y_nm: i64) {
     session.apply(MOVE_SYMBOL, &json!({"symbol":id, "x_nm":x_nm, "y_nm":y_nm, "expected_revision":session.revision()})).unwrap();
 }
 
+/// An archive includes unsaved edits and is readable before any cleanup. A blocked cleanup
+/// leaves a usable archive and the source, and subsequent desktop saves preserve compression.
+#[test]
+fn archive_folder_publishes_before_cleanup_and_preserves_deflate() {
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("working");
+    let destination = temporary.path().join("archived.pc");
+    let original = pcbcraft_engine::persistence::prepare_opened(decode(TWO_RESISTORS).unwrap()).unwrap();
+    save_new(original, None, SaveFormat::Folder, source.clone()).unwrap();
+    let mut session = Session::default();
+    let mut files = ProjectFiles::default();
+    assert!(matches!(complete(&mut files, &mut session, load(&source).map(Outcome::Opened)), Some(Update::Opened)));
+    let old = files.previous(&session.snapshot().unwrap()).unwrap();
+    let original_bytes = fs::read(source.join(ENTRY_POINT)).unwrap();
+    move_symbol(&mut session, "symbol-3", R2_X + STEP, 0);
+
+    let keep = SaveFormat::ArchiveFolder { trash_source: false };
+    let retire = SaveFormat::ArchiveFolder { trash_source: true };
+    let inside = save_new_with(session.snapshot().unwrap(), Some(&old), retire, source.join("inside.pc"), |_, _| {
+        panic!("must refuse a destination inside the folder before cleanup")
+    });
+    assert!(inside.err().unwrap().contains("outside"));
+    assert!(!source.join("inside.pc").exists());
+
+    let kept_archive = temporary.path().join("kept.pc");
+    let kept = save_new_with(session.snapshot().unwrap(), Some(&old), keep, kept_archive.clone(), |_, _| {
+        panic!("must never attempt cleanup without opt-in")
+    });
+    assert!(matches!(complete(&mut files, &mut session, kept), Some(Update::Message(notice)) if notice == "Project saved"));
+    assert_eq!(files.previous(&session.snapshot().unwrap()).unwrap().1.path(), kept_archive);
+    let kept_archive = decode_packed(&fs::read(kept_archive).unwrap()).unwrap();
+    assert!(kept_archive.deflated);
+    assert_eq!(positions(&kept_archive.project)[1].x_nm, R2_X + STEP);
+    assert_eq!(fs::read(source.join(ENTRY_POINT)).unwrap(), original_bytes);
+
+    let blocked = save_new_with(session.snapshot().unwrap(), Some(&old), retire, destination.clone(), |root, baseline| {
+        assert_eq!(root, source);
+        assert_eq!(baseline[ENTRY_POINT], original_bytes);
+        let published = decode_packed(&fs::read(&destination).unwrap()).unwrap();
+        assert!(published.deflated);
+        assert_eq!(positions(&published.project)[1].x_nm, R2_X + STEP);
+        Err("Test Trash service is unavailable.".to_owned())
+    });
+    assert!(matches!(complete(&mut files, &mut session, blocked), Some(Update::Message(notice)) if notice.contains("Original folder kept")));
+    assert_eq!(fs::read(source.join(ENTRY_POINT)).unwrap(), original_bytes);
+    assert!(files.archive_source(&session).is_none());
+    let saved = load(&destination).unwrap();
+    move_symbol(&mut session, "symbol-3", R2_X + 2 * STEP, 0);
+    save_target(session.snapshot().unwrap(), Some(&saved.snapshot), saved.target, &mut |_| Ok(())).unwrap();
+    let published = decode_packed(&fs::read(destination).unwrap()).unwrap();
+    assert!(published.deflated);
+    assert_eq!(positions(&published.project)[1].x_nm, R2_X + 2 * STEP);
+
+    let retry = temporary.path().join("verified.pc");
+    let recycled = temporary.path().join("recycled");
+    let outcome = save_new_with(session.snapshot().unwrap(), Some(&old), retire, retry.clone(), |root, _| {
+        assert!(decode_packed(&fs::read(&retry).unwrap()).unwrap().deflated);
+        fs::rename(root, &recycled).map_err(|error| error.to_string())
+    });
+    assert!(matches!(complete(&mut files, &mut session, outcome), Some(Update::Message(notice)) if notice.contains("moved to Trash")));
+    assert!(!source.exists());
+    assert_eq!(fs::read(recycled.join(ENTRY_POINT)).unwrap(), original_bytes);
+}
+
+/// The File menu names the source and starts with Trash unchecked in both themes.
+#[test]
+fn archive_folder_menu_confirms_the_source_in_both_themes() {
+    use crate::{Dialog, PcbApp, preferences::ThemeChoice};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("working");
+    let original = pcbcraft_engine::persistence::prepare_opened(decode(TWO_RESISTORS).unwrap()).unwrap();
+    save_new(original, None, SaveFormat::Folder, source.clone()).unwrap();
+    for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+        let mut app = PcbApp::default();
+        app.preferences.theme = theme;
+        app.home = false;
+        assert!(matches!(complete(&mut app.files, &mut app.session, load(&source).map(Outcome::Opened)), Some(Update::Opened)));
+        app.views.sync(&app.session);
+        let mut h = Harness::builder().with_size(egui::vec2(1100., 850.)).build_ui_state(|ui, app| app.frame(ui), app);
+        h.get_by_label("File").click();
+        h.run();
+        h.get_by_label("Archive Project Folder…").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: false }));
+        let path = h.state().files.archive_source(&h.state().session).unwrap().display().to_string();
+        h.get_by_label(&path);
+        h.get_by_label("Move original folder to Trash").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: true }));
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(!h.state().files.busy());
+        assert!(source.join(ENTRY_POINT).is_file());
+        h.get_by_label("File").click();
+        h.run();
+        h.get_by_label("Archive Project Folder…").click();
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::ArchiveFolder { trash_source: false }));
+    }
+}
+
 fn positions(project: &Project) -> Vec<Point> {
     project.symbols().iter().map(|symbol| symbol.position).collect()
 }

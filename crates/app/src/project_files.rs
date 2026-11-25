@@ -24,6 +24,10 @@ pub(super) enum SaveFormat {
     #[default]
     Folder,
     Archive,
+    #[cfg(not(target_arch = "wasm32"))]
+    ArchiveFolder {
+        trash_source: bool,
+    },
 }
 
 mod abandon;
@@ -237,6 +241,15 @@ pub(super) enum Update {
 }
 
 impl ProjectFiles {
+    /// Return the current working folder only when it belongs to the open project.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn archive_source(&self, session: &Session) -> Option<&std::path::Path> {
+        self.saved
+            .as_ref()
+            .filter(|saved| saved.target.format() == "folder" && session.project().is_some_and(|project| saved.snapshot.same_document(project)))
+            .map(|saved| saved.target.path())
+    }
+
     /// Supply a local-copy discriminator only after a project has a successfully adopted file.
     pub(super) fn arrangement_location(&self, session: &Session) -> Option<String> {
         let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
@@ -383,6 +396,10 @@ impl ProjectFiles {
     /// Capture an immutable snapshot. An explicit encoding starts a Save As or browser download.
     /// Browser exports of migrated files encode the current schema instead of reusing old bytes.
     pub(super) fn save(&mut self, session: &Session, encoding: Option<SaveFormat>, ctx: &egui::Context) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(encoding, Some(SaveFormat::ArchiveFolder { .. })) && self.busy() {
+            return Err("A project file operation is already running".to_owned());
+        }
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
         #[cfg(target_arch = "wasm32")]
@@ -532,21 +549,36 @@ impl ProjectFiles {
                 Some(Update::Error("Project changed while opening the file. Open it again to replace the current project.".to_owned()))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Ok(Outcome::Saved(saved, original)) => {
+            Ok(Outcome::Saved(mut saved, original)) => {
                 session.adopt_saved_metadata(&original, &saved.snapshot);
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 finished.path = Some(saved.target.path().display().to_string());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
+                let cleanup = saved.target.take_archive_cleanup();
                 self.saved = Some(saved);
-                let text = if !current {
-                    "Earlier version saved. Current edits are unsaved."
+                let text = if let Some(cleanup) = cleanup {
+                    let notice = match cleanup {
+                        Ok(source) => {
+                            self.recent.remove(&source);
+                            "Project archived. Original folder moved to Trash.".to_owned()
+                        }
+                        Err(error) => {
+                            let notice = format!("Archive saved. Original folder kept. {error}");
+                            finished.status = "failed";
+                            finished.error = Some(notice.clone());
+                            notice
+                        }
+                    };
+                    if current { notice } else { notice + " Current edits are unsaved." }
+                } else if !current {
+                    "Earlier version saved. Current edits are unsaved.".to_owned()
                 } else if added_manifest {
-                    "Project saved with a verified manifest"
+                    "Project saved with a verified manifest".to_owned()
                 } else {
-                    "Project saved"
+                    "Project saved".to_owned()
                 };
-                Some(Update::Message(text.to_owned()))
+                Some(Update::Message(text))
             }
             #[cfg(target_arch = "wasm32")]
             Ok(Outcome::Downloaded) => Some(Update::Message("Project download requested".to_owned())),

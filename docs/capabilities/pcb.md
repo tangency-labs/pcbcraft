@@ -24,6 +24,9 @@
 
 ### Available
 
+- The desktop [3D render workspace](../pcb-layout-workflow.md#preview-the-board-in-3d)
+  shows the board substrate, cutouts and round through holes with a navigable camera.
+
 - [Single-layer zone outlines](../pcb/copper-zone-outlines.md) with net selection/promotion,
   polygon/rectangle creation, edge resizing, vertex insertion/removal, axis alignment, boundary
   hatching, modifier/box/mixed selection and atomic Delete, Properties, layer/filter visibility,
@@ -146,6 +149,18 @@
 ### Remaining scope
 
 - Exact cross-view highlighting/Reveal #398.
+
+## Test-point marks
+
+### Available
+
+- [Shared command](../automation/board-commands.md#test-point-marks) to mark placed pads and vias
+  for assembly or bare-board testing, independently by board face, with undo/redo and native
+  save/reopen.
+
+### Remaining scope
+
+- No fixture report, probe-access validation, variant filtering or editor controls yet.
 
 ## Footprint locks
 

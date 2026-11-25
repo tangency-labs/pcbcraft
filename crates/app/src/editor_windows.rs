@@ -427,6 +427,10 @@ impl PcbApp {
     /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.render_browse_host().is_some_and(|host| host != self.views.host) {
+            return;
+        }
         if self.rule_dialog_host().is_some_and(|host| host != self.views.host) {
             return;
         }
@@ -605,13 +609,13 @@ impl PcbApp {
             self.begin_project_close(ctx);
             return;
         }
-        let close_rules = self.rule_dialog_host() == Some(host);
+        let close_dialog = self.rule_dialog_host() == Some(host) || self.render_browse_host() == Some(host);
         let next = if host == self.views.main { self.views.hosts.keys().copied().find(|id| *id != host) } else { Some(self.views.main) };
         if let Some(next) = next {
             self.bind_editor_host(next);
         }
         self.views.close_host(host);
-        if close_rules || self.arrangement_dialog_host() == Some(host) {
+        if close_dialog || self.arrangement_dialog_host() == Some(host) {
             self.dialog = Dialog::None;
         }
         self.windows.panels.remove(&host);
