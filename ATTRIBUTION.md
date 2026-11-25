@@ -651,6 +651,15 @@ native window when the original closes. The patch boundary and upgrade procedure
 are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
 ownership and the close/save policy remain in PCBcraft.
 
+## macOS Metal presentation
+
+PCBcraft's `surface_config` helper in `apps/pcbcraft/src/main.rs` comes from
+Warmbird's `apps/solidcraft/src/main.rs` change in SolidCraft at revision
+`28300caeab1a11ab2914a112ac33405e151c33dc` (MIT OR Apache-2.0). PCBcraft calls
+it when constructing its desktop window options, selecting the high-throughput
+surface preset on macOS and the low-latency preset on Windows and Linux.
+[SolidCraft PR #20572](https://github.com/tangency-labs/solidcraft/pull/20572)
+
 ## Wire endpoint attachment
 
 Endpoint drops in `crates/app/src/schematic_canvas/wires.rs` and
