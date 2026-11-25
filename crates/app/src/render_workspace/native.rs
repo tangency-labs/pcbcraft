@@ -693,7 +693,7 @@ fn array(v: solidcore_record::Vec3) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{click, harness};
+    use crate::tests::{click, harness, queue_click};
     use egui_kittest::kittest::Queryable;
     use pcbcraft_engine::{
         Session,
@@ -789,7 +789,9 @@ mod tests {
         let target = h.state().session.project().unwrap().board_target().unwrap();
 
         click(&mut h, "Choose workspace");
-        click(&mut h, "3D render");
+        // The preview spinner repaints until the worker finishes. Step through the click
+        // in the bounded worker wait instead of asking the harness to settle first.
+        queue_click(&mut h, "3D render");
         wait_for_preview(&mut h);
         let state = h.state().views.active.render.as_ref().unwrap();
         assert_eq!(state.target, Some(target));
@@ -821,9 +823,9 @@ mod tests {
         failed.mesh = None;
         failed.error = Some("Preview worker unavailable".into());
         click(&mut h, "Choose a board in this project");
-        click(&mut h, "Open");
-        assert!(matches!(h.state().dialog, Dialog::None));
+        queue_click(&mut h, "Open");
         wait_for_preview(&mut h);
+        assert!(matches!(h.state().dialog, Dialog::None));
         let rebuilt = h.state().views.active.render.as_ref().unwrap();
         assert_eq!(rebuilt.target, Some(target));
         assert_eq!(rebuilt.camera, camera);
