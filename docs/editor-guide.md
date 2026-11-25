@@ -1071,6 +1071,13 @@ Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
 **File → Save As…** offers **Project folder…** and **Packed project (.pc)…**.
 Commit the folder to Git; use the archive to share the complete project.
+To archive an open working folder to a compressed `.pc`, use
+**File → Archive Project Folder…**. Choose a path outside the working folder.
+PCBcraft saves and verifies the archive, switches to it, and keeps the original
+folder by default. Select **Move original folder to Trash** if you want to retire
+the folder after archiving. If the folder is in a Git working tree, contains other
+files, or has changed on disk, PCBcraft saves the archive and explains why it
+kept the original folder.
 Ordinary hand-zipped project folders open too, including those without a manifest.
 The browser uploads and downloads current `.pc` archives. Version 0.1.0 breaks
 older project layouts; see the [release notes](../CHANGELOG.md).

@@ -90,6 +90,7 @@ availability by themselves.
 | --- | --- |
 | PCB hosting and physical representation | [Board workspace plan](design/board-workspace-plan.md) · [PCB representation and shared rules](design/pcb-representation.md) · [PCB layout design plan](design/pcb-layout-gaps.md) |
 | Library/provider architecture | [Library sources model](design/library-sources.md); native source behavior is documented in the guide above |
+| Team catalog and supplier data | [Read-only team catalog and provider records](design/team-catalog.md), a proposal for [#94](https://github.com/tangency-labs/pcbcraft/issues/94) |
 | Net identity policy | [Persistent net identity](design/net-identity.md), including broader multiboard requirements |
 | Earlier net-registry rollout | [Path to the registry](design/net-registry-path.md), retained as a planning record; implemented slices are linked under Reference and formats |
 | Sheet paper, title blocks and parameters | [Sheet frames, parameters and templates](design/sheet-frames-and-parameters.md), a proposal for [#46](https://github.com/tangency-labs/pcbcraft/issues/46) |

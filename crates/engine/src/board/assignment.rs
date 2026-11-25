@@ -67,6 +67,7 @@ impl Assignment {
             locked: false,
             reference_offset: None,
             reference_text: None,
+            test_points: Default::default(),
         }
     }
 
@@ -232,11 +233,15 @@ impl Project {
         json!(
             self.footprint_catalog()
                 .iter()
-                .map(|d| json!({
-                    "library": d.library, "id": d.id, "revision": d.revision,
-                    "name": d.name, "pads": d.pads.iter().map(|pad| &pad.number).collect::<Vec<_>>(),
-                    "license": d.license, "source": d.source
-                }))
+                .map(|d| {
+                    let mut pads: Vec<&str> = d.pads.iter().map(|pad| pad.number.as_str()).collect();
+                    pads.sort_by(|a, b| crate::authoring::natural_cmp(a, b));
+                    json!({
+                        "library": d.library, "id": d.id, "revision": d.revision,
+                        "name": d.name, "pads": pads,
+                        "license": d.license, "source": d.source
+                    })
+                })
                 .collect::<Vec<_>>()
         )
     }

@@ -585,21 +585,21 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 }
 
 /// The workspace tile opens a picker that lists Schematic as current and the planned
-/// 3D/simulation workspaces as disabled rows. Clicking a planned row does nothing; Escape, a click outside and
+/// simulation workspace as a disabled row. Clicking it does nothing; Escape, a click outside and
 /// choosing Schematic each close the picker. Keys pressed in the picker don't reach the canvas.
 #[test]
 fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let mut harness = harness();
+    harness.set_size(egui::vec2(1000.0, 900.0));
+    harness.run();
     let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB Layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
     harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
-    for planned in ["3D render", "Simulate"] {
-        assert!(harness.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is planned");
-    }
+    assert!(harness.get_by_label("Simulate").accesskit_node().is_disabled());
     assert!(!harness.get_by_label("Schematic").accesskit_node().is_disabled());
 
-    harness.get_by_label("3D render").click();
+    harness.get_by_label("Simulate").click();
     harness.run();
     assert!(picker_open(&harness), "a planned row doesn't close the picker");
     harness.key_press(Key::Escape);

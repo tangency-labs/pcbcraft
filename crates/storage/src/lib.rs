@@ -16,7 +16,8 @@ mod folder;
 pub mod layout;
 pub mod library;
 pub mod recovery;
-pub use folder::{load, load_with_upgrade, save};
+pub use folder::{load, load_with_upgrade, save, trash_archived_folder};
+mod trash;
 
 /// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
 /// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the

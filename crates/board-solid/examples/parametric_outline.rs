@@ -7,7 +7,7 @@ use std::{
     process::ExitCode,
 };
 
-use pcbcraft_board_solid::{BoardSolid, Thickness};
+use pcbcraft_board_solid::{BoardSolid, Thickness, board1_xy};
 use pcbcraft_engine::{
     INITIALIZE_BOARD_SETUP, Project, SET_BOARD_SETUP, Session,
     board::{
@@ -105,7 +105,7 @@ fn snapshot(source: &Path, step: &Path) -> Result<()> {
     let outline_paths = outlines(board)
         .into_iter()
         .map(|drawing| {
-            let points = drawing.points.into_iter().map(|p| [mm(p.x_nm), mm(-p.y_nm)]).collect::<Vec<_>>();
+            let points = drawing.points.into_iter().map(|p| board1_xy(p).map(mm)).collect::<Vec<_>>();
             json!({"id":drawing.id,"points":points,"closed":drawing.closed})
         })
         .collect::<Vec<_>>();
@@ -208,5 +208,47 @@ fn archive_save_rejects_a_held_lock_and_a_stale_baseline() -> Result<()> {
     save(&path, b"winner", Some(b"original"))?;
     assert!(save(&path, b"contender", Some(b"original")).is_err());
     assert_eq!(fs::read(&path)?, b"winner");
+    Ok(())
+}
+
+/// Compare the renderer's cap and the exact STEP substrate through an actual saved resize.
+#[test]
+fn preview_and_step_follow_the_same_outline_resize() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("board.pc");
+    init(&path)?;
+    let mut board_id = None;
+    for width in [80_000_000, 85_000_000] {
+        if width == 85_000_000 {
+            resize(&path, "85 mm", "50 mm")?;
+        }
+        let project = decode_packed(&read_bytes(File::open(&path)?)?)?.project;
+        let board = view(&project)?;
+        assert_eq!(*board_id.get_or_insert(board.target.board), board.target.board);
+        let solid = BoardSolid::build(board)?;
+        let bounds = solid.body.bounding_box()?;
+        let (preview, thickness) = pcbcraft_board_solid::display_board(board, 10_000)?;
+        assert_eq!(thickness, solid.thickness);
+        assert_eq!(bounds.min_nm, [0, -50_000_000, -1_600_000]);
+        assert_eq!(bounds.max_nm, [width, 0, 0]);
+        for axis in 0..3 {
+            let coords = preview.positions_nm.iter().map(|position| position[axis]);
+            assert_eq!(coords.clone().min(), Some(bounds.min_nm[axis]));
+            assert_eq!(coords.max(), Some(bounds.max_nm[axis]));
+        }
+        let cutout = corners(19_000_000, 15_000_000, 31_000_000, 23_000_000).map(|point| {
+            let [x, y] = board1_xy(point);
+            [x, y, 0]
+        });
+        for (start, end) in cutout.into_iter().zip(cutout.into_iter().cycle().skip(1)) {
+            assert!(preview.triangles.iter().any(|triangle| {
+                let points = triangle.map(|index| preview.positions_nm[index as usize]);
+                points.contains(&start) && points.contains(&end)
+            }));
+        }
+        let step_path = dir.path().join(format!("{width}.step"));
+        snapshot(&path, &step_path)?;
+        assert!(fs::read(&step_path)?.starts_with(b"ISO-10303-21;"));
+    }
     Ok(())
 }
