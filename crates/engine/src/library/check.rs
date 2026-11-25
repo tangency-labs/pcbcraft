@@ -183,11 +183,12 @@ impl RuleId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
-    /// Worth knowing; never blocks anything.
+    /// Worth knowing; never sets [`Report::blocks_publish`].
     Info,
-    /// Worth fixing; does not block publication.
+    /// Worth fixing; never sets [`Report::blocks_publish`].
     Warning,
-    /// Blocks publication of the item.
+    /// Sets [`Report::blocks_publish`] when its rule runs at publish. The report only describes
+    /// publication; publication validates on its own and never reads it.
     Error,
 }
 
@@ -392,7 +393,8 @@ impl Report {
     pub fn counts(&self) -> Counts {
         self.counts
     }
-    /// True when a finding is an error from a rule that runs before publication.
+    /// True when a finding is an error from a rule that runs at publish. Informational only:
+    /// publication validates on its own and never reads this report.
     pub fn blocks_publish(&self) -> bool {
         self.blocks_publish
     }
@@ -764,8 +766,9 @@ pub fn check(capture: &Capture) -> Report {
     report(capture, RULES, Stage::Edit)
 }
 
-/// The one checker. GUI, MCP and publication gates call it on the same capture with their stage
-/// and severity overrides; `rules` is the registered rule set, normally [`RULES`].
+/// The one checker, run by the `library.check` command with its stage and severity overrides;
+/// `rules` is the registered rule set, normally [`RULES`]. Publication does not consult the
+/// report, so an override changes only this report, never what publication validates.
 ///
 /// # Errors
 /// Refuses a rule set with a repeated identity, an override of an unknown rule, or one below a
