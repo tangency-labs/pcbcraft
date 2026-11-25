@@ -108,9 +108,11 @@ project** action.
   newer revisions (`library.available_revisions`) and a read-only footprint pad
   preview exist today; see
   [Query available revisions](../libraries/native-library-sources.md#query-available-revisions).
-  Adopting a newer revision as one undoable command, as described in
-  [Pinning into a project](library-sources.md#pinning-into-a-project), is
-  designed but not built yet.
+  [Reviewed text-only adoption](https://github.com/tangency-labs/pcbcraft/pull/526)
+  lets users preview a loaded symbol or generic-part revision and apply the
+  reviewed changes to selected instances in one undoable edit. Broader
+  compatible revision adoption remains tracked in
+  [#312](https://github.com/tangency-labs/pcbcraft/issues/312).
 
 ## Pinned engineering definitions
 
