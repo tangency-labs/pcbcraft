@@ -12,7 +12,15 @@ use std::{
 };
 
 use craft_control::loopback::{AcceptedPeer, Listener, Token};
-use pcbcraft_engine::{Session, error_codes::ErrorCode};
+use pcbcraft_engine::{
+    APPLY_FOOTPRINT_REVISION, CommandError, Session,
+    board::{
+        track::preparation::{CopperEditJob, PreparedCopperEdit, can_prepare_copper_edit},
+        work::{Progress, Source},
+    },
+    error_codes::ErrorCode,
+    library::sources::{FootprintRevisionJob, PreparedFootprintRevision},
+};
 use pcbcraft_mcp::{
     Failure,
     live::{Editor, TOKEN_ENV, call_editor_with_package_commit, check_deferred_version, normalize_request, success_reply},
@@ -267,12 +275,77 @@ pub(super) struct RemoteCheck {
     request: Option<(Request, bool, u16)>,
 }
 
-/// One deferred copper mutation shares the checker worker limit, but retains its own
-/// authenticated request lease. Capturing or canceling it never changes authored state.
+/// One deferred mutation shares the checker worker limit and retains an authenticated lease.
 #[derive(Debug, Default)]
 pub(super) struct RemoteCopper {
-    queue: crate::board_drc::jobs::Queue<pcbcraft_engine::board::track::preparation::CopperEditJob>,
+    queue: crate::board_drc::jobs::Queue<RemoteEditJob>,
     request: Option<(Request, bool, u16)>,
+}
+
+enum RemoteEditJob {
+    Copper(Box<CopperEditJob>),
+    Footprint(Box<FootprintRevisionJob>),
+}
+
+enum PreparedRemoteEdit {
+    Copper(Box<PreparedCopperEdit>),
+    Footprint(Box<PreparedFootprintRevision>),
+}
+
+impl crate::board_drc::jobs::Work for RemoteEditJob {
+    type Output = Result<PreparedRemoteEdit, CommandError>;
+
+    fn source(&self) -> &Source {
+        match self {
+            Self::Copper(job) => job.source(),
+            Self::Footprint(job) => job.source(),
+        }
+    }
+
+    fn progress(&self) -> Progress {
+        match self {
+            Self::Copper(job) => job.progress(),
+            Self::Footprint(job) => job.progress(),
+        }
+    }
+
+    fn step(&mut self, budget: usize) -> bool {
+        match self {
+            Self::Copper(job) => job.step(budget),
+            Self::Footprint(job) => job.step(budget),
+        }
+    }
+
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        Ok(match self {
+            Self::Copper(job) => job.take_result().map(|edit| edit.map(|edit| PreparedRemoteEdit::Copper(Box::new(edit)))),
+            Self::Footprint(job) => job.take_result().map(|edit| edit.map(|edit| PreparedRemoteEdit::Footprint(Box::new(edit)))),
+        }
+        .transpose())
+    }
+}
+
+impl PreparedRemoteEdit {
+    /// Prepared footprint revisions always require a commit grant; copper preparation can return a report without publishing.
+    fn is_effectful(&self) -> bool {
+        match self {
+            Self::Copper(edit) => edit.is_effectful(),
+            Self::Footprint(_) => true,
+        }
+    }
+
+    /// Consume the opaque engine edit; no project reconstruction happens on the editor here.
+    fn commit(self, session: &mut Session) -> Result<(u64, Option<Value>), CommandError> {
+        match self {
+            Self::Copper(edit) => session.commit_copper_edit_with_report(*edit),
+            Self::Footprint(edit) => session.commit_footprint_revision(*edit).map(|revision| (revision, None)),
+        }
+    }
+}
+
+/// Preserve the existing copper diagnostics and distinguish footprint preparation.
+fn edit_subject(command: &str) -> &'static str {
+    if command == APPLY_FOOTPRINT_REVISION { "Footprint revision" } else { "Copper preparation" }
 }
 
 struct CancelOnDrop(Arc<AtomicBool>);
@@ -324,7 +397,6 @@ impl RemotePackageCompletion {
         pcbcraft_mcp::live::MAX_REPLY_BYTES
     }
 }
-
 impl std::fmt::Debug for Request {
     /// Diagnostic output omits request contents and response channels.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -426,26 +498,28 @@ impl PcbApp {
         }
     }
 
-    /// Use the engine's prepared path where available. Parameter and policy checks remain shared.
+    /// Use the bounded worker for prepared copper edits and footprint revisions. Parameter and policy checks remain shared.
     pub(super) fn defer_copper(&self, body: &Value) -> bool {
         let call = &body["params"];
         body["method"] == "engine.execute"
             && call["command"]
                 .as_str()
-                .is_some_and(|command| pcbcraft_engine::board::track::preparation::can_prepare_copper_edit(command, &call["params"]))
+                .is_some_and(|command| command == APPLY_FOOTPRINT_REVISION || can_prepare_copper_edit(command, &call["params"]))
     }
 
     /// Capture a read-only preparation job after policy checks, without executing a mutation.
     pub(super) fn start_remote_copper(&mut self, ctx: &egui::Context, mut request: Request, chat: bool) {
+        let command = request.body()["params"]["command"].as_str().unwrap_or_default().to_owned();
         if request.expired() {
-            request.answer(Err(Failure::new(ErrorCode::Cancelled, "Copper edit request expired or disconnected")));
+            let subject = if command == APPLY_FOOTPRINT_REVISION { "Footprint revision" } else { "Copper edit" };
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, format!("{subject} request expired or disconnected"))));
             return;
         }
         if self.remote_copper.queue.busy() {
-            request.answer(Err(Failure::new(ErrorCode::Busy, "A copper edit is already preparing; retry after it completes")));
+            let subject = if command == APPLY_FOOTPRINT_REVISION { "An edit" } else { "A copper edit" };
+            request.answer(Err(Failure::new(ErrorCode::Busy, format!("{subject} is already preparing; retry after it completes"))));
             return;
         }
-        let command = request.body()["params"]["command"].as_str().unwrap_or_default().to_owned();
         if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(&command) {
             request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
             return;
@@ -454,13 +528,18 @@ impl PcbApp {
             request.answer(Err(failure));
             return;
         }
-        let prepared = if command == pcbcraft_engine::MERGE_TRACKS {
-            let params = request.take_command_params();
-            self.session.prepare_copper_edit_owned(&command, params)
+        let job = if command == APPLY_FOOTPRINT_REVISION {
+            self.session.prepare_footprint_revision(&request.body()["params"]["params"]).map(|job| RemoteEditJob::Footprint(Box::new(job)))
         } else {
-            self.session.prepare_copper_edit(&command, &request.body()["params"]["params"])
+            let prepared = if command == pcbcraft_engine::MERGE_TRACKS {
+                let params = request.take_command_params();
+                self.session.prepare_copper_edit_owned(&command, params)
+            } else {
+                self.session.prepare_copper_edit(&command, &request.body()["params"]["params"])
+            };
+            prepared.map(|job| RemoteEditJob::Copper(Box::new(job)))
         };
-        match prepared {
+        match job {
             Ok(job) => {
                 let port = self.live_control.as_ref().map_or(0, LiveControl::port);
                 self.remote_copper.queue.submit(crate::board_drc::jobs::Request { id: 0, job });
@@ -486,7 +565,8 @@ impl PcbApp {
         if !valid || !self.remote_copper.queue.authority_current(&self.session) {
             self.remote_copper.queue.cancel();
             if let Some((request, _, _)) = self.remote_copper.request.take() {
-                request.answer(Err(obsolete(valid, "Copper preparation canceled, disconnected or stale", self.session.revision())));
+                let subject = edit_subject(request.body()["params"]["command"].as_str().unwrap_or_default());
+                request.answer(Err(obsolete(valid, &format!("{subject} canceled, disconnected or stale"), self.session.revision())));
             }
         }
         if let Some(completion) = self.remote_copper.queue.poll()
@@ -495,21 +575,23 @@ impl PcbApp {
             let revision = self.session.revision();
             let command = request.body()["params"]["command"].as_str().unwrap_or_default();
             let refusal = (LiveEditor { app: self, ctx }).refusal(command);
-            const OBSOLETE: &str = "Copper preparation canceled or project changed";
+            let subject = edit_subject(command);
+            let obsolete_message = || format!("{subject} canceled or project changed");
             let result = if request.expired() {
-                Err(Failure::new(ErrorCode::Cancelled, OBSOLETE))
+                Err(Failure::new(ErrorCode::Cancelled, obsolete_message()))
             } else if !completion.source.is_current(&self.session) {
-                Err(Failure::new(ErrorCode::StaleRevision, OBSOLETE)
+                Err(Failure::new(ErrorCode::StaleRevision, obsolete_message())
                     .with_details(serde_json::Map::from_iter([("current_revision".into(), revision.into())])))
             } else if let Some(reason) = refusal {
                 Err(Failure::new(ErrorCode::Unavailable, reason))
             } else {
                 completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
-                    let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Copper preparation canceled"))??;
+                    let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, format!("{subject} canceled")))??;
                     if edit.is_effectful() && !request.authority.grant_commit(request.deadline) {
-                        return Err(Failure::new(ErrorCode::Cancelled, "Copper edit request expired or disconnected before publication"));
+                        let subject = if command == APPLY_FOOTPRINT_REVISION { "Footprint revision" } else { "Copper edit" };
+                        return Err(Failure::new(ErrorCode::Cancelled, format!("{subject} request expired or disconnected before publication")));
                     }
-                    let (revision, report) = self.session.commit_copper_edit_with_report(edit)?;
+                    let (revision, report) = edit.commit(&mut self.session)?;
                     Ok(if let Some(report) = report {
                         report
                     } else if request.body()["params"]["inspect"].as_bool() == Some(false) {
@@ -788,6 +870,10 @@ impl Editor for LiveEditor<'_> {
         }
         if let Some(reason) = app.library_sources.command_refusal(command) {
             return Some(reason.into());
+        }
+        // Footprint apply is a PCB command, not a member of the `library.*` family.
+        if command == APPLY_FOOTPRINT_REVISION && (app.library_sources.mutating() || app.library_sources.installing()) {
+            return Some("Finish the current library folder operation before changing its sources or editors".into());
         }
         if app.library_editors.publisher.busy()
             && matches!(command, pcbcraft_engine::library::sources::LOAD | pcbcraft_engine::library::sources::REMOVE | "app.library_source")
@@ -1197,6 +1283,104 @@ mod copper_tests {
             authority,
         )
     }
+    /// The native request path captures large Apply jobs without a synchronous commit. In the
+    /// test scheduler one poll runs at most one 256-record batch, and disconnects cannot publish.
+    #[test]
+    fn large_board_live_footprint_revision_defers_and_bounds_editor_work() {
+        use pcbcraft_engine::{
+            ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL,
+            authoring::{
+                Item, Kind, Primitive,
+                publishing::{new_library, prepare},
+            },
+            library::sources::{LOAD, PREVIEW_FOOTPRINT_REVISION, symbol_digest},
+            persistence::{decode_documents, encode_documents},
+        };
+        let (mut app, ctx, copper) = fixture();
+        let manifest = new_library("live-pad-test", "Live pad test", "MIT OR Apache-2.0").unwrap();
+        let symbol = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+        let first = prepare(Arc::new(Item::new(Kind::Footprint).unwrap()), &manifest, 0, None, false).unwrap();
+        let mut next = first.item().as_ref().clone();
+        let Primitive::Pad { pad } = next.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
+        pad.center.x_nm += 200_000;
+        let second = prepare(Arc::new(next), &manifest, 1, Some(1), false).unwrap();
+        let mut documents = symbol.documents().clone();
+        documents.extend(first.documents().clone());
+        documents.extend(second.documents().clone());
+        documents.insert("library.json".into(), manifest);
+        app.session.execute(LOAD, &json!({"source":"live-pad-test","documents":documents})).unwrap();
+        let draft = symbol.item();
+        let symbol = app.session.libraries().symbol(&draft.library, &draft.id, draft.revision).unwrap();
+        let footprint = first.item().footprint().unwrap();
+        app.session
+            .apply(
+                PLACE_SYMBOL,
+                &json!({"library":symbol.library,"definition":symbol.id,"definition_revision":1,
+            "definition_digest":symbol_digest(&symbol).unwrap(),"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}),
+            )
+            .unwrap();
+        let part = app.session.project().unwrap().components().next().unwrap().id();
+        app.session
+            .apply(
+                ASSIGN_FOOTPRINT,
+                &json!({"component":part,"library":footprint.library,"definition":footprint.id,
+            "definition_revision":1,"mapping":{"1":"1","2":"2"},"expected_revision":app.session.revision()}),
+            )
+            .unwrap();
+        app.session.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":part,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
+        let mut track = copper["params"]["params"].clone();
+        track["expected_revision"] = json!(app.session.revision());
+        track["points"] = json!([{"x_nm":0,"y_nm":10_000_000},{"x_nm":1_000_000,"y_nm":10_000_000}]);
+        app.session.apply(pcbcraft_engine::ADD_TRACKS, &track).unwrap();
+        // Seed one saved fixture without simulating thousands of route and undo gestures.
+        const TRACKS: usize = 4096;
+        let snapshot = app.session.snapshot().unwrap();
+        let board_path = snapshot.board_document_path().unwrap();
+        let mut files = encode_documents(snapshot).unwrap();
+        let mut board: Value = serde_json::from_slice(&files[&board_path]).unwrap();
+        let seed: pcbcraft_engine::board::track::Track = serde_json::from_value(board["tracks"][0].clone()).unwrap();
+        board["tracks"] = json!(
+            (1..=TRACKS)
+                .map(|i| {
+                    let offset = 180_000 * i as i64;
+                    let mut track = seed.clone();
+                    track.id = uuid::Uuid::from_u128(i as u128);
+                    track.start.y_nm += offset;
+                    track.end.y_nm += offset;
+                    track
+                })
+                .collect::<Vec<_>>()
+        );
+        files.insert(board_path, serde_json::to_vec(&board).unwrap());
+        app.session.open_snapshot(decode_documents(&files).unwrap());
+        let before = app.session.snapshot().unwrap();
+        let target = before.board_target().unwrap();
+        let revision = app.session.revision();
+        let report = app.session.execute(PREVIEW_FOOTPRINT_REVISION, &json!({"board":target.board,"part_instance":part})).unwrap();
+        let body = json!({"method":"engine.execute","params":{"command":APPLY_FOOTPRINT_REVISION,"inspect":false,"params":{
+            "board":target.board,"part_instance":part,"expected_revision":revision,"acceptance":report["acceptance"],"mapping":{"1":"1","2":"2"}}}});
+        assert!(app.defer_copper(&body));
+        let (r, canceled, authority) = request(&app, body.clone());
+        app.start_remote_copper(&ctx, r, false);
+        assert_eq!(canceled.try_recv(), Err(mpsc::TryRecvError::Empty));
+        authority.cancel();
+        app.poll_remote_copper(&ctx);
+        assert_eq!(canceled.try_recv().unwrap()["code"], "cancelled");
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+
+        let (r, reply, _) = request(&app, body);
+        app.start_remote_copper(&ctx, r, false);
+        let (batches, result) = (1..=32)
+            .find_map(|batches| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok().map(|result| (batches, result))
+            })
+            .expect("4096 tracks must complete within 32 worker batches of at most 256 records");
+        assert!(batches > TRACKS / 256);
+        assert_eq!(result["result"], json!({"revision":revision+1}));
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), TRACKS);
+    }
+
     /// Both deferred command paths refuse a mismatched pin without queuing work or editing.
     #[test]
     fn version_pins_reach_deferred_checks_and_copper_preparation() {
@@ -1521,6 +1705,60 @@ mod copper_tests {
             assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
             assert!(!app.remote_copper.queue.busy());
         }
+    }
+
+    /// Deferred copper edits must acquire the request's commit grant before publishing: a lost
+    /// grant leaves board state and Undo history untouched, and a live publication claims the
+    /// grant so a subsequent socket timeout or cancel cannot abandon it.
+    #[test]
+    fn deferred_edit_requires_and_acquires_commit_grant_before_publish() {
+        let (mut app, ctx, mut body) = fixture();
+        let before_rename = app.session.snapshot().unwrap();
+        app.session.apply("project.rename", &json!({"name":"Prior edit"})).unwrap();
+        let before = app.session.snapshot().unwrap();
+        let revision = app.session.revision();
+        body["params"]["params"]["expected_revision"] = json!(revision);
+
+        // Claim the commit grant before poll_remote_copper publishes. The request is neither
+        // expired nor cancelled, so only grant_commit prevents publication.
+        let (r, reply, authority) = request(&app, body.clone());
+        app.start_remote_copper(&ctx, r, false);
+        assert!(authority.grant_commit(Instant::now() + Duration::from_secs(10)));
+        let refused = (0..100)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("deferred edit with spent grant must answer");
+        assert_eq!(refused["code"], "cancelled", "{refused}");
+        assert_eq!(app.session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
+        assert!(!app.remote_copper.queue.busy());
+        // Undo reverts the prior rename rather than a refused deferred edit.
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before_rename, &app.session.snapshot().unwrap()));
+        app.session.apply("edit.redo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+
+        // A live request acquires the commit grant when it publishes, locking out socket timeouts.
+        body["params"]["params"]["expected_revision"] = json!(app.session.revision());
+        let (r, reply, authority) = request(&app, body);
+        let live_revision = app.session.revision();
+        app.start_remote_copper(&ctx, r, false);
+        let committed = (0..100)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("live deferred edit must answer");
+        assert_eq!(committed["result"], json!({"revision": live_revision + 1}), "{committed}");
+        assert_eq!(app.session.revision(), live_revision + 1);
+        assert_eq!(app.session.project().unwrap().boards().next().unwrap().tracks().len(), 1);
+        assert_eq!(authority.next_wait(Instant::now()), Some(ACCEPT_POLL));
+        authority.cancel();
+        assert!(!authority.cancelled());
+        assert!(!authority.grant_commit(Instant::now() + Duration::from_secs(10)));
     }
 
     /// Deferred live `pcb.merge_tracks` matches headless preview and apply on a small fixture,
