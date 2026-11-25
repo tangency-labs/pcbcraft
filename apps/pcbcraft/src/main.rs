@@ -3,7 +3,7 @@
 
 use std::{ffi::OsString, path::PathBuf};
 
-use pcbcraft_app::PcbApp;
+use pcbcraft_app::{PcbApp, desktop_window_chrome};
 
 /// The short one-line usage errors this launcher prints to stderr before any window exists.
 const NO_OPTIONS: &str = "PCBCraft has no options · usage: pcbcraft [PROJECT]";
@@ -38,15 +38,15 @@ fn surface_config(macos: bool) -> eframe::egui_wgpu::SurfaceConfig {
     if macos { eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT } else { eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY }
 }
 
-/// The desktop window: its title, size and decorations (none with the integrated Linux title bar),
-/// and the renderer's [`surface_config`]; every other setting keeps eframe's default.
-fn native_options(integrated_titlebar: bool) -> eframe::NativeOptions {
+/// Configure the desktop window size, app-owned title bar and renderer surface.
+fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title(pcbcraft_app::APP_TITLE)
-            .with_decorations(!integrated_titlebar)
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size(pcbcraft_app::MAIN_WINDOW_MIN_SIZE),
+        viewport: desktop_window_chrome(
+            eframe::egui::ViewportBuilder::default()
+                .with_title(pcbcraft_app::APP_TITLE)
+                .with_inner_size([1280.0, 800.0])
+                .with_min_inner_size(pcbcraft_app::MAIN_WINDOW_MIN_SIZE),
+        ),
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration::default().with_surface_config(surface_config(cfg!(target_os = "macos"))),
         ..Default::default()
     }
@@ -61,12 +61,11 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
-    let integrated_titlebar = cfg!(target_os = "linux");
     eframe::run_native(
         "PCBCraft",
-        native_options(integrated_titlebar),
+        native_options(),
         Box::new(move |cc| {
-            let mut app = PcbApp::new(cc).with_integrated_titlebar(integrated_titlebar);
+            let mut app = PcbApp::new(cc).with_integrated_titlebar(true);
             if let Some(path) = startup_project.take() {
                 app = app.with_startup_project(path);
             }
@@ -158,8 +157,6 @@ mod surface_tests {
     #[test]
     fn native_options_use_the_platform_surface_config() {
         let expected = super::surface_config(cfg!(target_os = "macos"));
-        for integrated_titlebar in [false, true] {
-            assert_eq!(super::native_options(integrated_titlebar).wgpu_options.surface, expected);
-        }
+        assert_eq!(super::native_options().wgpu_options.surface, expected);
     }
 }
