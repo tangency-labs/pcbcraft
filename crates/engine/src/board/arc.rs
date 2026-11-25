@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
+pub mod geometry;
+
 /// Replace the addressed board's exact arc records without running conductive validation.
 pub const SET_ARCS: &str = "pcb.set_arc_tracks";
 /// Storage bound independent of the straight-segment budget.
@@ -124,11 +126,15 @@ impl<'a> BoardView<'a> {
     /// Refuse incomplete conductive results rather than silently omitting curved copper.
     pub fn require_linear_copper(self) -> Result<(), String> {
         self.require_no_arcs()?;
-        if self.teardrops().is_empty() { Ok(()) } else { Err(super::teardrop::UNSUPPORTED.into()) }
+        self.require_no_teardrops()
     }
     /// Refuse circular copper when building a projection of the underlying straight objects.
     pub(super) fn require_no_arcs(self) -> Result<(), String> {
         if self.arc_tracks().is_empty() { Ok(()) } else { Err(UNSUPPORTED.into()) }
+    }
+    /// Refuse incomplete conductive results while teardrop intents are present.
+    pub(super) fn require_no_teardrops(self) -> Result<(), String> {
+        if self.teardrops().is_empty() { Ok(()) } else { Err(super::teardrop::UNSUPPORTED.into()) }
     }
 }
 impl Session {

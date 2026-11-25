@@ -162,8 +162,11 @@ impl StoredInstances {
     /// Require the selected membership encoding and expand compact UUID dictionaries.
     /// The normal instance installer validates foreign identities.
     pub(super) fn into_records(self, compact: bool) -> Result<Instances, String> {
-        if compact != self.compact_part_group_memberships.is_some() || (compact && self.part_group_memberships.is_some()) {
-            return Err("Compact part-group memberships require project format 39, 36, 45, 48, 51, 56 or 61 and a compatible board-owned instances format (instances format 7, 8 or 9), with exactly one membership encoding.".into());
+        match (compact, self.compact_part_group_memberships.is_some(), self.part_group_memberships.is_some()) {
+            (_, true, true) => return Err("part_group_memberships and compact_part_group_memberships cannot both be present.".into()),
+            (true, false, _) => return Err("Missing required compact_part_group_memberships.".into()),
+            (false, true, false) => return Err("compact_part_group_memberships is not allowed by this instance encoding.".into()),
+            _ => {}
         }
         let part_group_memberships = match self.compact_part_group_memberships {
             Some(memberships) => Some(memberships.expand()?),

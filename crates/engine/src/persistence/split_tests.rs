@@ -47,6 +47,28 @@ fn board_path(d: &Documents) -> String {
     super::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap()
 }
 
+/// Missing mandatory fields identify the incoming envelope, not its shared layout vocabulary.
+#[test]
+fn missing_numeric_id_high_water_reports_the_incoming_envelope() {
+    for create_board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":create_board})).unwrap();
+        let mut docs = documents(&session);
+        let instance = session.snapshot().unwrap().instances_document_path();
+        for (project_header, instance_header) in [("pcbcraft-project/68", "pcbcraft-instances/12"), ("pcbcraft-project/63", "pcbcraft-instances/10")]
+        {
+            edit(&mut docs, ENTRY_POINT, |entry| entry["format"] = json!(project_header));
+            if let Some(path) = &instance {
+                edit(&mut docs, path, |entry| entry["format"] = json!(instance_header));
+            }
+            decode_documents(&docs).unwrap();
+            let mut missing = docs.clone();
+            edit(&mut missing, ENTRY_POINT, |entry| assert!(entry.as_object_mut().unwrap().remove("numeric_id_high_water").is_some()));
+            assert_eq!(decode_documents(&missing).unwrap_err(), format!("{ENTRY_POINT}: {project_header} requires numeric_id_high_water."));
+        }
+    }
+}
+
 /// A bare legacy board retains its identity and absent setup through the first current save.
 #[test]
 fn bare_board_migrates_to_current_folder_and_archive_bytes() {

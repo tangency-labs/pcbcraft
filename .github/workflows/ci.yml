@@ -40,6 +40,7 @@ jobs:
       native: ${{ steps.select.outputs.native }}
       windows: ${{ steps.select.outputs.windows }}
       windows_full: ${{ steps.select.outputs.windows_full }}
+      macos: ${{ steps.select.outputs.macos }}
       web: ${{ steps.select.outputs.web }}
       wasi: ${{ steps.select.outputs.wasi }}
       licenses: ${{ steps.select.outputs.licenses }}
@@ -211,6 +212,27 @@ jobs:
           path: ci-artifacts
       - run: python -B scripts/ci/window_smoke.py ci-artifacts/native_window_lifecycle.exe
 
+  macos-tests:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: ${{ vars.CI_RUNNER_MACOS || 'macos-latest' }}
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS_MACOS || '2' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v1
+          shared-key: macos-native
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - name: Run macOS workspace tests
+        run: cargo test --locked --profile ci --workspace
+
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -292,7 +314,7 @@ jobs:
   checks:
     # Report the selected stage honestly: passing quick feedback is green, not full qualification.
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
+    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, macos-tests, web, geometry-webassembly, licenses]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 65
     steps:
@@ -308,6 +330,42 @@ jobs:
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
+
+  nightly-packages:
+    name: Nightly desktop packages
+    needs: [changes, checks]
+    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-preview.yml
+    with:
+      artifact-prefix: pcbcraft-nightly-${{ github.sha }}
+      nightly: true
+
+  nightly-release:
+    name: Publish Nightly prerelease
+    needs: [nightly-packages]
+    if: ${{ !cancelled() && needs.nightly-packages.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: pcbcraft-nightly-${{ github.sha }}-*
+          path: packages
+      - name: Update the rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-nightly.sh
 
   pages-build:
     # Only a fully qualified main revision may produce a deployment artifact.

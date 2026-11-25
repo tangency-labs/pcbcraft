@@ -21,7 +21,7 @@ impl RecordEncoding {
     pub(crate) fn step(&mut self, out: &mut impl Write, row: &Record) -> Result<bool, String> {
         // Exhaustively destructure `Record` so adding a persisted field fails to compile
         // until both the incremental encoder and its parity test account for it.
-        let Record { id, generated_number, primary, fallbacks, lineage, state, class_bindings, appearance } = row;
+        let Record { id, generated_number, primary, fallbacks, lineage, state, class_bindings, authored_intent, appearance } = row;
         let successors = match state {
             State::Active {} => 0,
             State::Ambiguous { branches, .. } => branches.len(),
@@ -92,7 +92,7 @@ impl RecordEncoding {
             }
             3 => {
                 if class_bindings.is_empty() {
-                    close(out, appearance)?;
+                    close(out, authored_intent, appearance)?;
                     *self = Self::default();
                     return Ok(true);
                 }
@@ -106,7 +106,7 @@ impl RecordEncoding {
                     self.item += 1;
                 } else {
                     emit(out, b"]")?;
-                    close(out, appearance)?;
+                    close(out, authored_intent, appearance)?;
                     *self = Self::default();
                     return Ok(true);
                 }
@@ -117,8 +117,12 @@ impl RecordEncoding {
     }
 }
 
-/// End a large row: the small optional wire appearance follows `class_bindings`, as in Serde.
-fn close(out: &mut impl Write, appearance: &Option<super::Appearance>) -> Result<(), String> {
+/// End a large row with the small optional fields in Serde order.
+fn close(out: &mut impl Write, authored_intent: &super::intent::IntentV1, appearance: &Option<super::Appearance>) -> Result<(), String> {
+    if !authored_intent.is_empty() {
+        emit(out, b",\"authored_intent\":")?;
+        json(out, authored_intent)?;
+    }
     if let Some(appearance) = appearance {
         emit(out, b",\"appearance\":")?;
         json(out, appearance)?;
@@ -168,6 +172,10 @@ mod tests {
             lineage: ids.iter().map(|&id| Lineage { snapshot: snapshot.clone(), net: Some(id), anchor: primary.clone() }).collect(),
             state: State::Active {},
             class_bindings: vec![ClassBinding { class: Uuid::from_u128(5), origin: record_id }],
+            authored_intent: serde_json::from_value(serde_json::json!({
+                "voltage": {"magnitude_volts": "5", "basis": "dc", "reference": {"kind": "earth"}}
+            }))
+            .unwrap(),
             appearance: Some(Appearance { color: Some([1, 2, 3]), width_cp: Some(MIN_WIDTH_CP) }),
         };
         for state in [
@@ -207,6 +215,7 @@ mod tests {
             lineage: Vec::new(),
             state: State::Active {},
             class_bindings: bindings,
+            authored_intent: Default::default(),
             appearance: None,
         };
         let mut cursor = RecordEncoding::default();
@@ -250,6 +259,7 @@ mod tests {
             lineage: (10..22).map(|n| Lineage { snapshot: snapshot.clone(), net: Some(Uuid::from_u128(n)), anchor: primary.clone() }).collect(),
             state: State::Active {},
             class_bindings: Vec::new(),
+            authored_intent: Default::default(),
             appearance: Some(Appearance { color: None, width_cp: Some(MIN_WIDTH_CP) }),
         };
         let mut cursor = RecordEncoding::default();

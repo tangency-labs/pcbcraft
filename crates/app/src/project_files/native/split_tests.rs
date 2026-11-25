@@ -118,6 +118,45 @@ fn unchanged_native_save_migrates_only_the_old_instances_document() {
     }
 }
 
+/// The previous production envelopes both migrate once, even with no electrical intent.
+#[test]
+fn unchanged_native_save_migrates_pre_intent_envelopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Electrical intent migration","create_board":true})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let instance = snapshot.instances_document_path().unwrap();
+    let board = snapshot.board_document_path().unwrap();
+    let mut canonical = encode_documents(snapshot).unwrap();
+    canonical.get_mut(&board).unwrap().extend_from_slice(b"\n  ");
+    let mut original = canonical.clone();
+    for (path, current, previous) in
+        [(ENTRY_POINT, "pcbcraft-project/68", "pcbcraft-project/63"), (instance.as_str(), "pcbcraft-instances/12", "pcbcraft-instances/10")]
+    {
+        let bytes = String::from_utf8(canonical[path].clone()).unwrap();
+        assert!(bytes.contains(current));
+        original.insert(path.into(), bytes.replacen(current, previous, 1).into_bytes());
+    }
+
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(original.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let opened = load(target).unwrap();
+        assert!(opened.target.needs_upgrade());
+        assert!(opened.opened.is_none());
+        assert_eq!(opened.target.documents.as_deref(), Some(&original));
+        save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
+
+        let reopened = load(target).unwrap();
+        assert!(!reopened.target.needs_upgrade());
+        assert_eq!(reopened.target.documents.as_deref(), Some(&canonical));
+        save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
+        assert_eq!(load(target).unwrap().target.documents.as_deref(), Some(&canonical));
+    }
+}
+
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs. The
 /// snapshot is prepared as opening does, so it already has its paper.
 fn session() -> Session {

@@ -65,6 +65,7 @@ struct Document {
     tool: canvas::Tool,
     ribbon_tab: usize,
     error: Option<String>,
+    last_change: Option<pcbcraft_engine::authoring::ChangeRecord>,
 }
 impl Editors {
     /// Published drawing identity is enough for used-by inspection and creating a part association.
@@ -241,7 +242,20 @@ impl Editors {
     /// clone a displaced report merely to overwrite it; all other fields share the normal emitter.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect_with_remap(&self, pin_remap: Value) -> Value {
-        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        let documents: Vec<Value> = self
+            .documents
+            .iter()
+            .map(|(id, doc)| {
+                let mut entry = json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}});
+                if let Some(change) = &doc.last_change
+                    && let Some(object) = entry.as_object_mut()
+                {
+                    object.insert("last_change".into(), json!(change));
+                }
+                entry
+            })
+            .collect();
+        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":documents})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -285,12 +299,17 @@ impl Editors {
                 tool: canvas::Tool::Select,
                 ribbon_tab: 0,
                 error: None,
+                last_change: None,
             },
         );
         self.next_id = id;
         self.focus(Some(id))?;
         self.pending_document = Some(id);
         Ok(id)
+    }
+    /// Validate and record a dry-run change summary without mutating document state or history.
+    fn preview(&mut self, id: u64, revision: u64, action: Action) -> Result<(), String> {
+        self.documents.get_mut(&id).ok_or("Unknown library document ID.")?.preview(revision, action)
     }
     /// GUI and MCP edits share this document/revision check and engine transaction path.
     fn edit(&mut self, id: u64, revision: u64, action: Action) -> Result<(), String> {
@@ -383,6 +402,16 @@ impl Document {
         }
         Ok(())
     }
+    /// Validate one transaction without mutating the document, storing its readable change record.
+    fn preview(&mut self, revision: u64, action: Action) -> Result<(), String> {
+        if self.pending() {
+            return Err("Apply or reset the property fields before editing the document.".into());
+        }
+        let record = self.session.preview(revision, action)?;
+        self.last_change = Some(record);
+        self.error = None;
+        Ok(())
+    }
     /// Validate a shared transaction and invalidate cached forms/tools after an effective edit.
     /// Only an unchanged RemapPins transaction preserves UI state; legacy no-op actions still
     /// invalidate their cached forms/tools. Selecting a unit clears primitive selection rather
@@ -396,10 +425,13 @@ impl Document {
         let transforming = matches!(&action, Action::Transform { .. });
         let previous_selected = self.selected;
         let old = self.session.snapshot();
-        self.session.execute(revision, action)?;
+        let record = self.session.execute_change(revision, action)?;
         let next = self.session.snapshot();
         if remapping && std::sync::Arc::ptr_eq(&old, &next) {
             return Ok(());
+        }
+        if !remapping {
+            self.last_change = Some(record);
         }
         let inserted: std::collections::BTreeSet<_> = next.objects.keys().filter(|id| !old.objects.contains_key(id)).copied().collect();
         self.selection.retain(|id| next.objects.contains_key(id));
@@ -577,7 +609,7 @@ impl Document {
         if !open {
             return;
         }
-        for (object_id, primitive) in &item.objects {
+        for (object_id, primitive) in browser_objects(&item) {
             let label = format!("{} · {}", canvas::name(primitive), object_id);
             let row = TreeRow {
                 depth: 1,
@@ -586,12 +618,12 @@ impl Document {
                 label: &label,
                 accessibility_label: None,
                 tip: "",
-                selected: self.selection.contains(object_id),
+                selected: self.selection.contains(&object_id),
             };
             if tree_row(ui, ui.make_persistent_id(("definition_primitive", object_id)), &row).clicked {
                 let mut selection = if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
-                if !selection.insert(*object_id) {
-                    selection.remove(object_id);
+                if !selection.insert(object_id) {
+                    selection.remove(&object_id);
                 }
                 let _ = self.select_many(selection);
             }
@@ -1081,7 +1113,11 @@ impl PcbApp {
                 if matches!(&action, Action::RemapPins { .. }) {
                     return Err("Use app.library_pin_remap to review current nets before applying a remap.".into());
                 }
-                self.library_editors.edit(document()?, revision, action)?;
+                if params["dry_run"].as_bool() == Some(true) {
+                    self.library_editors.preview(document()?, revision, action)?;
+                } else {
+                    self.library_editors.edit(document()?, revision, action)?;
+                }
             }
             "app.library_pin_remap" => {
                 let document = pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(&params["document"])?;
@@ -1183,6 +1219,28 @@ impl PcbApp {
         ctx.request_repaint();
         Ok(())
     }
+}
+
+/// Order primitives for the definition browser so pads and pins sort naturally (`A2` before `A10`,
+/// `Y26` before `AA1`), followed by non-electrical primitives in stable ID order.
+pub(super) fn browser_objects(item: &Item) -> Vec<(u64, &pcbcraft_engine::authoring::Primitive)> {
+    use pcbcraft_engine::authoring::{Primitive, natural_cmp};
+    /// Extract the natural-sort pin/pad number key for electrical primitives.
+    fn key(primitive: &Primitive) -> Option<&str> {
+        match primitive {
+            Primitive::Pad { pad } => Some(pad.number.as_str()),
+            Primitive::Pin { number, .. } => Some(number.as_str()),
+            _ => None,
+        }
+    }
+    let mut entries: Vec<(u64, &Primitive)> = item.objects.iter().map(|(id, p)| (*id, p)).collect();
+    entries.sort_by(|(id_a, a), (id_b, b)| match (key(a), key(b)) {
+        (Some(na), Some(nb)) => natural_cmp(na, nb).then_with(|| id_a.cmp(id_b)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => id_a.cmp(id_b),
+    });
+    entries
 }
 
 /// Keep a selected courtyard vertex index only for genuine coordinate-only edits (unchanged

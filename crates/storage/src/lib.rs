@@ -16,7 +16,8 @@ mod folder;
 pub mod layout;
 pub mod library;
 pub mod recovery;
-pub use folder::{load, load_with_upgrade, save};
+pub use folder::{load, load_with_upgrade, save, trash_archived_folder};
+mod trash;
 
 /// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
 /// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
@@ -61,6 +62,16 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<File> {
         options.attributes(FILE_ATTRIBUTE_HIDDEN);
     }
     options.open(path)
+}
+
+/// Open the persistent sibling lock for a packed project archive. Take an exclusive lock on
+/// the returned file before checking the saved bytes, and hold it through replacement.
+pub fn open_archive_save_lock(path: &Path) -> std::io::Result<File> {
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Project file has no filename"))?;
+    let mut lock_name = std::ffi::OsString::from(".");
+    lock_name.push(name);
+    lock_name.push(".pcbcraft-lock");
+    open_lock_file(&path.with_file_name(lock_name))
 }
 
 /// Open a folder, its project.json entry point, or a packed archive.

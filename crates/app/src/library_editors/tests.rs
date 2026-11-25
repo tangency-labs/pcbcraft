@@ -1514,6 +1514,50 @@ fn library_tool_keys_and_rotate_use_the_pressed_event_modifiers() {
     }
 }
 
+/// Click extend reads the release event's own modifiers too: a shift held at the
+/// click still extends the selection even if released before batch end, and a
+/// shift arriving after the release cannot fake an extend.
+#[test]
+fn library_click_extend_uses_the_release_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        // Click extend: release carries shift, the batch ends without it.
+        let click = |release_shift: bool, end_shift: bool| {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+            // Center on empty model space so the click hits no primitive or panel.
+            h.state_mut()
+                .library_editors
+                .documents
+                .get_mut(&id)
+                .unwrap()
+                .camera
+                .center_on(pcbcraft_engine::schematic::Point { x_nm: 30_000_000, y_nm: 30_000_000 });
+            h.run();
+            let empty = h.get_by_label("Library canvas").rect().center();
+            h.hover_at(empty);
+            h.run();
+            let modifiers = |shift| egui::Modifiers { shift, ..Default::default() };
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(release_shift)),
+                egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: true, modifiers: modifiers(release_shift) },
+                egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: false, modifiers: modifiers(release_shift) },
+                egui::Event::ModifiersChanged(modifiers(end_shift)),
+            ]);
+            h.run();
+            h.state().library_editors.documents[&id].selection.clone()
+        };
+        assert_eq!(click(true, false), click(true, true), "{kind:?}: shift-click must extend when the release carries shift");
+        assert_eq!(click(false, true), click(false, false), "{kind:?}: a shift arriving after the release must not extend");
+        assert_eq!(click(true, true).len(), 1, "{kind:?}: extend keeps the selected object on empty space");
+        assert!(click(false, false).is_empty(), "{kind:?}: a plain click on empty space clears the selection");
+    }
+}
+
 /// Native keyboard→clipboard translation drives the library paste op for every OS
 /// clipboard state: `egui-winit` emits `Paste("")` on an empty or unsupported read
 /// and `PasteImage` on an image-only read. Both arm the same internal preview —
@@ -1675,4 +1719,105 @@ fn native_paste_chord_only_arms_the_focused_library_view() {
         matches!(h.state().library_editors.documents[&doc_b].tool, canvas::Tool::Select),
         "the document bound to the detached view must not consume the chord"
     );
+}
+
+/// The shared GUI/MCP `app.library_edit` command supports dry-run change records, applies a
+/// ball-grid array in one undo step, and orders pads naturally in the definition browser.
+#[test]
+fn ball_grid_command_supports_dry_run_single_undo_and_natural_browser_sort() {
+    let mut app = PcbApp::default();
+    let ctx = Context::default();
+    app.run_window_command(&ctx, "app.library_new", &json!({"kind":"footprint"})).unwrap();
+    let id = app.library_editors.active.unwrap();
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":0,"action":{"operation":"delete","objects":[2,3]}}))
+        .unwrap();
+
+    let action = json!({
+        "operation": "array",
+        "objects": [1],
+        "columns": 12,
+        "rows": 22,
+        "column_step": {"x_nm": 800_000, "y_nm": 0},
+        "row_step": {"x_nm": 0, "y_nm": 800_000},
+        "numbering": {"mode": "ball_grid", "skip_jedec": true}
+    });
+
+    // Dry run validates and records a readable change summary without mutating state or revision.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":1,"action":action,"dry_run":true})).unwrap();
+    let inspected = crate::window_commands::inspect_editor(&app);
+    let doc_state = &inspected["library_editors"]["documents"][0];
+    assert_eq!(doc_state["state"]["revision"], 1);
+    assert_eq!(doc_state["state"]["item"]["objects"].as_object().unwrap().len(), 1);
+    assert_eq!(doc_state["last_change"]["dry_run"], true);
+    assert_eq!(doc_state["last_change"]["changed"], true);
+    assert_eq!(doc_state["last_change"]["renamed_pads"], json!(["1 -> A1"]));
+    assert_eq!(doc_state["last_change"]["added_pads"].as_array().unwrap().len(), 263);
+
+    // Applying executes in one undo step and keeps the browser in natural pad order.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":1,"action":action})).unwrap();
+    let inspected = crate::window_commands::inspect_editor(&app);
+    let doc_state = &inspected["library_editors"]["documents"][0];
+    assert_eq!(doc_state["state"]["revision"], 2);
+    assert_eq!(doc_state["last_change"]["dry_run"], false);
+    assert_eq!(doc_state["state"]["item"]["objects"].as_object().unwrap().len(), 264);
+
+    let item = app.library_editors.documents[&id].session.snapshot();
+    let browser_pads: Vec<&str> = super::browser_objects(&item)
+        .into_iter()
+        .filter_map(|(_, primitive)| match primitive {
+            pcbcraft_engine::authoring::Primitive::Pad { pad } => Some(pad.number.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(browser_pads.len(), 264);
+    let pos = |label: &str| browser_pads.iter().position(|pad| *pad == label).unwrap();
+    assert!(pos("A2") < pos("A10"), "browser must sort A2 before A10");
+    assert!(pos("Y12") < pos("AA1"), "browser must sort Y12 before AA1");
+    assert_eq!(browser_pads.first().copied(), Some("A1"));
+    assert_eq!(browser_pads.last().copied(), Some("AB12"));
+
+    // One undo step restores the single seed pad.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":2,"action":{"operation":"undo"}})).unwrap();
+    assert_eq!(app.library_editors.documents[&id].session.snapshot().objects.len(), 1);
+}
+
+/// A batch from an unfocused viewport must not run any canvas keyboard command: the
+/// destructive M/E/Delete/Enter keys stay inert, and the same keys still work focused.
+#[test]
+fn unfocused_batches_ignore_library_canvas_keyboard_commands() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (key, focused, mutates) in
+            [(egui::Key::Delete, false, false), (egui::Key::M, false, false), (egui::Key::E, false, false), (egui::Key::Delete, true, true)]
+        {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let before = doc.session.snapshot();
+            doc.selection = before.objects.keys().copied().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            h.input_mut().focused = focused;
+            for pressed in [true, false] {
+                h.input_mut().events.push(egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert_eq!(doc.session.snapshot().as_ref() == before.as_ref(), !mutates, "{kind:?} {key:?} focus={focused}");
+            assert!(!doc.details_requested, "{kind:?} {key:?} focus={focused}");
+            assert!(mutates || matches!(doc.tool, canvas::Tool::Select), "{kind:?} {key:?}: an unfocused batch must not arm a tool");
+            if mutates {
+                assert!(doc.session.snapshot().objects.is_empty(), "{kind:?}: focused Delete clears the selection");
+            }
+        }
+    }
 }

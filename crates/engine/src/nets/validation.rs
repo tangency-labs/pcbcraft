@@ -5,7 +5,7 @@ use super::{
     graph::{Graph, GraphBuilder},
 };
 use crate::Project;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 /// Zero-allocation byte counter used to meter compact JSON size against [`MAX_REGISTRY_BYTES`].
@@ -33,8 +33,8 @@ fn history_ids(state: &State) -> Option<&[Uuid]> {
 /// Incremental validator and compact byte meter for [`Registry`] so native Save encoding can
 /// yield between frames without allocating an 8 MiB buffer. Per-item stages step one record
 /// ID/number check, differential pair, sheet anchor item, network index entry, record header,
-/// class binding, lineage item, seen-lineage cleanup entry, branch/successor UUID, or
-/// [`RecordEncoding`] byte-metering fragment per call.
+/// class binding, lineage item, seen-lineage cleanup entry, branch/successor UUID, split
+/// baseline check or index cleanup entry, or [`RecordEncoding`] byte-metering fragment per call.
 /// Three whole-project units remain single isolated steps that yield before and after: warming
 /// `project.borrowed_electrical_connectivity()` and indexing every net's label/port endpoints
 /// (`GraphBuilder` phase 0, building connectivity once per snapshot if not already cached),
@@ -56,6 +56,9 @@ pub(crate) struct RegistryValidation {
     graph: Option<Graph>,
     assigned: BTreeSet<usize>,
     seen_lineage: BTreeSet<(Uuid, Option<Uuid>, Anchor)>,
+    has_authored_intent: bool,
+    // For each source net: its most recent lineage owner and the number of distinct owners.
+    split_counts: BTreeMap<Uuid, (Uuid, u32)>,
     prev_successor: Option<Uuid>,
     meter_bytes: usize,
     meter_encoding: RecordEncoding,
@@ -74,6 +77,8 @@ impl RegistryValidation {
             5 => "numbering_plan",
             6 => "meter_records",
             7 => "meter_pairs",
+            8 => "validate_split_baselines",
+            9 => "drain_split_counts",
             _ => "done",
         }
     }
@@ -109,6 +114,7 @@ impl RegistryValidation {
             }
             1 => {
                 if let Some(record) = registry.records.get(self.cursor) {
+                    self.has_authored_intent |= !record.authored_intent.is_empty();
                     let unique = self.ids.insert(record.id);
                     if record.id.is_nil() || self.prev_id.is_some_and(|prev| prev >= record.id) || !unique {
                         self.id_error = true;
@@ -156,11 +162,12 @@ impl RegistryValidation {
                     self.cursor = 0;
                     self.assigned.clear();
                     self.seen_lineage.clear();
-                    self.phase = 5;
+                    self.phase = if self.has_authored_intent { 8 } else { 5 };
                     return Ok(false);
                 };
                 match self.substep {
                     0 => {
+                        record.authored_intent.validate_reference(Some(record.id), |id| self.ids.contains(&id))?;
                         let graph = self.graph.as_ref().ok_or("missing electrical graph during net registry validation")?;
                         if record.fallbacks.len() > 3
                             || record.lineage.len() > MAX_RECORDS
@@ -239,6 +246,15 @@ impl RegistryValidation {
                                 || !self.seen_lineage.insert((source.snapshot.capture_id, source.net, source.anchor.clone()))
                             {
                                 return Err("Invalid or duplicate snapshot-qualified net lineage.".into());
+                            }
+                            if self.has_authored_intent
+                                && let Some(net) = source.net
+                            {
+                                let (last, count) = self.split_counts.entry(net).or_insert((record.id, 1));
+                                if *last != record.id {
+                                    *last = record.id;
+                                    *count += 1;
+                                }
                             }
                             self.item_index += 1;
                         }
@@ -352,6 +368,21 @@ impl RegistryValidation {
                     return Ok(true);
                 }
             }
+            8 => {
+                if let Some(record) = registry.records.get(self.cursor) {
+                    record
+                        .authored_intent
+                        .validate_split_baselines_with(Some(record.id), |net| self.split_counts.get(&net).map_or(0, |&(_, count)| count))?;
+                    self.cursor += 1;
+                } else {
+                    self.phase = 9;
+                }
+            }
+            9 => {
+                if self.split_counts.pop_first().is_none() {
+                    self.phase = 5;
+                }
+            }
             _ => return Err("invalid net registry validation phase".into()),
         }
         Ok(false)
@@ -378,6 +409,16 @@ impl Registry {
     pub(crate) fn validate(&self, project: &Project) -> Result<(), String> {
         let mut validation = RegistryValidation::default();
         while !validation.step(self, project)? {}
+        Ok(())
+    }
+
+    /// Check the registry byte bound without rebuilding connectivity for a metadata-only edit.
+    pub(super) fn validate_encoded_size(&self) -> Result<(), String> {
+        let mut bytes = 0;
+        serde_json::to_writer(ByteCounter(&mut bytes), self).map_err(|error| error.to_string())?;
+        if bytes > MAX_REGISTRY_BYTES {
+            return Err("Net registry exceeds its byte limit.".into());
+        }
         Ok(())
     }
 }
@@ -533,6 +574,7 @@ mod tests {
                 revision: 1,
                 name: format!("Class{index}"),
                 rules: Default::default(),
+                authored_intent: Default::default(),
             })
             .collect();
 

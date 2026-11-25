@@ -314,7 +314,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         assert!(serde_json::to_vec(&stored["components"][0]["pin_functions"]).unwrap().len() <= 64);
         assert!(docs[ENTRY_POINT].len() <= before[ENTRY_POINT].len() + 256);
         for (change, expected) in [
-            ("old format", "require project format 48"),
+            ("old format", "pin_functions are not allowed in pcbcraft-project/16."),
             ("empty", "Invalid alternate pin function record count"),
             ("null", "invalid type: null, expected a sequence"),
             ("unknown", "Unknown or duplicate alternate pin function selection"),
@@ -522,6 +522,88 @@ fn pin_function_storage_with_designator_lock_keeps_the_current_header() {
     }
 }
 
+/// Authored electrical intent is an optional record beside pin function choices and an optional
+/// designator lock: it never changes the current project header or the instance header. Save
+/// and reopen preserve every feature exactly, an older pin-function header refuses the intent,
+/// and clearing the intent and lock returns to the pin-function bytes exactly.
+#[test]
+fn pin_function_storage_with_electrical_intent_keeps_the_current_header() {
+    for board in [false, true] {
+        let mut session = fixture(board);
+        session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+        let label = json!({"name":"TEST_INTENT","style":"local","x_nm":50_800_000,"y_nm":0,"expected_revision":session.revision()});
+        session.apply(crate::net_labels::ADD, &label).unwrap();
+        let pins_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        let current = crate::persistence::CURRENT_PROJECT_FORMAT;
+        assert_eq!(serde_json::from_slice::<Value>(&pins_only[ENTRY_POINT]).unwrap()["format"], current);
+        let project = session.project().unwrap();
+        let label = project.net_labels().iter().find(|label| label.name == "TEST_INTENT").unwrap();
+        let net = project
+            .net_registry
+            .records
+            .iter()
+            .find(|record| record.primary.kind == crate::nets::AnchorKind::Label && record.primary.object == label.id)
+            .unwrap()
+            .id;
+        let address = crate::nets::NetAddress { project: project.id(), scope: project.net_scope(), net };
+        let target = json!({"kind":"net","address":address});
+        let volts = json!({"working_voltage":{"magnitude":{"value":"24","unit":"V"},"basis":"dc","reference":{"kind":"earth"}}});
+        let intent = |session: &Session, intent: &Value| json!({"version":1,"expected_revision":session.revision(),"target":target,"intent":intent});
+        session.apply(crate::nets::intent::SET, &intent(&session, &volts)).unwrap();
+        let saved = session.snapshot().unwrap();
+        let docs = encode_documents(saved.clone()).unwrap();
+        let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(stored["format"], current);
+        assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
+        assert!(stored["components"][0].get("designator_locked").is_none());
+        if let Some(path) = saved.instances_document_path() {
+            let format = |docs: &crate::persistence::Documents| serde_json::from_slice::<Value>(&docs[&path]).unwrap()["format"].clone();
+            assert_eq!(format(&docs), format(&pins_only));
+        }
+        let mut invalid = stored.clone();
+        invalid["format"] = json!("pcbcraft-project/48");
+        let mut changed = docs.clone();
+        changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&invalid).unwrap());
+        if let Some(path) = saved.instances_document_path() {
+            let mut instances: Value = serde_json::from_slice(&changed[&path]).unwrap();
+            instances["format"] = json!("pcbcraft-instances/4");
+            changed.insert(path, serde_json::to_vec(&instances).unwrap());
+        }
+        let error = decode_documents(&changed).expect_err("an older header must refuse authored intent");
+        assert!(error.contains(&format!("Authored electrical intent requires {current}")), "{error}");
+        let reopened = decode_documents(&docs).unwrap();
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), docs);
+        assert_eq!(encode_documents(decode_packed(&encode_packed(saved).unwrap()).unwrap().project).unwrap(), docs);
+        let mut reader = Session::default();
+        reader.open_snapshot(reopened);
+        let inspected = reader.execute(crate::nets::intent::INSPECT, &json!({"version":1,"target":target})).unwrap();
+        assert_eq!(inspected["intent"], volts);
+
+        let lock = |session: &mut Session, locked: bool| {
+            let project = session.project().unwrap();
+            let placed = &project.symbols()[0];
+            let fields = json!({"symbol":placed.id(),"reference":project.reference(placed),"value":project.value(placed),
+                "designator_locked":locked,"expected_revision":session.revision()});
+            session.apply(crate::SET_SYMBOL_FIELDS, &fields).unwrap();
+        };
+        lock(&mut session, true);
+        let locked = encode_documents(session.snapshot().unwrap()).unwrap();
+        let stored: Value = serde_json::from_slice(&locked[ENTRY_POINT]).unwrap();
+        assert_eq!(stored["format"], current);
+        assert_eq!(stored["components"][0]["designator_locked"], true);
+        let reopened = decode_documents(&locked).unwrap();
+        assert!(reopened.components().next().unwrap().designator_locked());
+        assert_eq!(encode_documents(reopened).unwrap(), locked);
+
+        session.apply(crate::nets::intent::SET, &intent(&session, &json!({}))).unwrap();
+        let pins_and_lock = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&pins_and_lock[ENTRY_POINT]).unwrap()["format"], current);
+        lock(&mut session, false);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), pins_only);
+    }
+}
+
 /// Output recipes with a pin function choice keep the current project header, with or without
 /// a designator lock. Both codecs reopen it byte-identically, the older pin-function headers
 /// refuse recipes, and removing the recipes or the choice keeps the current header.
@@ -572,7 +654,7 @@ fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
         // The older pin-function headers refuse recipes.
         for older in ["pcbcraft-project/48", "pcbcraft-project/56"] {
             let error = decode_documents(&with_format(&docs, older)).err().unwrap();
-            assert!(error.contains("output_recipes requires project format 47, 57, 60, 62 or 63"), "{error}");
+            assert!(error.contains("output_recipes requires project format"), "{error}");
         }
         // A file saved earlier as project/60 still opens, and the next save writes the current format.
         let reopened = decode_documents(&with_format(&docs, "pcbcraft-project/60")).unwrap();
@@ -582,7 +664,7 @@ fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
         // The older recipe envelopes without pin functions refuse the choice.
         let older = if locked { "pcbcraft-project/57" } else { "pcbcraft-project/47" };
         let error = decode_documents(&with_format(&docs, older)).err().unwrap();
-        assert!(error.contains("Alternate pin functions require"), "{error}");
+        assert!(error.contains(&format!("pin_functions are not allowed in {older}")), "{error}");
     }
 
     // Removing the recipes keeps the current header with the locked choice.
