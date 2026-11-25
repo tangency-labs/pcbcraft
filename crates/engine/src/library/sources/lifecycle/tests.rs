@@ -255,11 +255,16 @@ fn codecs_refuse_wrong_versions_unknown_fields_and_limits() {
     policy.states =
         (0..MAX_STATES).map(|i| State { id: format!("state-{i}"), label: "é".repeat(MAX_LABEL_CHARS), disposition: Disposition::Draft }).collect();
     assert!(policy.validate().is_ok());
-    for bad_label in ["", " ", " Released", "Released ", "\u{feff}A", "A\u{feff}", "Re\nleased", "A\x7fB", &"é".repeat(MAX_LABEL_CHARS + 1)] {
+    for bad_label in
+        ["", " ", " Released", "Released ", "\u{feff}A", "A\u{feff}", "Re\nleased", "Released\n", "A\x7fB", &"é".repeat(MAX_LABEL_CHARS + 1)]
+    {
         let mut invalid = Policy::standard();
         invalid.states[0].label = bad_label.into();
         assert!(invalid.validate().is_err(), "label {bad_label:?}");
     }
+    let mut invalid = Policy::standard();
+    invalid.states[0].id = "draft\n".into();
+    assert!(invalid.validate().is_err());
     policy.states.push(State { id: "extra".into(), label: "Extra".into(), disposition: Disposition::Draft });
     assert!(policy.validate().unwrap_err().contains("must contain 1 to 64 states"));
     policy.states.truncate(2);

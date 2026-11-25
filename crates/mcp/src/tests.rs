@@ -1102,14 +1102,13 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
 }
 
-/// Net appearance commands are backward-compatible catalog additions: discovery keeps API version
-/// 1, publishes their full patch schema, and the catalog revision still changes when they are absent.
+/// Discovery publishes the net appearance commands and their patch schema at the current
+/// API version, and the catalog revision changes if those commands are absent.
 #[test]
-fn net_appearance_commands_are_version_one_catalog_additions() {
+fn net_appearance_commands_are_catalog_additions() {
     use pcbcraft_engine::command_api::{COMMAND_API_VERSION, catalog_revision};
     use pcbcraft_engine::nets::{INSPECT_APPEARANCE, MAX_PROPERTY_TARGETS, SET_APPEARANCE, SET_PROPERTIES};
 
-    assert_eq!(COMMAND_API_VERSION, 1);
     let mut s = server();
     let listed = call(&mut s, "list_commands", json!({}));
     assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
