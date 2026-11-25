@@ -14343,6 +14343,26 @@
       },
       "scope": "window"
     },
+    "file.archive_folder": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trash_source": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "file.open": {
       "params": {
         "additionalProperties": false,

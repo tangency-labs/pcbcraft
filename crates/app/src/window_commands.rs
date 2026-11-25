@@ -1311,6 +1311,20 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "file.archive_folder",
+            title: "Archive Project Folder",
+            summary: "Save the open project folder as a compressed .pc at a new path outside the folder and switch to it. The original folder stays by default. Set trash_source to true to request system Trash after verification. Check file.last for the outcome.",
+            params: &[
+                Param { name: "path", summary: "Absolute path of the new .pc archive", required: true, kind: Kind::Path },
+                Param {
+                    name: "trash_source",
+                    summary: "Request system Trash for the original folder after verification; defaults to false",
+                    required: false,
+                    kind: Kind::Bool,
+                },
+            ],
+        },
+        WindowCommand {
             id: "file.open",
             title: "Open",
             summary: "Open a project folder, its entry point or a .pc archive in place of the current project, as File › Open does without the picker. Refused while the current project has unsaved changes. Keep the reply's file.operation.id and poll inspect_editor: read file.last.status only when file.last.id equals it; a greater file.last.id means a later job replaced the result, which is then unavailable.",
@@ -2151,11 +2165,20 @@ mod live {
                         return Err(message);
                     }
                 }
-                ("file.save_as", _, _) => {
+                ("file.save_as" | "file.archive_folder", _, _) => {
                     if self.session.project().is_none() {
                         return Err("No project is open.".to_owned());
                     }
-                    let format = if params["format"] == "archive" { crate::SaveFormat::Archive } else { crate::SaveFormat::Folder };
+                    let format = if id == "file.archive_folder" {
+                        if self.files.archive_source(&self.session).is_none() {
+                            return Err("Open a project folder to archive it.".to_owned());
+                        }
+                        crate::SaveFormat::ArchiveFolder { trash_source: params["trash_source"].as_bool().unwrap_or(false) }
+                    } else if params["format"] == "archive" {
+                        crate::SaveFormat::Archive
+                    } else {
+                        crate::SaveFormat::Folder
+                    };
                     let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
                     self.files.save_to(&self.session, format, path, ctx)?;
                     self.message = None;

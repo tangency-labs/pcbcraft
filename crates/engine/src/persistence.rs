@@ -30,7 +30,9 @@ pub use documents::{
 };
 mod packed;
 mod power_migration;
-pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
+pub use packed::{
+    PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_deflated_packed_documents, encode_packed, encode_packed_documents,
+};
 pub use power_migration::migrate_power_markers;
 
 /// Prepare an opened native project for current bundled addresses without touching source bytes.
