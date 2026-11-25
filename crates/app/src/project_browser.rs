@@ -53,6 +53,7 @@ impl Node {
 /// Revision-bound presentation intent; the host applies it after rendering and modal checks.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Action {
+    CloseProject,
     OpenDocument(DocumentTarget),
     Inspection {
         source: pcbcraft_engine::board::correspondence::Source,
@@ -95,7 +96,7 @@ impl Action {
             Self::Inspection { .. } => Some("Show in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
-            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
+            Self::CloseProject | Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
         }
     }
 
@@ -109,7 +110,7 @@ impl Action {
             Self::Inspection { source: pcbcraft_engine::board::correspondence::Source::Pad(target), .. } => Some(DocumentTarget::Board(target.board)),
             Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
             Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
-            Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
+            Self::CloseProject | Self::ManageSheet { .. } | Self::SetPage { .. } | Self::SetTemplate { .. } | Self::UpdatePcb => None,
         }
     }
 }
@@ -327,6 +328,7 @@ impl ProjectBrowser {
         filters: crate::selection_filters::Filters,
         inspection: &[pcbcraft_engine::board::correspondence::Source],
         hidden: &BTreeSet<String>,
+        can_close_project: bool,
     ) -> Option<Action> {
         self.rect = Rect::NOTHING;
         if !self.open {
@@ -335,7 +337,7 @@ impl ProjectBrowser {
         let snapshot = session.snapshot()?;
         let mut action = None;
         let (card, toggle) = workspace::floating_card(ui, "project_browser", "Browser", canvas, self.collapsed, |ui| {
-            action = self.tree(ui, snapshot, active, selected, footprints, filters, inspection, hidden);
+            action = self.tree(ui, snapshot, active, selected, footprints, filters, inspection, hidden, can_close_project);
         });
         if toggle {
             self.collapsed = !self.collapsed;
@@ -359,6 +361,7 @@ impl ProjectBrowser {
         filters: crate::selection_filters::Filters,
         inspection: &[pcbcraft_engine::board::correspondence::Source],
         hidden: &BTreeSet<String>,
+        can_close_project: bool,
     ) -> Option<Action> {
         if !self.lists.as_ref().is_some_and(|lists| Arc::ptr_eq(&lists.project, &snapshot)) {
             if self.lists.as_ref().is_some_and(|lists| lists.project.sheet_target() != snapshot.sheet_target()) {
@@ -373,6 +376,7 @@ impl ProjectBrowser {
             active,
             sheets: &lists.sheets,
             sheet_count: lists.sheets.len(),
+            can_close_project,
             folded: None,
             reset: None,
             picked: None,
@@ -542,6 +546,7 @@ struct Tree<'a> {
     active: DocumentTarget,
     sheets: &'a [SheetItems],
     sheet_count: usize,
+    can_close_project: bool,
     folded: Option<(Node, bool)>,
     reset: Option<Node>,
     picked: Option<Action>,
@@ -629,8 +634,11 @@ impl Tree<'_> {
         let access = matches!(node, Node::Board(_)).then(|| format!("Board {label}"));
         let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
         let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);
-        if pick.is_some() || matches!(node, Node::Sheets | Node::Sheet(_)) {
+        if pick.is_some() || matches!(node, Node::Project | Node::Sheets | Node::Sheet(_)) {
             pcbcraft_chrome::menu::context(&response.response, |ui| {
+                if node == Node::Project && MenuItem::new("Close Project").enabled(self.can_close_project).show(ui) {
+                    self.picked = Some(Action::CloseProject);
+                }
                 if let Some(pick) = &pick
                     && self.open_menu(ui, pick)
                 {
