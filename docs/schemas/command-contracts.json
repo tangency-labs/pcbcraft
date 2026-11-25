@@ -13285,6 +13285,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "dry_run": {
+            "type": "boolean"
+          },
           "expected_revision": {
             "minimum": 0,
             "type": "integer"
@@ -13642,7 +13645,7 @@
               "minimum": 1,
               "type": "integer"
             },
-            "maxItems": 512,
+            "maxItems": 1536,
             "type": "array",
             "uniqueItems": true
           },

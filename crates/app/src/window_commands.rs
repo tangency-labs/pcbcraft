@@ -208,7 +208,9 @@ mod live {
                 Self::PinRemaps => pcbcraft_engine::authoring::remap::schema(),
                 Self::RemapRuntime => pcbcraft_engine::authoring::remap::Scalar::Runtime.schema(),
                 Self::RemapToken => pcbcraft_engine::authoring::remap::Scalar::Token.schema(),
-                Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::PrimitiveIds => {
+                    json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS,"uniqueItems":true})
+                }
                 Self::PartReferenceField => {
                     json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"enum":["footprint","new_package"]},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
                 }
@@ -260,7 +262,7 @@ mod live {
                             },
                             "required": ["clearance_nm"]
                         },
-                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
+                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step and optional numbering {mode:\"ball_grid\",skip_jedec}; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
                     })
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
@@ -299,7 +301,7 @@ mod live {
                 Self::RemapRuntime => return pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(value).map(|_| ()),
                 Self::RemapToken => return pcbcraft_engine::authoring::remap::Scalar::Token.parse(value).map(|_| ()),
                 Self::PrimitiveIds => value.as_array().is_some_and(|items| {
-                    items.len() <= 512
+                    items.len() <= pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
                         && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
                 }),
@@ -740,7 +742,7 @@ mod live {
         WindowCommand {
             id: "app.library_edit",
             title: "Edit Library Item",
-            summary: "Apply one revision-checked authoring transaction to a library document, using its separate undo history.",
+            summary: "Apply or dry-run one revision-checked authoring transaction on a library document, using its separate undo history.",
             params: &[
                 Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
                 Param {
@@ -750,6 +752,12 @@ mod live {
                     kind: Kind::LibraryRevision,
                 },
                 Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
+                Param {
+                    name: "dry_run",
+                    summary: "Validate and record the change summary without mutating the document",
+                    required: false,
+                    kind: Kind::Bool,
+                },
             ],
         },
         WindowCommand {
@@ -2196,6 +2204,20 @@ mod live {
             );
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
+        }
+
+        /// Group selection reaches every pad of a 26 x 26 ball grid; the published `maxItems` and
+        /// validation share the engine's footprint primitive limit, and IDs stay positive and distinct.
+        #[test]
+        fn primitive_ids_accept_a_full_footprint_and_refuse_one_more() {
+            let limit = pcbcraft_engine::authoring::MAX_FOOTPRINT_OBJECTS;
+            assert_eq!(Kind::PrimitiveIds.schema()["maxItems"], json!(limit));
+            let ids = |count: u64| Value::from((1..=count).collect::<Vec<_>>());
+            assert!(Kind::PrimitiveIds.validate(&ids(676)).is_ok());
+            assert!(Kind::PrimitiveIds.validate(&ids(limit as u64)).is_ok());
+            assert!(Kind::PrimitiveIds.validate(&ids(limit as u64 + 1)).is_err());
+            assert!(Kind::PrimitiveIds.validate(&json!([1, 1])).is_err());
+            assert!(Kind::PrimitiveIds.validate(&json!([0])).is_err());
         }
 
         /// Minimal JSON Schema evaluator covering the keywords used in command contracts

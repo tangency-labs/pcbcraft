@@ -118,6 +118,17 @@ round outline; the record remains a slot. Null slot records are not accepted.
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
 
+Ball-grid footprints may generate pad identifiers via the authoring `array`
+action with `numbering: {"mode": "ball_grid", "skip_jedec": true|false}`.
+Row labels follow Excel-style lettering (`A`…`Z`, then `AA`, `AB`, …) with
+columns `1`…`N`. When `skip_jedec` is true, the JEDEC skip set
+(`I`, `O`, `Q`, `S`, `X`, `Z`) is omitted from every row letter (so a 26-row
+grid runs `A`…`AF`). Footprint inspection catalogs, package maps and the
+definition browser present pad identifiers in natural order (`A2` before `A10`,
+`Y26` before `AA1`), while saved JSON retains its canonical storage order.
+The shared `app.library_edit` command accepts `"dry_run": true` to validate and
+record a readable change summary without mutating the document.
+
 A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,000).
 The array implies a non-plated through hole with no copper land. It has no pad
 number and does not participate in terminal mappings or connectivity. Footprint
