@@ -169,18 +169,18 @@ fn terminal_types(project: &Project) -> BTreeMap<Terminal, ElectricalType> {
         .collect()
 }
 
-/// Global net labels and power terminals on every sheet, with the name each one carries.
-fn global_anchors(project: &Project) -> BTreeMap<WireEndpoint, String> {
+/// Global net labels and power terminals, with the name and owning sheet index of each.
+fn global_anchors(project: &Project) -> BTreeMap<WireEndpoint, (String, usize)> {
     let mut anchors = BTreeMap::new();
     for sheet in project.sheets() {
         let Some(view) = project.for_sheet(sheet.target) else {
             continue;
         };
         for label in view.net_labels().iter().filter(|label| label.style.global()) {
-            anchors.insert(WireEndpoint::NetLabel(label.id), label.name.clone());
+            anchors.insert(WireEndpoint::NetLabel(label.id), (label.name.clone(), view.sheet_index));
         }
         for (end, name, _) in view.power_terminals() {
-            anchors.insert(end, name.to_owned());
+            anchors.insert(end, (name.to_owned(), view.sheet_index));
         }
     }
     anchors
@@ -314,6 +314,7 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
 
     let types = terminal_types(project);
     let globals = global_anchors(project);
+    let cut_nets: BTreeSet<_> = cut_wires.iter().filter_map(|wire| wire.net).collect();
     let nets: BTreeSet<_> = inside.iter().filter_map(|end| graph.net_index_for_endpoint(*end)).collect();
     let mut ports = Vec::new();
     let mut global_nets = Vec::new();
@@ -328,15 +329,21 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
             members.into_iter().filter(|end| !matches!(end, WireEndpoint::Junction(_))).collect()
         };
         let (members_in, members_out) = (anchors(members_in), anchors(members_out));
-        let names = |members: &[WireEndpoint]| -> BTreeSet<String> { members.iter().filter_map(|end| globals.get(end).cloned()).collect() };
-        let shared = names(members_in.as_slice()).intersection(&names(members_out.as_slice())).next().cloned();
+        // A cut wire leaves a branch on the parent. A remote anchor can keep a connection
+        // that is already global, but cannot serve as the hub for wiring that branch back in.
+        let needs_parent_hub = cut_nets.contains(&index);
+        let name_at = |end: &WireEndpoint, parent_only: bool| {
+            globals.get(end).filter(|(_, sheet)| !parent_only || *sheet == project.sheet_index).map(|(name, _)| name.as_str())
+        };
+        let names = |members: &[WireEndpoint], parent_only| -> BTreeSet<_> { members.iter().filter_map(|end| name_at(end, parent_only)).collect() };
+        let shared = names(&members_in, false).intersection(&names(&members_out, needs_parent_hub)).next().map(|name| (*name).to_owned());
         let listed = |members: &[WireEndpoint]| -> Vec<Value> { members.iter().map(|end| end.inspect()).collect() };
         if let Some(name) = shared {
-            let anchor = |members: &[WireEndpoint]| members.iter().copied().find(|end| globals.get(end) == Some(&name));
+            let anchor = |members: &[WireEndpoint], parent_only| members.iter().copied().find(|end| name_at(end, parent_only) == Some(name.as_str()));
             global_nets.push(GlobalNet {
                 inside: listed(members_in.as_slice()),
                 outside: listed(members_out.as_slice()),
-                anchors: [anchor(members_in.as_slice()), anchor(members_out.as_slice())],
+                anchors: [anchor(&members_in, false), anchor(&members_out, needs_parent_hub)],
                 members: [members_in, members_out],
                 name,
             });

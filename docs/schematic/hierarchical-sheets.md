@@ -82,8 +82,10 @@ on their own. The reply lists:
   driver is tri-state), driven only from outside is input, driven from both
   sides or carrying a bidirectional pin is bidirectional, otherwise passive;
 - the `global_nets` that need no port because the same global label or power
-  symbol name sits on both sides. A power symbol left outside the selection does
-  not carry its name inside, so that net is listed as a port.
+  symbol name sits on both sides. If a wire is cut, a matching anchor must stay
+  on the parent sheet to reconnect that branch; a match on a different sheet
+  alone is not enough. A power symbol left outside the selection does not carry
+  its name inside, so that net is listed as a port.
 
 More than 64 ports, two boundary nets with the same name, an empty or unknown
 selection, a selection with no symbol or net label, a taken or blank name, a full project and a stale `expected_revision`

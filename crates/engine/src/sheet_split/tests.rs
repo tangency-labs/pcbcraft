@@ -461,6 +461,42 @@ fn a_third_sheet_ground_needs_a_port_for_the_cut_parent_wire() -> Result<(), Com
     Ok(())
 }
 
+/// A remote-only name match needs no port when no wire is cut; when there is a cut,
+/// a matching parent label can reconnect it even if a remote label was created first.
+#[test]
+fn global_ground_stays_portless_when_no_parent_reconnection_is_missing() -> Result<(), CommandError> {
+    for cut_wire in [false, true] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({}))?;
+        let parent = s.open_project()?.sheet_target();
+        let gnd = ground(&mut s, 40 * GRID_NM, 0);
+        if cut_wire {
+            let part = resistor(&mut s, 0, 0);
+            connect(&mut s, pin(&part, "2"), pin(&gnd, "1"));
+        }
+        apply(&mut s, CREATE_SHEET, json!({"name":"Other"}));
+        let other = sheet_named(&s, "Other");
+        apply(&mut s, net_labels::ADD, json!({"sheet":other.id(),"name":"GND","style":"global","x_nm":0,"y_nm":0}));
+        if cut_wire {
+            apply(&mut s, net_labels::ADD, json!({"sheet":parent.id(),"name":"GND","style":"global","x_nm":0,"y_nm":20 * GRID_NM}));
+        }
+        let Some(before) = s.snapshot() else { panic!("expected an open project") };
+        let params = json!({"sheet":parent.id(),"items":{"symbols":[gnd],"wires":[]},"name":"Split","expected_revision":s.revision()});
+        let report = s.execute(PREVIEW, &params)?;
+        let preview = &report["split_preview"];
+        assert_eq!(preview["cut_wires"].as_array().map(Vec::len), Some(usize::from(cut_wire)));
+        assert_eq!(preview["ports"], json!([]), "{preview}");
+        let Some([global]) = preview["global_nets"].as_array().map(Vec::as_slice) else { panic!("expected one global net: {preview}") };
+        assert_eq!(global["name"], "GND");
+        s.apply(SPLIT, &params)?;
+        let after = s.open_project()?;
+        let Some(child) = after.for_sheet(sheet_named(&s, "Split")) else { panic!("expected the new child sheet") };
+        assert!(child.hierarchical_labels().is_empty());
+        assert!(same_netlist(before.borrowed_electrical_connectivity(), after.borrowed_electrical_connectivity()));
+    }
+    Ok(())
+}
+
 /// Splitting the fixture moves exactly the previewed symbols onto a new child sheet with their
 /// IDs, references and positions, adds one hierarchical label and sheet pin per previewed port,
 /// keeps every terminal on its net, and is one undo step that undo and redo replay exactly.
