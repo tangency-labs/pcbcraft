@@ -45,9 +45,11 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
   **N**/**Shift+N** are dead here. Opening another library document uses the
   Library tab instead.
 - Losing window focus resets the canvas tool to Select; switching the active
-  document does the same to the document losing focus. A paste chord only arms
-  while the window is focused, and a later Escape inside the same input batch
-  cancels it (events resolve in order).
+  document does the same to the document losing focus. No canvas keyboard
+  command runs from an unfocused viewport's input batch, so **M**, **E**,
+  **Delete** and **Enter** — like every chord below — cannot act on it.
+  A paste chord only arms while the window is focused, and a later Escape
+  inside the same input batch cancels it (events resolve in order).
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
@@ -150,13 +152,13 @@ so canvas keys do not fire while a field is focused.
 | Ctrl+Shift+A | `library_frame` → `assistant_shortcuts` → `toggle_assistant` | `assistant.rs` toggle tests |
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |
 | P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), ribbon clicks exercise `start_tool` |
-| M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path) |
+| M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path), `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
 | R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
-| E | `canvas` → `details_requested` (single selection) | — |
-| Delete | `canvas` → `delete` → `Action::Delete` | — |
+| E | `canvas` → `details_requested` (single selection) | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
+| Delete | `canvas` → `delete` → `Action::Delete` | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
 | Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
 | C | `canvas` → `start_tool(Place::Courtyard)` + `set_show_courtyard(true)` (Footprint Editor, unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_c_shortcut_ignores_copy_chord_and_shift_c` |
-| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit) |
+| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit), `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
 | Ctrl+A | `canvas` → `select_many(all)` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), `normalized_clipboard_events_drive_library_copy_and_paste` (same-frame Escape ordering) |
 | Ctrl+C / Ctrl+X / Ctrl+V | `canvas` → `copy` / `cut` (copy + one `Action::Delete`) / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Cut`/`Event::Paste`/`Event::PasteImage`, or the raw key matched at its own modifiers when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering, cut + undo, pending refusal), `library_cut_uses_the_pressed_event_modifiers` + `library_copy_uses_the_pressed_event_modifiers` (batched modifier changes, focus loss), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |

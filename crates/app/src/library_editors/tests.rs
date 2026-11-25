@@ -1780,3 +1780,44 @@ fn ball_grid_command_supports_dry_run_single_undo_and_natural_browser_sort() {
     app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":2,"action":{"operation":"undo"}})).unwrap();
     assert_eq!(app.library_editors.documents[&id].session.snapshot().objects.len(), 1);
 }
+
+/// A batch from an unfocused viewport must not run any canvas keyboard command: the
+/// destructive M/E/Delete/Enter keys stay inert, and the same keys still work focused.
+#[test]
+fn unfocused_batches_ignore_library_canvas_keyboard_commands() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (key, focused, mutates) in
+            [(egui::Key::Delete, false, false), (egui::Key::M, false, false), (egui::Key::E, false, false), (egui::Key::Delete, true, true)]
+        {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let before = doc.session.snapshot();
+            doc.selection = before.objects.keys().copied().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            h.input_mut().focused = focused;
+            for pressed in [true, false] {
+                h.input_mut().events.push(egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert_eq!(doc.session.snapshot().as_ref() == before.as_ref(), !mutates, "{kind:?} {key:?} focus={focused}");
+            assert!(!doc.details_requested, "{kind:?} {key:?} focus={focused}");
+            assert!(mutates || matches!(doc.tool, canvas::Tool::Select), "{kind:?} {key:?}: an unfocused batch must not arm a tool");
+            if mutates {
+                assert!(doc.session.snapshot().objects.is_empty(), "{kind:?}: focused Delete clears the selection");
+            }
+        }
+    }
+}
