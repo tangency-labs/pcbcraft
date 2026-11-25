@@ -1018,7 +1018,7 @@ fn normalize_header(raw: &str) -> String {
 const DETECT_SAMPLE_RECORDS: usize = 8;
 
 /// Candidate delimiters considered by automatic detection.
-const DETECT_CANDIDATES: [u8; 3] = [b'\t', b',', b';'];
+const DETECT_CANDIDATES: [u8; 3] = *b"\t,;";
 
 /// Separator statistics for one candidate delimiter over the sampled logical records.
 struct SeparatorSample {
