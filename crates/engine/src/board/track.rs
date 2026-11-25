@@ -448,6 +448,44 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
         .collect()
 }
 
+/// Detect a lost direct contact, even if another route still connects the two objects.
+/// This is a geometry-only edit: the pad, track and via indices must be stable across candidates.
+pub(super) fn loses_contact(before: BoardView<'_>, after: BoardView<'_>, copper: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> bool {
+    let old_lands = lands(before);
+    let new_lands = lands(after);
+    if before.tracks().len() != after.tracks().len()
+        || before.vias().len() != after.vias().len()
+        || !old_lands.iter().map(|land| &land.key).eq(new_lands.iter().map(|land| &land.key))
+    {
+        return true;
+    }
+    let old = IslandBuilder::new(&old_lands, before.tracks(), before.vias());
+    let new = IslandBuilder::new(&new_lands, after.tracks(), after.vias());
+    let moved: Vec<_> = old_lands
+        .iter()
+        .map(|land| footprints.contains(&land.key.0))
+        .chain(before.tracks().iter().map(|track| copper.contains(&track.id)))
+        .chain(before.vias().iter().map(|via| copper.contains(&via.id)))
+        .collect();
+    let lost = |i: usize, j: usize| (moved[i] || moved[j]) && old.routed_contact(i, j) && !new.routed_contact(i, j);
+    for i in 0..moved.len() {
+        if let Some(index) = &old.index {
+            let mut search = Search::default();
+            index.begin(&mut search, 0.);
+            loop {
+                match index.next(i, &mut search) {
+                    Hit::Candidate(j) if lost(i, j) => return true,
+                    Hit::Candidate(_) | Hit::Pending => continue,
+                    Hit::Done => break,
+                }
+            }
+        } else if (0..i).any(|j| lost(i, j)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
 pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {

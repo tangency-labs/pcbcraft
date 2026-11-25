@@ -21,6 +21,7 @@ mod board_drc;
 mod board_fills;
 mod board_measure;
 mod board_move;
+mod board_nudge;
 mod board_outputs;
 mod board_panels;
 mod board_presets;
@@ -570,6 +571,11 @@ impl PcbApp {
     /// desktop, a command that changes the session and ran for a long time requests a recovery
     /// snapshot on the next frame.
     fn run(&mut self, id: &str, params: &Value) {
+        self.run_project_command(id, params, None);
+    }
+
+    /// Share command errors, recovery and view synchronization with immediate canvas nudges.
+    fn run_project_command(&mut self, id: &str, params: &Value, nudge: Option<&mut Option<pcbcraft_engine::board::movement::NudgeBurst>>) {
         self.file_notice = None;
         let mut params = params.clone();
         if pcbcraft_engine::command(id).is_some_and(|c| c.params.iter().any(|p| p.name == "auto_heal"))
@@ -586,7 +592,12 @@ impl PcbApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let (started, revision) = (std::time::Instant::now(), self.session.revision());
-        self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
+        let result = if let Some(state) = nudge {
+            pcbcraft_engine::board::movement::NudgeBurst::step(state, &mut self.session, id, &params)
+        } else {
+            self.session.apply(id, &params)
+        };
+        self.message = result.err().map(|e| e.to_string());
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.revision() != revision {
             self.autosave.command_took(started.elapsed());
@@ -3050,6 +3061,9 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB Layout", "Move selected PCB group", "M".to_owned()));
+    list.push(("PCB Layout", "Nudge selection one grid step", "Arrows or Ctrl+Arrows".to_owned()));
+    list.push(("PCB Layout", "Nudge selection ten grid steps", "Shift+Arrows or Ctrl+Shift+Arrows".to_owned()));
+    list.push(("PCB Layout", "Nudge selection one tenth of a grid step", "Alt+Arrows".to_owned()));
     list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));

@@ -639,63 +639,6 @@ pub(super) fn copper_at(
     copper_choices(pointer, camera, rect, view, hidden, kinds, active).next()
 }
 
-/// Where `p` projects onto `track`, as a fraction from its start (0) to its end (1), and how far
-/// it lies from that point in nanometers.
-fn projection(p: Point, track: &Track) -> (f64, f64) {
-    let (ax, ay, bx, by) = (track.start.x_nm as f64, track.start.y_nm as f64, track.end.x_nm as f64, track.end.y_nm as f64);
-    let (dx, dy, px, py) = (bx - ax, by - ay, p.x_nm as f64 - ax, p.y_nm as f64 - ay);
-    let length = dx * dx + dy * dy;
-    let t = if length > 0. { ((px * dx + py * dy) / length).clamp(0., 1.) } else { 0. };
-    (t, (px - t * dx).hypot(py - t * dy))
-}
-
-/// Whether `p`, on copper `width_nm` wide, overlaps `track`'s copper.
-fn touches(p: Point, width_nm: i64, track: &Track) -> bool {
-    projection(p, track).1 <= (width_nm + track.width_nm) as f64 / 2.
-}
-
-/// New ends for a segment drag of `track` by `offset`, listing only tracks that change.
-///
-/// The dragged segment moves by `offset`, except that an end meeting the middle of another
-/// track on its layer is held there, so the segment pivots and that junction stays attached.
-/// Every other track on the layer whose end touches the dragged segment, at one of its ends or
-/// along it, follows that point to the same place on the moved segment. Empty when nothing
-/// would move, such as when both ends are held.
-fn dragged_ends(view: BoardView<'_>, track: Uuid, offset: (i64, i64)) -> Vec<(Uuid, Point, Point)> {
-    let tracks = view.tracks();
-    let Some(dragged) = tracks.iter().find(|t| t.id == track) else { return Vec::new() };
-    let others: Vec<&Track> = tracks.iter().filter(|t| t.id != track && t.layer == dragged.layer).collect();
-    // Ends of other tracks that touch the dragged segment stretch with it rather than hold it.
-    let attached = |other: &Track| touches(other.start, other.width_nm, dragged) || touches(other.end, other.width_nm, dragged);
-    let held = |p: Point| others.iter().any(|other| !attached(other) && touches(p, dragged.width_nm, other));
-    let shift = |p: Point| if held(p) { (0, 0) } else { offset };
-    let (from, to) = (shift(dragged.start), shift(dragged.end));
-    if (from, to) == ((0, 0), (0, 0)) {
-        return Vec::new();
-    }
-    let add = |p: Point, (dx, dy): (i64, i64)| Point { x_nm: p.x_nm.saturating_add(dx), y_nm: p.y_nm.saturating_add(dy) };
-    // A point on the dragged segment moves by the blend of its ends' moves at its position.
-    let follow = |p: Point| {
-        let t = if p == dragged.start {
-            0.
-        } else if p == dragged.end {
-            1.
-        } else {
-            projection(p, dragged).0
-        };
-        let blend = |a: i64, b: i64| a + ((b - a) as f64 * t).round() as i64;
-        add(p, (blend(from.0, to.0), blend(from.1, to.1)))
-    };
-    let mut out = vec![(dragged.id, add(dragged.start, from), add(dragged.end, to))];
-    for other in others {
-        let ends = [other.start, other.end].map(|p| if touches(p, other.width_nm, dragged) { follow(p) } else { p });
-        if ends != [other.start, other.end] {
-            out.push((other.id, ends[0], ends[1]));
-        }
-    }
-    out
-}
-
 /// Every track and via sharing a copper island with any of `seeds`.
 fn connected(view: BoardView<'_>, seeds: &BTreeSet<Uuid>) -> Result<BTreeSet<Uuid>, String> {
     let copper = view.copper()?;
@@ -789,7 +732,7 @@ fn route_target(
     }
     let free = camera.unsnapped(pointer, rect);
     if starting && let Some(track) = tracks.rev().find(|track| hit(pointer, camera, rect, track)) {
-        let (along, _) = projection(free, track);
+        let (along, _) = pcbcraft_engine::board::movement::track_projection(free, track);
         let at = |a: i64, b: i64| a + ((b - a) as f64 * along).round() as i64;
         return (
             Point { x_nm: at(track.start.x_nm, track.end.x_nm), y_nm: at(track.start.y_nm, track.end.y_nm) },
@@ -1334,7 +1277,11 @@ pub(super) fn interact(
         let changed = segment.offset != offset;
         if changed {
             segment.offset = offset;
-            segment.ends = dragged_ends(view, segment.track, offset);
+            segment.ends = view
+                .tracks()
+                .iter()
+                .find(|track| track.id == segment.track)
+                .map_or_else(Vec::new, |track| pcbcraft_engine::board::movement::dragged_ends(track, view.tracks().iter(), offset));
             segment.previewed = false;
         }
         let released = release.is_some();
