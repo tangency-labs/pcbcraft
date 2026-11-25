@@ -51,6 +51,14 @@ struct LoadedFile {
     text: String,
 }
 
+/// Source text and explicit column mapping captured when a file load starts. A finished load is
+/// applied only while the draft still matches it, so edits made during a slow load are kept.
+#[derive(Debug, PartialEq, Eq)]
+struct LoadBase {
+    raw_text: String,
+    manual_mapping: Option<ColumnMapping>,
+}
+
 /// Dialog-owned state for the pin-table preview; never touches symbol history.
 #[derive(Debug)]
 pub(crate) struct Draft {
@@ -66,6 +74,8 @@ pub(crate) struct Draft {
     findings_only: bool,
     page: usize,
     file_job: Option<Receiver<Result<Option<LoadedFile>, String>>>,
+    /// Draft text and mapping when the pending `file_job` started; `None` when no base was taken.
+    load_base: Option<LoadBase>,
     io_error: Option<String>,
     confirm_error: Option<String>,
     revision_stale: bool,
@@ -97,6 +107,7 @@ impl Draft {
             findings_only: false,
             page: 0,
             file_job: None,
+            load_base: None,
             io_error: None,
             confirm_error: None,
             revision_stale: false,
@@ -142,6 +153,20 @@ impl Draft {
         if self.findings_only { self.preview.rows_with_findings_count() } else { self.preview.rows.len() }
     }
 
+    /// The parts of the draft a finished file load replaces: source text and any manual mapping.
+    fn current_load_base(&self) -> LoadBase {
+        LoadBase { raw_text: self.raw_text.clone(), manual_mapping: self.manual_mapping.then_some(self.mapping) }
+    }
+
+    /// Track a started background file load, remembering the draft it will replace.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_file_job(&mut self, receiver: Receiver<Result<Option<LoadedFile>, String>>) {
+        self.file_job = Some(receiver);
+        self.load_base = Some(self.current_load_base());
+        self.io_error = None;
+        self.discard_prompt = DiscardPrompt::Hidden;
+    }
+
     /// Poll a pending background file picker without blocking the UI thread.
     fn poll_file_job(&mut self) {
         let Some(receiver) = self.file_job.as_ref() else {
@@ -153,7 +178,14 @@ impl Draft {
             Err(TryRecvError::Disconnected) => Err("Pin-table file loader stopped before reporting its result.".into()),
         };
         self.file_job = None;
+        let edited_while_loading = self.load_base.take().is_some_and(|base| base != self.current_load_base());
         match result {
+            Ok(Some(loaded)) if edited_while_loading => {
+                self.io_error = Some(format!(
+                    "{} was not loaded because the pin table text or column mapping changed while it was loading. Load it again to replace your edits.",
+                    loaded.name
+                ));
+            }
             Ok(Some(loaded)) => {
                 self.raw_text = loaded.text;
                 self.source_name = Some(loaded.name);
@@ -186,11 +218,7 @@ impl Draft {
                 let _ = send.send(outcome);
                 ctx.request_repaint();
             }) {
-                Ok(_) => {
-                    self.file_job = Some(receive);
-                    self.io_error = None;
-                    self.discard_prompt = DiscardPrompt::Hidden;
-                }
+                Ok(_) => self.begin_file_job(receive),
                 Err(error) => self.io_error = Some(format!("Could not start file loader: {error}")),
             }
         }
@@ -1554,6 +1582,127 @@ mod tests {
         assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").accesskit_node().is_disabled());
         assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    type FileJobSender = mpsc::SyncSender<Result<Option<LoadedFile>, String>>;
+
+    const LOADED_CSV: &str = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n";
+    const STALE_LOAD_ERROR: &str =
+        "mcu-pins.csv was not loaded because the pin table text or column mapping changed while it was loading. Load it again to replace your edits.";
+
+    /// Start a slow file load the way the Load file… button does, with the picker still open.
+    fn begin_slow_file_load(h: &mut Harness<'_, PcbApp>) -> FileJobSender {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+            panic!("expected pin table dialog");
+        };
+        draft.begin_file_job(receiver);
+        sender
+    }
+
+    /// Finish the pending file load with `mcu-pins.csv` and let the dialog poll it.
+    fn finish_file_load(h: &mut Harness<'_, PcbApp>, sender: &FileJobSender) {
+        sender.send(Ok(Some(LoadedFile { name: "mcu-pins.csv".into(), text: LOADED_CSV.into() }))).unwrap();
+        h.run();
+    }
+
+    fn draft_of<'a>(h: &'a Harness<'_, PcbApp>) -> &'a Draft {
+        let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+            panic!("expected pin table dialog");
+        };
+        draft
+    }
+
+    /// Text typed into the source field while a slow file load is pending is kept when the load
+    /// finishes: the file is not applied, the user is told why, and Load file… is available again.
+    #[test]
+    fn slow_file_load_keeps_text_typed_while_loading() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let sender = begin_slow_file_load(&mut h);
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Loading file…").accesskit_node().is_disabled());
+
+        type_multiline(&mut h, &["Pin,Name", "7,RESET"]);
+        assert_eq!(draft_text(&h), "Pin,Name\n7,RESET");
+        finish_file_load(&mut h, &sender);
+
+        let draft = draft_of(&h);
+        assert!(draft.file_job.is_none());
+        assert_eq!(draft.raw_text, "Pin,Name\n7,RESET");
+        assert_eq!(draft.source_name, None);
+        assert_eq!(draft.io_error.as_deref(), Some(STALE_LOAD_ERROR));
+        h.get_by_label(STALE_LOAD_ERROR);
+        assert!(h.query_by_label("Loaded file: mcu-pins.csv").is_none());
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Load file…").accesskit_node().is_disabled());
+    }
+
+    /// A manual column mapping chosen while a slow file load is pending survives the load: the
+    /// file is not applied and the explicit mapping stays.
+    #[test]
+    fn slow_file_load_keeps_manual_mapping_chosen_while_loading() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let text = "Signal\tPin\tType\nTXD\t1\toutput\nRXD\t2\tinput\n";
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = text.into();
+            draft.recompute();
+        }
+        h.run();
+        let sender = begin_slow_file_load(&mut h);
+        h.run();
+
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
+        h.run();
+        click(&mut h, "Unmapped (required)");
+        assert!(draft_of(&h).manual_mapping);
+        finish_file_load(&mut h, &sender);
+
+        let draft = draft_of(&h);
+        assert!(draft.file_job.is_none());
+        assert_eq!(draft.raw_text, text);
+        assert!(draft.manual_mapping);
+        assert_eq!(draft.mapping.number, None);
+        assert_eq!(draft.source_name, None);
+        assert_eq!(draft.io_error.as_deref(), Some(STALE_LOAD_ERROR));
+        h.get_by_label(STALE_LOAD_ERROR);
+    }
+
+    /// A slow load into a draft left unchanged while it was pending still applies the file:
+    /// the text is replaced, the earlier manual mapping is reset to auto-mapping, and the
+    /// loaded table is ready to stage.
+    #[test]
+    fn slow_file_load_into_unchanged_draft_replaces_text_and_mapping() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Signal\tPin\tType\nTXD\t1\toutput\n".into();
+            draft.recompute();
+        }
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
+        h.run();
+        click(&mut h, "Unmapped (required)");
+        assert!(draft_of(&h).manual_mapping);
+
+        let sender = begin_slow_file_load(&mut h);
+        h.run_steps(3);
+        finish_file_load(&mut h, &sender);
+
+        let draft = draft_of(&h);
+        assert!(draft.file_job.is_none());
+        assert!(draft.load_base.is_none());
+        assert_eq!(draft.raw_text, LOADED_CSV);
+        assert_eq!(draft.source_name.as_deref(), Some("mcu-pins.csv"));
+        assert_eq!(draft.io_error, None);
+        assert!(!draft.manual_mapping);
+        assert_eq!(draft.mapping.number, Some(0));
+        assert!(draft.preview.can_accept());
+        h.get_by_label("Loaded file: mcu-pins.csv");
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
     }
 
     /// Snapshot state: short host viewport (960x420) scrolled to the dialog footer.

@@ -252,6 +252,8 @@ pub enum FindingKind {
     EmptyTable,
     InputTooLarge,
     UnclosedQuote,
+    /// Non-whitespace data follows the closing quote of a quoted field (e.g. `"1"2`).
+    DataAfterClosingQuote,
     UnrecognizedHeader,
     MissingNumberColumn,
     TooManyPins,
@@ -274,6 +276,7 @@ impl FindingKind {
             Self::EmptyTable => "Empty",
             Self::InputTooLarge => "Too large",
             Self::UnclosedQuote => "Quote error",
+            Self::DataAfterClosingQuote => "Quote error",
             Self::UnrecognizedHeader => "Unrecognized header",
             Self::MissingNumberColumn => "Unmapped number",
             Self::TooManyPins => "Too many pins",
@@ -517,6 +520,15 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
             column: None,
             kind: FindingKind::UnclosedQuote,
             message: format!("Line {line}: unclosed quoted field."),
+        });
+    }
+    if let Some(line) = parsed.data_after_quote_line {
+        findings.push(Finding {
+            row: None,
+            line: Some(line),
+            column: None,
+            kind: FindingKind::DataAfterClosingQuote,
+            message: format!("Line {line}: unexpected data after a closing quote."),
         });
     }
 
@@ -964,46 +976,113 @@ fn normalize_header(raw: &str) -> String {
     out.trim().to_owned()
 }
 
-/// Detect the most likely field delimiter from the first non-empty lines of `text`, ignoring
-/// characters inside double-quoted strings. Prefers Tab whenever every sampled non-empty line
-/// contains at least one unquoted tab, so TSV tables whose names contain commas stay Tab-delimited.
-fn detect_delimiter(text: &str) -> Delimiter {
-    let mut tab_count: usize = 0;
-    let mut comma_count: usize = 0;
-    let mut semi_count: usize = 0;
-    let mut lines_with_tab: usize = 0;
-    let mut in_quotes = false;
-    let mut lines_checked: usize = 0;
+/// Maximum number of non-blank logical records sampled by [`detect_delimiter`].
+const DETECT_SAMPLE_RECORDS: usize = 8;
 
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut line_has_tab = false;
-        for byte in line.bytes() {
-            match byte {
-                b'"' => in_quotes = !in_quotes,
-                b'\t' if !in_quotes => {
-                    tab_count = tab_count.saturating_add(1);
-                    line_has_tab = true;
-                }
-                b',' if !in_quotes => comma_count = comma_count.saturating_add(1),
-                b';' if !in_quotes => semi_count = semi_count.saturating_add(1),
-                _ => {}
+/// Separator statistics for one candidate delimiter over the sampled logical records.
+struct SeparatorSample {
+    /// Unquoted separator bytes seen across the sampled records.
+    count: usize,
+    /// Non-blank logical records sampled.
+    records: usize,
+    /// Sampled records containing at least one unquoted separator.
+    records_with_separator: usize,
+}
+
+impl SeparatorSample {
+    /// Add one finished logical record; all-blank records are skipped like in [`parse_records`].
+    fn finish_record(&mut self, has_content: bool, separators: usize) {
+        if has_content {
+            self.records = self.records.saturating_add(1);
+            self.count = self.count.saturating_add(separators);
+            if separators > 0 {
+                self.records_with_separator = self.records_with_separator.saturating_add(1);
             }
         }
-        if line_has_tab {
-            lines_with_tab = lines_with_tab.saturating_add(1);
-        }
-        lines_checked = lines_checked.saturating_add(1);
-        if lines_checked >= 8 {
+    }
+}
+
+/// Count unquoted `separator` bytes over the first non-blank logical records of `text`, using the
+/// same record boundaries as [`parse_records`]: a quote opens only at the start of a field, `""`
+/// inside quotes is an escaped quote, quoted CR/LF bytes stay inside the field, and an unquoted CR,
+/// LF or CRLF each end exactly one record. Records whose cells are all blank are skipped.
+fn sample_separator(text: &str, separator: u8) -> SeparatorSample {
+    let bytes = text.as_bytes();
+    let mut sample = SeparatorSample { count: 0, records: 0, records_with_separator: 0 };
+    let mut in_quotes = false;
+    let mut field_empty = true;
+    let mut record_has_content = false;
+    let mut record_separators: usize = 0;
+    let mut index = 0usize;
+
+    while let Some(&byte) = bytes.get(index) {
+        if sample.records >= DETECT_SAMPLE_RECORDS {
             break;
         }
+        if in_quotes {
+            if byte == b'"' {
+                if bytes.get(index + 1) == Some(&b'"') {
+                    record_has_content = true;
+                    field_empty = false;
+                    index += 2;
+                    continue;
+                }
+                in_quotes = false;
+                index += 1;
+                continue;
+            }
+            if !byte.is_ascii_whitespace() {
+                record_has_content = true;
+            }
+            field_empty = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'"' && field_empty {
+            in_quotes = true;
+            index += 1;
+            continue;
+        }
+        if byte == separator {
+            record_separators = record_separators.saturating_add(1);
+            field_empty = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'\r' || byte == b'\n' {
+            index += if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') { 2 } else { 1 };
+            sample.finish_record(record_has_content, record_separators);
+            record_has_content = false;
+            record_separators = 0;
+            field_empty = true;
+            continue;
+        }
+        if !byte.is_ascii_whitespace() {
+            record_has_content = true;
+        }
+        field_empty = false;
+        index += 1;
     }
+    if sample.records < DETECT_SAMPLE_RECORDS {
+        sample.finish_record(record_has_content, record_separators);
+    }
+    sample
+}
 
-    if (lines_checked > 0 && lines_with_tab == lines_checked) || (tab_count >= comma_count && tab_count >= semi_count && tab_count > 0) {
+/// Detect the most likely field delimiter from the first non-blank logical records of `text`.
+/// Each candidate is sampled with [`parse_records`]' quoting and CR/LF/CRLF record rules, so quoted
+/// separators and quoted line breaks never count and never split a record. Prefers Tab whenever
+/// every sampled record contains at least one unquoted tab, so TSV tables whose names contain
+/// commas stay Tab-delimited.
+fn detect_delimiter(text: &str) -> Delimiter {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let tab = sample_separator(text, b'\t');
+    let comma = sample_separator(text, b',');
+    let semi = sample_separator(text, b';');
+
+    if (tab.records > 0 && tab.records_with_separator == tab.records) || (tab.count >= comma.count && tab.count >= semi.count && tab.count > 0) {
         Delimiter::Tab
-    } else if semi_count > comma_count {
+    } else if semi.count > comma.count {
         Delimiter::Semicolon
     } else {
         Delimiter::Comma
@@ -1018,6 +1097,8 @@ struct ParsedRecord {
 struct ParsedTable {
     records: Vec<ParsedRecord>,
     unclosed_quote_line: Option<usize>,
+    /// First line where non-whitespace data follows a quoted field's closing quote.
+    data_after_quote_line: Option<usize>,
     truncated: bool,
 }
 
@@ -1029,6 +1110,8 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
     let mut fields = Vec::new();
     let mut field = Vec::new();
     let mut in_quotes = false;
+    let mut quote_closed = false;
+    let mut data_after_quote_line = None;
     let mut quote_start_line = 1usize;
     let mut line_number = 1usize;
     let mut record_start_line = 1usize;
@@ -1044,6 +1127,7 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
                     continue;
                 }
                 in_quotes = false;
+                quote_closed = true;
                 index += 1;
                 continue;
             }
@@ -1065,11 +1149,13 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
         if byte == separator {
             fields.push(String::from_utf8_lossy(&field).into_owned());
             field.clear();
+            quote_closed = false;
             index += 1;
             continue;
         }
 
         if byte == b'\r' || byte == b'\n' {
+            quote_closed = false;
             if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
                 index += 2;
             } else {
@@ -1077,7 +1163,7 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
             }
             fields.push(String::from_utf8_lossy(&field).into_owned());
             field.clear();
-            if fields.iter().any(|cell| !cell.trim().is_empty()) {
+            if fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
                 records.push(ParsedRecord { line_number: record_start_line, fields: std::mem::take(&mut fields) });
             } else {
                 fields.clear();
@@ -1093,18 +1179,21 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
             continue;
         }
 
+        if quote_closed && byte != b' ' && byte != b'\t' && data_after_quote_line.is_none() {
+            data_after_quote_line = Some(line_number);
+        }
         field.push(byte);
         index += 1;
     }
 
     if !truncated && (!field.is_empty() || !fields.is_empty()) {
         fields.push(String::from_utf8_lossy(&field).into_owned());
-        if fields.iter().any(|cell| !cell.trim().is_empty()) {
+        if fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
             records.push(ParsedRecord { line_number: record_start_line, fields });
         }
     }
 
-    ParsedTable { records, unclosed_quote_line: in_quotes.then_some(quote_start_line), truncated }
+    ParsedTable { records, unclosed_quote_line: in_quotes.then_some(quote_start_line), data_after_quote_line, truncated }
 }
 
 #[cfg(test)]
@@ -1179,6 +1268,33 @@ mod tests {
         assert!(result.into_import_plan(0).is_err());
     }
 
+    /// Delimiter detection samples the same logical records as `parse_records`: a mid-field quote
+    /// stays literal, a quoted CRLF stays inside its field, and CRLF, bare CR and LF each end one
+    /// record, so this TSV with comma-heavy names is still detected as Tab.
+    #[test]
+    fn tsv_auto_detect_quoted_newline_and_mixed_line_endings() {
+        let tsv = "Number\tName\tType\r\n1\tLCD 3.5\" panel\tpassive\r2\tVDD, core, rail\tpower_in\n3\t\"A, B, C, D, E,\r\nF, G\"\tpassive\r\n4\tGND\tpower_in\r";
+        assert_eq!(detect_delimiter(tsv), Delimiter::Tab);
+        let with_bom = format!("\u{feff}{tsv}");
+        assert_eq!(detect_delimiter(&with_bom), Delimiter::Tab);
+
+        let auto = preview(tsv, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Tab);
+        assert_eq!(auto.rows.len(), 4);
+        let numbers: Vec<_> = auto.rows.iter().map(|row| row.number.as_deref()).collect();
+        assert_eq!(numbers, [Some("1"), Some("2"), Some("3"), Some("4")]);
+        let lines: Vec<_> = auto.rows.iter().map(|row| row.line_number).collect();
+        assert_eq!(lines, [2, 3, 4, 6]);
+        assert_eq!(auto.rows[0].name.as_deref(), Some("LCD 3.5\" panel"));
+        assert_eq!(auto.rows[1].name.as_deref(), Some("VDD, core, rail"));
+        assert_eq!(auto.rows[2].name, None);
+        assert_eq!(auto.rows[2].electrical_type, Some(ElectricalType::Passive));
+        assert_eq!(auto.rows[3].electrical_type, Some(ElectricalType::PowerIn));
+        assert_eq!(auto.findings.len(), 1);
+        assert_eq!(auto.findings[0].kind, FindingKind::InvalidPinName);
+        assert_eq!(auto.findings[0].line, Some(4));
+    }
+
     /// TSV input (including commas inside unquoted names), quoted fields, BOM and manual column
     /// remapping produce exact rows and plans.
     #[test]
@@ -1201,6 +1317,34 @@ mod tests {
         assert!(!no_num.can_accept());
         assert_eq!(no_num.table_finding_count(), 1);
         assert!(no_num.findings.iter().any(|finding| finding.kind == FindingKind::MissingNumberColumn));
+    }
+
+    /// Data after a closing quote is reported as malformed input and blocks staging instead of
+    /// being merged into the field (`"1"2` must never stage pin `12`). Valid quoted fields,
+    /// escaped quotes and whitespace before the delimiter stay accepted.
+    #[test]
+    fn data_after_closing_quote_is_reported_not_merged_into_pin_number() {
+        let malformed = preview("Number,Name\r\n\"1\"2,VCC\r\n", Delimiter::Comma, true, None);
+        let quote_findings: Vec<_> = malformed.findings.iter().filter(|finding| finding.kind == FindingKind::DataAfterClosingQuote).collect();
+        assert_eq!(quote_findings.len(), 1);
+        assert_eq!(quote_findings[0].row, None);
+        assert_eq!(quote_findings[0].line, Some(2));
+        assert_eq!(FindingKind::DataAfterClosingQuote.short_label(), "Quote error");
+        assert!(!malformed.can_accept());
+        assert!(malformed.into_import_plan(0).is_err());
+
+        let mut session = Session::default();
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "Number,Name\n1,\"VCC\" x\n"})).unwrap();
+        assert_eq!(reply["can_accept"], false);
+        assert!(reply["findings"].as_array().unwrap().iter().any(|finding| finding["kind"] == "data_after_closing_quote"));
+
+        let valid = preview("Number,Name\n\"12\",\"V\"\"CC\"\n\"13\" ,\"GND\"\t\n", Delimiter::Comma, true, None);
+        assert!(valid.findings.is_empty(), "{:?}", valid.findings);
+        assert!(valid.can_accept());
+        assert_eq!(valid.rows[0].number.as_deref(), Some("12"));
+        assert_eq!(valid.rows[0].name.as_deref(), Some("V\"CC"));
+        assert_eq!(valid.rows[1].number.as_deref(), Some("13"));
+        assert_eq!(valid.rows[1].name.as_deref(), Some("GND"));
     }
 
     /// Unit body geometry estimates stay aligned to the 1.27 mm schematic grid, enforce native
@@ -1362,6 +1506,30 @@ mod tests {
         let explicit = run(json!({"text": "ID,Title,Mode\n1,VCC,power_in", "mapping": {"number": 0, "name": 1, "electrical_type": 2}}));
         assert_eq!(explicit["can_accept"], true);
         assert_eq!(explicit["rows"][0]["number"], "1");
+    }
+
+    /// Delimiter-only records reach row validation (mid-table and at EOF); physically blank lines stay skipped.
+    #[test]
+    fn delimiter_only_records_report_missing_pin_number_and_blank_lines_stay_skipped() {
+        let missing_number_at = |text: &str, delimiter: Delimiter| {
+            let result = preview(text, delimiter, true, None);
+            assert!(!result.can_accept(), "delimiter-only record must block staging: {text:?}");
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding.kind == FindingKind::MissingPinNumber)
+                .map(|finding| (finding.row, finding.line))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(missing_number_at("Number,Name,Type\r\n1,VCC,power_in\r\n,,\r\n", Delimiter::Comma), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number,Name,Type\n1,VCC,power_in\n,,", Delimiter::Comma), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number;Name;Type\n1;VCC;power_in\n ; ;\n", Delimiter::Semicolon), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number\tName\tType\n1\tVCC\tpower_in\n\t\t\n2\tGND\tpower_in\n", Delimiter::Tab), vec![(Some(2), Some(3))]);
+
+        let blank_lines = preview("Number,Name,Type\n\n1,VCC,power_in\r\n   \r\n\n", Delimiter::Comma, true, None);
+        assert!(blank_lines.can_accept());
+        assert!(blank_lines.findings.is_empty());
+        assert_eq!(blank_lines.rows.len(), 1);
     }
 
     /// A command mapping replaces the detected one; omitted and out-of-range indices stay unmapped.

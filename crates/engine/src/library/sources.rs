@@ -280,7 +280,12 @@ pub(crate) const COMMANDS: [Command; 15] = [
         title: "Preview symbol pin table",
         summary: "Parse and validate a CSV or TSV pin table and report per-row findings and unit layout estimates. Creates no pins and changes no document.",
         params: &[
-            Param { name: "text", summary: "CSV or TSV pin table text", required: true, kind: ParamKind::PinTableText },
+            Param {
+                name: "text",
+                summary: "CSV or TSV pin table text, at most 262,144 UTF-8 bytes (256 KiB)",
+                required: true,
+                kind: ParamKind::PinTableText,
+            },
             Param {
                 name: "delimiter",
                 summary: "Field delimiter: auto, comma, tab or semicolon",
