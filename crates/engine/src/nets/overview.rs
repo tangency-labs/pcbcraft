@@ -142,8 +142,8 @@ pub struct SheetOverviewBasis {
 impl Project {
     /// List every net with endpoints on more than one sheet. With `only`, keep the nets that
     /// reach that sheet. It reads the project's cached whole-project graph and stores nothing,
-    /// and the result holds at most one entry per net and sheet. Local labels never join
-    /// sheets, so equal local names on two sheets are two nets. Fails only when the net
+    /// and the result holds at most one entry per net and sheet. Matching local names alone do
+    /// not join sheets. The overview omits nets that stay on one sheet. Fails only when the net
     /// anchors cannot be resolved.
     pub fn sheet_overview(&self, only: Option<SheetTarget>) -> Result<SheetOverview, String> {
         self.sheet_overview_basis()?.overview(self, only)

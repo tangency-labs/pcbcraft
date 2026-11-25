@@ -21,7 +21,8 @@ each sheet's page number and name, and the links that carry the net across sheet
 there (global label, power symbol, hierarchical label, sheet pin, or a shared
 terminal of a part whose units sit on several sheets). The active sheet is highlighted, and the search box
 also matches sheet names. The list is read-only and follows edits, Undo and
-reopening; equal local names on two sheets are two nets and are not listed.
+reopening. Matching local names alone do not join sheets. The overview omits
+nets that stay on one sheet.
 Agents read the same list with `nets.sheet_overview`. Each entry names a sheet
 occurrence; while repeated instances are refused, every sheet has exactly one. See
 [named nets and power symbols](net-labels.md) for local/global names and supplies.
