@@ -164,6 +164,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             parameters::LIST => json!({"scope":"project"}),
             parameters::RESOLVE => json!({"text":"@project.Revision"}),
             annotation::PREVIEW => json!({"expected_revision":revision}),
+            sheet_split::PREVIEW => json!({"items":{"symbols":[symbol.id()],"wires":[]},"name":"Split","expected_revision":revision}),
             PREVIEW_UPDATE => {
                 preview_and_cancel(
                     &mut reader,
@@ -243,6 +244,10 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         if id == annotation::PREVIEW {
             assert_eq!(actual["annotation_preview"]["rows"].as_array().map(Vec::len), Some(1));
             assert_eq!(actual["annotation_preview"]["errors"], json!([]));
+        }
+        if id == sheet_split::PREVIEW {
+            assert_eq!(actual["split_preview"]["symbols"][0]["symbol"], json!(symbol.id()));
+            assert_eq!(actual["split_preview"]["ports"], json!([]));
         }
         if id == sources::PREVIEW_PIN_REMAP {
             assert_eq!(actual["changes"][0]["after"], "7");

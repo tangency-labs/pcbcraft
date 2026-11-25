@@ -61,6 +61,7 @@ enum Action {
     HierarchicalLabel,
     Text,
     NewSheet,
+    MoveToNewSheet,
     Subsheet,
     Wire,
     NoConnect,
@@ -199,7 +200,9 @@ const LIBRARIES: &[Group] = &[
         extras: &[],
     },
 ];
-const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: &[] }];
+const SHEET_EXTRAS: &[ToolSpec] =
+    &[tool(Action::MoveToNewSheet, "Move to New Sheet…", Icon::Sheet, "Move the selected symbols and net labels to a new child sheet", "")];
+const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: SHEET_EXTRAS }];
 
 impl Action {
     /// Keep future controls visible on wide ribbons but out of compact promoted rows.
@@ -219,6 +222,7 @@ impl Action {
                 | Self::EditDefinitionCopy
                 | Self::HierarchicalLabel
                 | Self::NewSheet
+                | Self::MoveToNewSheet
                 | Self::Subsheet
                 | Self::Wire
                 | Self::Move
@@ -276,6 +280,11 @@ impl Action {
                     }
             }
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
+            Self::MoveToNewSheet => {
+                schematic
+                    && app.views.active.schematic.tool.is_none()
+                    && (!app.views.active.schematic.selection.symbols.is_empty() || !app.views.active.schematic.selection.net_labels.is_empty())
+            }
             Self::Move | Self::Rotate => {
                 schematic
                     && app.views.active.schematic.tool.is_none()
@@ -382,6 +391,7 @@ impl PcbApp {
             Action::Label => self.begin_net_label(pcbcraft_engine::net_labels::Style::Local),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
+            Action::MoveToNewSheet => self.begin_split_sheet(),
             Action::NewSheet => {
                 self.begin_sheet_edit(self.views.active.id(), pcbcraft_engine::sheets::CREATE_SHEET, None);
                 if matches!(self.dialog, Dialog::Sheet(_)) {

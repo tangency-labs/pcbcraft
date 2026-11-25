@@ -490,6 +490,9 @@ impl PcbApp {
             Dialog::BoardUpdate(edit) => {
                 self.views.bind(edit.source.view());
             }
+            Dialog::SplitSheet(edit) => {
+                self.views.bind(edit.source.view());
+            }
             _ => {}
         }
         self.dialogs(ctx);

@@ -226,6 +226,106 @@ fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() 
     assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
 }
 
+/// The split preview returns the same review data through live and headless dispatch with
+/// inspection omitted, and neither path changes the project or its revision.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn split_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
+    use crate::{
+        Backend, Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::sheet_split::PREVIEW;
+
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = OpenEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = editor.0.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    editor.0.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":editor.0.revision()})).unwrap();
+    let snapshot = editor.0.snapshot().unwrap();
+    editor.0.open_snapshot(snapshot.clone());
+    let mut headless = Headless::with_project(snapshot.clone());
+    let revision = headless.call("project.inspect", json!({})).unwrap()["revision"].clone();
+    let request = json!({"command":PREVIEW,"params":{"items":{"symbols":[symbols[0]],"wires":[]},"name":"Split"},"inspect":false});
+    let before = editor.0.inspect();
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let report = headless.call("engine.execute", request).unwrap();
+    assert_eq!(report["split_preview"], live["split_preview"]);
+    let ports = report["split_preview"]["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0]["inside"], json!([from]));
+    assert_eq!(ports[0]["outside"], json!([to]));
+    assert_eq!(report["split_preview"]["cut_wires"].as_array().unwrap().len(), 1);
+    assert_eq!(report["revision"], revision);
+    assert_eq!(live["revision"], before["revision"]);
+    assert!(report.get("project").is_none());
+    assert_eq!(editor.0.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+}
+
+/// The split runs through MCP as one edit at the previewed revision: the moved symbol is on
+/// the new sheet, one undo restores the project, and a repeated sheet name is refused.
+#[test]
+fn split_sheet_applies_through_mcp_as_one_undo_step() {
+    use pcbcraft_engine::sheet_split::{PREVIEW, SPLIT};
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    session.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":session.revision()})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let items = json!({"symbols":[symbols[0]],"wires":[]});
+    let preview = json!({"command":PREVIEW,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let report = crate::backend::call_session(&mut session, "engine.execute", &preview).unwrap();
+    assert_eq!(report["split_preview"]["ports"].as_array().unwrap().len(), 1);
+
+    let split = json!({"command":SPLIT,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let done = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap();
+    assert_eq!(done["revision"], json!(session.revision()));
+    let project = session.project().unwrap();
+    let child = project.sheets().find(|sheet| sheet.name == "Split").unwrap().target;
+    assert_eq!(project.for_sheet(child).unwrap().symbols().iter().map(|symbol| symbol.id()).collect::<Vec<_>>(), [symbols[0].clone()]);
+    assert_eq!(project.for_sheet(child).unwrap().hierarchical_labels().len(), 1);
+
+    let again = json!({"command":PREVIEW,"params":{"sheet":before.sheet_target().id(),"items":{"symbols":[symbols[1]],"wires":[]},"name":"split"},"inspect":false});
+    let refused = crate::backend::call_session(&mut session, "engine.execute", &again).unwrap_err();
+    assert_eq!(refused.code(), "invalid_params");
+    assert!(refused.message().contains("already exists"), "{}", refused.message());
+    let stale = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap_err();
+    assert_eq!(stale.code(), "stale_revision");
+
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(session.project().unwrap().sheets().len(), before.sheets().len());
+    assert_eq!(session.project().unwrap().symbols().len(), 2);
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
