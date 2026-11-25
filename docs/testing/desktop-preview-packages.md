@@ -11,9 +11,9 @@ keep their existing jobs. The workflow uses read-only repository permissions.
 | Windows x64 | Portable ZIP with `pcbcraft.exe` and `pcbcraft-cli.exe`, built with MSVC |
 | macOS Apple silicon | DMG with `PCBCraft.app` and a separate CLI ZIP |
 
-Each download group includes `SHA256SUMS.txt`. Packages include the Sensor Node
-example, the build revision, and the project and dependency notices. The packaged CLI checks its
-version and opens the example in a read-only session during the build. macOS
+Each download group includes `SHA256SUMS.txt`. Packages include the build
+revision and the project and dependency notices. The packaging check runs the
+CLI and opens the checkout's Sensor Node fixture in a read-only session. macOS
 reuses the existing packaging script, which checks the bundle signature. The
 preview workflow uses ad-hoc signing on macOS. A broadly distributed macOS
 release needs Developer ID signing and notarization. Windows preview binaries
@@ -40,8 +40,8 @@ a new output directory for each run.
 
 On each target, verify the checksum, then extract the ZIP or tarball or mount
 the DMG. Launch the editor from the extracted package or installed app and
-open the included `sensor-node.pc` offline. On macOS, the example is in the
-app bundle under `Contents/Resources/Licenses` and in the CLI ZIP. Save an edit
+open a local project offline. You can use `examples/sensor-node.pc` from the
+source checkout. Save an edit
 to a separate path and reopen it. Make another edit and confirm that closing
 with unsaved changes prompts before discarding them.
 

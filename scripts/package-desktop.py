@@ -86,7 +86,7 @@ def dependency_notices(target):
 
 
 def stage_resources(destination, target):
-    """Stage the offline example and the notices that accompany the native preview."""
+    """Stage the build metadata and notices that accompany the native preview."""
     destination.mkdir(parents=True)
     for path in REPO_NOTICES:
         shutil.copy2(ROOT / path, destination)
@@ -96,7 +96,6 @@ def stage_resources(destination, target):
     revision = command("git", "rev-parse", "HEAD", capture=True).strip()
     compiler = command("rustc", "--version", capture=True).strip()
     (destination / "BUILD.txt").write_text(f"Revision: {revision}\nTarget: {target}\nCompiler: {compiler}\n", encoding="utf-8")
-    shutil.copy2(ROOT / "examples/sensor-node.pc", destination)
 
 
 def package_macos(work, artifacts, resources, desktop, cli):
@@ -138,7 +137,7 @@ def package(platform, bin_dir, output):
         if actual != f"pcbcraft-cli {version}":
             raise ValueError(f"Expected CLI version {version}, got {actual}")
         subprocess.run(
-            [staged_cli, "mcp", "--read-only", "--project", portable / "sensor-node.pc"],
+            [staged_cli, "mcp", "--read-only", "--project", ROOT / "examples/sensor-node.pc"],
             cwd=work,
             input=b"",
             timeout=30,
