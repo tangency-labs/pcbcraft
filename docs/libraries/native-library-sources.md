@@ -262,9 +262,13 @@ checks relations the same way as other board edits, but the preview's
 or would be lost, Apply returns `unavailable` with `details.reason` set to
 `remap_required` or `would_lose`. `details.rows` lists the affected relations.
 The board, revision and Undo history do not change. Delete those relations,
-preview and apply the revision again, then add the relations again. Relations
-on other footprints do not block Apply. The desktop worker runs the same check
-before it checks save limits.
+preview and apply the revision again, then add the relations again. A relation
+on another footprint whose references do not change is not a remap or a loss.
+A changed pad can still short a copper island that holds any footprint named by
+a relation, including another one. Apply then returns `unavailable` with
+`details.reason` `affected_short`, and `details.rows.nets` names the two nets
+instead of relations. Nothing changes; resolve the short before you apply again.
+The desktop worker runs the same check before it checks save limits.
 
 ## Adopt non-geometric revisions
 
