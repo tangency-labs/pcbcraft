@@ -65,11 +65,14 @@ fn main() -> eframe::Result {
         "PCBCraft",
         native_options(),
         Box::new(move |cc| {
-            let mut app = PcbApp::new(cc).with_integrated_titlebar(true);
+            // Configure the heap-owned app in place: by-value builder chains retain
+            // additional full-sized temporaries on Windows' 1 MiB debug startup stack.
+            let mut app = Box::new(PcbApp::new(cc));
+            app.set_integrated_titlebar(true);
             if let Some(path) = startup_project.take() {
-                app = app.with_startup_project(path);
+                app.set_startup_project(path);
             }
-            Ok(Box::new(app))
+            Ok(app)
         }),
     )
 }

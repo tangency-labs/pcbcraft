@@ -75,6 +75,11 @@ and only a draft's assets can be refreshed.
 
 ## Build locally
 
+For Windows development, `cargo build --locked -p pcbcraft` produces the debug
+editor in `target/debug/pcbcraft.exe`. Check startup both without arguments
+(Home) and with a local project path when changing the launcher. Release-build
+optimizations can hide excess stack use in the debug startup path.
+
 Run on the target platform with Rust, Cargo, and Python 3.11 or newer. Linux
 also needs `readelf` from binutils and nFPM. macOS needs the Xcode command-line
 tools. Set the macOS deployment target to
