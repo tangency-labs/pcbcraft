@@ -127,6 +127,7 @@ impl PcbApp {
             view.release_input();
             view.definition = None;
             view.manufacturing = None;
+            view.render = None;
             view.library.get_or_insert_with(State::default);
         }
         self.library_editors.focus(None)?;

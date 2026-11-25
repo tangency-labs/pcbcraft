@@ -907,11 +907,13 @@ impl EditorViews {
                 if let Some(id) = parked {
                     let library = self.active.library.clone();
                     let manufacturing = self.active.manufacturing.as_mut().map(crate::manufacturing::State::fork);
+                    let render = self.active.render.as_ref().map(crate::render_workspace::State::fork);
                     let definition = self.active.definition;
                     if let Some(view) = self.view_mut(id) {
                         view.library = library;
                         view.manufacturing = manufacturing;
-                        if view.library.is_some() || view.manufacturing.is_some() {
+                        view.render = render;
+                        if view.library.is_some() || view.manufacturing.is_some() || view.render.is_some() {
                             view.definition = None;
                         } else if definition.is_some() {
                             view.definition = definition;
@@ -976,7 +978,7 @@ impl PcbApp {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
         let Some(view) = self.views.view(id) else { return plain() };
-        if view.manufacturing.is_some() {
+        if view.manufacturing.is_some() || view.render.is_some() {
             return vec![egui::Shape::rect_filled(area, 0, t.board_canvas)];
         }
         if view.unavailable() || view.library.is_some() {
@@ -1266,6 +1268,11 @@ impl PcbApp {
                 // Workspace painters may fill their maximum rectangle. Keep the shared
                 // pane header outside their clip, including Library and definition panes.
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.views.view(id).is_some_and(|view| view.render.is_some()) {
+                    self.render_pane(ui, id);
+                    return;
+                }
                 if self.views.view(id).is_some_and(|view| view.manufacturing.is_some()) {
                     self.manufacturing_pane(ui, id);
                     return;

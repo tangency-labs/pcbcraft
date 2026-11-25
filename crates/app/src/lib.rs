@@ -70,6 +70,7 @@ mod project_files;
 mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod render_workspace;
 mod requirement_input;
 mod ribbon;
 mod rule_diagram;
@@ -255,6 +256,8 @@ enum Dialog {
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     BoardColor(board_appearance::Edit),
+    #[cfg(not(target_arch = "wasm32"))]
+    BrowseRenderBoard(render_workspace::Browse),
     Zone(Box<board_zones::Edit>),
     CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
@@ -306,6 +309,8 @@ pub struct PcbApp {
     library_sources: native_sources::Sources,
     library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
     manufacturing_files: manufacturing::Files,
+    #[cfg(not(target_arch = "wasm32"))]
+    render_worker: render_workspace::Worker,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -452,8 +457,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             id: "render",
             multiple_views: true,
             title: "3D render",
-            description: "Inspect the assembled board, layers and components",
-            tabs: None,
+            description: "Inspect the PCB outline, thickness and drill holes",
+            tabs: if IN_BROWSER { None } else { Some("View") },
             icon: workspace::WorkspaceIcon::Render,
             current: false,
         },
@@ -493,6 +498,8 @@ impl PcbApp {
             ),
             routing_presets: board_presets::Presets::from_storage(cc.storage.and_then(|storage| storage.get_string(board_presets::STORAGE_KEY))),
             views,
+            #[cfg(not(target_arch = "wasm32"))]
+            render_worker: render_workspace::Worker::new(cc.wgpu_render_state.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2464,6 +2471,8 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::BrowseRenderBoard(browse) => self.render_board_dialog(ctx, browse),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
@@ -2684,6 +2693,8 @@ impl PcbApp {
     fn project_file_tick(&mut self, ctx: &egui::Context) {
         self.handle_close_request(ctx);
         self.poll_manufacturing(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_render(ctx);
         // The desktop command line's open starts once, before this frame's poll can report it.
         #[cfg(not(target_arch = "wasm32"))]
         self.begin_startup_open(ctx);
@@ -2823,6 +2834,11 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.views.active.render.is_some() && !(main && self.home) {
+            self.render_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.manufacturing.is_some() && !(main && self.home) {
             self.manufacturing_frame(ui, integrated_titlebar);
             return;

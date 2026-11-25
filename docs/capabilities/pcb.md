@@ -24,6 +24,9 @@
 
 ### Available
 
+- The desktop [3D render workspace](../pcb-layout-workflow.md#preview-the-board-in-3d)
+  shows the board substrate, cutouts and round through holes with a navigable camera.
+
 - [Single-layer zone outlines](../pcb/copper-zone-outlines.md) with net selection/promotion,
   polygon/rectangle creation, edge resizing, vertex insertion/removal, axis alignment, boundary
   hatching, modifier/box/mixed selection and atomic Delete, Properties, layer/filter visibility,
