@@ -461,6 +461,47 @@ fn a_third_sheet_ground_needs_a_port_for_the_cut_parent_wire() -> Result<(), Com
     Ok(())
 }
 
+/// The parent also needs a port when local labels, rather than a wire, tie its resistor to GND.
+#[test]
+fn a_third_sheet_ground_needs_a_port_for_the_wireless_parent_branch() -> Result<(), CommandError> {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({}))?;
+    let part = resistor(&mut s, 0, 0);
+    let gnd = ground(&mut s, 40 * GRID_NM, 0);
+    let parent = s.open_project()?.sheet_target();
+    let resistor_pin = terminal(&part, "2");
+    let ground_pin = terminal(&gnd, "1");
+    local_label(&mut s, parent, resistor_pin, "N");
+    local_label(&mut s, parent, ground_pin, "N");
+    apply(&mut s, CREATE_SHEET, json!({"name":"Other"}));
+    let other = sheet_named(&s, "Other");
+    apply(&mut s, net_labels::ADD, json!({"sheet":other.id(),"name":"GND","style":"global","x_nm":0,"y_nm":0}));
+    let net = net_of(&s, resistor_pin);
+    assert!(net.is_some());
+    assert_eq!(net, net_of(&s, ground_pin));
+
+    let Some(before) = s.snapshot() else { panic!("expected an open project") };
+    let params = json!({"sheet":parent.id(),"items":{"symbols":[gnd],"wires":[]},"name":"Split","expected_revision":s.revision()});
+    let report = s.execute(PREVIEW, &params)?;
+    let preview = &report["split_preview"];
+    assert_eq!(preview["cut_wires"], json!([]));
+    let Some([port]) = preview["ports"].as_array().map(Vec::as_slice) else { panic!("expected one GND port: {preview}") };
+    assert_eq!(port["name"], "GND");
+    assert_eq!(preview["global_nets"], json!([]));
+
+    s.apply(SPLIT, &params)?;
+    let after = s.open_project()?;
+    let Some(child) = after.for_sheet(sheet_named(&s, "Split")) else { panic!("expected the new child sheet") };
+    let [label] = child.hierarchical_labels() else { panic!("expected the previewed GND port") };
+    assert_eq!(port["name"], label.name.as_str());
+    let net = net_of(&s, resistor_pin);
+    assert!(net.is_some());
+    assert_eq!(net, net_of(&s, WireEndpoint::SheetPin(label.id)));
+    assert_eq!(net, net_of(&s, ground_pin));
+    assert!(same_netlist(before.borrowed_electrical_connectivity(), after.borrowed_electrical_connectivity()));
+    Ok(())
+}
+
 /// A remote-only name match needs no port when no wire is cut; when there is a cut,
 /// a matching parent label can reconnect it even if a remote label was created first.
 #[test]
