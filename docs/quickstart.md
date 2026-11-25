@@ -632,6 +632,9 @@ opens a sparse definition: check a dimension to give the class an opinion, or le
 it unchecked to inherit defaults. Save class commits one undoable edit. Classes
 can be authored in a schematic-only project; they do not create a board.
 
+To declare a net's or class's working voltage, use the **Working voltage** page in
+**Analyze → Rules** or the [electrical intent commands](formats/electrical-intent.md).
+
 Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
 Properties, or use the **Effective net rules** page in Rules to search for a current net.
 Check the classes to assign and choose **Assign classes**. The page shows effective

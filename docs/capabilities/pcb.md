@@ -245,7 +245,9 @@ is storage and inspection only, not pair authoring or routing.
 can be authored through shared commands, with retained origins, split inheritance,
 merge conflicts and protected class removal. [Class-aware routing, clearance
 queries and DRC](../formats/net-class-consumers.md) consume those bindings with effective
-dimensions and per-object provenance. [Editor controls](../pcb/net-class-editor.md) use the same commands and scoped identities. Zones,
+dimensions and per-object provenance. A [working-voltage requirement](../formats/electrical-intent.md)
+can be declared on persistent nets or classes in Rules or through shared commands. It is reported as
+unverified and does not affect routing or checks. [Editor controls](../pcb/net-class-editor.md) use the same commands and scoped identities. Zones,
 repeated instances and system registries remain separate work.
 [Part groups](../formats/part-groups.md) collect part instances by stable part-instance
 ID through shared headless/live MCP commands, with a project-wide catalog,

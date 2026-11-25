@@ -390,6 +390,13 @@ fn source_shown(h: &Harness<'_, PcbApp>, name: &'static str) -> bool {
     h.query(egui_kittest::kittest::By::new().role(egui::Role::Label).predicate(move |node| node.label().as_deref() == Some(name))).is_some()
 }
 
+/// Status rows carry an accessible name beside their visible text, so they are found as
+/// labelled Label nodes, as the effective-source cells are.
+fn status_shown(h: &Harness<'_, PcbApp>, name: &str) -> bool {
+    let name = name.to_owned();
+    h.query(egui_kittest::kittest::By::new().role(egui::Role::Label).predicate(move |node| node.label().as_deref() == Some(name.as_str()))).is_some()
+}
+
 /// The effective page identifies the actual source even when class/default numbers match,
 /// and staged checkbox changes are explicitly previews until the shared command succeeds.
 #[test]
@@ -463,4 +470,238 @@ fn equal_clearance_is_labelled_as_matching_the_baseline() {
     click(&mut h, "Contributions and identities");
     assert!(h.query_by_label("Active · Built-in defaults: 0.2 mm").is_some());
     assert!(h.query_by_label_contains("Active · My constraint").is_some());
+}
+
+/// A designer declares a working voltage on a selected schematic net in Rules, reads its
+/// source and unverified status, and sees a needs-review notice after the reference net is
+/// deleted. Saving a new value keeps the retained reference. Each save is one Undo step and
+/// the shared `electrical_intent.inspect` report survives native save/reopen.
+#[test]
+fn working_voltage_page_authors_inspects_and_flags_review() {
+    use pcbcraft_engine::{net_labels, nets::intent};
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    for (name, x) in [("TEST_SUPPLY", 0), ("TEST_RETURN", 25_400_000)] {
+        app.run(net_labels::ADD, &json!({"name":name,"style":"local","x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
+    }
+    let project = app.session.project().unwrap();
+    let labels: Vec<_> = project.net_labels().iter().map(|label| label.object_id()).collect();
+    app.views.active.schematic.selection.net_labels.insert(labels[0].clone());
+    app.begin_net_rules();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Button, "Working voltage").click();
+    h.run();
+    let target = {
+        let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+        assert_eq!(edit.page, Page::Voltage);
+        let draft = edit.voltage.as_ref().expect("the selected net is preselected");
+        edit.owners[draft.owner].target.clone()
+    };
+    assert_eq!(target["kind"], "net");
+    assert!(status_shown(&h, "Requirement source: Not declared"));
+    click(&mut h, "Declare working voltage");
+    replace(&mut h, "Working voltage value", "48");
+    let revision = h.state().session.revision();
+    click(&mut h, "Save working voltage");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let report = h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap();
+    let earth = json!({"magnitude":{"value":"48","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+    assert_eq!(report["intent"]["working_voltage"], earth);
+    assert_eq!(report["requirement"], json!({"source":"authored_on_net","verification":"unverified","review":"current","reasons":[]}));
+    assert!(status_shown(&h, "Requirement source: Entered on this net"));
+    assert!(status_shown(&h, "Verification: Unverified: no ERC, DRC or solver checks this value yet"));
+    assert!(status_shown(&h, "Review: Current"));
+    let mut canonical = pcbcraft_mcp::Headless::with_project(h.state().session.snapshot().unwrap());
+    use pcbcraft_mcp::Backend;
+    let shared = canonical.call("engine.execute", json!({"command":intent::INSPECT,"inspect":false,"params":{"version":1,"target":target}})).unwrap();
+    assert_eq!((&shared["intent"], &shared["requirement"]), (&report["intent"], &report["requirement"]));
+    click(&mut h, "Cancel");
+
+    let reference = h.state().session.project().unwrap().inspect_net_registry().unwrap()["nets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|net| net["name"] == "TEST_RETURN")
+        .unwrap()["id"]
+        .clone();
+    let mut declared = earth.clone();
+    declared["reference"] =
+        json!({"kind":"net","address":{"project":target["address"]["project"],"scope":target["address"]["scope"],"net":reference}});
+    let app = h.state_mut();
+    app.run(intent::SET, &json!({"version":1,"expected_revision":app.session.revision(),"target":target,"intent":{"working_voltage":declared}}));
+    app.run(net_labels::DELETE, &json!({"id":labels[1],"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none());
+    app.begin_net_rules();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Button, "Working voltage").click();
+    h.run();
+    assert!(h.query_by_label("Needs review").is_some());
+    assert!(h.query_by_label("The reference net no longer exists in the design.").is_some());
+    replace(&mut h, "Working voltage value", "50");
+    click(&mut h, "Save working voltage");
+    let report = h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap();
+    let mut kept = declared.clone();
+    kept["magnitude"]["value"] = json!("50");
+    assert_eq!(report["intent"]["working_voltage"], kept, "editing the value keeps the retained reference");
+    assert_eq!(report["requirement"]["review"], "needs_review");
+    let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&saved).unwrap().inspect_electrical_intent(&target).unwrap();
+    assert_eq!(reopened, report);
+    click(&mut h, "Cancel");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap()["intent"]["working_voltage"], declared);
+}
+
+/// A declaration whose own net was deleted stays reachable in Rules as a former net. Its
+/// review reason is shown, its value cannot be redeclared, and clearing it is one Undo step.
+#[test]
+fn working_voltage_page_reaches_and_clears_a_former_net() {
+    use pcbcraft_engine::{net_labels, nets::intent};
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    app.run(net_labels::ADD, &json!({"name":"TEST_SUPPLY","style":"local","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    let project = app.session.project().unwrap();
+    let label = project.net_labels()[0].object_id();
+    let registry = project.inspect_net_registry().unwrap();
+    let net = registry["nets"].as_array().unwrap().iter().find(|net| net["name"] == "TEST_SUPPLY").unwrap()["id"].clone();
+    let target = json!({"kind":"net","address":{"project":project.id(),"scope":registry["scope"],"net":net}});
+    let declared = json!({"magnitude":{"value":"48","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+    app.run(intent::SET, &json!({"version":1,"expected_revision":app.session.revision(),"target":target,"intent":{"working_voltage":declared}}));
+    app.run(net_labels::DELETE, &json!({"id":label,"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none());
+    app.begin_rules();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Button, "Working voltage").click();
+    h.run();
+    let former = format!("Former net · {}", &net.as_str().unwrap()[..8]);
+    {
+        let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+        let owner = edit.owners.iter().find(|owner| owner.target == target).expect("the former net is listed");
+        assert!(owner.historical);
+        assert_eq!(owner.label, former);
+    }
+    h.get_by_role_and_label(egui::Role::ComboBox, "Declared on").click();
+    h.run();
+    click(&mut h, &former);
+    assert!(h.query_by_label("Needs review").is_some());
+    assert!(h.query_by_label("This net no longer exists in the design.").is_some());
+    assert!(h.query_by_label("This net is no longer in the design. Its declaration can be reviewed or cleared, not changed.").is_some());
+    assert!(h.get_by_role_and_label(egui::Role::TextInput, "Working voltage value").accesskit_node().is_disabled());
+    let revision = h.state().session.revision();
+    click(&mut h, "Declare working voltage");
+    click(&mut h, "Save working voltage");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let report = h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap();
+    assert_eq!((&report["intent"]["working_voltage"], &report["requirement"]), (&Value::Null, &Value::Null));
+    click(&mut h, "Cancel");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap()["intent"]["working_voltage"], declared);
+}
+
+/// Resolving a split restores the original identity on a live branch. The provisional
+/// declaration stays clear-only, but Rules must not describe the branch as deleted.
+#[test]
+fn working_voltage_page_distinguishes_resolved_owner_from_removal() {
+    use pcbcraft_engine::{CONNECT_PINS, DELETE_ITEMS, PLACE_RESISTOR, net_labels, nets};
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    let mut pins = Vec::new();
+    for index in 0..6 {
+        app.run(PLACE_RESISTOR, &json!({"x_nm":index * 25_400_000,"y_nm":0,"expected_revision":app.session.revision()}));
+        pins.push(json!({"symbol":app.session.project().unwrap().symbols().last().unwrap().id(),"terminal":"1"}));
+    }
+    let connect = |app: &mut PcbApp, from: usize, to: usize| {
+        app.run(CONNECT_PINS, &json!({"from":pins[from],"to":pins[to],"expected_revision":app.session.revision()}));
+    };
+    connect(app, 0, 1);
+    app.run(nets::PROMOTE, &json!({"anchor":pins[0],"expected_revision":app.session.revision()}));
+    let registry = app.session.project().unwrap().inspect_net_registry().unwrap();
+    let source = registry["nets"].as_array().unwrap().iter().find(|net| net["id"].is_string()).unwrap()["id"].clone();
+    for (from, to) in [(0, 2), (2, 3), (0, 4), (4, 5)] {
+        connect(app, from, to);
+    }
+    let items = pcbcraft_engine::selection::Selection {
+        symbols: [pins[0]["symbol"].as_str().unwrap().into(), pins[1]["symbol"].as_str().unwrap().into()].into(),
+        ..Default::default()
+    };
+    app.run(DELETE_ITEMS, &json!({"items":items,"expected_revision":app.session.revision()}));
+    app.run(nets::PROMOTE, &json!({"anchor":pins[2],"expected_revision":app.session.revision()}));
+    let project = app.session.project().unwrap();
+    let symbol = project.symbols().iter().find(|part| part.id() == pins[2]["symbol"].as_str().unwrap()).unwrap();
+    let at = symbol.pins()[symbol.unit_definition().pin_index("1").unwrap()];
+    app.run(
+        net_labels::ADD,
+        &json!({"name":"RESOLUTION_BRANCH","style":"local","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":app.session.revision()}),
+    );
+    let branch_id =
+        |registry: &Value| registry["nets"].as_array().unwrap().iter().find(|net| net["name"] == "RESOLUTION_BRANCH").unwrap()["id"].clone();
+    let project = app.session.project().unwrap();
+    let registry = project.inspect_net_registry().unwrap();
+    let provisional = branch_id(&registry);
+    assert!(provisional.is_string());
+    assert_ne!(provisional, source);
+    let target = json!({"kind":"net","address":{"project":project.id(),"scope":registry["scope"],"net":provisional}});
+    let declared = json!({"magnitude":{"value":"12","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+    app.run(
+        nets::intent::SET,
+        &json!({"version":1,"expected_revision":app.session.revision(),"target":target,"intent":{"working_voltage":declared}}),
+    );
+    app.run(nets::RESOLVE_AMBIGUITY, &json!({"net":source,"anchor":pins[2],"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none());
+    let project = app.session.project().unwrap();
+    assert_eq!(branch_id(&project.inspect_net_registry().unwrap()), source, "the named branch remains live under the original identity");
+    assert_eq!(project.inspect_electrical_intent(&target).unwrap()["intent"]["working_voltage"], declared);
+    app.begin_rules();
+    h.run();
+    click(&mut h, "Working voltage");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Declared on").click();
+    h.run();
+    click(&mut h, &format!("Former net · {}", &provisional.as_str().unwrap()[..8]));
+    assert!(h.query_by_label("This net identity is no longer active. Its declaration can be reviewed or cleared, not changed.").is_some());
+    assert!(
+        h.query_by_label("Resolving a split restored the original net identity. Re-declare the voltage on that net if it still applies.").is_some()
+    );
+    assert!(h.query_by_label_contains("no longer in the design").is_none());
+    assert!(h.query_by_label("This net no longer exists in the design.").is_none());
+    assert!(h.get_by_role_and_label(egui::Role::TextInput, "Working voltage value").accesskit_node().is_disabled());
+    let revision = h.state().session.revision();
+    click(&mut h, "Declare working voltage");
+    click(&mut h, "Save working voltage");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let report = h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap();
+    assert_eq!((&report["intent"]["working_voltage"], &report["requirement"]), (&Value::Null, &Value::Null));
+}
+
+/// The reference picker offers only named nets, as `electrical_intent.set` requires, while an
+/// unnamed saved net can still own a declaration.
+#[test]
+fn working_voltage_references_offer_only_named_nets() {
+    use pcbcraft_engine::net_labels;
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    let mut pins = Vec::new();
+    for x in [0, 25_400_000] {
+        app.run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":50_800_000,"expected_revision":app.session.revision()}));
+        pins.push(json!({"symbol":app.session.project().unwrap().symbols().last().unwrap().id(),"terminal":"1"}));
+    }
+    app.run(pcbcraft_engine::CONNECT_PINS, &json!({"from":pins[0],"to":pins[1],"expected_revision":app.session.revision()}));
+    app.run(pcbcraft_engine::nets::PROMOTE, &json!({"anchor":pins[0],"expected_revision":app.session.revision()}));
+    app.run(net_labels::ADD, &json!({"name":"TEST_RETURN","style":"local","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none());
+    let registry = app.session.project().unwrap().inspect_net_registry().unwrap();
+    let rows = registry["nets"].as_array().unwrap();
+    let id = |named: bool| -> Uuid {
+        let row = rows.iter().find(|row| !row["id"].is_null() && row["names"].as_array().unwrap().is_empty() != named).unwrap();
+        Uuid::parse_str(row["id"].as_str().unwrap()).unwrap()
+    };
+    let (unnamed, named) = (id(false), id(true));
+    app.begin_rules();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Button, "Working voltage").click();
+    h.run();
+    let Dialog::Rules(edit) = &h.state().dialog else { panic!("rules") };
+    assert!(edit.owners.iter().any(|owner| owner.net == Some(unnamed) && !owner.historical));
+    assert_eq!(edit.references.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![named]);
 }

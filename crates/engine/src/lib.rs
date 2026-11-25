@@ -207,6 +207,9 @@ enum ParamKind {
     ClassSet,
     ClassId,
     ClassTarget,
+    IntentVersion,
+    IntentTarget,
+    AuthoredIntent,
     /// Sparse schematic wire appearance patch, or null to reset to theme defaults.
     NetAppearance,
     /// Distinct scoped nets in one batch edit.
@@ -356,6 +359,9 @@ impl ParamKind {
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
+            Self::IntentVersion => json!({"type":"integer","const":nets::intent::CONTRACT_VERSION}),
+            Self::IntentTarget => nets::intent::target_schema(),
+            Self::AuthoredIntent => nets::intent::intent_schema(),
             Self::NetAppearance => nets::appearance_param_schema(),
             Self::NetPropertyTargets => nets::property_targets_schema(),
             Self::NetPropertyChanges => nets::property_changes_schema(),
@@ -720,6 +726,10 @@ impl ParamKind {
                 .map_err(|_| "must contain supported integer-nanometre class rules")
                 .and_then(|rules| net_classes::validate_rules(&rules).map_err(|_| "class dimensions are invalid or contradictory")),
             Self::ClassSet => net_classes::parse_set(value).map(|_| ()).map_err(|_| "must contain a bounded set of unique non-nil class UUIDs"),
+            Self::IntentVersion if value.as_u64() == Some(u64::from(nets::intent::CONTRACT_VERSION)) => Ok(()),
+            Self::IntentVersion => Err("requires authored electrical intent version 1"),
+            Self::IntentTarget => nets::intent::validate_target(value),
+            Self::AuthoredIntent => nets::intent::validate_intent(value),
             Self::ClassTarget => nets::ClassTarget::parse(value)
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
@@ -997,6 +1007,10 @@ impl Command {
     }
 }
 
+const INTENT_VERSION: Param =
+    Param { required: true, name: "version", summary: "Authored electrical intent contract version", kind: ParamKind::IntentVersion };
+const INTENT_TARGET: Param =
+    Param { required: true, name: "target", summary: "An existing scoped net or project-owned net class", kind: ParamKind::IntentTarget };
 const NAME: Param = Param { required: true, name: "name", summary: "The project's name", kind: ParamKind::Name };
 const NEW_NAME: Param = Param { required: false, name: "name", summary: "The project's name (default Untitled)", kind: ParamKind::Name };
 const NEW_BOARD_NAME: Param = Param { required: false, name: "name", summary: "The board's name (default Board)", kind: ParamKind::Name };
@@ -2876,6 +2890,29 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: nets::intent::SET,
+        title: "Set Authored Electrical Intent",
+        summary: "Replace the working-voltage requirement on one existing net or class in one undo step, or validate without changing it.",
+        params: &[
+            INTENT_VERSION,
+            EXPECTED_REVISION,
+            INTENT_TARGET,
+            Param {
+                name: "intent",
+                kind: ParamKind::AuthoredIntent,
+                required: true,
+                summary: "Complete replacement; omitted or null fields are unset",
+            },
+            Param { name: "dry_run", kind: ParamKind::Flag, required: false, summary: "Validate the same edit without publishing it" },
+        ],
+    },
+    Command {
+        id: nets::intent::INSPECT,
+        title: "Inspect Authored Electrical Intent",
+        summary: "Read the authored working voltage, its source, unverified status and review state on one net or class; unset is null.",
+        params: &[INTENT_VERSION, INTENT_TARGET],
+    },
+    Command {
         id: nets::SET_CLASSES,
         title: "Set Net Classes",
         summary: "Replace a net's complete class set, promoting an eligible derived target in the same undoable transaction. An empty set removes assignments.",
@@ -3723,6 +3760,8 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | nets::intent::SET
+            | nets::intent::INSPECT
             | nets::SET_APPEARANCE
             | nets::SET_PROPERTIES
             | nets::INSPECT_APPEARANCE
@@ -3939,6 +3978,13 @@ impl Session {
                 self.report_committed(id, params);
             }
             return Ok(result);
+        }
+        if id == nets::intent::INSPECT {
+            self.validate_project_command(id, params)?;
+            return self.inspect_electrical_intent(params);
+        }
+        if id == nets::intent::SET {
+            return self.apply(id, params).map(|revision| json!({"revision":revision}));
         }
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             return self.preview_symbol_fields(params);
@@ -4289,6 +4335,8 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | nets::intent::SET
+                | nets::intent::INSPECT
                 | nets::SET_APPEARANCE
                 | nets::SET_PROPERTIES
                 | nets::INSPECT_APPEARANCE
@@ -4408,6 +4456,10 @@ impl Session {
             net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
             net_classes::INSPECT | net_classes::RESOLVE => {
                 self.net_class_query(id, params)?;
+            }
+            nets::intent::SET => self.set_electrical_intent(params)?,
+            nets::intent::INSPECT => {
+                self.inspect_electrical_intent(params)?;
             }
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
@@ -5290,6 +5342,13 @@ impl Session {
             self.publish(prepared);
         }
         Ok(())
+    }
+
+    /// Publish an already validated candidate. Metadata-only handlers use the same history
+    /// boundary after verifying their own payload; only topology edits prepare connectivity.
+    fn publish_prepared_change(&mut self, project: Project, highest: u64) {
+        let project = self.retain_allocation_watermark(Arc::new(project));
+        self.publish_change(project, highest);
     }
 
     /// Adopt the exact checked candidate once, without deriving or mutating authored fields again.
