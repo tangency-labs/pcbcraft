@@ -132,7 +132,8 @@ struct PendingRegeneration {
 /// Bounded final validation before adopting a regenerated copper edit.
 enum FinalCheck {
     /// Full native board byte-limit check (includes budgeted zone validation).
-    Size(crate::persistence::BoardSizeCheck),
+    /// Box its state so the smaller zone-only check need not reserve that space.
+    Size(Box<crate::persistence::BoardSizeCheck>),
     /// Budgeted zone validation when the final board skips the native document-size check.
     Zones { steps: crate::board::zones::ZoneValidationSteps, completed: usize, total: usize },
 }
@@ -455,7 +456,7 @@ impl CopperEditJob {
         {
             return match &finalize.final_check {
                 FinalCheck::Size(check) => {
-                    let (completed, total) = check.progress(&finalize.project);
+                    let (completed, total) = check.as_ref().progress(&finalize.project);
                     Progress { stage: "Checking board size", completed, total }
                 }
                 FinalCheck::Zones { completed, total, .. } => {
@@ -903,7 +904,7 @@ impl CopperEditJob {
                 let source = &self.context.source;
                 let final_check = if Session::needs_board_size_check(Some(&source.snapshot), &next) {
                     // Regeneration already checked every surviving teardrop invariant and derivation.
-                    FinalCheck::Size(crate::persistence::BoardSizeCheck::new(false))
+                    FinalCheck::Size(Box::new(crate::persistence::BoardSizeCheck::new(false)))
                 } else {
                     let total = crate::board::zones::ZoneValidationSteps::total(&next);
                     FinalCheck::Zones { steps: crate::board::zones::ZoneValidationSteps::new(), completed: 0, total }
@@ -919,7 +920,7 @@ impl CopperEditJob {
                     return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
                 };
                 let done = match &mut finalize.final_check {
-                    FinalCheck::Size(size_check) => size_check.step(&finalize.project, budget).map_err(CommandError::InvalidParams)?,
+                    FinalCheck::Size(size_check) => size_check.as_mut().step(&finalize.project, budget).map_err(CommandError::InvalidParams)?,
                     FinalCheck::Zones { steps, completed, .. } => {
                         let mut remaining = budget;
                         let done = steps.step(&finalize.project, &mut remaining).map_err(CommandError::InvalidParams)?;
