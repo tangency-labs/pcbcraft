@@ -314,7 +314,7 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
         assert!(serde_json::to_vec(&stored["components"][0]["pin_functions"]).unwrap().len() <= 64);
         assert!(docs[ENTRY_POINT].len() <= before[ENTRY_POINT].len() + 256);
         for (change, expected) in [
-            ("old format", "require project format 48"),
+            ("old format", "pin_functions are not allowed in pcbcraft-project/16."),
             ("empty", "Invalid alternate pin function record count"),
             ("null", "invalid type: null, expected a sequence"),
             ("unknown", "Unknown or duplicate alternate pin function selection"),

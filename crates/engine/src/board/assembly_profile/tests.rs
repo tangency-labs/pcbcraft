@@ -571,7 +571,7 @@ fn profile_format_round_trips_and_undo_restores_authored_content() {
         altered.insert("project.json".into(), text.replacen(from, to, 1).into_bytes());
         refused_because(decode_documents(&altered), reason);
     };
-    refused(crate::persistence::CURRENT_PROJECT_FORMAT, "pcbcraft-project/23", "assembly profiles require");
+    refused(crate::persistence::CURRENT_PROJECT_FORMAT, "pcbcraft-project/23", "assembly_profiles not allowed in pcbcraft-project/23.");
     refused("pcbcraft-assembly-profile/1", "pcbcraft-assembly-profile/2", "Unsupported assembly profile");
     refused("\"rotation\":270", "\"rotation\":360", "rotation correction");
     refused("\"rotation\":270", "\"rotation\":0", "zero rotation");

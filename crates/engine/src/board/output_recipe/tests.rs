@@ -263,7 +263,7 @@ fn recipe_and_designator_lock_share_the_current_format() {
     });
     assert!(decode_documents(&missing).err().unwrap().contains("formats 47, 57 and 60 require it"));
     let locked = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/47"));
-    assert!(decode_documents(&locked).err().unwrap().contains("Designator locks require"));
+    assert_eq!(decode_documents(&locked).unwrap_err(), "project.json: designator_locked not allowed in pcbcraft-project/47.");
     let unlocked = replace_entry(&recipes_only, |entry| entry["format"] = json!("pcbcraft-project/57"));
     assert!(decode_documents(&unlocked).err().unwrap().contains("at least one true"));
 

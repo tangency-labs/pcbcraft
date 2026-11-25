@@ -315,7 +315,7 @@ fn malformed_and_downgraded_documents_are_refused() {
             }),
         ];
         let mut reasons = vec![
-            "requires project format 24",
+            "part_groups not allowed in pcbcraft-project/23.",
             "Empty part-group catalogs must be omitted",
             "invalid type: null, expected struct Catalog",
             "Unsupported part-group format",
