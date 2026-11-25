@@ -426,16 +426,51 @@ impl BoardView<'_> {
         }
     }
 
+    /// Detect physical copper shorts across pads, straight tracks, vias and circular arcs.
+    /// Reports one [`Kind::Short`] violation per copper island that joins distinct intended nets,
+    /// including direct pad contacts and arcs touching foreign copper. Listed violations are
+    /// capped at [`MAX_LISTED`] (1,000); `report.total > report.violations.len()` indicates
+    /// truncation. Only `violations`, `counts` and `total` carry meaning on the returned
+    /// [`Report`] (`rules` is default and `sources` is empty). Does not run clearance, dimension,
+    /// outline or courtyard DRC checks; refuses teardrop boards.
+    pub fn copper_shorts(self) -> Result<Report, String> {
+        self.require_no_teardrops()?;
+        let lands = super::track::lands(self);
+        let (tracks, vias, arcs) = (self.tracks(), self.vias(), self.arc_tracks());
+        let arc_geoms = arcs.iter().map(super::arc::geometry::ArcGeometry::from_track).collect::<Result<Vec<_>, _>>()?;
+        let items = super::track::CopperItems { lands: &lands, tracks, vias, arcs };
+        let (copper, members) = super::track::islands_with_arc_geoms(items, &arc_geoms);
+        let members = super::track::with_pad_contacts(&lands, &copper, members);
+        let mut found = Findings::default();
+        self.collect_shorts(
+            items,
+            &members,
+            |node| {
+                if let Some(land) = lands.get(node) {
+                    (format!("{}:{}", land.key.0, land.key.1), land.center)
+                } else if let Some(track) = tracks.get(node - lands.len()) {
+                    (track.id.to_string(), midpoint(track.start, track.end))
+                } else if let Some(via) = vias.get(node - lands.len() - tracks.len()) {
+                    (via.id.to_string(), via.at)
+                } else if let Some((arc, geom)) =
+                    node.checked_sub(lands.len() + tracks.len() + vias.len()).and_then(|i| Some((arcs.get(i)?, arc_geoms.get(i)?)))
+                {
+                    (arc.id.to_string(), geom.midpoint())
+                } else {
+                    (String::new(), Point { x_nm: 0, y_nm: 0 })
+                }
+            },
+            &mut found,
+        );
+        Ok(found.finish(Rules::default(), BTreeMap::new()))
+    }
+
     /// Report one short per physical island containing pads from distinct intended nets.
     /// Resolve terminal-to-pad mappings against accepted history when present, including retained
     /// removals; otherwise use the project-wide graph. All indices and lookups stay snapshot-local.
     /// Every involved copper item and mapped terminal is retained, in canonical identity order.
     fn check_shorts(self, lands: &[Land], members: &[Vec<usize>], items: &[Item], found: &mut Findings) {
         let project = self.project();
-        let baseline = project.board.baseline.as_ref();
-        let graph = baseline.is_none().then(|| project.electrical_connectivity());
-        let intent = project.board_intent_memberships();
-        let intrinsic = super::via_nets::node_membership(project, lands, self.tracks().len(), self.vias(), &intent);
         for via in self.vias() {
             if let Some(address) = via.net_assignment.filter(|a| project.via_net_state(*a) != "active") {
                 found.push(Violation {
@@ -447,14 +482,6 @@ impl BoardView<'_> {
                 });
             }
         }
-        let memberships: Vec<_> = lands
-            .iter()
-            .map(|land| {
-                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
-                let (component, terminal) = project.board.component_pin_for(pad)?;
-                Some(TerminalKey { component, terminal: terminal.to_owned() })
-            })
-            .collect();
         for island in members {
             let assigned = island
                 .iter()
@@ -472,6 +499,34 @@ impl BoardView<'_> {
                     nets: Vec::new(),
                 });
             }
+        }
+        let copper = super::track::CopperItems { lands, tracks: self.tracks(), vias: self.vias(), arcs: &[] };
+        self.collect_shorts(copper, members, |node| (items[node].name.clone(), items[node].at), found);
+    }
+
+    /// Shared island short detection used by both [`Self::copper_shorts`] and DRC.
+    fn collect_shorts(
+        self,
+        items: super::track::CopperItems<'_>,
+        members: &[Vec<usize>],
+        item_info: impl Fn(usize) -> (String, Point),
+        found: &mut Findings,
+    ) {
+        let project = self.project();
+        let baseline = project.board.baseline.as_ref();
+        let graph = baseline.is_none().then(|| project.electrical_connectivity());
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership_with_arcs(project, items, &intent);
+        let memberships: Vec<_> = items
+            .lands
+            .iter()
+            .map(|land| {
+                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
+                let (component, terminal) = project.board.component_pin_for(pad)?;
+                Some(TerminalKey { component, terminal: terminal.to_owned() })
+            })
+            .collect();
+        for island in members {
             let mut nets = BTreeMap::<usize, Vec<TerminalKey>>::new();
             for &node in island {
                 if let Some(net) = intrinsic[node] {
@@ -499,8 +554,8 @@ impl BoardView<'_> {
                 })
                 .collect();
             let names: Vec<_> = nets.iter().map(|net| format!("{} (net {})", net.name, net.net + 1)).collect();
-            let at = island.first().map(|node| items[*node].at);
-            let mut names_of_items: Vec<_> = island.iter().map(|&node| items[node].name.clone()).collect();
+            let at = island.first().map(|&node| item_info(node).1);
+            let mut names_of_items: Vec<_> = island.iter().map(|&node| item_info(node).0).collect();
             names_of_items.sort();
             if let Some(at) = at {
                 found.push(Violation {

@@ -164,13 +164,23 @@ impl<T> Completion<T> {
 pub(crate) struct Queue<J: Work = CheckJob> {
     active: Option<Running<J>>,
     pending: Option<Request<J>>,
+    #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+    use_native: bool,
     pub replaced: u64,
     pub canceled: u64,
     pub completed: u64,
 }
 impl<J: Work> Default for Queue<J> {
     fn default() -> Self {
-        Self { active: None, pending: None, replaced: 0, canceled: 0, completed: 0 }
+        Self {
+            active: None,
+            pending: None,
+            #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+            use_native: false,
+            replaced: 0,
+            canceled: 0,
+            completed: 0,
+        }
     }
 }
 impl<J: Work> std::fmt::Debug for Queue<J> {
@@ -180,6 +190,25 @@ impl<J: Work> std::fmt::Debug for Queue<J> {
     }
 }
 impl<J: Work> Queue<J> {
+    /// Run queued work on the desktop background worker thread during native tests.
+    #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+    pub fn enable_native_worker(&mut self) {
+        self.use_native = true;
+    }
+    fn start_request(&self, request: Request<J>) -> Running<J> {
+        #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+        {
+            if self.use_native {
+                Running::Native(Box::new(native::Running::start(request)))
+            } else {
+                Running::Incremental(Box::new(incremental::Running::start(request)))
+            }
+        }
+        #[cfg(not(all(test, feature = "performance-harness", not(target_arch = "wasm32"))))]
+        {
+            Running::start(request)
+        }
+    }
     /// Coalesce replacements without starting another worker until cancellation is acknowledged.
     pub fn submit(&mut self, request: Request<J>) {
         if let Some(active) = &mut self.active {
@@ -187,7 +216,7 @@ impl<J: Work> Queue<J> {
             self.replaced += u64::from(self.pending.is_some());
             self.pending = Some(request);
         } else {
-            self.active = Some(Running::start(request));
+            self.active = Some(self.start_request(request));
         }
     }
     /// Signal cancellation and discard queued work without waiting or joining.
@@ -205,7 +234,7 @@ impl<J: Work> Queue<J> {
             self.active = None;
             self.completed += 1;
             if let Some(request) = self.pending.take() {
-                self.active = Some(Running::start(request));
+                self.active = Some(self.start_request(request));
             }
         }
         result
@@ -240,10 +269,53 @@ impl<J: Work> Queue<J> {
         self.active.is_some() || self.pending.is_some()
     }
 }
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_arch = "wasm32", all(test, not(feature = "performance-harness"))))]
 use incremental::Running;
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 use native::Running;
+
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+enum Running<J: Work> {
+    Incremental(Box<incremental::Running<J>>),
+    Native(Box<native::Running<J>>),
+}
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+impl<J: Work> Running<J> {
+    fn source(&self) -> Option<&CheckSource> {
+        match self {
+            Self::Incremental(running) => running.source(),
+            Self::Native(running) => running.source(),
+        }
+    }
+    fn id(&self) -> Option<u64> {
+        match self {
+            Self::Incremental(running) => running.id(),
+            Self::Native(running) => running.id(),
+        }
+    }
+    fn cancel(&mut self) {
+        match self {
+            Self::Incremental(running) => running.cancel(),
+            Self::Native(running) => running.cancel(),
+        }
+    }
+    fn progress(&self) -> Option<CheckProgress> {
+        match self {
+            Self::Incremental(running) => running.progress(),
+            Self::Native(running) => running.progress(),
+        }
+    }
+    fn poll(&mut self) -> Option<Completion<J::Output>> {
+        match self {
+            Self::Incremental(running) => running.poll(),
+            Self::Native(running) => running.poll(),
+        }
+    }
+}
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+pub(crate) fn native_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    native::TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod incremental {
@@ -566,6 +638,116 @@ mod native {
             assert!(!completion.retryable());
             assert!(matches!(completion.report, Ok(Some(Err(pcbcraft_engine::CommandError::NotFound(message)))) if message == "unknown track"));
             assert_eq!(session.inspect(), before);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+        }
+        /// A real native worker prepares `pcb.merge_tracks` off the editor thread, honors
+        /// cancellation cleanly, and returns the full diff report for single-step publication.
+        #[test]
+        fn native_merge_worker_prepares_without_publication_and_cancels_cleanly() {
+            let _lock = TEST_LOCK.lock().unwrap();
+            let mut session = pcbcraft_engine::Session::default();
+            session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+            session
+                .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
+                .unwrap();
+            let target = session.project().unwrap().board_target().unwrap();
+            let layer = session
+                .project()
+                .unwrap()
+                .board_view(target)
+                .unwrap()
+                .layers()
+                .into_iter()
+                .find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+                .unwrap()
+                .id;
+            let points: Vec<_> = (0..=200).map(|i| serde_json::json!({"x_nm":i * 1_000_000,"y_nm":0})).collect();
+            session
+                .apply(
+                    pcbcraft_engine::ADD_TRACKS,
+                    &serde_json::json!({"board":target.board,"layer":layer,"width_nm":250_000,"points":points,"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            let tracks: Vec<_> = session.project().unwrap().board_view(target).unwrap().tracks().iter().map(|t| t.id).collect();
+            assert_eq!(tracks.len(), 200);
+            let before = session.snapshot().unwrap();
+            let revision = session.revision();
+            let params = serde_json::json!({"board":target.board,"tracks":tracks,"dry_run":false,"expected_revision":revision});
+
+            // Cancel a running native worker and confirm the board stays untouched and slots clear.
+            // The gate holds the worker inside its first batch until cancellation is signalled,
+            // so a worker that ignored cancellation would return the prepared edit instead.
+            struct Gated {
+                job: pcbcraft_engine::board::track::preparation::CopperEditJob,
+                entered: Option<mpsc::SyncSender<()>>,
+                release: Option<Receiver<()>>,
+            }
+            impl Work for Gated {
+                type Output = <pcbcraft_engine::board::track::preparation::CopperEditJob as Work>::Output;
+                fn source(&self) -> &CheckSource {
+                    Work::source(&self.job)
+                }
+                fn progress(&self) -> CheckProgress {
+                    Work::progress(&self.job)
+                }
+                /// The first batch parks until released and does no work, returning to the
+                /// worker's cancellation check; later batches run the real merge preparation.
+                fn step(&mut self, budget: usize) -> bool {
+                    if let Some(release) = self.release.take() {
+                        if let Some(entered) = self.entered.take() {
+                            entered.send(()).unwrap();
+                        }
+                        release.recv().unwrap();
+                        return false;
+                    }
+                    Work::step(&mut self.job, budget)
+                }
+                fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+                    Work::take_output(&mut self.job)
+                }
+            }
+            let job = session.prepare_copper_edit(pcbcraft_engine::MERGE_TRACKS, &params).unwrap();
+            let (entered_tx, entered) = mpsc::sync_channel(1);
+            let (release, release_rx) = mpsc::sync_channel(1);
+            let mut cancelled = Running::start(Request { id: 1, job: Gated { job, entered: Some(entered_tx), release: Some(release_rx) } });
+            entered.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            assert!(cancelled.poll().is_none());
+            cancelled.cancel();
+            release.send(()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let completion = loop {
+                if let Some(done) = cancelled.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(!completion.retryable());
+            assert!(matches!(completion.report, Ok(None)));
+            assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+
+            // A fresh native worker prepares the merge off-thread and commits in one undo step.
+            let job = session.prepare_copper_edit(pcbcraft_engine::MERGE_TRACKS, &params).unwrap();
+            let mut running = Running::start(Request { id: 2, job });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let completion = loop {
+                if let Some(done) = running.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            let prepared = completion.report.unwrap().unwrap().unwrap();
+            let (new_rev, report) = session.commit_copper_edit_with_report(prepared).unwrap();
+            assert_eq!(new_rev, revision + 1);
+            let report = report.unwrap();
+            assert_eq!(report["revision"], serde_json::json!(revision + 1));
+            assert_eq!(report["merge_tracks"]["removed"].as_array().unwrap().len(), 199);
+            assert_eq!(session.project().unwrap().board_view(target).unwrap().tracks().len(), 1);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
         }
         /// Excess native work is refused without spawning a third worker or waiting.

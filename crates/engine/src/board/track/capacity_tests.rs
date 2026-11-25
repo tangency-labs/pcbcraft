@@ -24,12 +24,12 @@ fn at(x_nm: i64, y_nm: i64) -> Point {
 fn exhaustive(mut builder: IslandBuilder, end: usize) -> IslandBuilder {
     for i in builder.node..end {
         for j in 0..i {
-            let layers = match (builder.layers.get(i), builder.layers.get(j)) {
+            let layers = match (builder.layers.get(i).and_then(Option::as_ref), builder.layers.get(j).and_then(Option::as_ref)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
                 _ => true,
             };
-            if layers && builder.contours[i].touches(&builder.contours[j]) {
+            if layers && builder.shapes[i].touches(&builder.shapes[j]) {
                 join(&mut builder.parent, i, j);
             }
         }
@@ -137,8 +137,8 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
 }
 
 /// Both island paths give the exhaustive eligible-pair result below, at and above the switch
-/// size. Reusing synchronous roots preserves the legacy separation and matches the resumable
-/// pad-contact merge at sampled budgets.
+/// size. Native pad sweeping and the reused builder preserve the separate routed-only groups
+/// and match the resumable pad-contact merge at sampled budgets.
 #[test]
 fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
     for items in [PAIRWISE_BELOW - 1, PAIRWISE_BELOW, PAIRWISE_BELOW + 1] {
@@ -147,8 +147,11 @@ fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
         assert_eq!(compares_every_pair(items), items < PAIRWISE_BELOW, "{items} items");
         let expected = exhaustive(IslandBuilder::new(&lands, &tracks, &vias), items).finish(&lands, &tracks, &vias);
         let pads = exhaustive(IslandBuilder::pad_contacts(&lands, &tracks, &vias, &expected.1), lands.len()).finish(&lands, &tracks, &vias);
-        assert_eq!(build_islands(&lands, &tracks, &vias, false), expected);
-        assert_eq!(build_islands(&lands, &tracks, &vias, true), pads);
+        let copper_items = CopperItems { lands: &lands, tracks: &tracks, vias: &vias, arcs: &[] };
+        assert_eq!(build_islands(copper_items, false), Ok(expected.clone()));
+        assert_eq!(build_islands(copper_items, true), Ok(pads.clone()));
+        assert_eq!(IslandBuilder::complete(&lands, &tracks, &vias, false).finish(&lands, &tracks, &vias), expected);
+        assert_eq!(IslandBuilder::complete(&lands, &tracks, &vias, true).finish(&lands, &tracks, &vias), pads);
         for pairwise in [true, false] {
             for budget in [1, 7, usize::MAX] {
                 let mut builder = IslandBuilder::new(&lands, &tracks, &vias).on_path(pairwise);

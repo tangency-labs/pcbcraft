@@ -2,8 +2,8 @@ use super::*;
 use pcbcraft_engine::{
     MOVE_SYMBOL, Session,
     persistence::{
-        CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, ENTRY_POINT, decode, decode_documents, encode_documents,
-        migrate_bundled_libraries,
+        CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, ENTRY_POINT, decode, decode_documents,
+        encode_documents, migrate_bundled_libraries,
     },
 };
 use serde_json::json;
@@ -24,7 +24,7 @@ fn encode(current: Arc<Project>, original: Option<Original>) -> Documents {
 #[test]
 fn unchanged_download_advances_the_project_header() {
     let mut session = Session::default();
-    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    session.apply("project.new", &json!({})).unwrap();
     let current = encode_documents(session.snapshot().unwrap()).unwrap();
     let mut previous = current.clone();
     let entry = String::from_utf8(previous[ENTRY_POINT].clone()).unwrap().replacen(CURRENT_PROJECT_FORMAT, "pcbcraft-project/16", 1);
@@ -107,6 +107,27 @@ fn unchanged_download_advances_the_sheet_header() {
     let current = encode_documents(snapshot).unwrap();
     let mut previous = current.clone();
     let historical = String::from_utf8(current[&path].clone()).unwrap().replacen(CURRENT_SHEET_FORMAT, "pcbcraft-sheet/9", 1);
+    previous.insert(path, historical.into_bytes());
+    let opened = decode_documents(&previous).unwrap();
+    let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();
+    assert!(baseline.unchanged(&opened).is_none());
+    let migrated = encode(opened, Some(baseline));
+    assert_eq!(migrated, current);
+    let reopened = decode_documents(&migrated).unwrap();
+    let baseline = Original::for_project(reopened.clone(), Arc::new(migrated), &reopened).unwrap();
+    assert_eq!(baseline.unchanged(&reopened).as_deref(), Some(&current));
+}
+
+/// An unchanged archive with an older instance document bypasses raw reuse once.
+#[test]
+fn unchanged_download_advances_the_instances_header() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let path = snapshot.instances_document_path().unwrap();
+    let current = encode_documents(snapshot).unwrap();
+    let mut previous = current.clone();
+    let historical = String::from_utf8(current[&path].clone()).unwrap().replacen(CURRENT_INSTANCES_FORMAT, "pcbcraft-instances/1", 1);
     previous.insert(path, historical.into_bytes());
     let opened = decode_documents(&previous).unwrap();
     let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();

@@ -194,7 +194,7 @@ const LIBRARIES: &[Group] = &[
         title: "Library sources",
         tools: &[
             tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
-            tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
+            tool(Action::Updates, "Updates", Icon::Sync, "Review newer library revisions of placed parts", ""),
         ],
         extras: &[],
     },
@@ -213,6 +213,7 @@ impl Action {
                 | Self::Label
                 | Self::Symbol
                 | Self::Sources
+                | Self::Updates
                 | Self::OpenLibraryItem
                 | Self::ResumeLibraryEditors
                 | Self::EditDefinitionCopy
@@ -252,6 +253,7 @@ impl Action {
             }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
+            Self::Updates => project,
             Self::Rules => project && app.views.active.input(&app.session).is_some(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
@@ -363,6 +365,7 @@ impl PcbApp {
             Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
             Action::Sources => self.open_library_workspace(ctx),
+            Action::Updates => self.open_library_updates(ctx),
             Action::Rules => self.begin_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),

@@ -131,7 +131,7 @@ impl Session {
         super::track::protect_locked(&source, &next)?;
         let affected: BTreeSet<_> = plan.items.tracks.union(&plan.items.vias).copied().chain(plan.carried.keys().copied()).collect();
         if (!affected.is_empty() || !plan.items.footprints.is_empty())
-            && let Some((a, b)) = super::track::short_for_copper_edit(&next, &affected, &plan.items.footprints)
+            && let Some((a, b)) = super::track::short_for_copper_edit(&next, &affected, &plan.items.footprints).map_err(invalid)?
         {
             return Err(invalid(format!("This move would connect nets {a} and {b}.")));
         }

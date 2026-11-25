@@ -42,6 +42,27 @@ applied atomically; typing in a draft does not change the project. Expanding the
 form does not create another draft or undo history. Invalid input stays editable,
 Cancel leaves the document unchanged and stale view/project revisions are refused.
 
+A schematic wire selection offers **Net rules…** and inline **Net appearance** fields.
+Appearance follows the whole logical net across supported sheets: wires joined
+into one net by matching global labels all repaint, while same-named local labels
+on different sheets remain separate nets. The fields edit optional RGB color
+and stroke width, with `100%` representing the default stroke. The shared
+`nets.set_appearance` and `nets.inspect_appearance` commands
+back the fields, so MCP uses the same edit path with width in hundredths of a
+point. Stroke width is a screen-space width and stays readable at every zoom. Color is
+presentation only; selection, hover and error indicators keep their own colors and
+a contrasting screen-space underlay, so a selected wire stays readable even when its
+net color matches the active theme's selection accent or its stroke is at the maximum
+width. Handles still appear only for a single selected wire with an interior corner
+or a junction end. Repeated instances are not supported; appearance across them is
+tracked in [#441](https://github.com/tangency-labs/pcbcraft/issues/441).
+
+Selecting wires or net labels on distinct nets shows the selection’s appearance and class
+assignments. Mixed values are preserved until a field is set for all or reset to
+the theme default. **Assign class** and **Remove class** change membership in the
+selected rule class. **Apply changes** commits the pending fields together so one
+Undo restores the previous values on each net.
+
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without
 placing copper. Initial board placement stays a separate command. A placed
@@ -159,9 +180,10 @@ keeps that version. Footprint drafts use `pcbcraft-library-item/1` by default,
 plated slots. The envelope records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
-Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
-and 64 undo snapshots per document, so footprints with more pads than that cannot
-yet be edited here. The footprint schema itself allows 1,024 pads, 256
+Its object order is deterministic, with a 1 MiB encoded size limit, up to 512
+primitives per symbol or 1,536 primitives per footprint (covering up to 1,024
+pads plus artwork, mechanical holes and legacy graphics), and 64 undo snapshots
+per document. The footprint schema itself allows 1,024 pads, 256
 parameterized artwork objects, 64 legacy technical rectangles and 64 legacy
 silkscreen paths.
 Object/content allocation counters survive

@@ -34,6 +34,28 @@ impl PcbApp {
         self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
     }
 
+    /// The focused view's selected track segments, without vias or stale ids, in board order.
+    /// Lazy, so the ribbon's enable check can stop at the second match.
+    fn selected_track_ids(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
+        let board = self.views.active.board.target.and_then(|target| self.session.project()?.board_view(target));
+        let tracks = board.map_or(&[][..], |board| board.tracks());
+        self.views.active.board.tracks.selected.iter().filter(move |id| tracks.binary_search_by_key(*id, |t| t.id).is_ok()).copied()
+    }
+
+    /// Merge the focused view's selected track segments through the shared `pcb.merge_tracks`
+    /// command. Like other canvas copper edits, it is validated by background copper preparation
+    /// and published as one undo step; refusals appear in the status bar.
+    pub(super) fn merge_selected_tracks(&mut self) {
+        let Some(source) = self.views.active.input(&self.session) else { return };
+        let Some(target) = self.views.active.board.target else { return };
+        let tracks: Vec<_> = self.selected_track_ids().collect();
+        if tracks.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({"board": target.board, "tracks": tracks, "expected_revision": source.revision});
+        self.prepare_canvas_copper(crate::board_drawing::Command::new(source, pcbcraft_engine::MERGE_TRACKS, params));
+    }
+
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -209,6 +231,15 @@ impl PcbApp {
             active: false,
             menu_check: None,
         };
+        let merge = RibbonTool {
+            icon: ToolIcon::Track,
+            label: "Merge Tracks",
+            description: "Merge selected straight track segments",
+            shortcut: "",
+            enabled: idle && !editing && !self.views.active.board.tracks.committing() && self.selected_track_ids().nth(1).is_some(),
+            active: false,
+            menu_check: None,
+        };
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
             .iter()
@@ -222,13 +253,14 @@ impl PcbApp {
                 menu_check: None,
             })
             .collect();
-        let menu: Vec<_> = std::iter::once(delete).chain(aligns).collect();
+        let menu: Vec<_> = [delete, merge].into_iter().chain(aligns).collect();
         match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
             Some(2) => self.views.active.board.flip_requested = true,
             Some(3) => self.delete_board_items(),
-            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
+            Some(4) => self.merge_selected_tracks(),
+            Some(index) if (5..5 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 5].1),
             _ => {}
         }
     }
@@ -674,18 +706,19 @@ impl PcbApp {
         self.views.active.board.tracks.start();
     }
 
-    /// Paint any addressed board pane, with input granted only to its focused view. The renderer
+    /// Paint any addressed board pane, with input granted only to its focused view; pan and zoom
+    /// follow the pointer into either pane without focusing it. The renderer
     /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
     /// Rejected drawing creation restores its captured gesture so the user can correct it.
     /// An accepted zone creation renews its armed net choice for the next outline only.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
-        let enabled = ui.is_enabled()
+        let navigation_enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
             && !self.home
-            && self.views.active.id() == id
             && matches!(self.dialog, Dialog::None)
             && !self.project_action_pending();
+        let enabled = navigation_enabled && self.views.active.id() == id;
         let owner_enabled = enabled;
         let enabled = enabled && !egui::Popup::is_any_open(ui.ctx());
         if self.session.project().is_some_and(|project| project.board_target().is_none())
@@ -735,6 +768,7 @@ impl PcbApp {
                         view.filters,
                         &self.board_appearance,
                         owner_enabled,
+                        navigation_enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity(true),
                         self.preferences.board_grid_style,
