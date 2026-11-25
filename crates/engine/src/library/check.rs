@@ -499,7 +499,8 @@ fn copy_terminals<'a>(terminals: impl IntoIterator<Item = &'a String>, work: &mu
     Ok(copy)
 }
 
-/// Read the format first, then decode and validate identity without checking pads or publication readiness.
+/// Read the format first, then check identity and pad-number spelling without requiring
+/// unique pad numbers or publication readiness.
 fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
@@ -512,6 +513,12 @@ fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, Check
     }
     if !definition.has_valid_identity() {
         return Err(CheckError::Malformed { file: path.into(), reason: "invalid footprint identity".into() });
+    }
+    // Leave oversized footprints to the existing capture limit instead of scanning their pads.
+    if definition.pads.len() <= MAX_PADS
+        && let Some(index) = definition.pads.iter().position(|pad| crate::schematic::PinNumber::new(&pad.number).is_none())
+    {
+        return Err(CheckError::Malformed { file: path.into(), reason: format!("invalid footprint pad number at pads[{index}].number") });
     }
     Ok(definition)
 }

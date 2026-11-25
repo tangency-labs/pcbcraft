@@ -216,6 +216,31 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
     assert_eq!((editors(&fixture), fixture.session.inspect(), fixture.session.revision(), params), before);
 }
 
+/// A package resolves the transported pad set before the catalog copy at the same reference.
+#[test]
+fn package_uses_transported_pad_set_before_catalog() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let record = connector_part(&fixture.footprint, &[("1", &["1"]), ("2", &["2", "3"])], &[]);
+    let mut changed: Value = serde_json::from_str(&fixture.documents[&fixture.footprint_path])?;
+    assert_eq!(changed["pads"][2]["number"], "3");
+    changed["pads"][2]["number"] = json!("9");
+    let documents = edited(&fixture, |_| changed.to_string());
+    let mut catalog_only = documents.clone();
+    catalog_only.remove(&fixture.footprint_path);
+
+    let baseline = fixture.session.execute(CHECK, &json!({"documents":catalog_only,"record":record}))?;
+    assert_eq!(baseline["findings"], json!([]));
+    let report = fixture.session.execute(CHECK, &json!({"documents":documents,"record":record}))?;
+    let [unaccounted, missing] = report["findings"].as_array().ok_or("expected findings")?.as_slice() else {
+        return Err(format!("expected exactly two findings: {report}").into());
+    };
+    assert_eq!(unaccounted["rule"], "package.pad.unaccounted");
+    assert_eq!(unaccounted["subject"]["number"], "9");
+    assert_eq!(missing["rule"], "package.pad.not_in_footprint");
+    assert_eq!(missing["subject"]["number"], "3");
+    Ok(())
+}
+
 /// Last good value: one pad numbered 1. First bad value: a second one, which is one finding
 /// listing both occurrences in authored order.
 #[test]
@@ -460,6 +485,36 @@ fn rejects_invalid_transported_footprint_identity() -> Result<(), serde_json::Er
             "{field}"
         );
     }
+    Ok(())
+}
+
+/// A malformed pad number is an input error; valid repeated numbers still yield a report.
+#[test]
+fn transported_pad_number_spelling_is_checked_without_requiring_uniqueness() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let mut definition: Value = serde_json::from_str(&fixture.documents[&fixture.footprint_path])?;
+    definition["format"] = json!(CURRENT_FORMAT);
+    definition["pads"][0]["number"] = json!("bad pad");
+    let invalid = edited(&fixture, |_| definition.to_string());
+    let reason = "invalid footprint pad number at pads[0].number";
+    assert_eq!(
+        Capture::from_documents(&invalid, &Catalog::default()),
+        Err(CheckError::Malformed { file: fixture.footprint_path.clone(), reason: reason.into() })
+    );
+    assert_eq!(
+        fixture.session.execute(CHECK, &json!({"documents":invalid})),
+        Err(crate::CommandError::InvalidParams(format!("{}: {reason}", fixture.footprint_path)))
+    );
+
+    let duplicate = edited(&fixture, |text| repeat_pad(text, 0, 2_000_000));
+    let report = fixture.session.execute(CHECK, &json!({"documents":duplicate}))?;
+    let [finding] = report["findings"].as_array().ok_or("expected findings")?.as_slice() else {
+        return Err(format!("expected exactly one finding: {report}").into());
+    };
+    assert_eq!(finding["rule"], "pad.number.repeated");
+    assert_eq!(finding["subject"]["number"], "1");
+    assert_eq!(finding["measured"], json!({"value":2,"unit":"count"}));
+    assert_eq!(finding["occurrences"], json!([{"index":0,"ordinal":1},{"index":3,"ordinal":2}]));
     Ok(())
 }
 
