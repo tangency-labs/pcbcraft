@@ -49,6 +49,7 @@ pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::output_recipe::SET_OUTPUT_RECIPE;
 pub use board::rules::SET_RULES;
+pub use board::test_points::SET_TEST_POINT;
 pub use board::track::{
     ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MERGE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE,
     UNROUTE_CONNECTION,
@@ -188,6 +189,9 @@ enum ParamKind {
     RuleLength,
     BoardRules,
     PlacementOrigin,
+    TestPointTarget,
+    TestPointPurpose,
+    TestPointSides,
     /// An assembly profile UUID from inspection.
     AssemblyProfileId,
     /// Immutable assembly profile content, or null to retire the addressed profile.
@@ -339,6 +343,9 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
+            Self::TestPointTarget => board::test_points::target_schema(),
+            Self::TestPointPurpose => json!({"type":"string","enum":["assembly","fabrication"]}),
+            Self::TestPointSides => json!({"enum":["top","bottom","both",null]}),
             Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
             Self::OutputRecipeId => non_nil_uuid_schema(),
             Self::OutputRecipeContent => board::output_recipe::schema(),
@@ -725,6 +732,12 @@ impl ParamKind {
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
             Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
+            Self::TestPointTarget if board::test_points::valid_target(value) => Ok(()),
+            Self::TestPointTarget => Err("must identify one placed pad or via"),
+            Self::TestPointPurpose if serde_json::from_value::<board::test_points::Purpose>(value.clone()).is_ok() => Ok(()),
+            Self::TestPointPurpose => Err("must be assembly or fabrication"),
+            Self::TestPointSides if serde_json::from_value::<Option<board::test_points::Sides>>(value.clone()).is_ok() => Ok(()),
+            Self::TestPointSides => Err("must be top, bottom, both or null"),
             Self::OutputRecipeId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
             Self::OutputRecipeId => Err("must identify an output recipe by non-nil UUID"),
             Self::OutputRecipeContent if board::output_recipe::valid_content(value) => Ok(()),
@@ -2707,6 +2720,18 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_TEST_POINT,
+        title: "Set Test Point",
+        summary: "Mark a placed pad or via on the top, bottom, or both board faces for one test purpose, or clear that purpose, in one undo step.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param { name: "target", required: true, summary: "One placed pad or via on the addressed board", kind: ParamKind::TestPointTarget },
+            Param { name: "purpose", required: true, summary: "Assembly or fabrication test", kind: ParamKind::TestPointPurpose },
+            Param { name: "sides", required: true, summary: "Top, bottom, both faces, or null to clear", kind: ParamKind::TestPointSides },
+        ],
+    },
+    Command {
         id: SET_COPPER_LOCKED,
         title: "Set Copper Lock",
         summary: "Lock or unlock selected tracks and vias atomically. Locked copper stays selectable; edits to geometry, sizes or deletion fail as a whole. Copies preserve locks.",
@@ -3745,6 +3770,7 @@ impl Session {
             | DELETE_TRACKS
             | UNROUTE_CONNECTION
             | SET_COPPER_LOCKED
+            | SET_TEST_POINT
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -4175,6 +4201,7 @@ impl Session {
                 | DELETE_TRACKS
                 | UNROUTE_CONNECTION
                 | SET_COPPER_LOCKED
+                | SET_TEST_POINT
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -4514,6 +4541,7 @@ impl Session {
                 }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
+            SET_TEST_POINT => self.set_test_point(params)?,
             MERGE_TRACKS => {
                 self.merge_tracks(params)?;
             }
@@ -5108,13 +5136,14 @@ impl Session {
         if !defer_net_reconciliation {
             reconcile(&mut project, previous.map(Arc::as_ref))?;
         }
-        // Copper and package maps can exhaust the native board document even before the
-        // record-count limits. Check the changed board before publishing snapshot or history.
+        // Copper, package maps and test-point marks can exhaust the native board document even
+        // before the record-count limits. Check the changed board before publishing snapshot or history.
         if previous.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()
-                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
+                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some())
+                || project.board.has_test_points())
         {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {

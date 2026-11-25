@@ -164,7 +164,7 @@ it later proposes an addition using that choice, which remains unplaced after Ap
 
 ## Persisted records
 
-[Board format 42](../formats/native-project-storage.md#current-board-records)
+[Board format 43](../formats/native-project-storage.md#current-board-records)
 stores the optional accepted `baseline` alongside desired `assignments`.
 The desired mapping must cover the live component and exact pinned package.
 The baseline and placement keep the accepted package and mapping independently.

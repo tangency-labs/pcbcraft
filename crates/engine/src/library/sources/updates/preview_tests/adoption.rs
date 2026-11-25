@@ -120,6 +120,29 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), adopted_bytes);
 }
 
+/// The footprint review does not authorize moving or clearing a test-point mark.
+#[test]
+fn footprint_revision_refuses_marked_pad_without_editing() {
+    let (mut session, _, target) = package_fixture(|pad| pad.center.x_nm += 200_000, false, true);
+    let project = session.snapshot().unwrap();
+    let mut mark = json!({
+        "board": target["board"],
+        "target": {"kind":"pad","footprint":format!("footprint-{}", project.board.footprints()[0].id),"pad":"1"},
+        "purpose":"assembly", "sides":"top", "expected_revision":session.revision(),
+    });
+    session.apply(crate::SET_TEST_POINT, &mark).unwrap();
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    assert_apply_refused_without_edit(&mut session, &params, "Clear this footprint's pad test-point marks before applying a different revision.");
+
+    mark["sides"] = Value::Null;
+    mark["expected_revision"] = json!(session.revision());
+    session.apply(crate::SET_TEST_POINT, &mark).unwrap();
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+}
+
 /// Link two board-eligible parts on terminal 1, leaving terminal 2 free for pad-only nets.
 fn connect_another_part(session: &mut Session) -> (String, String) {
     let project = session.snapshot().unwrap();

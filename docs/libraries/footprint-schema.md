@@ -7,7 +7,7 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In [board format 42](../formats/native-project-storage.md#current-board-records),
+In [board format 43](../formats/native-project-storage.md#current-board-records),
 the placed footprint owns `locked`, an optional boolean that defaults to false.
 Canonical encoding omits false. The flag lives on the placement, separate
 from its pinned library definition and mapping. See
@@ -60,6 +60,10 @@ python3 -B -m unittest discover -s scripts -p 'test_footprint_schemas.py'
 
 A footprint owns pads, mechanical holes, physical artwork and a generated reference's default
 position and font. A component instance owns its reference text, such as `R12`.
+Test-point marks refer to individual placed pads and are board-owned. They are
+[stored on the board](../formats/native-project-storage.md#test-point-records), not in the
+reusable footprint definition.
+
 A board placement owns its origin, orientation, side, terminal-to-pad mapping
 and optional reference displacement. Library previews substitute `REF` for the
 component's text.
@@ -117,6 +121,17 @@ round outline; the record remains a slot. Null slot records are not accepted.
 
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
+
+Ball-grid footprints may generate pad identifiers via the authoring `array`
+action with `numbering: {"mode": "ball_grid", "skip_jedec": true|false}`.
+Row labels follow Excel-style lettering (`A`…`Z`, then `AA`, `AB`, …) with
+columns `1`…`N`. When `skip_jedec` is true, the JEDEC skip set
+(`I`, `O`, `Q`, `S`, `X`, `Z`) is omitted from every row letter (so a 26-row
+grid runs `A`…`AF`). Footprint inspection catalogs, package maps and the
+definition browser present pad identifiers in natural order (`A2` before `A10`,
+`Y26` before `AA1`), while saved JSON retains its canonical storage order.
+The shared `app.library_edit` command accepts `"dry_run": true` to validate and
+record a readable change summary without mutating the document.
 
 A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,000).
 The array implies a non-plated through hole with no copper land. It has no pad

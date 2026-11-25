@@ -246,7 +246,9 @@ review and are refused by this command.
 After a project edit or source reload, preview again. A locked footprint or
 one with a different pending package choice cannot be changed here. Apply pins
 the exact new package for this one instance, retains its placement and leaves
-tracks and vias where they are. On a board with an accepted baseline, a terminal
+tracks and vias where they are. Clear any pad test-point marks on this footprint
+before applying; the reviewed pad map does not establish probe access on the new
+package. On a board with an accepted baseline, a terminal
 that gains an extra pad still needs those pads connected, even if it is unwired
 in the schematic. Apply updates that connection without accepting pending
 schematic changes. Desktop live Apply checks save limits on a worker and refuses

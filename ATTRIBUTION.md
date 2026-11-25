@@ -651,6 +651,15 @@ native window when the original closes. The patch boundary and upgrade procedure
 are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
 ownership and the close/save policy remain in PCBcraft.
 
+## macOS Metal presentation
+
+PCBcraft's `surface_config` helper in `apps/pcbcraft/src/main.rs` comes from
+Warmbird's `apps/solidcraft/src/main.rs` change in SolidCraft at revision
+`28300caeab1a11ab2914a112ac33405e151c33dc` (MIT OR Apache-2.0). PCBcraft calls
+it when constructing its desktop window options, selecting the high-throughput
+surface preset on macOS and the low-latency preset on Windows and Linux.
+[SolidCraft PR #20572](https://github.com/tangency-labs/solidcraft/pull/20572)
+
 ## Wire endpoint attachment
 
 Endpoint drops in `crates/app/src/schematic_canvas/wires.rs` and
@@ -1901,3 +1910,25 @@ The degree-two trace-chain graph, cooperative per-query topology preparation,
 soft bend hints, source-preserving path partitioning and independent chain/contact
 validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
 implementation, dependency or saved-format change was introduced.
+
+## Board substrate preview
+
+The desktop 3D render workspace uses the SolidCraft camera, shaded GPU
+viewport and egui background painter at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright
+2026 SolidCraft contributors). The view compass and board picker chrome use
+the existing licensed Craft UI toolkit in the same revision. PCBcraft owns
+the board-to-triangle conversion, the pane-local egui callback and board
+addressing. Separate callbacks are required because the shared egui
+callback holds one prepared picture per renderer. No component models or
+other external 3D assets are included.
+
+Spade 2.15.1 (MIT OR Apache-2.0), already used by the pinned SolidCore
+display tessellator, also triangulates the preview's bounded,
+non-intersecting board outlines and drill loops. The board's exact solid
+continues to use SolidCore.
+
+The 3D workspace uses the pinned SolidCraft `solidcraft-gpu` hardware
+path tracer, `solidcraft-render` image host and `solidcraft-geom` scene types
+(MIT OR Apache-2.0). PCBcraft supplies the board geometry, studio lighting,
+material settings and render controls.
