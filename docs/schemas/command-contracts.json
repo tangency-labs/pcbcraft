@@ -9373,6 +9373,87 @@
         "type": "object"
       }
     },
+    "pcb.set_test_point": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "purpose": {
+            "enum": [
+              "assembly",
+              "fabrication"
+            ],
+            "type": "string"
+          },
+          "sides": {
+            "enum": [
+              "top",
+              "bottom",
+              "both",
+              null
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "footprint": {
+                    "pattern": "^footprint-[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "pad"
+                  },
+                  "pad": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "footprint",
+                  "pad"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "via"
+                  },
+                  "via": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "via"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "board",
+          "expected_revision",
+          "target",
+          "purpose",
+          "sides"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.set_track_width": {
       "params": {
         "additionalProperties": false,

@@ -150,6 +150,18 @@
 
 - Exact cross-view highlighting/Reveal #398.
 
+## Test-point marks
+
+### Available
+
+- [Shared command](../automation/board-commands.md#test-point-marks) to mark placed pads and vias
+  for assembly or bare-board testing, independently by board face, with undo/redo and native
+  save/reopen.
+
+### Remaining scope
+
+- No fixture report, probe-access validation, variant filtering or editor controls yet.
+
 ## Footprint locks
 
 ### Available

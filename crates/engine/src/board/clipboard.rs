@@ -369,6 +369,7 @@ impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
     /// Selections containing zones and boards with unsupported copper are refused in full.
+    /// Cut also refuses marked test points.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
         if !selection.zones.is_empty() {
             return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
@@ -388,6 +389,9 @@ impl BoardFragment {
             || vias.len() != selection.vias.len()
         {
             return Err(invalid("copy needs existing selected board objects"));
+        }
+        if cut && (footprints.iter().any(|footprint| !footprint.test_points.is_empty()) || vias.iter().any(|via| !via.test_points.is_empty())) {
+            return Err(invalid("Cut would discard test-point marks. Use Move to relocate marked objects."));
         }
         let components: BTreeSet<_> = footprints.iter().map(|f| f.component).collect();
         if components.iter().any(|id| !project.component_is_board_eligible(*id)) {
@@ -801,6 +805,7 @@ impl BoardFragment {
             let mut copy = source.clone();
             copy.id = crate::clipboard::allocate(&mut cursor)?;
             copy.component = components[&source.component];
+            copy.test_points.clear();
             let point = crate::clipboard::transformed(Point { x_nm: source.x_nm, y_nm: source.y_nm }, self.anchor, at, options.items.quarter_turns)?;
             copy.x_nm = point.x_nm;
             copy.y_nm = point.y_nm;
@@ -864,6 +869,7 @@ impl BoardFragment {
             }
             let mut copy = source.clone();
             copy.id = crate::fresh_id()?;
+            copy.test_points = Default::default();
             copy.at = crate::clipboard::transformed(source.at, self.anchor, at, options.items.quarter_turns)?;
             selected.vias.insert(copy.id);
             Arc::make_mut(&mut next.board).vias.push(copy);

@@ -7,7 +7,7 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In [board format 42](../formats/native-project-storage.md#current-board-records),
+In [board format 43](../formats/native-project-storage.md#current-board-records),
 the placed footprint owns `locked`, an optional boolean that defaults to false.
 Canonical encoding omits false. The flag lives on the placement, separate
 from its pinned library definition and mapping. See
@@ -60,6 +60,10 @@ python3 -B -m unittest discover -s scripts -p 'test_footprint_schemas.py'
 
 A footprint owns pads, mechanical holes, physical artwork and a generated reference's default
 position and font. A component instance owns its reference text, such as `R12`.
+Test-point marks refer to individual placed pads and are board-owned. They are
+[stored on the board](../formats/native-project-storage.md#test-point-records), not in the
+reusable footprint definition.
+
 A board placement owns its origin, orientation, side, terminal-to-pad mapping
 and optional reference displacement. Library previews substitute `REF` for the
 component's text.
