@@ -188,41 +188,35 @@ pub struct ColumnMapping {
 }
 
 impl ColumnMapping {
-    /// Infer column assignments from header cells, falling back to positional defaults when
-    /// `has_header` is false or no header names match known pin fields.
+    /// Infer assignments from recognized header names, or use positional defaults for a headerless table.
+    /// A declared header with no recognized names leaves every column unmapped.
     pub fn auto_detect(headers: &[String], column_count: usize, has_header: bool) -> Self {
-        let mut mapping = Self::default();
-        if has_header {
-            for (index, header) in headers.iter().enumerate() {
-                let norm = normalize_header(header);
-                if mapping.number.is_none()
-                    && matches!(
-                        norm.as_str(),
-                        "number" | "pin" | "pin number" | "pin no" | "pin num" | "designator" | "num" | "no" | "#" | "terminal"
-                    )
-                {
-                    mapping.number = Some(index);
-                } else if mapping.name.is_none()
-                    && matches!(norm.as_str(), "name" | "pin name" | "signal" | "signal name" | "label" | "display name" | "function")
-                {
-                    mapping.name = Some(index);
-                } else if mapping.electrical_type.is_none()
-                    && matches!(
-                        norm.as_str(),
-                        "type" | "electrical type" | "electrical" | "elec" | "elec type" | "pin type" | "direction" | "dir" | "io" | "i/o"
-                    )
-                {
-                    mapping.electrical_type = Some(index);
-                } else if mapping.unit.is_none() && matches!(norm.as_str(), "unit" | "part" | "section" | "bank" | "subpart" | "group") {
-                    mapping.unit = Some(index);
-                } else if mapping.side.is_none() && matches!(norm.as_str(), "side" | "edge" | "position" | "orientation" | "location") {
-                    mapping.side = Some(index);
-                }
-            }
+        if !has_header {
+            return Self::positional(column_count);
         }
-        if mapping.number.is_none() && mapping.name.is_none() && mapping.electrical_type.is_none() && mapping.unit.is_none() && mapping.side.is_none()
-        {
-            mapping = Self::positional(column_count);
+        let mut mapping = Self::default();
+        for (index, header) in headers.iter().enumerate() {
+            let norm = normalize_header(header);
+            if mapping.number.is_none()
+                && matches!(norm.as_str(), "number" | "pin" | "pin number" | "pin no" | "pin num" | "designator" | "num" | "no" | "#" | "terminal")
+            {
+                mapping.number = Some(index);
+            } else if mapping.name.is_none()
+                && matches!(norm.as_str(), "name" | "pin name" | "signal" | "signal name" | "label" | "display name" | "function")
+            {
+                mapping.name = Some(index);
+            } else if mapping.electrical_type.is_none()
+                && matches!(
+                    norm.as_str(),
+                    "type" | "electrical type" | "electrical" | "elec" | "elec type" | "pin type" | "direction" | "dir" | "io" | "i/o"
+                )
+            {
+                mapping.electrical_type = Some(index);
+            } else if mapping.unit.is_none() && matches!(norm.as_str(), "unit" | "part" | "section" | "bank" | "subpart" | "group") {
+                mapping.unit = Some(index);
+            } else if mapping.side.is_none() && matches!(norm.as_str(), "side" | "edge" | "position" | "orientation" | "location") {
+                mapping.side = Some(index);
+            }
         }
         mapping.clamped(column_count)
     }
@@ -258,6 +252,7 @@ pub enum FindingKind {
     EmptyTable,
     InputTooLarge,
     UnclosedQuote,
+    UnrecognizedHeader,
     MissingNumberColumn,
     TooManyPins,
     TooManyUnits,
@@ -279,6 +274,7 @@ impl FindingKind {
             Self::EmptyTable => "Empty",
             Self::InputTooLarge => "Too large",
             Self::UnclosedQuote => "Quote error",
+            Self::UnrecognizedHeader => "Unrecognized header",
             Self::MissingNumberColumn => "Unmapped number",
             Self::TooManyPins => "Too many pins",
             Self::TooManyUnits => "Too many units",
@@ -487,7 +483,8 @@ pub const fn electrical_type_label(kind: ElectricalType) -> &'static str {
 }
 
 /// Parse and validate a CSV or TSV pin table without mutating any symbol or project state.
-/// When `mapping_override` is `None`, columns are auto-mapped from headers (or positionally).
+/// In automatic mode, a nonempty table whose declared header has no known column names
+/// cannot be staged until the caller disables header handling or supplies an explicit mapping.
 pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_override: Option<ColumnMapping>) -> Preview {
     let resolved = delimiter.resolve(text);
     if text.len() > MAX_BYTES {
@@ -537,6 +534,16 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
         Some(custom) => custom.clamped(column_count),
         None => ColumnMapping::auto_detect(&headers, column_count, has_header),
     };
+    let unrecognized_header = has_header && mapping_override.is_none() && mapping == ColumnMapping::default();
+    if unrecognized_header && let Some(first) = parsed.records.first() {
+        findings.push(Finding {
+            row: None,
+            line: Some(first.line_number),
+            column: None,
+            kind: FindingKind::UnrecognizedHeader,
+            message: "No pin-table column names were recognized in the first row. Turn off ‘First row is header’ if it contains a pin, or map columns manually to use it as a header.".into(),
+        });
+    }
 
     if data_records.is_empty() {
         if findings.is_empty() {
@@ -561,7 +568,7 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
         };
     }
 
-    if mapping.number.is_none() {
+    if mapping.number.is_none() && !unrecognized_header {
         findings.push(Finding {
             row: None,
             line: None,
@@ -1311,9 +1318,53 @@ mod tests {
         assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"number": 99}})).is_err());
     }
 
-    /// The command's `mapping` is a complete mapping, not a per-field override of the detected
-    /// one: omitted fields are unmapped (so leaving out `number` blocks staging), an index past the
-    /// last column is unmapped, and the reply echoes the mapping that was used.
+    #[test]
+    fn unrecognized_header_blocks_staging_until_header_intent_is_explicit() {
+        let text = "1,VCC,power_in\n2,GND,power_in";
+        let ambiguous = preview(text, Delimiter::Comma, true, None);
+        assert_eq!(ambiguous.mapping, ColumnMapping::default());
+        assert!(!ambiguous.can_accept());
+        assert!(ambiguous.into_import_plan(0).is_err());
+        assert_eq!(ambiguous.findings.len(), 1);
+        let finding = &ambiguous.findings[0];
+        assert_eq!((finding.kind, finding.row, finding.line), (FindingKind::UnrecognizedHeader, None, Some(1)));
+
+        let headerless = preview(text, Delimiter::Comma, false, None);
+        assert!(headerless.can_accept());
+        assert_eq!(headerless.rows.iter().map(|row| row.number.as_deref()).collect::<Vec<_>>(), [Some("1"), Some("2")]);
+
+        let custom_header = "ID,Title,Mode\n1,VCC,power_in\n2,GND,power_in";
+        let explicit = preview(custom_header, Delimiter::Comma, true, Some(ColumnMapping::positional(3)));
+        assert!(explicit.can_accept());
+        assert_eq!(explicit.rows.iter().map(|row| row.number.as_deref()).collect::<Vec<_>>(), [Some("1"), Some("2")]);
+    }
+
+    #[test]
+    fn command_reports_unrecognized_header_and_accepts_explicit_intent() {
+        let mut session = Session::default();
+        let text = "1,VCC,power_in\n2,GND,power_in";
+        let mut run = |params: Value| {
+            let reply = session.execute(sources::PREVIEW_PIN_TABLE, &params);
+            assert!(reply.is_ok(), "pin-table preview failed: {reply:?}");
+            reply.unwrap_or_default()
+        };
+        let ambiguous = run(json!({"text": text}));
+        assert_eq!(ambiguous["can_accept"], false);
+        assert_eq!(ambiguous["findings"][0]["kind"], "unrecognized_header");
+        assert_eq!(ambiguous["findings"][0]["row"], Value::Null);
+        assert_eq!(ambiguous["findings"][0]["line"], 1);
+
+        let headerless = run(json!({"text": text, "has_header": false}));
+        assert_eq!(headerless["can_accept"], true);
+        assert_eq!(headerless["rows"][0]["number"], "1");
+        assert_eq!(headerless["rows"][1]["number"], "2");
+
+        let explicit = run(json!({"text": "ID,Title,Mode\n1,VCC,power_in", "mapping": {"number": 0, "name": 1, "electrical_type": 2}}));
+        assert_eq!(explicit["can_accept"], true);
+        assert_eq!(explicit["rows"][0]["number"], "1");
+    }
+
+    /// A command mapping replaces the detected one; omitted and out-of-range indices stay unmapped.
     #[test]
     fn command_mapping_is_complete_and_omitted_fields_stay_unmapped() {
         let mut session = Session::default();
