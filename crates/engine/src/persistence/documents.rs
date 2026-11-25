@@ -2242,7 +2242,25 @@ impl DocumentsEncoder {
                         self.finish_sheet()?;
                     }
                 }
-                21 => {
+                BOARD_TRACKS => {
+                    if let Some(track) = self.project.board.tracks.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, track)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(BOARD_ARRAY_END);
+                        self.start_board_list_after_tracks();
+                    }
+                }
+                BOARD_VIAS => {
+                    if let Some(via) = self.project.board.vias.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, via)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(BOARD_ARRAY_END);
+                        self.start_board_list_after_vias();
+                    }
+                }
+                BOARD_TEST_POINTS => {
                     if self.test_points.step(&mut self.bytes, &self.project, &mut 1)? {
                         self.start_board_placements();
                     }
@@ -2421,13 +2439,11 @@ impl DocumentsEncoder {
             sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
             self.phase = 12;
         } else if self.project.board_target().is_some() {
-            self.cursor = 0;
-            self.first = true;
             board_header(&mut self.bytes, &self.project)?;
-            if self.project.board.has_test_points() {
-                self.phase = 21;
+            if self.project.board.tracks.is_empty() {
+                self.start_board_list_after_tracks();
             } else {
-                self.start_board_placements();
+                self.start_board_list(BOARD_TRACKS, BOARD_TRACKS_START);
             }
         } else {
             self.phase = 9;
@@ -2450,12 +2466,36 @@ impl DocumentsEncoder {
         Ok(())
     }
 
-    /// Continue into the ordinary assignment and footprint phases after the optional marks.
-    fn start_board_placements(&mut self) {
-        self.phase = 7;
+    /// Start vias when present, otherwise continue past routed copper.
+    fn start_board_list_after_tracks(&mut self) {
+        if self.project.board.vias.is_empty() {
+            self.start_board_list_after_vias();
+        } else {
+            self.start_board_list(BOARD_VIAS, BOARD_VIAS_START);
+        }
+    }
+
+    /// Test-point marks follow routed copper and precede placements; [`TestPointSteps`] writes
+    /// the list opener with its first mark and the closer after its last.
+    fn start_board_list_after_vias(&mut self) {
+        if self.project.board.has_test_points() {
+            self.phase = BOARD_TEST_POINTS;
+        } else {
+            self.start_board_placements();
+        }
+    }
+
+    /// Open a board array and reset the incremental record cursor and separator.
+    fn start_board_list(&mut self, phase: u8, start: &[u8]) {
+        self.bytes.extend_from_slice(start);
+        self.phase = phase;
         self.cursor = 0;
         self.first = true;
-        self.bytes.extend_from_slice(board_placements_header(&self.project));
+    }
+
+    /// Continue into the ordinary assignment and footprint phases after the optional marks.
+    fn start_board_placements(&mut self) {
+        self.start_board_list(7, board_placements_header(&self.project));
     }
 
     /// Advance to the next list and reset its ordering cursor and separator state.
@@ -2477,6 +2517,13 @@ impl DocumentsEncoder {
     }
 }
 
+const BOARD_TEST_POINTS: u8 = 21;
+const BOARD_TRACKS: u8 = 23;
+const BOARD_VIAS: u8 = 24;
+const BOARD_TRACKS_START: &[u8] = b"  \"tracks\": [\n";
+const BOARD_VIAS_START: &[u8] = b"  \"vias\": [\n";
+const BOARD_TEST_POINTS_START: &[u8] = b"  \"test_points\": [\n";
+const BOARD_ARRAY_END: &[u8] = b"  ],\n";
 const BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS: &[u8] = b"  ],\n  \"footprints\": [\n";
 const DOCUMENT_END: &[u8] = b"  ]\n}\n";
 
@@ -2771,7 +2818,7 @@ impl TestPointSteps {
             *budget -= 1;
         }
         if self.wrote_mark {
-            bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
         }
         Ok(true)
     }
@@ -2779,7 +2826,7 @@ impl TestPointSteps {
     fn write_mark(&mut self, bytes: &mut impl Write, mark: &crate::board::test_points::Record) -> Result<(), String> {
         let mut first = !self.wrote_mark;
         if first {
-            bytes.write_all(b"  \"test_points\": [\n").map_err(|error| error.to_string())?;
+            bytes.write_all(BOARD_TEST_POINTS_START).map_err(|error| error.to_string())?;
         }
         record(bytes, &mut first, mark)?;
         self.wrote_mark = true;
@@ -3066,7 +3113,8 @@ fn board_header_fields(bytes: &mut impl Write, project: &Project) -> Result<(), 
     Ok(())
 }
 
-/// Write the current board header through copper, before test points and placements.
+/// Write the current board header through teardrops; Save then writes tracks and vias in
+/// bounded record batches before test points and placements.
 fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     board_header_prefix(bytes, project, true)?;
     let board = &project.board;
@@ -3075,22 +3123,6 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         let mut first = true;
         for intent in &board.teardrops {
             record(bytes, &mut first, intent)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.tracks.is_empty() {
-        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for track in &board.tracks {
-            record(bytes, &mut first, track)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.vias.is_empty() {
-        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for via in &board.vias {
-            record(bytes, &mut first, via)?;
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }

@@ -132,6 +132,13 @@ fn package_maps_cover_every_terminal_and_pad_once() {
     package.mapping.get_mut("1").unwrap().push("EP".into());
     package.unconnected_pads.push("01".into());
     package.validate_definitions(&symbol, &footprint).unwrap();
+    package.unconnected_pads.push("EP".into());
+    let both = Err("Pad EP cannot be both mapped and unconnected, or repeated.".to_owned());
+    assert_eq!(package.validate_definitions(&symbol, &footprint), both);
+    let assigned: BTreeMap<String, mapping::PadIds> =
+        package.mapping.iter().map(|(terminal, pads)| (terminal.clone(), mapping::PadIds::from(pads.clone()))).collect();
+    assert_eq!(mapping::validate(&assigned, &package.unconnected_pads, &symbol, &footprint), both);
+    package.unconnected_pads.pop();
     package.mapping.get_mut("2").unwrap().push("EP".into());
     assert!(package.validate_definitions(&symbol, &footprint).is_err());
     package.mapping.get_mut("2").unwrap().pop();
