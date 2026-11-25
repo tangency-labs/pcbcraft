@@ -615,7 +615,13 @@ fn voltage_page(ui: &mut egui::Ui, edit: &mut Edit, dirty: bool, pick_owner: &mu
     let historical = edit.owners.get(draft.owner).is_some_and(|owner| owner.historical);
     form::section(ui, "Requirement", |ui| {
         if historical {
-            ui.label(shell::dim("This net is no longer in the design. Its declaration can be reviewed or cleared, not changed."));
+            let removed =
+                draft.report["requirement"]["reasons"].as_array().is_some_and(|reasons| reasons.iter().any(|reason| reason == "net_retired"));
+            ui.label(shell::dim(if removed {
+                "This net is no longer in the design. Its declaration can be reviewed or cleared, not changed."
+            } else {
+                "This net identity is no longer active. Its declaration can be reviewed or cleared, not changed."
+            }));
         }
         controls::checkbox(ui, &mut draft.fields.declared, "Declare working voltage");
         ui.add_enabled_ui(draft.fields.declared && !historical, |ui| {

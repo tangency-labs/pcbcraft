@@ -586,6 +586,7 @@ fn working_voltage_page_reaches_and_clears_a_former_net() {
     click(&mut h, &former);
     assert!(h.query_by_label("Needs review").is_some());
     assert!(h.query_by_label("This net no longer exists in the design.").is_some());
+    assert!(h.query_by_label("This net is no longer in the design. Its declaration can be reviewed or cleared, not changed.").is_some());
     assert!(h.get_by_role_and_label(egui::Role::TextInput, "Working voltage value").accesskit_node().is_disabled());
     let revision = h.state().session.revision();
     click(&mut h, "Declare working voltage");
@@ -597,6 +598,80 @@ fn working_voltage_page_reaches_and_clears_a_former_net() {
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap()["intent"]["working_voltage"], declared);
+}
+
+/// Resolving a split restores the original identity on a live branch. The provisional
+/// declaration stays clear-only, but Rules must not describe the branch as deleted.
+#[test]
+fn working_voltage_page_distinguishes_resolved_owner_from_removal() {
+    use pcbcraft_engine::{CONNECT_PINS, DELETE_ITEMS, PLACE_RESISTOR, net_labels, nets};
+    let mut h = harness(1200.);
+    let app = h.state_mut();
+    let mut pins = Vec::new();
+    for index in 0..6 {
+        app.run(PLACE_RESISTOR, &json!({"x_nm":index * 25_400_000,"y_nm":0,"expected_revision":app.session.revision()}));
+        pins.push(json!({"symbol":app.session.project().unwrap().symbols().last().unwrap().id(),"terminal":"1"}));
+    }
+    let connect = |app: &mut PcbApp, from: usize, to: usize| {
+        app.run(CONNECT_PINS, &json!({"from":pins[from],"to":pins[to],"expected_revision":app.session.revision()}));
+    };
+    connect(app, 0, 1);
+    app.run(nets::PROMOTE, &json!({"anchor":pins[0],"expected_revision":app.session.revision()}));
+    let registry = app.session.project().unwrap().inspect_net_registry().unwrap();
+    let source = registry["nets"].as_array().unwrap().iter().find(|net| net["id"].is_string()).unwrap()["id"].clone();
+    for (from, to) in [(0, 2), (2, 3), (0, 4), (4, 5)] {
+        connect(app, from, to);
+    }
+    let items = pcbcraft_engine::selection::Selection {
+        symbols: [pins[0]["symbol"].as_str().unwrap().into(), pins[1]["symbol"].as_str().unwrap().into()].into(),
+        ..Default::default()
+    };
+    app.run(DELETE_ITEMS, &json!({"items":items,"expected_revision":app.session.revision()}));
+    app.run(nets::PROMOTE, &json!({"anchor":pins[2],"expected_revision":app.session.revision()}));
+    let project = app.session.project().unwrap();
+    let symbol = project.symbols().iter().find(|part| part.id() == pins[2]["symbol"].as_str().unwrap()).unwrap();
+    let at = symbol.pins()[symbol.unit_definition().pin_index("1").unwrap()];
+    app.run(
+        net_labels::ADD,
+        &json!({"name":"RESOLUTION_BRANCH","style":"local","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":app.session.revision()}),
+    );
+    let branch_id =
+        |registry: &Value| registry["nets"].as_array().unwrap().iter().find(|net| net["name"] == "RESOLUTION_BRANCH").unwrap()["id"].clone();
+    let project = app.session.project().unwrap();
+    let registry = project.inspect_net_registry().unwrap();
+    let provisional = branch_id(&registry);
+    assert!(provisional.is_string());
+    assert_ne!(provisional, source);
+    let target = json!({"kind":"net","address":{"project":project.id(),"scope":registry["scope"],"net":provisional}});
+    let declared = json!({"magnitude":{"value":"12","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+    app.run(
+        nets::intent::SET,
+        &json!({"version":1,"expected_revision":app.session.revision(),"target":target,"intent":{"working_voltage":declared}}),
+    );
+    app.run(nets::RESOLVE_AMBIGUITY, &json!({"net":source,"anchor":pins[2],"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none());
+    let project = app.session.project().unwrap();
+    assert_eq!(branch_id(&project.inspect_net_registry().unwrap()), source, "the named branch remains live under the original identity");
+    assert_eq!(project.inspect_electrical_intent(&target).unwrap()["intent"]["working_voltage"], declared);
+    app.begin_rules();
+    h.run();
+    click(&mut h, "Working voltage");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Declared on").click();
+    h.run();
+    click(&mut h, &format!("Former net · {}", &provisional.as_str().unwrap()[..8]));
+    assert!(h.query_by_label("This net identity is no longer active. Its declaration can be reviewed or cleared, not changed.").is_some());
+    assert!(
+        h.query_by_label("Resolving a split restored the original net identity. Re-declare the voltage on that net if it still applies.").is_some()
+    );
+    assert!(h.query_by_label_contains("no longer in the design").is_none());
+    assert!(h.query_by_label("This net no longer exists in the design.").is_none());
+    assert!(h.get_by_role_and_label(egui::Role::TextInput, "Working voltage value").accesskit_node().is_disabled());
+    let revision = h.state().session.revision();
+    click(&mut h, "Declare working voltage");
+    click(&mut h, "Save working voltage");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let report = h.state().session.project().unwrap().inspect_electrical_intent(&target).unwrap();
+    assert_eq!((&report["intent"]["working_voltage"], &report["requirement"]), (&Value::Null, &Value::Null));
 }
 
 /// The reference picker offers only named nets, as `electrical_intent.set` requires, while an
