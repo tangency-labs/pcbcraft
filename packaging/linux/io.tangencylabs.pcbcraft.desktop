@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=PCBcraft
+Comment=Schematic and PCB editor
+Exec=pcbcraft
+Terminal=false
+Categories=Development;Electronics;

@@ -81,6 +81,8 @@ supported versions and deferred work before extending a format or consumer.
 
 [Continuous integration](testing/continuous-integration.md) describes quick PR feedback,
 approval and affected native checks, deferred platform coverage and build caches.
+[Desktop builds and releases](testing/desktop-builds-and-releases.md)
+covers nightly downloads and the release checklist.
 
 These documents explain design decisions and staged work. Several combine
 delivered foundations with proposed extensions; they do not establish feature
