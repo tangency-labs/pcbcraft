@@ -329,6 +329,86 @@ establish either status. This is not a compatibility or adoption decision.
 The query does not search other projects or address future model and reusable
 module records.
 
+## Check library items
+
+`library.check` explains footprint and package-map defects that strict loading,
+the editors and publication refuse. It takes transported `documents` (the same
+relative-path map as `library.load_source`), an optional footprint authoring
+`item` and an optional generic part draft `record`. It needs no open project,
+writes no file, changes no project, source registration or history, and runs in
+read-only sessions and through MCP with `inspect: false`.
+
+The check reads `library.json` and decodes footprint, symbol and part
+files structurally, so it can explain defects that strict loading rejects.
+It checks path and size limits for every file, but does not parse the contents
+of `categories/*.json` or `manufacturer-parts/*.json`. A clean report does not
+validate those files; use `library.load_source` to validate the whole source.
+
+Every footprint format this build reads is accepted, including footprints with
+plated slots. The current footprint format accepts any supported
+mix of holes; an older format must match the authored holes. Part documents and
+drafts must meet the [native format requirements](part-schema.md#native-format-requirements),
+including the format-specific rules for symbols, ratings and descriptive metadata.
+A part that uses a supported format but has invalid values, such as a description
+that is too long or a reversed supply range, reports the specific content error.
+Transported parts must also have a valid native header, including a positive
+revision; this check does not impose that requirement on draft records.
+Every authored pad is kept in its authored order, with no
+deduplication; slotted pads are pads, and non-plated holes are not. Exact symbol and footprint
+references resolve in the transported documents first and then in the loaded
+catalog. A map entry for an unknown symbol terminal is refused, as is any mapping
+or unconnected-pad list on a package without a symbol. Missing assignments for
+real terminals still produce findings. Invalid JSON, unknown fields and
+repeated keys in the files the check reads are `invalid_params` errors, never a
+clean report. Invalid assignments, an unsupported or mismatched format, an
+unresolved reference, more than 1024 pads in one footprint, or more than 64
+packages in one part or 1024 terminals or pads in one package also return
+`invalid_params`, as does any document over the 1 MiB file limit.
+
+One check also has an aggregate limit of 33,554,432 work units and a 4 MiB
+budget for the estimated compact report size, before stage or severity settings
+are applied. Work units account for captured entries and text, counting every
+mapping occurrence, each package's copy of its symbol terminals, and every pass
+over a footprint even if many packages use the same revision. The report
+estimate includes every finding's subject text and pad occurrences. Exceeding
+either budget returns `invalid_params` with a size error and no partial report.
+To check fewer items at once, supply a smaller set of documents and keep the
+manifest and referenced definitions available to resolve exact revisions.
+
+The result has `capture_digest`, the SHA-256 of the canonical capture, the
+`stage` that ran, `findings`, `counts` of findings per severity (`error`,
+`warning`, `info`) and `blocks_publish`. An empty list is clean. Findings are sorted by rule and exact
+identity, independent of document or authored order. Each finding has `rule`, its `severity` in this run, a
+`subject` (`kind` is `pad`, `terminal` or `package_pad`, with its exact
+footprint or part reference and a `source` whose `kind` is `document` with its
+`path`, `draft` or `catalog`),
+the authored pad `occurrences` it involves (`index` and 1-based `ordinal`), the
+`measured` count, the `limit` and its `basis` in these documents.
+
+| Rule | Reports |
+| --- | --- |
+| `pad.number.repeated` | A footprint has more than one pad with the same number; one finding per number lists every occurrence. |
+| `package.terminal.unmapped` | A symbol terminal has no pad in a package map. |
+| `package.pad.unaccounted` | A package with a symbol has a footprint pad that is neither mapped nor listed as unconnected. |
+| `package.pad.not_in_footprint` | A package names a pad number its footprint does not have. |
+| `package.pad.repeated` | A package assigns the same pad number more than once. |
+
+Every rule has a severity (`error`, `warning` or `info`), the stages it runs at
+(`edit`, `publish` and `place`) and whether it is required. The five rules above
+are required errors that run at every stage. The optional `stage` parameter
+(default `edit`) runs only the rules for that stage. `blocks_publish` is true
+when a finding is an error from a rule that also runs at `publish`.
+
+The optional `severity` parameter maps rule IDs to a severity for this run, for
+example `{"package.pad.repeated": "warning"}`. A required rule can be lowered to
+`warning` but not to `info`, and an unknown rule ID is refused; both are
+`invalid_params`. Overrides change only the report, never the capture digest,
+loading or publication. Rules are registered by ID; user-written rules are not
+supported yet.
+
+The check reports defects; it does not relax validation, repair a document or
+make a refused one loadable.
+
 ## Edit and publish native items
 
 On desktop, **New → Library** creates a native library in an unused folder and

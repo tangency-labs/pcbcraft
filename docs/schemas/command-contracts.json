@@ -386,6 +386,51 @@
         "type": "object"
       }
     },
+    "library.check": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "documents": {
+            "additionalProperties": {
+              "maxLength": 1048576,
+              "type": "string"
+            },
+            "maxProperties": 8192,
+            "type": "object"
+          },
+          "item": {
+            "type": "object"
+          },
+          "record": {
+            "type": "object"
+          },
+          "severity": {
+            "additionalProperties": {
+              "enum": [
+                "error",
+                "warning",
+                "info"
+              ],
+              "type": "string"
+            },
+            "maxProperties": 64,
+            "type": "object"
+          },
+          "stage": {
+            "enum": [
+              "edit",
+              "publish",
+              "place"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "documents"
+        ],
+        "type": "object"
+      }
+    },
     "library.list_sources": {
       "params": {
         "additionalProperties": false,

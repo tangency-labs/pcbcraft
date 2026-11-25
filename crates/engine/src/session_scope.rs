@@ -2,8 +2,9 @@
 
 use crate::{
     CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS, PREVIEW_ASSEMBLY_PROFILE,
-    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources, net_classes, netlist,
-    nets, no_connect, parameters, part_groups, sheet_split, sheets,
+    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command,
+    library::{check, sources},
+    net_classes, netlist, nets, no_connect, parameters, part_groups, sheet_split, sheets,
 };
 
 /// Command access set by the host when a session is created.
@@ -51,8 +52,9 @@ impl Session {
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard. Export/publication preparation does
-/// not write files, netlist comparison only reads the text it is given, and the annotation
-/// and split previews cache no proposal. Loading/removing library sources and Cut are not reads.
+/// not write files, netlist comparison only reads the text it is given, the annotation
+/// and split previews cache no proposal, and library checks only report findings.
+/// Loading/removing library sources and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -96,6 +98,7 @@ fn is_read_command(id: &str) -> bool {
             | sources::PREVIEW_FOOTPRINT_REVISION
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION
+            | check::CHECK
     )
 }
 

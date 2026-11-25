@@ -93,7 +93,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 14] = [
+pub(crate) const COMMANDS: [Command; 15] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -284,6 +284,28 @@ pub(crate) const COMMANDS: [Command; 14] = [
             Param { name: "kind", summary: "Native item kind", required: true, kind: ParamKind::LibraryKind },
             Param { name: "definition", summary: "Exact item identity", required: true, kind: ParamKind::LibrarySource },
             Param { name: "definition_revision", summary: "Exact item revision", required: true, kind: ParamKind::DefinitionRevision },
+        ],
+    },
+    Command {
+        id: super::check::CHECK,
+        title: "Check library items",
+        summary: "Report typed pad-number and package-map findings for transported documents and optional drafts. No files, project edit or history step.",
+        params: &[
+            Param {
+                name: "documents",
+                summary: "Transported native documents including library.json; no filesystem paths",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param { name: "item", summary: "Captured footprint authoring envelope", required: false, kind: ParamKind::AuthoringItem },
+            Param { name: "record", summary: "Captured native generic part draft", required: false, kind: ParamKind::PartDraft },
+            Param { name: "stage", summary: "Run only rules for edit (default), publish or place", required: false, kind: ParamKind::CheckStage },
+            Param {
+                name: "severity",
+                summary: "Severity per rule ID for this run; required rules go no lower than warning",
+                required: false,
+                kind: ParamKind::CheckSeverities,
+            },
         ],
     },
 ];
@@ -985,6 +1007,11 @@ impl Catalog {
             })
             .and_then(Item::symbol)
     }
+    /// Exact symbol lookup for the checker, without rescanning the catalog for each part.
+    pub(super) fn indexed_symbol(&self, reference: &Reference) -> Option<Arc<SymbolDefinition>> {
+        self.exact(reference, Kind::Symbol).ok()?.symbol()
+    }
+
     /// Inspect every revision from one available registration, including quarantined items.
     /// Browsing does not select placement candidates or silently substitute another source.
     pub fn source_items(&self, source: &str) -> &[Item] {
@@ -1235,6 +1262,7 @@ impl Session {
                     .collect();
                 Ok(json!(items))
             }
+            super::check::CHECK => super::check::execute(params, &self.libraries).map_err(CommandError::InvalidParams),
             _ => Err(CommandError::Unknown(id.into())),
         }
     }

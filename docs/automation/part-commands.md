@@ -12,6 +12,16 @@ distinguish part definitions from placed part instances. `schematic.place_part`
 pins the full native dependency set; `part.set_selection` edits package, MPN and
 typed requirements through the same revision-checked command path as the GUI.
 
+`library.check` takes transported `documents` with an optional footprint `item`
+or generic part `record` and returns typed findings for repeated pad numbers and
+incomplete or inconsistent package maps, each with its severity, plus counts per
+severity and `blocks_publish`, even with `inspect: false`. Optional `stage` and
+per-rule `severity` parameters choose which rules run and how much their
+findings matter. It needs no
+open project, runs in a `--read-only` session and changes nothing. A malformed or
+unresolvable capture is `invalid_params`, never a clean report. See
+[check library items](../libraries/native-library-sources.md#check-library-items).
+
 `schematic.place_symbol` accepts an optional `unit` for a new part, while
 `schematic.place_unit` adds an unplaced unit to an existing `component-…` part
 using its project-pinned definition. Supply `component`, `unit`, `x_nm`, `y_nm`,

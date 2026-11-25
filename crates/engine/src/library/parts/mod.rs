@@ -15,6 +15,7 @@ pub use requirement::{Requirement, requirements_schema};
 mod supply_range;
 mod value;
 pub use category::{Category, CategoryBinding, Field, FieldType, field_id};
+pub(crate) use definition::PartFormatError;
 pub use definition::{PartDefinition, PartLink};
 pub use package::Package;
 pub use quantity::{Quantity, decimal, display_quantity};

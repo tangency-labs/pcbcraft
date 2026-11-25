@@ -319,7 +319,12 @@ JSON Schema checks object shapes, required fields, enumerations and numeric
 bounds. Implementations must additionally check relationships that depend on
 other fields or project state.
 
-- Pad numbers are distinct. A rounded corner is at most half the shorter land
+- A transported footprint passed to `library.check` must have the same valid
+  library ID, item ID and nonzero revision required by the strict reader.
+  The check does not require the footprint to be ready for publication.
+- Pad numbers are distinct; `library.check` reports each repeated number with
+  its authored occurrences (see
+  [check library items](native-library-sources.md#check-library-items)). A rounded corner is at most half the shorter land
   dimension, a circular land has equal dimensions, and a plated drill is smaller
   than both land dimensions. A plated slot must have copper around its entire
   outline, including both ends; the board annular-ring rule checks the minimum

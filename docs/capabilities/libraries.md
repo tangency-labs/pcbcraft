@@ -134,6 +134,13 @@ on one placed instance. It does not check standalone circular track ends or edit
 the project. A separate [reviewed Apply command](../libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
 requires a complete pad map, pins the exact replacement and leaves copper in
 place. Undo restores the old package in one step.
+The shared read-only `library.check` command reports repeated footprint pad
+numbers and incomplete or inconsistent package maps in transported library
+documents, a footprint draft or a part draft. Each finding names its rule, exact
+subject, authored pad occurrences, measured count, limit and basis. It runs in
+read-only sessions and through MCP with `inspect: false`, changes nothing, and
+does not relax loading or publication; see
+[check library items](../libraries/native-library-sources.md#check-library-items).
 
 Parts Library Preview and `library.where_used` list actual instances of an exact
 native item revision in the open project, separating footprint assignments from

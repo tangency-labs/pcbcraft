@@ -158,13 +158,6 @@ trimming and case folding is rejected as a duplicate, so `Precision` and
 ` precision ` cannot both be authored. URLs are not deduplicated against labels
 or each other; only labels form link identities.
 
-The reader enforces the declared format. Format 1 requires a symbol, and
-formats 1 and 2 exclude ratings and descriptive metadata. Format 4 requires
-at least one terminal rating and excludes descriptive metadata. Format 5
-requires at least one of `description`, `keywords` or `links`. Format 6 makes
-all of these fields optional. In every rated definition the exact symbol must
-declare the rated terminals as `power_in`.
-
 `PartDefinition::search_text()` lowercases the description and keywords and
 joins them with spaces. Catalog search trims and lowercases the query and tests
 it as a substring of that text as well as of name, ID, library, manufacturer/MPN
@@ -182,12 +175,25 @@ against the earlier digest is refused. The digest also covers symbol, category
 and package dependencies, as described in [the source
 guide](native-library-sources.md#part-definitions-and-categories).
 
+## Native format requirements
+
+The reader enforces the declared format. Format 1 requires a symbol, and
+formats 1 and 2 exclude ratings and descriptive metadata. Format 4 requires
+at least one terminal rating and excludes descriptive metadata. Format 5
+requires at least one of `description`, `keywords` or `links`. Format 6 makes
+all of these fields optional. In every rated definition the exact symbol must
+declare the rated terminals as `power_in`.
+
+## Package maps
+
 A package has `name`, an exact `footprint`, a `mapping` and optional
 `unconnected_pads`. When a symbol is present, the mapping's keys are its terminal
 IDs and each value is one or more footprint pad identifiers. Every terminal must
 be mapped, and every pad must occur exactly once either in one mapping entry or
-as explicitly unconnected. Without a symbol, `mapping` is empty and
-`unconnected_pads` is omitted. Multiple lands can belong to one terminal, but one pad cannot
+as explicitly unconnected. [`library.check`](native-library-sources.md#check-library-items)
+reports missing assignments and invalid pad coverage but refuses maps that name
+unknown terminals. Without a symbol, `mapping` is empty and `unconnected_pads`
+is omitted; the checker refuses either kind of assignment in that case. Multiple lands can belong to one terminal, but one pad cannot
 belong to two terminals. Identifier spelling is preserved, including `01`, `EP`
 and alphanumeric names. Names, positions and package size codes never establish
 a map. Parts support at most 64 packages; a package maps at most 1,024

@@ -34,6 +34,7 @@ pub use packed::{
     PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_deflated_packed_documents, encode_packed, encode_packed_documents,
 };
 pub use power_migration::migrate_power_markers;
+pub(crate) use power_migration::reject_duplicate_json_keys;
 
 /// Prepare an opened native project for current bundled addresses without touching source bytes.
 /// Raw codecs remain byte-preserving for journal validation and other migrations. Hosts retain

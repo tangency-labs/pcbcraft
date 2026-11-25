@@ -119,6 +119,11 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
     Ok(documents)
 }
 
+/// Reject repeated JSON object keys at any depth before a `Value`-based parser can overwrite them.
+pub(crate) fn reject_duplicate_json_keys(text: &str) -> Result<(), String> {
+    serde_json::from_str::<UniqueValue>(text).map(|_| ()).map_err(|error| error.to_string())
+}
+
 /// A JSON tree that refuses duplicate object keys at every depth before any sheet rewrite.
 /// Typed document validation still checks the sanitized schema and all cross-document references.
 struct UniqueValue(Value);

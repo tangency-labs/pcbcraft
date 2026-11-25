@@ -60,6 +60,22 @@ pub struct PartDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "link_list")]
     pub links: Vec<PartLink>,
 }
+/// Keep format incompatibility distinct from invalid values in a compatible record.
+#[derive(Debug)]
+pub(crate) enum PartFormatError {
+    Incompatible(String),
+    InvalidContent(String),
+}
+
+impl PartFormatError {
+    /// Preserve the native validator's diagnostic for strict loading.
+    fn into_reason(self) -> String {
+        match self {
+            Self::Incompatible(reason) | Self::InvalidContent(reason) => reason,
+        }
+    }
+}
+
 impl PartDefinition {
     /// Parse an actual native part file; unresolved dependencies are checked separately by the catalog.
     pub fn read(text: &str) -> Result<Self, String> {
@@ -179,39 +195,60 @@ impl PartDefinition {
         Ok(())
     }
 
-    /// Validate closed records and local invariants; empty package/category choices remain valid.
-    pub fn validate(&self) -> Result<(), String> {
-        let expected = match self.format.as_str() {
-            LEGACY_PART_FORMAT => LEGACY_PART_FORMAT,
-            RATED_PART_FORMAT => RATED_PART_FORMAT,
-            METADATA_PART_FORMAT => METADATA_PART_FORMAT,
-            CURRENT_PART_FORMAT => CURRENT_PART_FORMAT,
-            _ => PART_FORMAT,
-        };
-        header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+    /// Recognize a generic part format without validating the record's contents.
+    pub(crate) fn supported_format(format: &str) -> Option<&'static str> {
+        match format {
+            LEGACY_PART_FORMAT => Some(LEGACY_PART_FORMAT),
+            PART_FORMAT => Some(PART_FORMAT),
+            RATED_PART_FORMAT => Some(RATED_PART_FORMAT),
+            METADATA_PART_FORMAT => Some(METADATA_PART_FORMAT),
+            CURRENT_PART_FORMAT => Some(CURRENT_PART_FORMAT),
+            _ => None,
+        }
+    }
+
+    /// Check the native format and its symbol, metadata and rating requirements without
+    /// requiring publication identity, resolving references or inspecting package maps.
+    pub(crate) fn validate_format(&self) -> Result<(), PartFormatError> {
+        use PartFormatError::{Incompatible, InvalidContent};
+        let format = Self::supported_format(&self.format).ok_or_else(|| Incompatible(format!("Unsupported part format {:?}.", self.format)))?;
         let rated = !self.terminal_ratings.is_empty();
         let metadata = self.has_metadata();
-        match self.format.as_str() {
-            METADATA_PART_FORMAT if !metadata => return Err("pcbcraft-part/5 requires a description, keyword or link.".into()),
+        let mismatch = match format {
+            METADATA_PART_FORMAT if !metadata => Some("pcbcraft-part/5 requires a description, keyword or link."),
             LEGACY_PART_FORMAT | PART_FORMAT | RATED_PART_FORMAT if metadata => {
-                return Err("Part description, keywords and links require pcbcraft-part/5 or pcbcraft-part/6.".into());
+                Some("Part description, keywords and links require pcbcraft-part/5 or pcbcraft-part/6.")
             }
-            LEGACY_PART_FORMAT | PART_FORMAT if rated => {
-                return Err("Terminal ratings require pcbcraft-part/4, pcbcraft-part/5 or pcbcraft-part/6.".into());
-            }
-            RATED_PART_FORMAT if !rated => return Err("pcbcraft-part/4 requires at least one terminal rating.".into()),
-            _ => {}
+            LEGACY_PART_FORMAT | PART_FORMAT if rated => Some("Terminal ratings require pcbcraft-part/4, pcbcraft-part/5 or pcbcraft-part/6."),
+            RATED_PART_FORMAT if !rated => Some("pcbcraft-part/4 requires at least one terminal rating."),
+            _ => None,
+        };
+        if let Some(reason) = mismatch {
+            return Err(Incompatible(reason.into()));
         }
-        self.validate_metadata()?;
+        self.validate_metadata().map_err(InvalidContent)?;
         if self.symbol.is_none()
             && let Some(terminal) = self.terminal_ratings.keys().next()
         {
-            return Err(format!("Supply range for terminal {terminal} requires an exact symbol."));
+            return Err(InvalidContent(format!("Supply range for terminal {terminal} requires an exact symbol.")));
         }
-        self.validate_rating_values()?;
-        if self.format == LEGACY_PART_FORMAT && self.symbol.is_none() {
-            return Err("Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.".into());
+        self.validate_rating_values().map_err(InvalidContent)?;
+        if format == LEGACY_PART_FORMAT && self.symbol.is_none() {
+            return Err(Incompatible("Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.".into()));
         }
+        Ok(())
+    }
+
+    /// Validate the native part header without resolving dependencies or inspecting package maps.
+    pub(crate) fn validate_header(&self) -> Result<(), String> {
+        let expected = Self::supported_format(&self.format).unwrap_or(PART_FORMAT);
+        header(&self.format, expected, &self.reference(), &self.name, &self.license)
+    }
+
+    /// Validate closed records and local invariants; empty package/category choices remain valid.
+    pub fn validate(&self) -> Result<(), String> {
+        self.validate_header()?;
+        self.validate_format().map_err(PartFormatError::into_reason)?;
         if let Some(symbol) = &self.symbol {
             symbol.validate()?;
         }

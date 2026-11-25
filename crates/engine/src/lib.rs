@@ -130,6 +130,10 @@ enum ParamKind {
     PinRemaps,
     RemapBaseRevision,
     PartDraft,
+    /// The lifecycle stage whose library check rules run.
+    CheckStage,
+    /// Library check severities keyed by rule ID.
+    CheckSeverities,
     LibraryQuery,
     LibraryKind,
     LibraryQuantity,
@@ -314,6 +318,10 @@ impl ParamKind {
             Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
+            Self::CheckStage => json!({"type":"string","enum":["edit","publish","place"]}),
+            Self::CheckSeverities => {
+                json!({"type":"object","maxProperties":64,"additionalProperties":{"type":"string","enum":["error","warning","info"]}})
+            }
             Self::LibraryQuantity => {
                 json!({"type":"string","enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"]})
             }
@@ -611,6 +619,15 @@ impl ParamKind {
             Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
+            Self::CheckStage if value.is_string() && serde_json::from_value::<library::check::Stage>(value.clone()).is_ok() => Ok(()),
+            Self::CheckStage => Err("must be edit, publish or place"),
+            Self::CheckSeverities
+                if value.as_object().is_some_and(|map| map.len() <= 64 && map.values().all(Value::is_string))
+                    && serde_json::from_value::<std::collections::BTreeMap<String, library::check::Severity>>(value.clone()).is_ok() =>
+            {
+                Ok(())
+            }
+            Self::CheckSeverities => Err("must map at most 64 rule IDs to error, warning or info"),
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
@@ -2190,6 +2207,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[11],
     library::sources::COMMANDS[12],
     library::sources::COMMANDS[13],
+    library::sources::COMMANDS[14],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -3712,7 +3730,8 @@ impl Session {
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION
-            | library::sources::PREVIEW_PIN_REMAP => true,
+            | library::sources::PREVIEW_PIN_REMAP
+            | library::check::CHECK => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),

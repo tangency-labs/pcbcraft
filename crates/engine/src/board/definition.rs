@@ -15,6 +15,8 @@ const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
 /// Native format for all newly authored footprints, with any supported mix of holes.
 pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/6";
+/// Every native footprint format this build reads, oldest first.
+pub(crate) const FORMATS: [&str; 4] = [LEGACY_FORMAT, NPTH_FORMAT, SLOT_FORMAT, CURRENT_FORMAT];
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -320,6 +322,11 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
+    /// Check the exact library/item/revision identity independently of metadata and geometry.
+    pub(crate) fn has_valid_identity(&self) -> bool {
+        valid_id(&self.library) && valid_id(&self.id) && self.revision != 0
+    }
+
     /// Report actual slot geometry for fabrication and clipboard feature checks.
     pub(crate) fn has_plated_slots(&self) -> bool {
         self.pads.iter().any(|pad| pad.plated_slot.is_some())
@@ -327,7 +334,7 @@ impl FootprintDefinition {
 
     /// Keep the historical feature requirements while allowing any supported mix in format 6.
     /// Pad and hole dimensions are validated separately.
-    fn validate_format(&self) -> Result<(), String> {
+    pub(crate) fn validate_format(&self) -> Result<(), String> {
         let matches_content = match self.format.as_str() {
             CURRENT_FORMAT => true,
             LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
@@ -364,9 +371,7 @@ impl FootprintDefinition {
             return Err("invalid circular non-plated hole count, centre or finished diameter".into());
         }
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
-        if !valid_id(&self.library)
-            || !valid_id(&self.id)
-            || self.revision == 0
+        if !self.has_valid_identity()
             || !text(&self.name, 200)
             || !text(&self.license, 200)
             || !text(&self.source.kind, 64)
