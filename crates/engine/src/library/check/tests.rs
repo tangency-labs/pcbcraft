@@ -4,7 +4,7 @@ use crate::{
     authoring::{Action, publishing},
     board::definition::{CURRENT_FORMAT, CircularNpth},
     library::{
-        parts::{CURRENT_PART_FORMAT, LEGACY_PART_FORMAT, METADATA_PART_FORMAT, PART_FORMAT, RATED_PART_FORMAT},
+        parts::{CURRENT_PART_FORMAT, LEGACY_PART_FORMAT, MAX_DESCRIPTION_CHARS, METADATA_PART_FORMAT, PART_FORMAT, RATED_PART_FORMAT},
         sources::{LOAD, NativeSource, PREPARE_PUBLICATION},
     },
     part_authoring::{self, ReferenceField},
@@ -195,7 +195,7 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
             occurrences: Vec::new(),
             measured: Quantity { value: 0, unit: Unit::Count },
             limit: Limit { value: 1, unit: Unit::Count, comparator: Comparator::Min },
-            basis: Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Part fields" },
+            basis: Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Package maps" },
         }
     );
     assert_eq!(report["findings"][0]["rule"], "pad.number.repeated");
@@ -206,7 +206,7 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
         report["findings"][0]["basis"],
         json!({"kind":"project_rule","doc":"docs/libraries/footprint-schema.md","section":"Semantic validation"})
     );
-    assert_eq!(report["findings"][1]["basis"], json!({"kind":"project_rule","doc":"docs/libraries/part-schema.md","section":"Part fields"}));
+    assert_eq!(report["findings"][1]["basis"], json!({"kind":"project_rule","doc":"docs/libraries/part-schema.md","section":"Package maps"}));
     // The default run is the edit stage; its errors come from rules that also run at publish.
     assert_eq!(direct.stage(), Stage::Edit);
     assert!(direct.blocks_publish());
@@ -506,6 +506,35 @@ fn part_format_content_requirements_apply_to_documents_and_drafts() -> Result<()
         for params in part_inputs(&fixture.documents, &refused)? {
             let result = fixture.session.execute(CHECK, &params);
             assert!(matches!(result, Err(crate::CommandError::InvalidParams(reason)) if reason.contains(refused.format.as_str())));
+        }
+    }
+    Ok(())
+}
+
+/// Compatible part formats preserve the native error for malformed metadata or rating values.
+#[test]
+fn part_content_errors_keep_native_reasons_in_documents_and_drafts() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let Record::Part(mut valid) = fixture.part_editor.record().clone() else { return Err("expected a generic part".into()) };
+    valid.description = Some("x".repeat(MAX_DESCRIPTION_CHARS));
+    valid.set_supply_range("1", "4.5 V", "5.5 V")?;
+    for params in part_inputs(&fixture.documents, &valid)? {
+        let report = fixture.session.execute(CHECK, &params)?;
+        assert_eq!(report["findings"][0]["rule"], "package.terminal.unmapped");
+    }
+
+    let mut long_description = valid.clone();
+    long_description.description = Some("x".repeat(MAX_DESCRIPTION_CHARS + 1));
+    let mut reversed_rating = valid;
+    let range = reversed_rating.terminal_ratings.get_mut("1").ok_or("missing fixture rating")?;
+    std::mem::swap(&mut range.supply_min, &mut range.supply_max);
+    let description_reason = format!("`description` must be 1 to {MAX_DESCRIPTION_CHARS} characters on one line");
+    for (bad, reason) in
+        [(long_description, description_reason.as_str()), (reversed_rating, "Terminal 1: supply_min 5.5 V exceeds supply_max 4.5 V.")]
+    {
+        for (file, params) in ["parts/check-input.json", "record"].into_iter().zip(part_inputs(&fixture.documents, &bad)?) {
+            let result = fixture.session.execute(CHECK, &params);
+            assert_eq!(result, Err(crate::CommandError::InvalidParams(format!("{file}: {reason}"))));
         }
     }
     Ok(())

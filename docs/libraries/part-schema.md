@@ -158,13 +158,6 @@ trimming and case folding is rejected as a duplicate, so `Precision` and
 ` precision ` cannot both be authored. URLs are not deduplicated against labels
 or each other; only labels form link identities.
 
-The reader enforces the declared format. Format 1 requires a symbol, and
-formats 1 and 2 exclude ratings and descriptive metadata. Format 4 requires
-at least one terminal rating and excludes descriptive metadata. Format 5
-requires at least one of `description`, `keywords` or `links`. Format 6 makes
-all of these fields optional. In every rated definition the exact symbol must
-declare the rated terminals as `power_in`.
-
 `PartDefinition::search_text()` lowercases the description and keywords and
 joins them with spaces. Catalog search trims and lowercases the query and tests
 it as a substring of that text as well as of name, ID, library, manufacturer/MPN
@@ -181,6 +174,17 @@ keyword or link at the same address changes the digest, and a placement captured
 against the earlier digest is refused. The digest also covers symbol, category
 and package dependencies, as described in [the source
 guide](native-library-sources.md#part-definitions-and-categories).
+
+## Native format requirements
+
+The reader enforces the declared format. Format 1 requires a symbol, and
+formats 1 and 2 exclude ratings and descriptive metadata. Format 4 requires
+at least one terminal rating and excludes descriptive metadata. Format 5
+requires at least one of `description`, `keywords` or `links`. Format 6 makes
+all of these fields optional. In every rated definition the exact symbol must
+declare the rated terminals as `power_in`.
+
+## Package maps
 
 A package has `name`, an exact `footprint`, a `mapping` and optional
 `unconnected_pads`. When a symbol is present, the mapping's keys are its terminal

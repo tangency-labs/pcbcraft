@@ -6,7 +6,7 @@
 //! limit and basis. It writes no file, changes no project and records no history step.
 use super::{
     parse_manifest, parse_symbol,
-    parts::{Package, PartDefinition, Reference},
+    parts::{Package, PartDefinition, PartFormatError, Reference},
     sources::{Catalog, Documents, MAX_FILE_BYTES, check_documents},
 };
 use crate::{
@@ -164,7 +164,7 @@ impl RuleId {
         match self {
             Self::PadNumberRepeated => Basis::ProjectRule { doc: "docs/libraries/footprint-schema.md", section: "Semantic validation" },
             Self::PackageTerminalUnmapped | Self::PackagePadUnaccounted | Self::PackagePadNotInFootprint | Self::PackagePadRepeated => {
-                Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Part fields" }
+                Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Package maps" }
             }
         }
     }
@@ -497,7 +497,10 @@ fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
 
 /// Apply the same format/content checks to a transported definition and a typed draft.
 fn validate_part_format(file: &str, part: &PartDefinition) -> Result<(), CheckError> {
-    part.validate_format().map_err(|_| CheckError::UnsupportedFormat { file: file.into(), format: part.format.clone() })
+    part.validate_format().map_err(|error| match error {
+        PartFormatError::Incompatible(_) => CheckError::UnsupportedFormat { file: file.into(), format: part.format.clone() },
+        PartFormatError::InvalidContent(reason) => CheckError::Malformed { file: file.into(), reason },
+    })
 }
 
 /// Keep every pad in authored order and number its same-number occurrences.

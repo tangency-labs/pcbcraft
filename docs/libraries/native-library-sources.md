@@ -309,8 +309,10 @@ document that strict loading rejects for a semantic defect can still be
 explained. Every footprint format this build reads is accepted, including
 footprints with plated slots. The current footprint format accepts any supported
 mix of holes; an older format must match the authored holes. Part documents and
-drafts must meet the [native format requirements](part-schema.md#part-fields),
+drafts must meet the [native format requirements](part-schema.md#native-format-requirements),
 including the format-specific rules for symbols, ratings and descriptive metadata.
+A part that uses a supported format but has invalid values, such as a description
+that is too long or a reversed supply range, reports the specific content error.
 Every authored pad is kept in its authored order, with no
 deduplication; slotted pads are pads, and non-plated holes are not. Exact symbol and footprint
 references resolve in the transported documents first and then in the loaded
