@@ -636,9 +636,9 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
     assert_eq!(encode_documents(reopened).unwrap(), expected);
 }
 
-/// Native board copper serialization (tracks and vias) streams incrementally within the caller's
-/// step budget, can be cancelled mid-tracks or mid-vias without affecting the snapshot, and
-/// produces byte-exact `board.json` output matching the canonical array framing.
+/// Native board copper serialization stays within the caller's step budget across arrays,
+/// can be cancelled mid-tracks or mid-vias without affecting the snapshot, and produces
+/// byte-exact `board.json` output matching the canonical array framing.
 #[test]
 fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
     use crate::{ADD_TRACKS, ADD_VIA, INITIALIZE_BOARD_SETUP, board::setup::LayerPurpose};
@@ -668,40 +668,31 @@ fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
     let mut via_steps = 0usize;
     let mut mid_tracks_seen = false;
     let mut mid_vias_seen = false;
-    let mut prev_tracks: Option<usize> = None;
-    let mut prev_vias: Option<usize> = None;
-    let incremental = loop {
-        if let Some(docs) = encoder.step(BUDGET).unwrap() {
-            break docs;
-        }
-        match encoder.board_copper_progress() {
-            Some(("tracks", written)) => {
-                track_steps += 1;
-                if let Some(prev) = prev_tracks {
-                    assert!(written >= prev && written - prev <= BUDGET, "track step exceeded budget: {prev} -> {written}");
-                } else {
-                    assert!(written <= BUDGET, "initial track step exceeded budget: {written}");
-                }
-                if written > 0 && written < TRACK_COUNT {
-                    mid_tracks_seen = true;
-                }
-                prev_tracks = Some(written);
-            }
-            Some(("vias", written)) => {
-                via_steps += 1;
-                if let Some(prev) = prev_vias {
-                    assert!(written >= prev && written - prev <= BUDGET, "via step exceeded budget: {prev} -> {written}");
-                } else {
-                    assert!(written <= BUDGET, "initial via step exceeded budget: {written}");
-                }
-                if written > 0 && written < VIA_COUNT {
-                    mid_vias_seen = true;
-                }
-                prev_vias = Some(written);
-            }
-            _ => {}
-        }
-    };
+    let mut mixed_step_seen = false;
+    let (mut prev_tracks, mut prev_vias) = (0, 0);
+    let incremental = (0..512)
+        .find_map(|_| {
+            // Pause one track before the boundary, then give the next call enough units to begin vias too.
+            let budget = if (TRACK_COUNT - BUDGET..TRACK_COUNT - 1).contains(&prev_tracks) { 1 } else { BUDGET };
+            let docs = encoder.step(budget).unwrap();
+            let (tracks, vias) = encoder.board_copper_progress();
+            assert!(tracks >= prev_tracks && vias >= prev_vias, "copper progress went backwards");
+            let (track_delta, via_delta) = (tracks - prev_tracks, vias - prev_vias);
+            assert!(
+                track_delta + via_delta <= budget,
+                "copper step exceeded budget {budget}: ({prev_tracks} tracks, {prev_vias} vias) -> ({tracks} tracks, {vias} vias)"
+            );
+            track_steps += usize::from(track_delta > 0);
+            via_steps += usize::from(via_delta > 0);
+            mixed_step_seen |= track_delta > 0 && via_delta > 0;
+            mid_tracks_seen |= tracks > 0 && tracks < TRACK_COUNT;
+            mid_vias_seen |= vias > 0 && vias < VIA_COUNT;
+            (prev_tracks, prev_vias) = (tracks, vias);
+            docs
+        })
+        .unwrap();
+    assert_eq!((prev_tracks, prev_vias), (TRACK_COUNT, VIA_COUNT));
+    assert!(mixed_step_seen, "one call must emit both tracks and vias");
     assert!(mid_tracks_seen, "encoder must yield mid-tracks");
     assert!(mid_vias_seen, "encoder must yield mid-vias");
     assert!(track_steps >= TRACK_COUNT / BUDGET, "too few track steps: {track_steps}");
@@ -709,18 +700,12 @@ fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
 
     for (target_kind, target_total) in [("tracks", TRACK_COUNT), ("vias", VIA_COUNT)] {
         let mut cancelled = DocumentsEncoder::new(snapshot.clone());
-        let mut cancelled_mid = false;
-        for _ in 0..512 {
+        let cancelled_mid = (0..512).any(|_| {
             assert!(cancelled.step(BUDGET).unwrap().is_none(), "finished before mid-{target_kind} pause");
-            if let Some((kind, written)) = cancelled.board_copper_progress()
-                && kind == target_kind
-                && written > 0
-                && written < target_total
-            {
-                cancelled_mid = true;
-                break;
-            }
-        }
+            let (tracks, vias) = cancelled.board_copper_progress();
+            let written = if target_kind == "tracks" { tracks } else { vias };
+            written > 0 && written < target_total
+        });
         assert!(cancelled_mid, "did not reach mid-{target_kind} state to cancel");
         drop(cancelled);
     }
@@ -728,11 +713,7 @@ fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
     let reference = encode_documents(snapshot.clone()).unwrap();
     assert_eq!(incremental, reference);
     let mut one_by_one = DocumentsEncoder::new(snapshot.clone());
-    let single_step = loop {
-        if let Some(docs) = one_by_one.step(1).unwrap() {
-            break docs;
-        }
-    };
+    let single_step = (0..512).find_map(|_| one_by_one.step(1).unwrap()).unwrap();
     assert_eq!(single_step, reference);
     check_board_document_size(&snapshot).unwrap();
 

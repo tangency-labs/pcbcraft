@@ -1967,17 +1967,15 @@ impl DocumentsEncoder {
         (self.phase == 39).then(|| self.registry_validation.stage())
     }
 
-    /// Copper-row emission progress while phase 30 streams tracks or vias:
-    /// `Some(("tracks", written))` or `Some(("vias", written))`.
+    /// Cumulative `(tracks, vias)` emitted, retained after the board-row phase and Save completion.
     #[cfg(test)]
-    pub(crate) fn board_copper_progress(&self) -> Option<(&'static str, usize)> {
-        if self.phase != 30 {
-            return None;
-        }
+    pub(crate) fn board_copper_progress(&self) -> (usize, usize) {
+        let board = &self.project.board;
         match self.board_rows.phase {
-            6 => Some(("tracks", self.board_rows.index.saturating_sub(1))),
-            7 => Some(("vias", self.board_rows.index.saturating_sub(1))),
-            _ => None,
+            0..=5 => (0, 0),
+            6 => (self.board_rows.index.saturating_sub(1), 0),
+            7 => (board.tracks.len(), self.board_rows.index.saturating_sub(1)),
+            _ => (board.tracks.len(), board.vias.len()),
         }
     }
 
