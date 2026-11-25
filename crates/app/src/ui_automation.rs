@@ -709,16 +709,10 @@ impl PcbApp {
     /// The events one pass of `viewport` receives: an off-window release ahead of physical
     /// input after a cancellation, or the queued job's next frame after it.
     fn automation_events(&self, viewport_id: egui::ViewportId) -> (Vec<Event>, Vec<Event>) {
-        let mut release = Vec::new();
-        if let Some((host, button, modifiers)) = self.automation.release
-            && viewport_id == viewport(host)
-        {
-            let pos = egui::pos2(-1000.0, -1000.0);
-            release.push(Event::ModifiersChanged(modifiers));
-            if let Some(button) = button {
-                release.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button, pressed: false, modifiers }, Event::PointerGone]);
-            }
-        }
+        let release = match self.automation.release {
+            Some((host, button, modifiers)) if viewport_id == viewport(host) => off_window_release(button, modifiers),
+            _ => Vec::new(),
+        };
         let mut frame = Vec::new();
         if let Some(job) = &self.automation.job
             && viewport_id == viewport(job.host)
@@ -748,6 +742,17 @@ impl PcbApp {
             self.automation.injected = Some((viewport_id, frame, false));
         }
     }
+}
+
+/// The events that end an injected gesture: restore the person's modifiers and, when a
+/// button is held, release it off-window so the release cannot activate a control.
+fn off_window_release(button: Option<PointerButton>, modifiers: Modifiers) -> Vec<Event> {
+    let pos = egui::pos2(-1000.0, -1000.0);
+    let mut release = vec![Event::ModifiersChanged(modifiers)];
+    if let Some(button) = button {
+        release.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button, pressed: false, modifiers }, Event::PointerGone]);
+    }
+    release
 }
 
 /// Facts about a queued job that its own window's raw input is checked against.

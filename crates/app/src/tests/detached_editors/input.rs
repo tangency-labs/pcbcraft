@@ -122,6 +122,9 @@ fn detached_input_is_cancelled_without_an_edit() {
         let operation = finish(&mut h);
         assert_eq!((&operation["state"], &operation["reason"]), (&json!("cancelled"), &json!(reason)));
         assert_eq!((h.state().session.inspect(), h.state().session.revision()), before, "{reason}");
+        // The interrupted pass itself already released the synthetic button in window 1.
+        let child = crate::editor_windows::viewport(HostId(1));
+        assert!(!h.ctx.input_for(child, |i| i.pointer.any_down()), "{reason}");
         h.run_steps(3);
         let ctx = h.ctx.clone();
         h.state_mut().live_control.get_or_insert_with(|| crate::live_control::LiveControl::start(&ctx).unwrap());
