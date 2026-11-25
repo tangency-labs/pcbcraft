@@ -17,7 +17,7 @@ use crate::{
 };
 use serde::{
     Deserializer,
-    de::{MapAccess, Visitor},
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Value, json, value::RawValue};
 
@@ -67,6 +67,22 @@ fn has_raw_remap_item(message: &Value) -> bool {
         && params["name"] == "execute"
         && params["arguments"]["command"] == pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
         && params["arguments"]["params"]["item"].is_object()
+}
+
+/// An electrical intent edit needs its original JSON: normalization keeps only the last of two
+/// repeated members, so a second `working_voltage` could silently replace or clear the first.
+fn has_raw_intent_edit(message: &Value) -> bool {
+    let params = &message["params"];
+    message.get("id").is_some()
+        && message["method"] == "tools/call"
+        && params["name"] == "execute"
+        && params["arguments"]["command"] == pcbcraft_engine::nets::intent::SET
+        && params["arguments"]["params"].is_object()
+}
+
+/// Whether a message carries members that must be checked before normalization.
+fn needs_raw_check(message: &Value) -> bool {
+    has_raw_remap_item(message) || has_raw_intent_edit(message)
 }
 
 /// Borrow the selected member's exact bytes, including any repeated keys inside it.
@@ -123,6 +139,79 @@ fn duplicate_remap_keys(text: &str, level: RemapMap) -> Option<&'static str> {
     serde_json::Deserializer::from_str(text).deserialize_map(level).ok().flatten()
 }
 
+/// Walk one JSON value and report whether any object inside it repeats a key.
+struct RepeatedKeys;
+
+impl<'de> Visitor<'de> for RepeatedKeys {
+    type Value = bool;
+
+    /// Any JSON value is accepted; only repeated object keys are reported.
+    fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    fn visit_unit<E>(self) -> Result<bool, E> {
+        Ok(false)
+    }
+
+    /// Check every element, including objects nested inside arrays.
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<bool, A::Error> {
+        let mut repeated = false;
+        while let Some(inner) = seq.next_element_seed(RepeatedKeys)? {
+            repeated |= inner;
+        }
+        Ok(repeated)
+    }
+
+    /// Compare this object's keys and check every member value.
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<bool, A::Error> {
+        let mut keys = BTreeSet::new();
+        let mut repeated = false;
+        while let Some(key) = map.next_key::<String>()? {
+            repeated |= !keys.insert(key);
+            repeated |= map.next_value_seed(RepeatedKeys)?;
+        }
+        Ok(repeated)
+    }
+}
+
+impl<'de> DeserializeSeed<'de> for RepeatedKeys {
+    type Value = bool;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<bool, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+/// Refuse an electrical intent edit whose command parameters repeat a member at any depth.
+fn raw_intent_duplicate(mut text: &str) -> Option<&'static str> {
+    for key in ["params", "arguments", "params"] {
+        text = raw_member(text, key).ok()?;
+    }
+    let repeated = serde_json::Deserializer::from_str(text).deserialize_any(RepeatedKeys).ok()?;
+    repeated.then_some("Duplicate member in the electrical intent request.")
+}
+
 /// Detect duplicate item members and drawing/unit keys; keep normalized size accounting.
 fn raw_remap_duplicate(mut text: &str) -> Option<&'static str> {
     for key in ["params", "arguments", "params", "item"] {
@@ -175,7 +264,7 @@ impl Server {
             Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
             Ok(Value::Array(batch)) if batch.len() > MAX_BATCH => Some(error(Value::Null, INVALID_REQUEST, "batch too large")),
             Ok(Value::Array(batch)) => {
-                let replies: Vec<Value> = if batch.iter().any(has_raw_remap_item) {
+                let replies: Vec<Value> = if batch.iter().any(needs_raw_check) {
                     match serde_json::from_str::<Vec<&RawValue>>(line) {
                         Ok(raw) => batch.into_iter().zip(raw).filter_map(|(msg, raw)| self.handle_raw(msg, raw.get())).collect(),
                         Err(e) => return Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}")).to_string()),
@@ -191,10 +280,17 @@ impl Server {
         reply.map(|r| r.to_string())
     }
 
-    /// Detect duplicate remap keys on the wire without changing normal request validation.
+    /// Detect duplicate remap and electrical intent keys on the wire without changing normal
+    /// request validation.
     fn handle_raw(&mut self, msg: Value, raw: &str) -> Option<Value> {
-        let remap_error = has_raw_remap_item(&msg).then(|| raw_remap_duplicate(raw)).flatten();
-        self.handle_message(msg, remap_error)
+        let raw_error = if has_raw_remap_item(&msg) {
+            raw_remap_duplicate(raw)
+        } else if has_raw_intent_edit(&msg) {
+            raw_intent_duplicate(raw)
+        } else {
+            None
+        };
+        self.handle_message(msg, raw_error)
     }
 
     /// Handle an already-decoded message, which has no raw wire keys to inspect.
@@ -226,8 +322,8 @@ impl Server {
         })
     }
 
-    /// Answer one JSON-RPC method. A command failure, including duplicate raw remap keys
-    /// inside a checked tool call, carries `isError` and a stable PCBCraft code. An unknown
+    /// Answer one JSON-RPC method. A command failure, including duplicate raw remap or
+    /// electrical intent keys inside a checked tool call, carries `isError` and a stable PCBCraft code. An unknown
     /// method or resource, invalid tool envelope, or resource read failure is a JSON-RPC error.
     fn request(&mut self, method: &str, params: &Value, remap_error: Option<&'static str>) -> Result<Value, (i64, String)> {
         match method {
