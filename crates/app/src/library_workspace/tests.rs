@@ -26,6 +26,242 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
+/// Install a source with a renamed second revision (or only the first) and place its first
+/// revision; returns the placed instance's checkbox label and its original name.
+#[allow(clippy::unwrap_used)]
+fn place_reviewable_symbol(app: &mut PcbApp, renamed: bool) -> (String, String) {
+    use pcbcraft_engine::authoring::{
+        Item as Draft, Kind as DraftKind,
+        publishing::{new_library, prepare},
+    };
+    let manifest = new_library("review-demo", "Review demo", "MIT OR Apache-2.0").unwrap();
+    let first = prepare(Arc::new(Draft::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let mut documents = first.documents().clone();
+    if renamed {
+        let mut next = first.item().as_ref().clone();
+        next.name = "GUI renamed symbol".into();
+        let later = prepare(Arc::new(next), &manifest, 1, Some(1), false).unwrap();
+        documents.extend(later.documents().clone());
+    }
+    documents.insert("library.json".into(), manifest);
+    app.session.install_library_source("review-demo", Arc::new(sources::NativeSource::load(&documents).unwrap())).unwrap();
+    let item = first.item();
+    let symbol = app.session.libraries().symbol(&item.library, &item.id, item.revision).unwrap();
+    app.session
+        .apply(
+            pcbcraft_engine::PLACE_SYMBOL,
+            &json!({"library":symbol.library,"definition":symbol.id,
+        "definition_revision":symbol.revision(),"definition_digest":sources::symbol_digest(&symbol).unwrap(),
+        "x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}),
+        )
+        .unwrap();
+    let project = app.session.snapshot().unwrap();
+    let instance = project.components().next().unwrap();
+    (format!("{} ({})", instance.reference(), instance.id()), instance.definition.name.clone())
+}
+
+/// Open the actual desktop pane's list of available revisions without selecting anything.
+#[allow(clippy::unwrap_used)]
+fn adoption_review(renamed: bool) -> (Harness<'static, PcbApp>, String, String) {
+    let mut h = fixture(1800.);
+    let (label, name) = place_reviewable_symbol(h.state_mut(), renamed);
+    h.run();
+    click(&mut h, "Review library updates");
+    h.get_by_label("Available library revisions");
+    (h, label, name)
+}
+
+/// Open the actual desktop pane and complete a preview for one placed revision.
+#[allow(clippy::unwrap_used)]
+fn adoption_fixture() -> Harness<'static, PcbApp> {
+    let (mut h, label, _) = adoption_review(true);
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, &label);
+    click(&mut h, "Preview selected updates");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h
+}
+
+/// The list state: one supported instance, nothing selected, and Preview unavailable.
+#[test]
+fn adoption_review_lists_instances_with_preview_disabled_until_selection() {
+    let (mut h, label, _) = adoption_review(true);
+    let before = h.state().session.snapshot().unwrap();
+    assert_eq!(h.get_by_label(&label).accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    assert!(h.get_by_label("Preview selected updates").accesskit_node().is_disabled());
+    assert!(h.query_by_label("Review selected updates").is_none());
+    click(&mut h, &label);
+    assert!(!h.get_by_label("Preview selected updates").accesskit_node().is_disabled());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The filled preview names the exact pin change and each changed field before Apply.
+#[test]
+fn adoption_preview_shows_the_exact_changes_before_apply() {
+    let (mut h, label, name) = adoption_review(true);
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, &label);
+    click(&mut h, "Preview selected updates");
+    h.get_by_label("Review selected updates");
+    h.get_by_label(&format!("name: {name} → GUI renamed symbol"));
+    assert!(!h.get_by_label("Apply reviewed updates").accesskit_node().is_disabled());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// A source with no newer revision gives an explicit empty state and no reviewable rows.
+#[test]
+fn adoption_review_states_when_no_supported_update_is_loaded() {
+    let (h, label, _) = adoption_review(false);
+    h.get_by_label("No supported updates from loaded sources.");
+    assert!(h.query_by_label(&label).is_none());
+    assert!(h.get_by_label("Preview selected updates").accesskit_node().is_disabled());
+}
+
+/// A folder operation replaces the review button with its refusal; nothing can be opened.
+/// The test ends in that state; release and recovery are covered by the interlock test.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn adoption_review_is_refused_during_a_folder_operation() {
+    let mut h = fixture(1800.);
+    place_reviewable_symbol(h.state_mut(), true);
+    let before = h.state().session.snapshot().unwrap();
+    let generation = h.state().session.libraries().generation();
+    let _held = h.state_mut().library_sources.hold_refresh_for_test("review-demo", generation);
+    h.run();
+    h.get_by_label("Finish the current library folder operation before reviewing or adopting revisions");
+    assert!(h.query_by_label("Review library updates").is_none());
+    assert!(h.query_by_label("Available library revisions").is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The review is keyboard operable: Space selects, Tab moves to Preview and Apply, Enter acts.
+#[test]
+fn adoption_review_is_keyboard_operable() {
+    let (mut h, label, _) = adoption_review(true);
+    h.get_by_label(&label).focus();
+    h.run();
+    h.key_press(egui::Key::Space);
+    h.run();
+    assert_eq!(h.get_by_label(&label).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.key_press(egui::Key::Tab);
+    h.run();
+    assert!(h.get_by_label("Preview selected updates").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run();
+    h.get_by_label("Review selected updates");
+    h.key_press(egui::Key::Tab);
+    h.run();
+    assert!(h.get_by_label("Apply reviewed updates").is_focused());
+    h.key_press(egui::Key::Enter);
+    h.run();
+    h.get_by_label("Library revisions adopted");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
+}
+
+/// The ribbon's Libraries → Updates opens the same review from a schematic.
+#[test]
+fn ribbon_updates_opens_the_adoption_review() {
+    let mut h = crate::tests::harness();
+    h.set_size(egui::vec2(1800., 900.));
+    h.state_mut().run("project.new", &json!({}));
+    let (label, _) = place_reviewable_symbol(h.state_mut(), true);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Libraries");
+    click(&mut h, "Review newer library revisions of placed parts");
+    h.get_by_label("Available library revisions");
+    h.get_by_label(&label);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The desktop panel commits one edit and exposes the real project Undo action.
+#[test]
+fn review_library_updates_through_the_desktop_panel() {
+    let mut h = adoption_fixture();
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
+    click(&mut h, "Undo adoption");
+    h.get_by_label("Review library updates");
+    assert!(h.query_by_label("Library revisions adopted").is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// A later local edit keeps the revision, so Undo adoption waits until that edit is undone
+/// and then undoes the adoption rather than the newer edit.
+#[test]
+fn undo_adoption_never_undoes_a_later_local_edit() {
+    let mut h = adoption_fixture();
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    let adopted = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    // A personal color change records this kind of entry without changing the revision.
+    h.state_mut().session.record_local_edit("later local edit");
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    h.get_by_label("Library revisions adopted");
+    assert!(h.query_by_label("Undo adoption").is_none());
+    h.get_by_label("Undo the later edits first to undo this adoption.");
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.run();
+    assert!(Arc::ptr_eq(&adopted, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
+    click(&mut h, "Undo adoption");
+    h.get_by_label("Review library updates");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 1);
+}
+
+/// A pending refresh hides GUI Apply and rejects an otherwise valid live Apply without edits.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_refresh_interlocks_desktop_and_live_adoption() {
+    let mut h = adoption_fixture();
+    let before = h.state().session.snapshot().unwrap();
+    let instance = before.components().next().unwrap().id();
+    let session = &mut h.state_mut().session;
+    let revision = session.revision();
+    let preview = session.execute(sources::PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":revision})).unwrap();
+    let generation = session.libraries().generation();
+    let finish = h.state_mut().library_sources.hold_refresh_for_test("review-demo", generation);
+    h.run();
+    h.get_by_label("Finish the current library folder operation before reviewing or adopting revisions");
+    assert!(h.query_by_label("Apply reviewed updates").is_none());
+    let ctx = h.ctx.clone();
+    let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+    let request = json!({"method":"engine.execute","params":{"command":sources::APPLY_ADOPTION,
+        "params":{"instances":[instance],"expected_revision":revision,"preview":preview["preview"]},"inspect":false}});
+    let error = pcbcraft_mcp::live::call_editor(&mut editor, &request).unwrap_err();
+    assert!(error.message().contains("current library folder operation"));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    finish();
+    h.run();
+    // The generation did not change on cancellation; obtain fresh confirmation then apply.
+    click(&mut h, "Preview selected updates");
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+}
+
+/// An Undo through live control invalidates the originating pane's now-historical result.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_undo_clears_the_desktop_adoption_result() {
+    let mut h = adoption_fixture();
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    let ctx = h.ctx.clone();
+    let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+    let request = json!({"method":"engine.execute","params":{"command":"edit.undo","params":{},"inspect":false}});
+    pcbcraft_mcp::live::call_editor(&mut editor, &request).unwrap();
+    h.run();
+    assert!(h.query_by_label("Library revisions adopted").is_none());
+    assert!(h.query_by_label("Undo adoption").is_none());
+    h.get_by_label("Review library updates");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 1);
+}
+
 /// Expansion and selection are independent; nested and flat views address identical records.
 #[test]
 fn browse_select_expand_and_flat_view_preserve_project_state() {

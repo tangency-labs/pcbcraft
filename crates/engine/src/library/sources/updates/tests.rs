@@ -5,7 +5,7 @@ use crate::{
         Item as Draft, Kind as DraftKind,
         publishing::{new_library, prepare},
     },
-    library::sources::{AVAILABLE_REVISIONS, Documents, LOAD, REMOVE, symbol_digest},
+    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, Documents, LOAD, PREVIEW_ADOPTION, REMOVE, symbol_digest},
     persistence::{decode_documents, encode_documents},
 };
 use std::sync::Arc;
@@ -16,6 +16,7 @@ fn symbols(last: u32) -> (Documents, Key) {
     let first = prepare(Arc::new(Draft::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
     let mut draft = first.item().as_ref().clone();
     draft.name = "Later drawing".into();
+    draft.default_value = "New library default".into();
     let later = prepare(Arc::new(draft), &manifest, 1, Some(1), false).unwrap();
     let mut documents = first.documents().clone();
     // Publication reserves headroom for future edits. Source reading has no such authoring
@@ -89,6 +90,69 @@ fn available_revisions_lists_exactly_two_of_three_without_editing() {
     assert_eq!(session.inspect()["project"]["name"], "Temporary name");
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Keep a selected batch in one history step; its pins and unit drawings survive offline Save.
+#[test]
+fn adoption_updates_selected_symbol_text_in_one_undo_step() {
+    let (mut session, _, mut key) = fixture(2);
+    place(&mut session, &key);
+    place(&mut session, &key);
+    key.revision = 2;
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let original = encode_documents(before.clone()).unwrap();
+    let ids: Vec<_> = before.components().take(2).map(|component| component.id()).collect();
+    let revision = session.revision();
+    let params = json!({"instances":ids,"expected_revision":revision});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(preview["changes"][0]["fields"][0]["after"], "Later drawing");
+    assert_eq!(preview["changes"][0]["fields"][1]["after"], "New library default");
+    let mut apply = params;
+    apply["preview"] = preview["preview"].clone();
+    let applied = session.execute(APPLY_ADOPTION, &apply).unwrap();
+    assert_eq!(applied["changes"], preview["changes"]);
+    assert_eq!(applied["applied"], true);
+    assert_eq!(session.revision(), revision + 1);
+    let after = session.snapshot().unwrap();
+    for (old, new) in before.components().zip(after.components()) {
+        assert_eq!(old.id(), new.id());
+        assert_eq!(old.value(), new.value());
+        assert_eq!(old.reference(), new.reference());
+        assert_eq!(new.definition.revision(), 2);
+    }
+    for (old, new) in before.symbols().iter().zip(after.symbols()) {
+        assert_eq!(old.position, new.position);
+        assert_eq!(new.definition.revision(), 2);
+    }
+    let saved = encode_documents(after).unwrap();
+    let offline = decode_documents(&saved).unwrap();
+    assert!(offline.components().all(|instance| instance.definition.revision() == 2));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
+    session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// A mixed selection with an ineligible component cannot update even its first valid member.
+#[test]
+fn adoption_refuses_entire_batch_when_any_selected_root_cannot_advance() {
+    let (mut session, _, mut key) = fixture(2);
+    place(&mut session, &key);
+    key.revision = 2;
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let ids: Vec<_> = before.components().map(|component| component.id()).collect();
+    let revision = session.revision();
+    let mut params = json!({"instances":ids,"expected_revision":revision});
+    assert!(matches!(session.execute(PREVIEW_ADOPTION, &params), Err(CommandError::InvalidParams(_))));
+    params["preview"] = json!("0".repeat(64));
+    assert!(matches!(session.execute(APPLY_ADOPTION, &params), Err(CommandError::InvalidParams(_))));
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
 /// Missing, unavailable and older-only sources are unknown, not evidence of being current;
@@ -204,6 +268,49 @@ fn pinned_part_fixture() -> (Session, Documents, Key, PartDefinition) {
         )
         .unwrap();
     (session, documents, key, part)
+}
+
+/// A text-only generic update preserves its exact symbol dependency and instance values.
+#[test]
+fn adoption_advances_generic_part_name_with_the_exact_same_dependencies() {
+    let (mut session, mut documents, _, mut part) = pinned_part_fixture();
+    part.name = "New generic title".into();
+    part.revision = 2;
+    documents.insert("parts/owned-r2.json".into(), part.encode().unwrap());
+    session.execute(LOAD, &json!({"source":"demo","documents":documents})).unwrap();
+    let before = session.snapshot().unwrap();
+    let old = before.components().next().unwrap();
+    let mut params = json!({"instances":[old.id()],"expected_revision":session.revision()});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(preview["changes"][0]["fields"][0]["after"], part.name);
+    params["preview"] = preview["preview"].clone();
+    session.execute(APPLY_ADOPTION, &params).unwrap();
+    let after = session.snapshot().unwrap();
+    let new = after.components().next().unwrap();
+    assert!(Arc::ptr_eq(&old.definition, &new.definition));
+    assert_eq!(old.value(), new.value());
+    assert_eq!(new.part.as_ref().unwrap().resolved.definition.revision, 2);
+}
+
+/// A harmless-looking revision changing only a rendered line is outside non-geometric adoption.
+#[test]
+fn adoption_refuses_changed_symbol_drawing_geometry() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let manifest = new_library("shape-demo", "Shape demo", "MIT OR Apache-2.0").unwrap();
+    let raw = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/symbols/resistor.json"));
+    let mut later: Value = serde_json::from_str(raw).unwrap();
+    later["revision"] = json!(3);
+    later["units"][0]["drawing"][0]["to_nm"][0] = json!(-3_000_000);
+    let docs =
+        Documents::from([("library.json".into(), manifest), ("symbols/r2.json".into(), raw.into()), ("symbols/r3.json".into(), later.to_string())]);
+    session.execute(LOAD, &json!({"source":"shape-demo","documents":docs})).unwrap();
+    place(&mut session, &Key { library: "shape-demo".into(), kind: Kind::Symbol, id: "resistor".into(), revision: 2 });
+    let before = session.snapshot().unwrap();
+    let instance = before.components().next().unwrap().id();
+    let response = session.execute(PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":session.revision()}));
+    assert!(response.unwrap_err().to_string().contains("changes symbol structure"));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
 /// A replacement can resolve normally in the catalog but conflict with a saved dependency.
@@ -499,4 +606,161 @@ fn available_revisions_validates_command_inputs_and_empty_projects() {
     let report = session.execute(AVAILABLE_REVISIONS, &Value::Null).unwrap();
     assert_eq!(report["instances"], json!([]));
     assert_eq!(report["outdated_instances"], json!([]));
+}
+
+/// A real confirmation goes stale when a newer candidate loads at the same project revision:
+/// Apply refuses it and leaves the snapshot, its saved bytes and both history directions alone.
+#[test]
+fn adoption_refuses_a_real_preview_after_a_newer_candidate_loads() {
+    let (mut session, documents, key) = fixture(2);
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let bytes = encode_documents(before.clone()).unwrap();
+    let instance = before.components().next().unwrap().id();
+    let revision = session.revision();
+    let mut params = json!({"instances":[instance],"expected_revision":revision});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(preview["changes"][0]["to"]["revision"], 2);
+    // Reload the same source with a third revision: the project revision does not move.
+    let mut newer = documents.clone();
+    let mut third: Value = serde_json::from_str(&newer["symbols/later-r2.json"]).unwrap();
+    third["revision"] = json!(3);
+    third["name"] = json!("Third drawing");
+    newer.insert("symbols/later-r3.json".into(), third.to_string());
+    session.execute(LOAD, &json!({"source":"demo","documents":newer})).unwrap();
+    assert_eq!(session.revision(), revision);
+    let (undo, redo) = (session.undo.len(), session.redo.len());
+    params["preview"] = preview["preview"].clone();
+    let error = session.execute(APPLY_ADOPTION, &params).unwrap_err();
+    assert!(matches!(error, CommandError::InvalidParams(_)));
+    assert!(error.to_string().contains("no longer matches the reviewed changes"), "{error}");
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), (undo, redo));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+    params.as_object_mut().unwrap().remove("preview");
+    let fresh = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(fresh["changes"][0]["to"]["revision"], 3);
+    assert_ne!(fresh["preview"], preview["preview"]);
+}
+
+/// Adopting one of two instances leaves the other on its original revision, also after Save,
+/// reopen and a fresh query; Undo restores both.
+#[test]
+fn adoption_of_one_instance_keeps_the_other_on_its_original_revision() {
+    let (mut session, _, key) = fixture(2);
+    place(&mut session, &key);
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let original = encode_documents(before.clone()).unwrap();
+    let ids: Vec<_> = before.components().map(|component| component.id()).collect();
+    let mut params = json!({"instances":[ids[0]],"expected_revision":session.revision()});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    params["preview"] = preview["preview"].clone();
+    session.execute(APPLY_ADOPTION, &params).unwrap();
+    let revisions = |project: &Project| project.components().map(|component| component.definition.revision()).collect::<Vec<_>>();
+    assert_eq!(revisions(&session.snapshot().unwrap()), [2, 1]);
+    let report = session.execute(AVAILABLE_REVISIONS, &json!({})).unwrap();
+    assert_eq!(report["outdated_instances"], json!([ids[1]]));
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut reopened = Session::default();
+    reopened.open_snapshot(decode_documents(&saved).unwrap());
+    assert_eq!(revisions(&reopened.snapshot().unwrap()), [2, 1]);
+    assert_eq!(encode_documents(reopened.snapshot().unwrap()).unwrap(), saved);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
+}
+
+/// Any part change beyond its name, here a newer exact symbol dependency, is refused whole.
+#[test]
+fn adoption_refuses_a_generic_part_whose_dependencies_change() {
+    let (mut session, mut documents, key, mut part) = pinned_part_fixture();
+    part.revision = 2;
+    part.symbol = Some(Reference { library: key.library.clone(), id: key.id.clone(), revision: 2 });
+    documents.insert("parts/owned-r2.json".into(), part.encode().unwrap());
+    session.execute(LOAD, &json!({"source":"demo","documents":documents})).unwrap();
+    let before = session.snapshot().unwrap();
+    let instance = before.components().next().unwrap().id();
+    let report = session.execute(AVAILABLE_REVISIONS, &json!({})).unwrap();
+    assert_eq!(report["outdated_instances"], json!([instance]));
+    let error = session.execute(PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":session.revision()})).unwrap_err();
+    assert!(error.to_string().contains("changes part semantics or exact dependencies"), "{error}");
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// An orderable selection pins the old generic part, so even a name-only update is refused.
+#[test]
+fn adoption_refuses_an_instance_with_a_manufacturer_selection() {
+    use crate::{
+        library::sources::{manufacturer_digest, part_digest},
+        part_instances::PLACE_PART,
+    };
+    let mut documents: Documents = [
+        ("library.json", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/library.json"))),
+        ("symbols/resistor.json", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/symbols/resistor.json"))),
+        (
+            "footprints/resistor-0603.json",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/footprints/resistor-0603.json")),
+        ),
+        ("categories/resistor.json", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/categories/resistor.json"))),
+        ("parts/resistor.json", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/parts/resistor.json"))),
+        (
+            "manufacturer-parts/test-resistor-100m.json",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts/manufacturer-parts/test-resistor-100m.json")),
+        ),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect();
+    let mut part: Value = serde_json::from_str(&documents["parts/resistor.json"]).unwrap();
+    part["fixed_parameters"] = json!({"pcbcraft:resistance":{"type":"quantity","value":"0.1","unit":"Ohm"}});
+    documents.insert("parts/resistor.json".into(), part.to_string());
+    part["revision"] = json!(2);
+    part["name"] = json!("Renamed generic resistor");
+    documents.insert("parts/resistor-r2.json".into(), part.to_string());
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.execute(LOAD, &json!({"source":"native-parts","documents":documents})).unwrap();
+    let reference = Reference { library: "parts-demo".into(), id: "resistor".into(), revision: 1 };
+    let digest = part_digest(session.libraries().resolve_part(&reference).unwrap());
+    let record = session.libraries().manufacturers_for(&reference).pop().unwrap();
+    session
+        .apply(
+            PLACE_PART,
+            &json!({"library":"parts-demo","definition":"resistor","definition_revision":1,"definition_digest":digest,
+        "manufacturer":record.reference(),"manufacturer_digest":manufacturer_digest(&record),"x_nm":0,"y_nm":0,
+        "expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let before = session.snapshot().unwrap();
+    let instance = before.components().next().unwrap();
+    assert!(instance.part.as_ref().unwrap().manufacturer.is_some());
+    let instance = instance.id();
+    let report = session.execute(AVAILABLE_REVISIONS, &json!({})).unwrap();
+    assert_eq!(report["outdated_instances"], json!([instance]));
+    let error = session.execute(PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":session.revision()})).unwrap_err();
+    assert!(error.to_string().contains("orderable selection names the old exact generic part revision"), "{error}");
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// Preview is a read: a read-only session gets the same changes, while Apply stays out of scope.
+#[test]
+fn read_only_sessions_preview_adoption_but_cannot_apply() {
+    let (mut session, documents, key) = fixture(2);
+    place(&mut session, &key);
+    let project = session.snapshot().unwrap();
+    let instance = project.components().next().unwrap().id();
+    let expected = session.execute(PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":session.revision()})).unwrap();
+    let mut reader = Session::with_scope(crate::SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    reader.install_library_source("demo", Arc::new(crate::library::sources::NativeSource::load(&documents).unwrap())).unwrap();
+    let mut params = json!({"instances":[instance],"expected_revision":reader.revision()});
+    let preview = reader.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(preview["changes"], expected["changes"]);
+    assert_eq!(reader.apply(PREVIEW_ADOPTION, &params).unwrap(), reader.revision());
+    params["preview"] = preview["preview"].clone();
+    let error = reader.execute(APPLY_ADOPTION, &params).unwrap_err();
+    assert_eq!(error.code(), crate::error_codes::ErrorCode::OutOfScope, "{error}");
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
 }

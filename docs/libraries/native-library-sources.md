@@ -139,8 +139,11 @@ Opening a project never searches or refreshes a library to replace its geometry.
 `library.available_revisions` takes no parameters and requires an open project.
 It compares existing part instances with native revisions already loaded in the
 session, without refreshing sources or accessing the network. It works through
-the shared engine command, including live and headless MCP with `inspect: false`;
-there is no dedicated update-list GUI in this command.
+the shared engine command, including live and headless MCP with `inspect: false`.
+In the desktop app, Parts Library's **Review library updates** (also
+**Libraries → Updates** on the ribbon) lists the instances this query reports
+with a supported update; see
+[adopt non-geometric revisions](#adopt-non-geometric-revisions).
 
 The result contains `project` (UUID), runtime `revision`, `catalog_generation`,
 `board` (UUID or null), `instances` and `outdated_instances`. Each instance row
@@ -250,6 +253,38 @@ schematic changes. Desktop live Apply checks save limits on a worker and refuses
 an obsolete request before editing. Run the board design checks after applying;
 this command does not repair routing. One Undo restores the prior package and
 mapping. Neither preview nor Apply writes to a library source.
+
+## Adopt non-geometric revisions
+
+With a project open, choose **Review library updates** in Parts Library, or
+**Updates** on the ribbon's Libraries tab, which opens the same review. Select
+instances, choose **Preview selected updates**, and read the exact before and
+after fields. **Apply reviewed updates** uses the same command and Undo history
+as the schematic editor. **Undo adoption** reverses the change directly from
+its result while the adoption is the next Undo step; after a later local edit,
+such as a color change, undo that edit first. A project or source change clears the current review or result;
+open the review again to see the current state. A pending library folder
+operation temporarily prevents review and adoption in the desktop and live
+MCP editor; the pane then shows that refusal in place of the review button.
+Previews are read-only and also run in read-only headless sessions.
+
+`library.preview_adoption` reviews the latest loaded symbol or generic-part root
+for the chosen `instances` (a nonempty list of distinct `component-N` IDs).
+Use the `expected_revision` from project inspection. The result lists the exact
+old and new pins, candidate digest and changed text per instance without making
+an edit. Pass the returned `preview` fingerprint with the same parameters to
+`library.apply_adoption`. It refuses a different change set and otherwise makes
+one revision-checked edit with one Undo step. Both return the change record to
+live and headless MCP even with `inspect: false`.
+
+For plain symbols, this slice allows a new name or default value while preserving
+all placed values, geometry and electrical behavior. Generic-part updates allow
+a new name with identical selected dependencies and requirements. Explicit
+manufacturer selections still pin the old generic part revision: use a separate
+review for those. Standalone footprint updates, changed symbols' drawings or pins,
+and changed package maps are not adopted by these commands. A conflict, unresolved
+candidate or ineligible selection refuses the entire batch; there is no fallback
+to a different revision.
 
 ## Find where a revision is used
 

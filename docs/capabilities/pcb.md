@@ -195,11 +195,14 @@ the Board setup form does not yet present it.
 DRC and the engine's [snapshot copper query](../pcb/copper-clearance-query.md) share
 supported pad/track/via contours, contact and clearance predicates. Queries retain
 board, snapshot, revision and effective-clearance authority, with conservative
-candidates and an exhaustive reference. Circular conductive contours remain separate
+candidates and an exhaustive reference. Circular clearance and DRC contours remain separate
 work. [Exact circular copper records](../pcb/circular-copper-records.md) support shared
-revision-checked replacement, dry-run diffs and native save/reopen; geometry
-consumers, PCB rendering/editing and fabrication explicitly refuse boards
-containing arcs rather than returning incomplete straight-only results.
+revision-checked replacement, dry-run diffs, native save/reopen and exact
+arc contact geometry for copper connectivity, ratsnest, via inspection and
+engine short detection; clearance queries, DRC, copper preparation,
+PCB rendering/editing, transforms, clipboard and fabrication still explicitly
+refuse boards containing arcs rather than returning incomplete straight-only
+results.
 [Straight via teardrop intents](../pcb/teardrop-records.md) use a shared
 revision-checked add/remove command with dry-run, per-site rule reports, one
 undo step and native save/reopen. Geometry consumers refuse boards with these

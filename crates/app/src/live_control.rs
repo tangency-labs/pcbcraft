@@ -868,12 +868,11 @@ impl Editor for LiveEditor<'_> {
         if app.automation.busy() {
             return Some("Wait for the queued UI input to complete, or cancel it, before running another command".into());
         }
-        if (app.library_sources.mutating() || app.library_sources.installing())
-            && (command.starts_with("library.")
-                || command.starts_with("app.library_")
-                || command.starts_with("app.part_")
-                || command == pcbcraft_engine::APPLY_FOOTPRINT_REVISION)
-        {
+        if let Some(reason) = app.library_sources.command_refusal(command) {
+            return Some(reason.into());
+        }
+        // Footprint apply is a PCB command, not a member of the `library.*` family.
+        if command == APPLY_FOOTPRINT_REVISION && (app.library_sources.mutating() || app.library_sources.installing()) {
             return Some("Finish the current library folder operation before changing its sources or editors".into());
         }
         if app.library_editors.publisher.busy()
