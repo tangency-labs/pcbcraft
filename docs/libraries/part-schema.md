@@ -186,10 +186,10 @@ A package has `name`, an exact `footprint`, a `mapping` and optional
 `unconnected_pads`. When a symbol is present, the mapping's keys are its terminal
 IDs and each value is one or more footprint pad identifiers. Every terminal must
 be mapped, and every pad must occur exactly once either in one mapping entry or
-as explicitly unconnected; `library.check` reports a map that breaks these
-rules ([check library items](native-library-sources.md#check-library-items)).
-Without a symbol, `mapping` is empty and
-`unconnected_pads` is omitted. Multiple lands can belong to one terminal, but one pad cannot
+as explicitly unconnected. [`library.check`](native-library-sources.md#check-library-items)
+reports missing assignments and invalid pad coverage but refuses maps that name
+unknown terminals. Without a symbol, `mapping` is empty and `unconnected_pads`
+is omitted; the checker refuses either kind of assignment in that case. Multiple lands can belong to one terminal, but one pad cannot
 belong to two terminals. Identifier spelling is preserved, including `01`, `EP`
 and alphanumeric names. Names, positions and package size codes never establish
 a map. Parts support at most 64 packages; a package maps at most 1,024

@@ -6,7 +6,7 @@
 //! limit and basis. It writes no file, changes no project and records no history step.
 use super::{
     parse_manifest, parse_symbol,
-    parts::{LEGACY_PART_FORMAT, Package, PartDefinition, Reference},
+    parts::{Package, PartDefinition, Reference},
     sources::{Catalog, Documents, MAX_FILE_BYTES, check_documents},
 };
 use crate::{
@@ -88,7 +88,7 @@ pub struct Capture {
 /// A capture that cannot be checked. There is no partial or clean report for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckError {
-    /// Invalid JSON, an unknown or repeated field, a wrong library or a repeated identity.
+    /// Invalid JSON, fields, identities or package assignments.
     Malformed { file: String, reason: String },
     /// A format the check does not read, or one that does not match the authored content.
     UnsupportedFormat { file: String, format: String },
@@ -162,9 +162,9 @@ impl RuleId {
     /// The project rule each check enforces; standard clauses arrive with numeric rules.
     fn basis(self) -> Basis {
         match self {
-            Self::PadNumberRepeated => Basis::ProjectRule { doc: "docs/footprint-schema.md", section: "Semantic validation" },
+            Self::PadNumberRepeated => Basis::ProjectRule { doc: "docs/libraries/footprint-schema.md", section: "Semantic validation" },
             Self::PackageTerminalUnmapped | Self::PackagePadUnaccounted | Self::PackagePadNotInFootprint | Self::PackagePadRepeated => {
-                Basis::ProjectRule { doc: "docs/part-schema.md", section: "Part fields" }
+                Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Part fields" }
             }
         }
     }
@@ -483,7 +483,7 @@ fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, Check
     Ok(definition)
 }
 
-/// Read the format first, then decode the part without its local map validation.
+/// Decode a part with the native format checks but without strict package-map validation.
 fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
@@ -491,10 +491,13 @@ fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: header.format });
     }
     let part: PartDefinition = serde_json::from_str(text).map_err(malformed)?;
-    if part.format == LEGACY_PART_FORMAT && part.symbol.is_none() {
-        return Err(CheckError::UnsupportedFormat { file: path.into(), format: part.format });
-    }
+    validate_part_format(path, &part)?;
     Ok(part)
+}
+
+/// Apply the same format/content checks to a transported definition and a typed draft.
+fn validate_part_format(file: &str, part: &PartDefinition) -> Result<(), CheckError> {
+    part.validate_format().map_err(|_| CheckError::UnsupportedFormat { file: file.into(), format: part.format.clone() })
 }
 
 /// Keep every pad in authored order and number its same-number occurrences.
@@ -547,6 +550,19 @@ fn bounded_package(part: &Reference, name: &str, package: &Package) -> Result<()
     Ok(())
 }
 
+/// Refuse assignments that cannot belong to this package. Missing real terminals and
+/// missing or repeated pads still reach the checker as findings.
+fn validate_package_assignments(name: &str, package: &Package, has_symbol: bool, terminals: &BTreeSet<&str>, file: &str) -> Result<(), CheckError> {
+    let malformed = |reason| CheckError::Malformed { file: file.into(), reason };
+    if !has_symbol && (!package.mapping.is_empty() || !package.unconnected_pads.is_empty()) {
+        return Err(malformed(format!("Package {name:?} has a mapping or unconnected pads but the part has no symbol.")));
+    }
+    if let Some(terminal) = package.mapping.keys().find(|terminal| !terminals.contains(terminal.as_str())) {
+        return Err(malformed(format!("Package {name:?} maps unknown symbol terminal {terminal:?}.")));
+    }
+    Ok(())
+}
+
 impl Capture {
     /// Capture a whole transported library: its footprints and the packages of its parts.
     pub fn from_documents(documents: &Documents, catalog: &Catalog) -> Result<Self, CheckError> {
@@ -575,9 +591,7 @@ impl Capture {
             transported.parts.iter().map(|(path, part)| (CaptureSource::Document { path: path.clone() }, part)).collect();
         match record {
             Some(Record::Part(part)) => {
-                if PartDefinition::supported_format(&part.format).is_none() || (part.format == LEGACY_PART_FORMAT && part.symbol.is_none()) {
-                    return Err(CheckError::UnsupportedFormat { file: "record".into(), format: part.format.clone() });
-                }
+                validate_part_format("record", part)?;
                 parts.push((CaptureSource::Draft, part));
             }
             Some(Record::Orderable(_)) => {
@@ -593,8 +607,14 @@ impl Capture {
                 return Err(CheckError::TooLarge { what, limit: MAX_PACKAGES });
             }
             let terminals = transported.terminals(part.symbol.as_ref(), catalog)?;
+            let terminal_ids = terminals.iter().map(String::as_str).collect();
+            let file = match &source {
+                CaptureSource::Document { path } => path.as_str(),
+                _ => "record",
+            };
             for (name, package) in &part.packages {
                 bounded_package(&reference, name, package)?;
+                validate_package_assignments(name, package, part.symbol.is_some(), &terminal_ids, file)?;
                 let target = &package.footprint;
                 let known = footprints.iter().any(|footprint| footprint.reference == *target && footprint.source != CaptureSource::Draft);
                 if !known {

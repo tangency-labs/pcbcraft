@@ -4,7 +4,7 @@ use crate::{
     authoring::{Action, publishing},
     board::definition::{CURRENT_FORMAT, CircularNpth},
     library::{
-        parts::{CURRENT_PART_FORMAT, PART_FORMAT},
+        parts::{CURRENT_PART_FORMAT, LEGACY_PART_FORMAT, METADATA_PART_FORMAT, PART_FORMAT, RATED_PART_FORMAT},
         sources::{LOAD, NativeSource, PREPARE_PUBLICATION},
     },
     part_authoring::{self, ReferenceField},
@@ -128,6 +128,15 @@ fn edited(fixture: &Fixture, edit: impl FnOnce(&str) -> String) -> Documents {
     documents
 }
 
+/// Use the same part as a transported document and as an authoring draft on the command surface.
+fn part_inputs(documents: &Documents, part: &PartDefinition) -> Result<[Value; 2], serde_json::Error> {
+    let mut saved = part.clone();
+    saved.library = LIBRARY.into();
+    let mut transported = documents.clone();
+    transported.insert("parts/check-input.json".into(), serde_json::to_string(&saved)?);
+    Ok([json!({"documents":transported}), json!({"documents":documents,"record":part})])
+}
+
 /// Rules of a report, in report order.
 fn rules(report: &Report) -> Vec<RuleId> {
     report.findings().iter().map(|finding| finding.rule).collect()
@@ -174,7 +183,7 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
             occurrences: vec![PadOccurrenceRef { index: 2, ordinal: 1 }, PadOccurrenceRef { index: 3, ordinal: 2 }],
             measured: Quantity { value: 2, unit: Unit::Count },
             limit: Limit { value: 1, unit: Unit::Count, comparator: Comparator::Max },
-            basis: Basis::ProjectRule { doc: "docs/footprint-schema.md", section: "Semantic validation" },
+            basis: Basis::ProjectRule { doc: "docs/libraries/footprint-schema.md", section: "Semantic validation" },
         }
     );
     assert_eq!(
@@ -186,13 +195,18 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
             occurrences: Vec::new(),
             measured: Quantity { value: 0, unit: Unit::Count },
             limit: Limit { value: 1, unit: Unit::Count, comparator: Comparator::Min },
-            basis: Basis::ProjectRule { doc: "docs/part-schema.md", section: "Part fields" },
+            basis: Basis::ProjectRule { doc: "docs/libraries/part-schema.md", section: "Part fields" },
         }
     );
     assert_eq!(report["findings"][0]["rule"], "pad.number.repeated");
     assert_eq!(report["findings"][1]["rule"], "package.terminal.unmapped");
     assert_eq!(report["findings"][0]["severity"], "error");
     assert_eq!(report["findings"][1]["severity"], "error");
+    assert_eq!(
+        report["findings"][0]["basis"],
+        json!({"kind":"project_rule","doc":"docs/libraries/footprint-schema.md","section":"Semantic validation"})
+    );
+    assert_eq!(report["findings"][1]["basis"], json!({"kind":"project_rule","doc":"docs/libraries/part-schema.md","section":"Part fields"}));
     // The default run is the edit stage; its errors come from rules that also run at publish.
     assert_eq!(direct.stage(), Stage::Edit);
     assert!(direct.blocks_publish());
@@ -317,6 +331,51 @@ fn symbol_less_package_skips_unaccounted_pad_check_but_empty_symbol_map_reports_
     assert_eq!(unaccounted, ["1", "2", "3"]);
 }
 
+/// An extra terminal must not hide an unaccounted pad; a real unconnected pad remains valid.
+#[test]
+fn unknown_terminal_assignment_is_refused_before_counting_pad_coverage() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let record = connector_part(&fixture.footprint, &[("1", &["1"]), ("2", &["2"])], &["3"]);
+    let Record::Part(known) = record else { return Err("expected a generic part".into()) };
+    let mut unknown = known.clone();
+    let package = unknown.packages.get_mut("main").ok_or("missing fixture package")?;
+    package.unconnected_pads.clear();
+    package.mapping.insert("99".into(), vec!["3".into()]);
+    for params in part_inputs(&fixture.documents, &known)? {
+        let report = fixture.session.execute(CHECK, &params)?;
+        assert_eq!(report["findings"], json!([]));
+    }
+    for params in part_inputs(&fixture.documents, &unknown)? {
+        let result = fixture.session.execute(CHECK, &params);
+        assert!(matches!(result, Err(crate::CommandError::InvalidParams(reason)) if reason.contains("unknown symbol terminal \"99\"")));
+    }
+    Ok(())
+}
+
+/// A package without a symbol can have a footprint but neither kind of pad assignment.
+#[test]
+fn symbol_less_package_assignments_are_refused() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let Record::Part(mut part) = Record::new_part(None)? else { return Err("expected a generic part".into()) };
+    let bare = Package { name: "Main".into(), footprint: fixture.footprint.clone(), mapping: BTreeMap::new(), unconnected_pads: Vec::new() };
+    part.packages.insert("main".into(), bare.clone());
+    for params in part_inputs(&fixture.documents, &part)? {
+        let report = fixture.session.execute(CHECK, &params)?;
+        assert_eq!(report["findings"], json!([]));
+    }
+    for bad in [
+        Package { mapping: BTreeMap::from([("1".into(), vec!["1".into()])]), ..bare.clone() },
+        Package { unconnected_pads: vec!["1".into()], ..bare },
+    ] {
+        part.packages.insert("main".into(), bad);
+        for params in part_inputs(&fixture.documents, &part)? {
+            let result = fixture.session.execute(CHECK, &params);
+            assert!(matches!(result, Err(crate::CommandError::InvalidParams(reason)) if reason.contains("part has no symbol")));
+        }
+    }
+    Ok(())
+}
+
 /// Pad 3 assigned to two terminals is one finding measured two with a maximum of one.
 #[test]
 fn pad_mapped_twice_is_a_finding() {
@@ -408,6 +467,48 @@ fn checks_current_part_format_in_documents_and_drafts() {
     let draft = Capture::from_part_record(&draft, &fixture.documents, &Catalog::default()).unwrap();
     assert_eq!(rules(&check(&transported)), [RuleId::PackageTerminalUnmapped]);
     assert_eq!(rules(&check(&draft)), [RuleId::PackageTerminalUnmapped]);
+}
+
+/// Native format/content rules apply to both command inputs without swallowing incomplete-map findings.
+#[test]
+fn part_format_content_requirements_apply_to_documents_and_drafts() -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture();
+    let Record::Part(part) = fixture.part_editor.record().clone() else { return Err("expected a generic part".into()) };
+    let with_format = |mut part: PartDefinition, format: &str| {
+        part.format = format.into();
+        part
+    };
+    let mut rated = part.clone();
+    rated.set_supply_range("1", "4.5 V", "5.5 V")?;
+    let mut described = part.clone();
+    described.description = Some("Four-pin connector".into());
+
+    for accepted in [
+        with_format(rated.clone(), RATED_PART_FORMAT),
+        with_format(described.clone(), METADATA_PART_FORMAT),
+        with_format(part.clone(), LEGACY_PART_FORMAT),
+        with_format(part.clone(), PART_FORMAT),
+    ] {
+        for params in part_inputs(&fixture.documents, &accepted)? {
+            let report = fixture.session.execute(CHECK, &params)?;
+            assert_eq!(report["findings"][0]["rule"], "package.terminal.unmapped", "{}", accepted.format);
+        }
+    }
+    for refused in [
+        with_format(part.clone(), RATED_PART_FORMAT),
+        with_format(part, METADATA_PART_FORMAT),
+        with_format(rated.clone(), LEGACY_PART_FORMAT),
+        with_format(rated, PART_FORMAT),
+        with_format(described.clone(), LEGACY_PART_FORMAT),
+        with_format(described.clone(), PART_FORMAT),
+        with_format(described, RATED_PART_FORMAT),
+    ] {
+        for params in part_inputs(&fixture.documents, &refused)? {
+            let result = fixture.session.execute(CHECK, &params);
+            assert!(matches!(result, Err(crate::CommandError::InvalidParams(reason)) if reason.contains(refused.format.as_str())));
+        }
+    }
+    Ok(())
 }
 
 /// A generic part draft with an unsupported format is rejected even without a symbol or

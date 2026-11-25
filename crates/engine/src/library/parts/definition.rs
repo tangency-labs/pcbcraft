@@ -191,10 +191,12 @@ impl PartDefinition {
         }
     }
 
-    /// Validate closed records and local invariants; empty package/category choices remain valid.
-    pub fn validate(&self) -> Result<(), String> {
-        let expected = Self::supported_format(&self.format).unwrap_or(PART_FORMAT);
-        header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+    /// Check the native format and its symbol, metadata and rating requirements without
+    /// requiring publication identity, resolving references or inspecting package maps.
+    pub(crate) fn validate_format(&self) -> Result<(), String> {
+        if Self::supported_format(&self.format).is_none() {
+            return Err(format!("Unsupported part format {:?}.", self.format));
+        }
         let rated = !self.terminal_ratings.is_empty();
         let metadata = self.has_metadata();
         match self.format.as_str() {
@@ -218,6 +220,14 @@ impl PartDefinition {
         if self.format == LEGACY_PART_FORMAT && self.symbol.is_none() {
             return Err("Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.".into());
         }
+        Ok(())
+    }
+
+    /// Validate closed records and local invariants; empty package/category choices remain valid.
+    pub fn validate(&self) -> Result<(), String> {
+        let expected = Self::supported_format(&self.format).unwrap_or(PART_FORMAT);
+        header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+        self.validate_format()?;
         if let Some(symbol) = &self.symbol {
             symbol.validate()?;
         }
