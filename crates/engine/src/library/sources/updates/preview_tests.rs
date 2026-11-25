@@ -18,6 +18,8 @@ use crate::{
 };
 use std::sync::Arc;
 
+mod adoption;
+
 /// Author two original library footprints and an original symbol; build the board with the shared commands.
 fn fixture(edit_pad: impl FnOnce(&mut RectPad), owned_part: bool) -> (Session, Documents, Value) {
     fixture_with_original(|_| {}, edit_pad, owned_part)
@@ -25,6 +27,21 @@ fn fixture(edit_pad: impl FnOnce(&mut RectPad), owned_part: bool) -> (Session, D
 
 /// Author both versions when the change also needs a non-default starting shape.
 fn fixture_with_original(original: impl FnOnce(&mut RectPad), edit_pad: impl FnOnce(&mut RectPad), owned_part: bool) -> (Session, Documents, Value) {
+    build_package_fixture(original, edit_pad, owned_part, false)
+}
+
+/// Optionally add pad 9 only to the candidate; use the default original land geometry.
+fn package_fixture(edit_pad: impl FnOnce(&mut RectPad), owned_part: bool, add_pad_nine: bool) -> (Session, Documents, Value) {
+    build_package_fixture(|_| {}, edit_pad, owned_part, add_pad_nine)
+}
+
+/// Author both source revisions and place the original; a new pad and its native mapping belong only to the candidate.
+fn build_package_fixture(
+    original: impl FnOnce(&mut RectPad),
+    edit_pad: impl FnOnce(&mut RectPad),
+    owned_part: bool,
+    add_pad_nine: bool,
+) -> (Session, Documents, Value) {
     let manifest = new_library("preview-test", "Preview test", "MIT OR Apache-2.0").unwrap();
     let symbol = prepare(Arc::new(Draft::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
     let mut first_draft = Draft::new(DraftKind::Footprint).unwrap();
@@ -39,7 +56,19 @@ fn fixture_with_original(original: impl FnOnce(&mut RectPad), edit_pad: impl FnO
     let second = prepare(Arc::new(draft), &manifest, 1, Some(1), false).unwrap();
     let mut documents = symbol.documents().clone();
     documents.extend(first.documents().clone());
-    documents.extend(second.documents().clone());
+    for (path, text) in second.documents() {
+        if add_pad_nine {
+            let mut doc: Value = serde_json::from_str(text).unwrap();
+            let pads = doc["pads"].as_array_mut().unwrap();
+            let mut nine = pads[1].clone();
+            nine["number"] = json!("9");
+            nine["center"]["x_nm"] = json!(2_000_000);
+            pads.push(nine);
+            documents.insert(path.clone(), doc.to_string());
+        } else {
+            documents.insert(path.clone(), text.clone());
+        }
+    }
     documents.insert("library.json".into(), manifest);
     let symbol = symbol.item().symbol().unwrap();
     let footprint = first.item().footprint().unwrap();
@@ -58,7 +87,11 @@ fn fixture_with_original(original: impl FnOnce(&mut RectPad), edit_pad: impl FnO
         .unwrap();
         documents.insert("parts/part-r1.json".into(), part.encode().unwrap());
         part.revision = 2;
-        part.packages.get_mut("same-package").unwrap().footprint.revision = 2;
+        let package = part.packages.get_mut("same-package").unwrap();
+        package.footprint.revision = 2;
+        if add_pad_nine {
+            package.mapping.get_mut("2").unwrap().push("9".into());
+        }
         documents.insert("parts/part-r2.json".into(), part.encode().unwrap());
         load(&mut session, &documents);
         let original = Reference { library: part.library, id: part.id, revision: 1 };

@@ -3314,6 +3314,68 @@
         "type": "object"
       }
     },
+    "pcb.apply_footprint_revision": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  },
+                  "maxItems": 128,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              ]
+            },
+            "maxProperties": 1024,
+            "minProperties": 1,
+            "type": "object"
+          },
+          "part_instance": {
+            "type": "string"
+          },
+          "unconnected_pads": {
+            "items": {
+              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "board",
+          "part_instance",
+          "expected_revision",
+          "acceptance",
+          "mapping"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.apply_update": {
       "params": {
         "additionalProperties": false,
