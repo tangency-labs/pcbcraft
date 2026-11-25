@@ -1237,7 +1237,15 @@ mod tests {
             board_data.assignments.clear();
             board_data.definitions.clear();
             board_data.baseline = None;
-            board_data.vias = vec![Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 }];
+            board_data.vias = vec![Via {
+                id: via,
+                net_assignment: None,
+                locked: false,
+                at,
+                diameter_nm: 500_000,
+                drill_nm: 300_000,
+                test_points: Default::default(),
+            }];
             board_data.tracks = vec![Track {
                 id: track,
                 locked: false,

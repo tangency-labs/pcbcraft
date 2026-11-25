@@ -438,7 +438,15 @@ mod regeneration {
                 let via = Uuid::from_u128(0x10_0000 + index as u128);
                 let track = Uuid::from_u128(0x20_0000 + index as u128);
                 let id = Uuid::from_u128(0x30_0000 + index as u128);
-                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.vias.push(Via {
+                    id: via,
+                    net_assignment: None,
+                    locked: false,
+                    at,
+                    diameter_nm: 500_000,
+                    drill_nm: 300_000,
+                    test_points: Default::default(),
+                });
                 board_data.tracks.push(Track {
                     id: track,
                     locked: false,
@@ -578,7 +586,15 @@ mod regeneration {
                 let via = Uuid::from_u128(0x10_0000 + index as u128);
                 let track = Uuid::from_u128(0x20_0000 + index as u128);
                 let id = Uuid::from_u128(0x30_0000 + index as u128);
-                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.vias.push(Via {
+                    id: via,
+                    net_assignment: None,
+                    locked: false,
+                    at,
+                    diameter_nm: 500_000,
+                    drill_nm: 300_000,
+                    test_points: Default::default(),
+                });
                 board_data.tracks.push(Track {
                     id: track,
                     locked: false,
@@ -774,7 +790,15 @@ mod regeneration {
                 let via = Uuid::from_u128(0x10_0000 + index as u128);
                 let track = Uuid::from_u128(0x20_0000 + index as u128);
                 let id = Uuid::from_u128(0x30_0000 + index as u128);
-                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.vias.push(Via {
+                    id: via,
+                    net_assignment: None,
+                    locked: false,
+                    at,
+                    diameter_nm: 500_000,
+                    drill_nm: 300_000,
+                    test_points: Default::default(),
+                });
                 board_data.tracks.push(Track {
                     id: track,
                     locked: false,
@@ -970,7 +994,15 @@ mod regeneration {
                 let via = Uuid::from_u128(0x10_0000 + index as u128);
                 let track = Uuid::from_u128(0x20_0000 + index as u128);
                 let id = Uuid::from_u128(0x30_0000 + index as u128);
-                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.vias.push(Via {
+                    id: via,
+                    net_assignment: None,
+                    locked: false,
+                    at,
+                    diameter_nm: 500_000,
+                    drill_nm: 300_000,
+                    test_points: Default::default(),
+                });
                 board_data.tracks.push(Track {
                     id: track,
                     locked: false,
@@ -1232,7 +1264,15 @@ mod regeneration {
         {
             let board_data = Arc::make_mut(&mut project.board);
             let at = point(10_000_000, 20_000_000);
-            board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+            board_data.vias.push(Via {
+                id: via,
+                net_assignment: None,
+                locked: false,
+                at,
+                diameter_nm: 500_000,
+                drill_nm: 300_000,
+                test_points: Default::default(),
+            });
             board_data.tracks.push(Track {
                 id: track,
                 locked: false,
