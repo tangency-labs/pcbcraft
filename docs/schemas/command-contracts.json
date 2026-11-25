@@ -15038,6 +15038,15 @@
       },
       "scope": "window"
     },
+    "file.close": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "file.open": {
       "params": {
         "additionalProperties": false,

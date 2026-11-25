@@ -45,7 +45,7 @@ fn close_project_from_file_home_and_browser() {
 #[test]
 fn close_project_after_save_or_stay_open_on_cancel_and_failure() {
     let dir = tempfile::tempdir().unwrap();
-    for outcome in ["cancel", "saved", "cancelled", "failed", "edited"] {
+    for outcome in ["cancel", "saved", "cancelled", "failed", "edited", "cancel close"] {
         let mut h = unsaved_project();
         let ctx = h.ctx.clone();
         let original = h.state().session().snapshot().unwrap();
@@ -60,6 +60,14 @@ fn close_project_after_save_or_stay_open_on_cancel_and_failure() {
             match outcome {
                 "saved" => h.state_mut().files.finish_stand_in(dir.path().join("saved")),
                 "cancelled" => h.state_mut().files.end_stand_in(None),
+                "cancel close" => {
+                    assert!(h.query_by_label("Close without waiting").is_none());
+                    assert!(h.query_by_label("Stop waiting").is_none());
+                    press(&mut h, "Cancel close");
+                    assert!(h.state().waiting.is_none());
+                    assert!(h.state().files.stand_in_waiting());
+                    h.state_mut().files.finish_stand_in(dir.path().join("kept-open"));
+                }
                 "edited" => {
                     h.state_mut().run("project.rename", &json!({"name": "Edit during save"}));
                     h.state_mut().files.finish_stand_in(dir.path().join("edited"));
@@ -71,6 +79,10 @@ fn close_project_after_save_or_stay_open_on_cancel_and_failure() {
         if outcome == "saved" {
             assert!(h.state().home && h.state().session().project().is_none());
             assert!(!h.state().close_allowed);
+        } else if outcome == "cancel close" {
+            assert!(!h.state().home && !h.state().close_allowed);
+            assert!(h.state().session().project().is_some());
+            assert!(!h.state().files.dirty(h.state().session()));
         } else {
             if outcome == "edited" {
                 assert_eq!(h.state().session().project().unwrap().name, "Edit during save");
