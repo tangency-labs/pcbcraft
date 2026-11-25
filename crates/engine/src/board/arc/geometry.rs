@@ -37,8 +37,11 @@ pub struct ArcGeometry {
     start_point: Point,
     end_point: Point,
     start_angle: f64,
+    end_angle: f64,
     /// Positive angular span in `(0, TAU)` traversed in `direction` from `start` to `end`.
     sweep: f64,
+    /// Complementary span, kept at full precision when the sweep nearly wraps around.
+    complement: f64,
     direction: Direction,
     half_width: f64,
 }
@@ -65,6 +68,7 @@ impl ArcGeometry {
             Direction::Clockwise => (end_angle - start_angle).rem_euclid(TAU),
             Direction::Counterclockwise => (start_angle - end_angle).rem_euclid(TAU),
         };
+        let mut complement = TAU - sweep;
         // Near 0 or TAU, `atan2` subtraction can round to 0 or flip order across adjacent ULPs.
         // Decide tiny sweep vs near-full circle from exact integer cross and dot products.
         if sweep <= 1e-12 || sweep >= TAU - 1e-12 {
@@ -80,6 +84,7 @@ impl ArcGeometry {
                 };
                 let below_tau = f64::from_bits(TAU.to_bits() - 1);
                 sweep = if is_tiny { delta } else { (TAU - delta).min(below_tau) };
+                complement = if is_tiny { TAU - delta } else { delta };
             }
         }
         Ok(Self {
@@ -91,7 +96,9 @@ impl ArcGeometry {
             start_point: arc.start,
             end_point: arc.end,
             start_angle,
+            end_angle,
             sweep,
+            complement,
             direction: arc.direction,
             half_width: arc.width_nm as f64 / 2.0,
         })
@@ -150,11 +157,22 @@ impl ArcGeometry {
     /// Whether `angle` (in radians, standard `atan2(y - cy, x - cx)` in X-right, Y-down) lies
     /// within the closed angular sweep `[0, sweep]` from `start_angle` in `self.direction`.
     pub fn contains_angle(&self, angle: f64) -> bool {
+        if angle == self.end_angle {
+            return true;
+        }
         let offset = match self.direction {
-            Direction::Clockwise => (angle - self.start_angle).rem_euclid(TAU),
-            Direction::Counterclockwise => (self.start_angle - angle).rem_euclid(TAU),
+            Direction::Clockwise => angle - self.start_angle,
+            Direction::Counterclockwise => self.start_angle - angle,
+        } % TAU;
+        // Preserve the sign of a tiny backward offset instead of rounding it up to TAU.
+        let signed = if offset > PI {
+            offset - TAU
+        } else if offset <= -PI {
+            offset + TAU
+        } else {
+            offset
         };
-        offset <= self.sweep
+        if self.sweep <= PI { (0.0..=self.sweep).contains(&signed) } else { signed >= 0.0 || signed <= -self.complement }
     }
 
     /// Point on the circular centerline at `angle` radians.
@@ -295,9 +313,9 @@ impl ArcGeometry {
         // Concentric or coincident circles.
         if dist_c <= CONTACT_TOLERANCE_NM {
             let shares_angle = self.contains_angle(other.start_angle)
-                || self.contains_angle(other.end_angle())
+                || self.contains_angle(other.end_angle)
                 || other.contains_angle(self.start_angle)
-                || other.contains_angle(self.end_angle());
+                || other.contains_angle(self.end_angle);
             if shares_angle {
                 best = best.min((self.radius - other.radius).abs());
             }
@@ -335,11 +353,6 @@ impl ArcGeometry {
             }
         }
         best
-    }
-
-    /// Angle of the authored end point relative to `self.center`.
-    fn end_angle(&self) -> f64 {
-        (self.end.1 - self.center.1).atan2(self.end.0 - self.center.0)
     }
 
     /// Exact copper contact test: arc vs arc (including tangency, endpoint touch and coincidence).
@@ -434,6 +447,29 @@ mod tests {
 
         assert_eq!(arc.end_point(), pt(0, 5_000_001));
         assert!(arc.touches_via(pt(-120_000, 5_160_001), 200_000).unwrap());
+    }
+
+    /// A nearly full turn includes its end and the sweep near it, but excludes the small gap.
+    #[test]
+    fn closed_sweep_keeps_signed_offsets_near_a_full_turn() {
+        for (y, direction) in [(-1, Direction::Clockwise), (1, Direction::Counterclockwise)] {
+            let start = pt(500_000_000, y);
+            let end = pt(499_999_999, y);
+            let arc = ArcGeometry::from_track(&make_arc(pt(0, 0), start, end, 200_000, direction)).unwrap();
+            let gap_midpoint = (arc.end_angle + arc.start_angle) / 2.0;
+            assert!(arc.sweep() > PI);
+            assert!(arc.contains_angle(arc.end_angle));
+            assert!(arc.contains_angle(arc.end_angle + (arc.end_angle - arc.start_angle)));
+            assert!(!arc.contains_angle(gap_midpoint));
+
+            let opposite = match direction {
+                Direction::Clockwise => Direction::Counterclockwise,
+                Direction::Counterclockwise => Direction::Clockwise,
+            };
+            let small = ArcGeometry::from_track(&make_arc(pt(0, 0), start, end, 200_000, opposite)).unwrap();
+            assert!(small.contains_angle(gap_midpoint));
+            assert!(!small.contains_angle(arc.start_angle - (arc.end_angle - arc.start_angle)));
+        }
     }
 
     #[test]

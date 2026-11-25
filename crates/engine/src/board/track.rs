@@ -353,7 +353,9 @@ impl<'a> BoardView<'a> {
             Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
             _ => islands_with_arcs(items)?,
         };
-        let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
+        let join_pads = vias.iter().any(|v| v.net_assignment.is_some());
+        let physical_representatives = (include_ids && join_pads).then(|| members.iter().map(|nodes| nodes.first().copied()).collect::<Vec<_>>());
+        let members = if join_pads { with_pad_contacts(&lands, &copper, members) } else { members };
         let intent = if include_ids { self.project().accepted_net_memberships() } else { self.project().board_intent_memberships() };
         let intrinsic = super::via_nets::node_membership_with_arcs(self.project(), items, &intent);
         let island_net: Vec<_> = members
@@ -372,7 +374,20 @@ impl<'a> BoardView<'a> {
             .collect();
         let net_ids = if include_ids {
             let ids: BTreeMap<_, _> = intent.ids.iter().map(|(&id, &member)| (member, id)).collect();
-            island_net.iter().map(|member| member.and_then(|index| ids.get(&index).copied())).collect()
+            let group_ids = island_net.iter().map(|member| member.and_then(|index| ids.get(&index).copied()));
+            if let Some(representatives) = physical_representatives {
+                // Pad contact groups are only used to resolve intent. Callers index with the
+                // original physical islands, so each receives its group's resolved ID.
+                let mut node_ids = vec![None; intrinsic.len()];
+                for (nodes, id) in members.iter().zip(group_ids) {
+                    for &node in nodes {
+                        node_ids[node] = id;
+                    }
+                }
+                representatives.into_iter().map(|node| node.and_then(|node| node_ids[node])).collect()
+            } else {
+                group_ids.collect()
+            }
         } else {
             Vec::new()
         };

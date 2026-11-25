@@ -54,6 +54,43 @@ fn arc_joins_same_net_pads_and_clears_ratsnest_airwire() {
     assert!(shorts.violations.is_empty());
 }
 
+/// Direct pad contacts resolve intent without renumbering the physical islands used by the view.
+#[test]
+fn presentation_keeps_original_island_ids_after_pad_contacts() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let board_lands = lands(view(&s));
+    let mut accepted: Vec<_> = board_lands.iter().filter(|land| land.net.as_deref() == Some("ACCEPTED")).collect();
+    accepted.sort_by_key(|land| land.center.x_nm);
+    let (fixed, moved) = (accepted[0], accepted[1]);
+    let footprint = view(&s).footprints().find(|footprint| footprint.id == moved.key.0).unwrap();
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":footprint.id,"rotation":footprint.rotation,
+            "x_nm":footprint.position.x_nm + fixed.center.x_nm - moved.center.x_nm,
+            "y_nm":footprint.position.y_nm + fixed.center.y_nm - moved.center.y_nm,
+            "expected_revision":s.revision()}),
+    )
+    .unwrap();
+
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    let anchor = &registry["nets"].as_array().unwrap().iter().find(|row| row["name"] == "ACCEPTED").unwrap()["anchor"];
+    let at = Point { x_nm: -30_000_000, y_nm: -30_000_000 };
+    s.apply(crate::ADD_VIA, &json!({"at":at,"target":{"kind":"derived","anchor":anchor},"expected_revision":s.revision()})).unwrap();
+    let via = view(&s).vias()[0].clone();
+    let assigned_net = via.net_assignment.unwrap().net;
+    let arc = semicircle_between(0xc003, front, at, Point { x_nm: -26_000_000, ..at }, 250_000, Direction::Clockwise);
+    s.apply(SET_ARCS, &params(&s, std::slice::from_ref(&arc))).unwrap();
+
+    let presentation = view(&s).copper_presentation(true).unwrap();
+    let copper = presentation.copper;
+    assert_ne!(copper.pads[&fixed.key], copper.pads[&moved.key]);
+    assert_eq!(presentation.net_ids[copper.pads[&fixed.key]], Some(assigned_net));
+    assert_eq!(presentation.net_ids[copper.pads[&moved.key]], Some(assigned_net));
+    assert_eq!(copper.vias[&via.id], copper.arcs[&arc.id]);
+    assert_eq!(presentation.net_ids[copper.arcs[&arc.id]], Some(assigned_net));
+}
+
 /// Arcs respect copper layer isolation and join multi-layer chains through vias.
 #[test]
 fn arc_layer_isolation_and_multilayer_via_chain() {
