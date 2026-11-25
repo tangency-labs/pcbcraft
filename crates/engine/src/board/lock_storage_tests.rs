@@ -328,6 +328,258 @@ fn arc_and_footprint_lock_edits_keep_current_format_and_bytes() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
 }
 
+/// Relations are an optional record beside arcs and footprint locks: the board keeps the current
+/// format, and relations are not an edit permission.
+#[test]
+fn a_format_f1_composes_with_native_arc_lock_corpus() {
+    use crate::board::relations::{
+        commands::{DELETE, EDIT, LIST},
+        tests::{add, bytes, origin, pick, run, unchanged},
+    };
+    for (arcs, lock) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut s = track::tests::routed_fixture();
+        // Read the never-opted-in controls through the same native packed and document codecs.
+        let untouched = s.snapshot().unwrap();
+        if arcs {
+            add_arc(&mut s);
+        }
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let native = bytes(&s);
+        let native_packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_packed(decode_packed(&native_packed).unwrap().project).unwrap(), native_packed);
+        assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        // The arc cases clear their arcs before the final delete, so the end state is the same
+        // board without arcs, in the same current format.
+        s.open_snapshot(untouched.clone());
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let without_arcs = bytes(&s);
+        s.open_snapshot(untouched);
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        let id = add(&mut s, "horizontal", origin(), reference);
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        if arcs {
+            add_arc(&mut s);
+        }
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let saved = bytes(&s);
+        let path = test_board_path(&saved);
+        let f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        assert_eq!(f1["format"], native_board["format"]);
+        assert_eq!(f1["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+        assert_eq!(f1.get("arcs").is_some(), arcs);
+        assert_eq!(f1["footprints"][0].get("locked").is_some(), lock);
+        // The unreleased board/58 label is not a format.
+        let mut reserved = f1.clone();
+        reserved["format"] = json!("pcbcraft-board/58");
+        let mut doctored = saved.clone();
+        doctored.insert(path, serde_json::to_vec(&reserved).unwrap());
+        let before = doctored.clone();
+        assert!(decode_documents(&doctored).is_err());
+        assert_eq!(doctored, before);
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        s.open_snapshot(decode_packed(&packed).unwrap().project);
+        assert_eq!(bytes(&s), saved);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
+        if arcs {
+            let e = unchanged(&mut s, |s| run(s, DELETE, json!({"ids":[id]})));
+            assert_eq!(e.details()["reason"], "arc_board");
+            assert_eq!(bytes(&s), saved);
+            let target = s.project().unwrap().board_target().unwrap().board;
+            run(&mut s, arc::SET_ARCS, json!({"board":target,"arcs":[]})).unwrap();
+        }
+        run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+        let final_docs = bytes(&s);
+        assert_eq!(final_docs[&test_board_path(&final_docs)], without_arcs[&test_board_path(&without_arcs)], "arcs={arcs}, lock={lock}");
+    }
+}
+
+/// Check via net assignments and material reports independently of the arc/lock corpus; both
+/// save in the current format.
+#[test]
+fn a_format_f1_composes_with_assigned_via_and_material_report() {
+    use crate::board::relations::{
+        commands::{DELETE, EDIT, LIST},
+        tests::{add, bytes, origin, pick, run},
+    };
+    for report in [false, true] {
+        let mut s = track::tests::routed_fixture();
+        if report {
+            add_material_report(&mut s);
+        } else {
+            let anchor = s.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+            run(&mut s, track::ADD_VIA, json!({"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},"target":{"kind":"derived","anchor":anchor}})).unwrap();
+        }
+        let native = bytes(&s);
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+        let path = test_board_path(&native);
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        assert_eq!(native_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+        if report {
+            assert!(native_board["setup"]["materials"][0]["thermal_conductivity"].is_array());
+        } else {
+            assert!(native_board["vias"][0]["net_assignment"].is_object());
+        }
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        let id = add(&mut s, "horizontal", origin(), reference);
+        let composed = bytes(&s);
+        let mut b: Value = serde_json::from_slice(&composed[&path]).unwrap();
+        assert_eq!(b["format"], native_board["format"]);
+        assert_eq!(b.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
+        assert_eq!(b, native_board);
+        for (file, data) in &native {
+            if *file != path {
+                assert_eq!(data, &composed[file]);
+            }
+        }
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        s.open_snapshot(decode_packed(&packed).unwrap().project);
+        assert_eq!(bytes(&s), composed);
+        assert_eq!(encode_packed(s.snapshot().unwrap()).unwrap(), packed);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        let edited = bytes(&s);
+        s.open_snapshot(decode_documents(&edited).unwrap());
+        assert_eq!(bytes(&s), edited);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
+        run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+        assert_eq!(bytes(&s), native);
+    }
+}
+
+/// Relations ride beside named layer groups in the current format without changing it; an empty
+/// group list is still refused, and deleting the last relation returns the exact native bytes.
+#[test]
+fn a_format_f1_composes_with_named_layer_groups() {
+    use crate::board::relations::tests::{add, bytes, origin, pick, run};
+    let mut s = track::tests::routed_fixture();
+    let layer = track::tests::copper_layers(&s)[0];
+    let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[layer]});
+    let mut setup = json!(s.project().unwrap().board_setup().unwrap());
+    setup["stackup"]["layer_groups"] = json!([group]);
+    run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":setup})).unwrap();
+    let native = bytes(&s);
+    let path = test_board_path(&native);
+    let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+    assert_eq!(native_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let id = add(&mut s, "horizontal", origin(), reference);
+    let composed = bytes(&s);
+    let board: Value = serde_json::from_slice(&composed[&path]).unwrap();
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
+    assert_eq!(board["relations"]["relations"][0]["id"], id);
+    let mut stripped = board.clone();
+    stripped.as_object_mut().unwrap().remove("relations");
+    assert_eq!(stripped, native_board);
+    for (file, data) in &native {
+        if *file != path {
+            assert_eq!(data, &composed[file]);
+        }
+    }
+    assert_eq!(encode_documents(decode_documents(&composed).unwrap()).unwrap(), composed);
+    let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+    s.open_snapshot(decode_packed(&packed).unwrap().project);
+    assert_eq!(bytes(&s), composed);
+    let mut empty = board.clone();
+    empty["setup"]["stackup"]["layer_groups"] = json!([]);
+    assert_invalid_board_record(&composed, &empty, "layer_groups must be omitted when empty");
+    run(&mut s, crate::board::relations::commands::DELETE, json!({"ids":[id]})).unwrap();
+    assert_eq!(bytes(&s), native);
+}
+
+/// Relations ride beside teardrops in the current format. Relation edits on a teardrop board are refused like every
+/// other non-teardrop board edit, so the exact teardrop control is reached by removing the teardrop.
+#[test]
+fn a_format_f1_composes_with_teardrops() {
+    use crate::CommandError;
+    use crate::board::{
+        relations::{
+            commands::{ADD, DELETE, EDIT, FEATURES, LIST},
+            tests::{add, bytes, origin, pick, run, unchanged},
+        },
+        rules::Values,
+        setup::LayerPurpose,
+        teardrop::{EDIT_TEARDROPS, Length, Parameters, Record, UNSUPPORTED},
+    };
+    let mut s = track::tests::routed_fixture();
+    let layer = track::tests::copper_layers(&s)[0];
+    let target = s.project().unwrap().board_target().unwrap().board;
+    let (center, end) = (json!({"x_nm":0,"y_nm":20_000_000}), json!({"x_nm":600_000,"y_nm":20_000_000}));
+    run(&mut s, crate::ADD_VIA, json!({"at":center,"via_diameter_nm":500_000,"via_drill_nm":300_000})).unwrap();
+    run(&mut s, crate::ADD_TRACKS, json!({"layer":layer,"width_nm":100_000,"points":[center,end]})).unwrap();
+    let outline = track::tests::view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let corners: Vec<_> = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .into_iter()
+        .map(|(x_nm, y_nm)| json!({"x_nm":x_nm,"y_nm":y_nm}))
+        .collect();
+    run(&mut s, crate::ADD_DRAWING, json!({"board":target,"layer":outline,"points":corners,"closed":true})).unwrap();
+    let values = Values { clearance_nm: 35_000, ..Values::default() };
+    run(&mut s, crate::SET_RULES, json!({"board":target,"rules":values})).unwrap();
+    let board = track::tests::view(&s);
+    let record = Record {
+        id: uuid::Uuid::from_u128(1),
+        via: board.vias().iter().find(|via| via.at.y_nm == 20_000_000).unwrap().id,
+        track: board.tracks().iter().find(|track| track.start.y_nm == 20_000_000).unwrap().id,
+        parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
+    };
+    let teardrop = |s: &mut Session, add: &[Record], remove: &[uuid::Uuid]| {
+        let result = run(s, EDIT_TEARDROPS, json!({"board":target,"edits":{"add":add,"remove":remove}})).unwrap();
+        assert_eq!(result["teardrops"]["rejected"], json!([]));
+    };
+    let native = bytes(&s);
+    let path = test_board_path(&native);
+    // Native teardrop control: the same teardrop on the same board without relations.
+    let untouched = s.snapshot().unwrap();
+    teardrop(&mut s, &[record], &[]);
+    let control = bytes(&s);
+    let control_board: Value = serde_json::from_slice(&control[&path]).unwrap();
+    assert_eq!(control_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    assert!(s.project().unwrap().board.arcs.is_empty());
+    assert!(!s.available(ADD) && !s.available(EDIT) && !s.available(DELETE));
+    assert!(s.available(LIST) && s.available(FEATURES));
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let e = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[origin(), reference.clone()]}})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
+    assert_eq!(bytes(&s), control);
+    teardrop(&mut s, &[], &[record.id]);
+    assert_eq!(bytes(&s), native);
+    // The relation first, then the teardrop, under the same current header.
+    s.open_snapshot(untouched);
+    let id = add(&mut s, "horizontal", origin(), reference);
+    let related = bytes(&s);
+    teardrop(&mut s, &[record], &[]);
+    let saved = bytes(&s);
+    let mut f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(f1["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    assert_eq!(f1["teardrops"], control_board["teardrops"]);
+    assert_eq!(f1.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
+    assert_eq!(f1, control_board);
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+    s.open_snapshot(decode_packed(&packed).unwrap().project);
+    assert_eq!(bytes(&s), saved);
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+    let e = unchanged(&mut s, |s| run(s, EDIT, json!({"id":id,"edit":{"suppressed":false}})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
+    let e = unchanged(&mut s, |s| run(s, DELETE, json!({"ids":[id]})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
+    assert_eq!(bytes(&s), saved);
+    teardrop(&mut s, &[], &[record.id]);
+    assert_eq!(bytes(&s), related);
+    assert!(s.available(ADD) && s.available(EDIT) && s.available(DELETE));
+    run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+    assert_eq!(bytes(&s), native);
+}
+
 /// Named groups, circular copper and active footprint locks coexist in the current format.
 #[test]
 fn current_board_round_trips_named_groups_with_arcs_and_locks() {

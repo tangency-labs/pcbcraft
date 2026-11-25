@@ -282,7 +282,13 @@ impl Session {
         let project = self.open_project()?;
         if let Some((mut next, moved)) = alignment_candidate(project, params)? {
             super::track::carry_copper(project, &mut next, &moved)?;
-            self.change(next)?;
+            // Relation review sees every selected footprint, including unchanged align anchors.
+            let poses = params["footprints"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")));
+            self.change_with_native_poses(next, poses)?;
         }
         Ok(())
     }
@@ -380,7 +386,7 @@ impl Session {
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
         super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
-        self.change(next)?;
+        self.change_with_native_poses(next, [current.id])?;
         Ok(())
     }
 }

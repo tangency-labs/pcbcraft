@@ -2665,6 +2665,471 @@
         "type": "object"
       }
     },
+    "pcb.add_relation": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relation": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "horizontal",
+                  "vertical",
+                  "aligned",
+                  "point_edge",
+                  "gap",
+                  "align_h",
+                  "align_v"
+                ]
+              },
+              "label": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "x_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      },
+                      "y_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "x_nm",
+                      "y_nm"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "refs": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "tag": {
+                          "const": "board.origin"
+                        }
+                      },
+                      "required": [
+                        "tag"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "def": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "library": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 4294967295,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "library",
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "const": "generic-through-hole-2"
+                                },
+                                "revision": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "fp": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "tag": {
+                          "const": "fp.origin"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "fp",
+                        "def"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "def": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "library": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 4294967295,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "library",
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "const": "generic-through-hole-2"
+                                },
+                                "revision": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "fp": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "pad": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        },
+                        "tag": {
+                          "const": "pad.center"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "fp",
+                        "def",
+                        "pad"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "corner": {
+                          "enum": [
+                            "ll",
+                            "lr",
+                            "ur",
+                            "ul"
+                          ]
+                        },
+                        "def": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "library": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 4294967295,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "library",
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "const": "generic-through-hole-2"
+                                },
+                                "revision": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "fp": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "pad": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        },
+                        "tag": {
+                          "const": "pad.corner"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "fp",
+                        "def",
+                        "pad",
+                        "corner"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "def": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "library": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 4294967295,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "library",
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "const": "generic-through-hole-2"
+                                },
+                                "revision": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "fp": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "pad": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        },
+                        "side": {
+                          "enum": [
+                            "left",
+                            "right",
+                            "top",
+                            "bottom"
+                          ]
+                        },
+                        "tag": {
+                          "const": "pad.edge"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "fp",
+                        "def",
+                        "pad",
+                        "side"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "def": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "library": {
+                                  "maxLength": 64,
+                                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 4294967295,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "library",
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "const": "generic-through-hole-2"
+                                },
+                                "revision": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "fp": {
+                          "maximum": 9223372036854775807,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "rect": {
+                          "maximum": 63,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "side": {
+                          "enum": [
+                            "left",
+                            "right",
+                            "top",
+                            "bottom"
+                          ]
+                        },
+                        "tag": {
+                          "const": "courtyard.edge"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "fp",
+                        "def",
+                        "side",
+                        "rect"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "suppressed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "refs"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "relation"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.add_tracks": {
       "params": {
         "additionalProperties": false,
@@ -3376,13 +3841,71 @@
         "type": "object"
       }
     },
+    "pcb.apply_relation_preview": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "accept_loss": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 2048,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "confirm_remaps": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "token": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "token",
+          "accept_loss",
+          "confirm_remaps"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.apply_update": {
       "params": {
         "additionalProperties": false,
         "properties": {
+          "accept_loss": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 2048,
+            "type": "array",
+            "uniqueItems": true
+          },
           "board": {
             "format": "uuid",
             "type": "string"
+          },
+          "confirm_remaps": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "type": "array",
+            "uniqueItems": true
           },
           "expected_revision": {
             "minimum": 0,
@@ -3482,6 +4005,21 @@
         },
         "required": [
           "plan_token"
+        ],
+        "type": "object"
+      }
+    },
+    "pcb.cancel_relation_preview": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
         ],
         "type": "object"
       }
@@ -4737,6 +5275,35 @@
         "type": "object"
       }
     },
+    "pcb.delete_relations": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 2048,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "expected_revision",
+          "ids"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.delete_tracks": {
       "params": {
         "additionalProperties": false,
@@ -4802,6 +5369,513 @@
         "required": [
           "expected_revision",
           "zones"
+        ],
+        "type": "object"
+      }
+    },
+    "pcb.edit_relation": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "edit": {
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "x_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      },
+                      "y_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "x_nm",
+                      "y_nm"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "repick": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "horizontal",
+                      "vertical",
+                      "aligned",
+                      "point_edge",
+                      "gap",
+                      "align_h",
+                      "align_v"
+                    ]
+                  },
+                  "label": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "x_nm": {
+                            "maximum": 987300000,
+                            "minimum": -987300000,
+                            "type": "integer"
+                          },
+                          "y_nm": {
+                            "maximum": 987300000,
+                            "minimum": -987300000,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "x_nm",
+                          "y_nm"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "refs": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "tag": {
+                              "const": "board.origin"
+                            }
+                          },
+                          "required": [
+                            "tag"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "def": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "library": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "revision": {
+                                      "maximum": 4294967295,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "library",
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "const": "generic-through-hole-2"
+                                    },
+                                    "revision": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "fp": {
+                              "maximum": 9223372036854775807,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "tag": {
+                              "const": "fp.origin"
+                            }
+                          },
+                          "required": [
+                            "tag",
+                            "fp",
+                            "def"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "def": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "library": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "revision": {
+                                      "maximum": 4294967295,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "library",
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "const": "generic-through-hole-2"
+                                    },
+                                    "revision": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "fp": {
+                              "maximum": 9223372036854775807,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "pad": {
+                              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                              "type": "string"
+                            },
+                            "tag": {
+                              "const": "pad.center"
+                            }
+                          },
+                          "required": [
+                            "tag",
+                            "fp",
+                            "def",
+                            "pad"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "corner": {
+                              "enum": [
+                                "ll",
+                                "lr",
+                                "ur",
+                                "ul"
+                              ]
+                            },
+                            "def": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "library": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "revision": {
+                                      "maximum": 4294967295,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "library",
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "const": "generic-through-hole-2"
+                                    },
+                                    "revision": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "fp": {
+                              "maximum": 9223372036854775807,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "pad": {
+                              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                              "type": "string"
+                            },
+                            "tag": {
+                              "const": "pad.corner"
+                            }
+                          },
+                          "required": [
+                            "tag",
+                            "fp",
+                            "def",
+                            "pad",
+                            "corner"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "def": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "library": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "revision": {
+                                      "maximum": 4294967295,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "library",
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "const": "generic-through-hole-2"
+                                    },
+                                    "revision": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "fp": {
+                              "maximum": 9223372036854775807,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "pad": {
+                              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                              "type": "string"
+                            },
+                            "side": {
+                              "enum": [
+                                "left",
+                                "right",
+                                "top",
+                                "bottom"
+                              ]
+                            },
+                            "tag": {
+                              "const": "pad.edge"
+                            }
+                          },
+                          "required": [
+                            "tag",
+                            "fp",
+                            "def",
+                            "pad",
+                            "side"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "def": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "library": {
+                                      "maxLength": 64,
+                                      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                      "type": "string"
+                                    },
+                                    "revision": {
+                                      "maximum": 4294967295,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "library",
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "const": "generic-through-hole-2"
+                                    },
+                                    "revision": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "fp": {
+                              "maximum": 9223372036854775807,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "rect": {
+                              "maximum": 63,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "side": {
+                              "enum": [
+                                "left",
+                                "right",
+                                "top",
+                                "bottom"
+                              ]
+                            },
+                            "tag": {
+                              "const": "courtyard.edge"
+                            }
+                          },
+                          "required": [
+                            "tag",
+                            "fp",
+                            "def",
+                            "side",
+                            "rect"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  "suppressed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "refs"
+                ],
+                "type": "object"
+              },
+              "suppressed": {
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "id",
+          "edit"
         ],
         "type": "object"
       }
@@ -4970,6 +6044,23 @@
           },
           "dry_run": {
             "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "pcb.feature_catalog": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "fp": {
+            "pattern": "^footprint-[1-9][0-9]*$",
+            "type": "string"
           }
         },
         "required": [],
@@ -7627,6 +8718,1678 @@
         "type": "object"
       }
     },
+    "pcb.preview_relation": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "intent": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.cut"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "drawings": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 512,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "footprints": {
+                            "items": {
+                              "pattern": "^footprint-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "tracks": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 65536,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "vias": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 16384,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "zones": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.delete_items"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "drawings": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 512,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "footprints": {
+                            "items": {
+                              "pattern": "^footprint-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "tracks": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 65536,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "vias": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 16384,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "zones": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.delete_footprints"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "footprints": {
+                        "items": {
+                          "pattern": "^footprint-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "maxItems": 4096,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "footprints"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "schematic.cut"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "net_labels": {
+                            "items": {
+                              "pattern": "^net-label-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "no_connects": {
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "part": {
+                                      "pattern": "^component-[1-9][0-9]*$",
+                                      "type": "string"
+                                    },
+                                    "terminal": {
+                                      "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "part",
+                                    "terminal"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "junction": {
+                                      "pattern": "^junction-[1-9][0-9]*$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "junction"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "symbols": {
+                            "items": {
+                              "pattern": "^symbol-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "wires": {
+                            "items": {
+                              "pattern": "^wire-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "required": [
+                          "symbols",
+                          "wires"
+                        ],
+                        "type": "object"
+                      },
+                      "objects": {
+                        "items": {
+                          "pattern": "^(sheet-symbol|label)-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "maxItems": 128,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "sheet": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "schematic.delete_items"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "net_labels": {
+                            "items": {
+                              "pattern": "^net-label-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "no_connects": {
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "part": {
+                                      "pattern": "^component-[1-9][0-9]*$",
+                                      "type": "string"
+                                    },
+                                    "terminal": {
+                                      "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "part",
+                                    "terminal"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "junction": {
+                                      "pattern": "^junction-[1-9][0-9]*$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "junction"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "symbols": {
+                            "items": {
+                              "pattern": "^symbol-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "wires": {
+                            "items": {
+                              "pattern": "^wire-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "required": [
+                          "symbols",
+                          "wires"
+                        ],
+                        "type": "object"
+                      },
+                      "sheet": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "items"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "schematic.delete_symbol"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "sheet": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "symbol": {
+                        "pattern": "^symbol-[1-9][0-9]*$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "symbol"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "sheet.delete"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "sheet": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "sheet"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.move_items"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "dx_nm": {
+                        "maximum": 1974600000,
+                        "minimum": -1974600000,
+                        "type": "integer"
+                      },
+                      "dy_nm": {
+                        "maximum": 1974600000,
+                        "minimum": -1974600000,
+                        "type": "integer"
+                      },
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "drawings": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 512,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "footprints": {
+                            "items": {
+                              "pattern": "^footprint-[1-9][0-9]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 4096,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "tracks": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 65536,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "vias": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 16384,
+                            "type": "array",
+                            "uniqueItems": true
+                          },
+                          "zones": {
+                            "items": {
+                              "format": "uuid",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "items",
+                      "dx_nm",
+                      "dy_nm"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.set_footprint_transform"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "footprint": {
+                        "pattern": "^footprint-[1-9][0-9]*$",
+                        "type": "string"
+                      },
+                      "rotation": {
+                        "maximum": 359,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "side": {
+                        "enum": [
+                          "front",
+                          "back"
+                        ],
+                        "type": "string"
+                      },
+                      "x_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      },
+                      "y_nm": {
+                        "maximum": 987300000,
+                        "minimum": -987300000,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "footprint",
+                      "x_nm",
+                      "y_nm",
+                      "rotation"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.align_footprints"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "footprints": {
+                        "items": {
+                          "pattern": "^footprint-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "maxItems": 4096,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mode": {
+                        "enum": [
+                          "left",
+                          "right",
+                          "top",
+                          "bottom",
+                          "center_x",
+                          "center_y",
+                          "distribute_x",
+                          "distribute_y"
+                        ],
+                        "type": "string"
+                      },
+                      "pitch_nm": {
+                        "maximum": 1974600000,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "footprints",
+                      "mode"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.add_drawing"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "closed": {
+                        "type": "boolean"
+                      },
+                      "layer": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "points": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x_nm": {
+                              "maximum": 987300000,
+                              "minimum": -987300000,
+                              "type": "integer"
+                            },
+                            "y_nm": {
+                              "maximum": 987300000,
+                              "minimum": -987300000,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "x_nm",
+                            "y_nm"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 256,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "stroke_nm": {
+                        "maximum": 10000000,
+                        "minimum": 10000,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "layer",
+                      "points",
+                      "closed"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.set_drawing"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "closed": {
+                        "type": "boolean"
+                      },
+                      "drawing": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "points": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x_nm": {
+                              "maximum": 987300000,
+                              "minimum": -987300000,
+                              "type": "integer"
+                            },
+                            "y_nm": {
+                              "maximum": 987300000,
+                              "minimum": -987300000,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "x_nm",
+                            "y_nm"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 256,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "stroke_nm": {
+                        "maximum": 10000000,
+                        "minimum": 10000,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "drawing",
+                      "points",
+                      "closed"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.delete_drawing"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "drawing": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "drawing"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.set_placement_origin"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "origin": {
+                        "oneOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "board_zero"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "outline_lower_left"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "point"
+                              },
+                              "x_nm": {
+                                "maximum": 987300000,
+                                "minimum": -987300000,
+                                "type": "integer"
+                              },
+                              "y_nm": {
+                                "maximum": 987300000,
+                                "minimum": -987300000,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "x_nm",
+                              "y_nm"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "board",
+                      "origin"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "pcb.assign_footprint"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "board": {
+                        "format": "uuid",
+                        "type": "string"
+                      },
+                      "component": {
+                        "type": "string"
+                      },
+                      "definition": {
+                        "type": "string"
+                      },
+                      "definition_revision": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "library": {
+                        "type": "string"
+                      },
+                      "mapping": {
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                              "type": "string"
+                            },
+                            {
+                              "items": {
+                                "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                "type": "string"
+                              },
+                              "maxItems": 128,
+                              "minItems": 1,
+                              "type": "array",
+                              "uniqueItems": true
+                            }
+                          ]
+                        },
+                        "maxProperties": 1024,
+                        "minProperties": 1,
+                        "type": "object"
+                      },
+                      "unconnected_pads": {
+                        "items": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        },
+                        "maxItems": 1024,
+                        "type": "array",
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "component",
+                      "library",
+                      "definition",
+                      "definition_revision",
+                      "mapping"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "const": "part.set_selection"
+                  },
+                  "params": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "component": {
+                        "type": "string"
+                      },
+                      "manufacturer": {
+                        "oneOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "library": {
+                                "maxLength": 64,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "revision": {
+                                "maximum": 4294967295,
+                                "minimum": 1,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "library",
+                              "id",
+                              "revision"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "manufacturer_digest": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "package": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "requirements": {
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "operator": {
+                                  "enum": [
+                                    "exact",
+                                    "at_least",
+                                    "at_most"
+                                  ]
+                                },
+                                "value": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "type": {
+                                      "enum": [
+                                        "quantity",
+                                        "integer",
+                                        "choice",
+                                        "text",
+                                        "boolean"
+                                      ]
+                                    },
+                                    "unit": {
+                                      "type": "string"
+                                    },
+                                    "value": {}
+                                  },
+                                  "required": [
+                                    "type",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "operator",
+                                "value"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "maximum": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "type": {
+                                      "enum": [
+                                        "quantity",
+                                        "integer",
+                                        "choice",
+                                        "text",
+                                        "boolean"
+                                      ]
+                                    },
+                                    "unit": {
+                                      "type": "string"
+                                    },
+                                    "value": {}
+                                  },
+                                  "required": [
+                                    "type",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                "minimum": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "type": {
+                                      "enum": [
+                                        "quantity",
+                                        "integer",
+                                        "choice",
+                                        "text",
+                                        "boolean"
+                                      ]
+                                    },
+                                    "unit": {
+                                      "type": "string"
+                                    },
+                                    "value": {}
+                                  },
+                                  "required": [
+                                    "type",
+                                    "value"
+                                  ],
+                                  "type": "object"
+                                },
+                                "operator": {
+                                  "const": "range"
+                                }
+                              },
+                              "required": [
+                                "operator",
+                                "minimum",
+                                "maximum"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "operator": {
+                                  "const": "one_of"
+                                },
+                                "values": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "type": {
+                                        "enum": [
+                                          "quantity",
+                                          "integer",
+                                          "choice",
+                                          "text",
+                                          "boolean"
+                                        ]
+                                      },
+                                      "unit": {
+                                        "type": "string"
+                                      },
+                                      "value": {}
+                                    },
+                                    "required": [
+                                      "type",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 64,
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "uniqueItems": true
+                                }
+                              },
+                              "required": [
+                                "operator",
+                                "values"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "maxProperties": 64,
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "component"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "command",
+                  "params"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "remap_choices": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "choice": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "correspond"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "keep_lost"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "repick"
+                        },
+                        "reference": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "tag": {
+                                  "const": "board.origin"
+                                }
+                              },
+                              "required": [
+                                "tag"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "tag": {
+                                  "const": "fp.origin"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "tag": {
+                                  "const": "pad.center"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "corner": {
+                                  "enum": [
+                                    "ll",
+                                    "lr",
+                                    "ur",
+                                    "ul"
+                                  ]
+                                },
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "tag": {
+                                  "const": "pad.corner"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad",
+                                "corner"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "side": {
+                                  "enum": [
+                                    "left",
+                                    "right",
+                                    "top",
+                                    "bottom"
+                                  ]
+                                },
+                                "tag": {
+                                  "const": "pad.edge"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad",
+                                "side"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "rect": {
+                                  "maximum": 63,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "side": {
+                                  "enum": [
+                                    "left",
+                                    "right",
+                                    "top",
+                                    "bottom"
+                                  ]
+                                },
+                                "tag": {
+                                  "const": "courtyard.edge"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "side",
+                                "rect"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "reference"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "pick": {
+                  "enum": [
+                    0,
+                    1
+                  ]
+                },
+                "relation": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "relation",
+                "pick",
+                "choice"
+              ],
+              "type": "object"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "intent"
+        ],
+        "type": "object"
+      }
+    },
     "pcb.preview_update": {
       "params": {
         "additionalProperties": false,
@@ -7638,6 +10401,461 @@
           "expected_revision": {
             "minimum": 0,
             "type": "integer"
+          },
+          "remap_choices": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "choice": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "correspond"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "keep_lost"
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "const": "repick"
+                        },
+                        "reference": {
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "tag": {
+                                  "const": "board.origin"
+                                }
+                              },
+                              "required": [
+                                "tag"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "tag": {
+                                  "const": "fp.origin"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "tag": {
+                                  "const": "pad.center"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "corner": {
+                                  "enum": [
+                                    "ll",
+                                    "lr",
+                                    "ur",
+                                    "ul"
+                                  ]
+                                },
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "tag": {
+                                  "const": "pad.corner"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad",
+                                "corner"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "pad": {
+                                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                                  "type": "string"
+                                },
+                                "side": {
+                                  "enum": [
+                                    "left",
+                                    "right",
+                                    "top",
+                                    "bottom"
+                                  ]
+                                },
+                                "tag": {
+                                  "const": "pad.edge"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "pad",
+                                "side"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "def": {
+                                  "oneOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "library": {
+                                          "maxLength": 64,
+                                          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                                          "type": "string"
+                                        },
+                                        "revision": {
+                                          "maximum": 4294967295,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "library",
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "const": "generic-through-hole-2"
+                                        },
+                                        "revision": {
+                                          "const": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "revision"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
+                                },
+                                "fp": {
+                                  "maximum": 9223372036854775807,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "rect": {
+                                  "maximum": 63,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "side": {
+                                  "enum": [
+                                    "left",
+                                    "right",
+                                    "top",
+                                    "bottom"
+                                  ]
+                                },
+                                "tag": {
+                                  "const": "courtyard.edge"
+                                }
+                              },
+                              "required": [
+                                "tag",
+                                "fp",
+                                "def",
+                                "side",
+                                "rect"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "reference"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "pick": {
+                  "enum": [
+                    0,
+                    1
+                  ]
+                },
+                "relation": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "relation",
+                "pick",
+                "choice"
+              ],
+              "type": "object"
+            },
+            "maxItems": 4096,
+            "type": "array"
           }
         },
         "required": [
@@ -7647,6 +10865,19 @@
       }
     },
     "pcb.refill_zones": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "pcb.relations": {
       "params": {
         "additionalProperties": false,
         "properties": {

@@ -381,6 +381,10 @@ impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
+    /// Optional reference-only relations. Read the raw record until board format dispatch has
+    /// accepted the header. Older builds without relation support reject the field.
+    #[serde(default, deserialize_with = "present")]
+    relations: Option<Box<serde_json::value::RawValue>>,
     #[serde(default, deserialize_with = "present")]
     arcs: Option<Vec<crate::board::arc::ArcTrack>>,
     #[serde(default, deserialize_with = "present")]
@@ -1056,6 +1060,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     } else {
         BoardDocument {
             format: BOARD_FORMAT.into(),
+            relations: None,
             zones: None,
             rules: None,
             placement_origin: None,
@@ -1450,6 +1455,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
+    let relations = board
+        .relations
+        .as_deref()
+        .map(|raw| {
+            let record = serde_json::from_str::<crate::board::relations::Relations>(raw.get())
+                .map_err(|error| format!("{}: relations: {error}", board_path.as_deref().unwrap_or("board.json")))?;
+            record.validate().map_err(|error| format!("board.json: {error}"))?;
+            Ok::<_, String>(Arc::new(record))
+        })
+        .transpose()?;
     let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
     if !current && grouped != has_groups {
         return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
@@ -1635,6 +1650,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         baseline.validate_assets(project_data)?;
     }
+    Arc::make_mut(&mut project_data.board).relations = relations;
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Arc::make_mut(&mut project_data.board).rules = board.rules;
@@ -2580,8 +2596,8 @@ impl Write for BoardByteCounter {
     }
 }
 
-/// Check the native board document before adopting an edited board with copper, package maps
-/// or test-point marks. Use the native writer's header, record framing, serialized fields and closing bytes.
+/// Check the native board document before adopting an edited board with copper, package maps,
+/// test-point marks or board relations. Count the native writer's framing, fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
     board_header(&mut bytes, project)?;
@@ -2682,6 +2698,15 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
             }
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
+    }
+    // Relations are optional data under the current board format and are omitted when none exist.
+    if let Some(relations) = &board.relations {
+        bytes.write_all(b"  \"relations\": {\n    \"relations\": [\n").map_err(|error| error.to_string())?;
+        let mut first = true;
+        for relation in &relations.relations {
+            record(bytes, &mut first, relation)?;
+        }
+        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
     }
     if let Some(baseline) = &board.baseline {
         let encoded = baseline.encode()?;

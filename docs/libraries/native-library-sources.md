@@ -256,6 +256,20 @@ an obsolete request before editing. Run the board design checks after applying;
 this command does not repair routing. One Undo restores the prior package and
 mapping. Neither preview nor Apply writes to a library source.
 
+A board relation that names this footprint pins its old revision. Apply
+checks relations the same way as other board edits, but the preview's
+`acceptance` covers only the package change. If a relation would need a remap
+or would be lost, Apply returns `unavailable` with `details.reason` set to
+`remap_required` or `would_lose`. `details.rows` lists the affected relations.
+The board, revision and Undo history do not change. Delete those relations,
+preview and apply the revision again, then add the relations again. A relation
+on another footprint whose references do not change is not a remap or a loss.
+A changed pad can still short a copper island that holds any footprint named by
+a relation, including another one. Apply then returns `unavailable` with
+`details.reason` `affected_short`, and `details.rows.nets` names the two nets
+instead of relations. Nothing changes; resolve the short before you apply again.
+The desktop worker runs the same check before it checks save limits.
+
 ## Adopt non-geometric revisions
 
 With a project open, choose **Review library updates** in Parts Library, or

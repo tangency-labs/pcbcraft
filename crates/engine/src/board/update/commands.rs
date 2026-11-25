@@ -1,7 +1,10 @@
 //! Session-owned authority for bounded, nonpersistent board-update previews.
 
 use super::{Baseline, ComponentChange, PartInstanceState, Preview, SourceCapture, apply_candidate, preview};
-use crate::{CommandError, Project, Session};
+use crate::{
+    CommandError, Session,
+    board::relations::{self, Base, Disclosure, Prepared, RelationInput, ReviewSlot},
+};
 use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::{Value, json};
 use std::{
@@ -23,13 +26,19 @@ pub const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
 /// One session-local capability. It is deliberately absent from project codecs.
 #[derive(Debug)]
 pub(crate) struct CachedPlan {
-    token: Uuid,
-    revision: u64,
-    opening: u64,
-    snapshot: Arc<Project>,
+    base: Base,
     accepted: Arc<Baseline>,
     proposed: Baseline,
     changes: Preview,
+    payload: Payload,
+}
+
+#[derive(Debug)]
+enum Payload {
+    Blocked,
+    NoOp,
+    LegacyLazy,
+    Checked { prepared: Prepared, intent_digest: String },
 }
 
 /// Complete bounded review information without duplicating the whole project inspection.
@@ -52,9 +61,46 @@ pub struct BoardUpdatePreview<'a> {
     pub can_apply: bool,
     #[serde(rename = "component_details")]
     details: ComponentDetails<'a>,
+    /// Optional complete detail for relation-aware updates (omitted on legacy/no-detail reviews).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relation_detail: Option<&'a Disclosure>,
+    /// Certificate of the checked candidate, present only when relation-aware preparation occurred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate_digest: Option<&'a str>,
+    /// Digest of the typed choices bound to this checked candidate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intent_digest: Option<&'a str>,
 }
 
 impl<'a> BoardUpdatePreview<'a> {
+    /// Borrow the mandatory native fields, independently of any physical candidate.
+    fn native(base: &Base, accepted: &'a Baseline, proposed: &'a Baseline, changes: &'a Preview) -> Self {
+        Self {
+            plan_token: base.token,
+            revision: base.revision,
+            project: proposed.project,
+            board: proposed.board,
+            source: &proposed.source,
+            changes,
+            can_apply: changes.blockers.is_empty(),
+            details: ComponentDetails { proposed: &proposed.components, accepted: &accepted.components, changes: &changes.components },
+            relation_detail: None,
+            candidate_digest: None,
+            intent_digest: None,
+        }
+    }
+
+    /// Size the complete engine reply before installing authority; never truncate report rows.
+    fn check_bound(self) -> Result<(), CommandError> {
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            revision: u64,
+            board_update_preview: BoardUpdatePreview<'a>,
+        }
+        serde_json::to_writer(ReportSize { bytes: 0 }, &Envelope { revision: self.revision, board_update_preview: self })
+            .map_err(|error| CommandError::Unavailable(format!("board update preview is too large to review: {error}")))
+    }
+
     /// Resolve stable part metadata from this captured plan, including parts
     /// removed from the current schematic. It is safe to use for review labels.
     pub fn component(&self, id: u64) -> Option<&'a PartInstanceState> {
@@ -113,31 +159,43 @@ impl Serialize for ComponentDetails<'_> {
 impl CachedPlan {
     /// Require the exact immutable opening/input, not merely coincident UUIDs or revisions.
     fn matches(&self, session: &Session) -> bool {
-        self.revision == session.revision
-            && self.opening == session.history_root_revision
-            && session.project.as_ref().is_some_and(|project| Arc::ptr_eq(project, &self.snapshot))
+        self.base.matches(session)
     }
 
     /// Borrow the complete report for size checking or explicit preview inspection.
     fn report(&self) -> BoardUpdatePreview<'_> {
-        BoardUpdatePreview {
-            plan_token: self.token,
-            revision: self.revision,
-            project: self.proposed.project,
-            board: self.proposed.board,
-            source: &self.proposed.source,
-            changes: &self.changes,
-            can_apply: self.changes.blockers.is_empty(),
-            details: ComponentDetails { proposed: &self.proposed.components, accepted: &self.accepted.components, changes: &self.changes.components },
+        let mut report = BoardUpdatePreview::native(&self.base, &self.accepted, &self.proposed, &self.changes);
+        if let Payload::Checked { prepared, intent_digest } = &self.payload {
+            report.relation_detail = (!prepared.disclosure.is_empty()).then_some(&prepared.disclosure);
+            report.candidate_digest = prepared.digest.as_deref();
+            report.intent_digest = Some(intent_digest);
         }
+        report
     }
 }
 
 impl Session {
+    /// Borrow only the current ECO tag of the common review slot.
+    fn eco_plan(&self) -> Option<&CachedPlan> {
+        match &self.update_plan {
+            Some(ReviewSlot::Eco(plan)) if plan.matches(self) => Some(plan),
+            _ => None,
+        }
+    }
+
     /// Borrow a current typed review for native UI. The returned view cannot
     /// outlive its session borrow; Apply still validates the opaque token again.
     pub fn cached_board_update(&self) -> Option<BoardUpdatePreview<'_>> {
-        self.update_plan.as_ref().filter(|plan| plan.matches(self)).map(CachedPlan::report)
+        self.eco_plan().map(CachedPlan::report)
+    }
+
+    /// Expose the retained Arc to exact-candidate tests, not to the public command API.
+    #[cfg(test)]
+    pub(crate) fn checked_eco_candidate(&self) -> Option<&Arc<crate::Project>> {
+        match &self.eco_plan()?.payload {
+            Payload::Checked { prepared, .. } => Some(&prepared.snapshot),
+            _ => None,
+        }
     }
 
     /// Inspect the current bounded review report. Cached data is runtime-only;
@@ -149,8 +207,8 @@ impl Session {
     /// Publish a small preview summary in ordinary inspection, avoiding repeated
     /// full net membership responses after unrelated inspect operations.
     pub fn board_update_summary(&self) -> Option<Value> {
-        let plan = self.update_plan.as_ref().filter(|plan| plan.matches(self))?;
-        Some(json!({"plan_token":plan.token,"board":plan.proposed.board,"revision":plan.revision,
+        let plan = self.eco_plan()?;
+        Some(json!({"plan_token":plan.base.token,"board":plan.proposed.board,"revision":plan.base.revision,
             "component_changes":plan.changes.components.len(),"removed_nets":plan.changes.removed_nets.len(),
             "added_nets":plan.changes.added_nets.len(),"blockers":plan.changes.blockers,"can_apply":plan.changes.blockers.is_empty()}))
     }
@@ -160,6 +218,8 @@ impl Session {
     pub(crate) fn preview_board_update(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
+        let target = snapshot.resolve_board(params.get("board").and_then(Value::as_str))?;
+        let choices = relations::choices(params.get("remap_choices"))?;
         let source = super::capture_source(&snapshot)?;
         let accepted = if let Some(baseline) = &snapshot.board.baseline {
             Arc::clone(baseline)
@@ -173,45 +233,81 @@ impl Session {
         };
         let proposed = Baseline::proposed(&snapshot, &Baseline::current_choices(&snapshot), source).map_err(CommandError::InvalidParams)?;
         let changes = preview(&accepted, &proposed).map_err(CommandError::InvalidParams)?;
-        let plan = CachedPlan {
-            token: crate::fresh_id()?,
-            revision: self.revision,
-            opening: self.history_root_revision,
-            snapshot,
-            accepted,
-            proposed,
-            changes,
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::EcoDiff);
+        let base = Base::new(self, snapshot.clone(), target)?;
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::NativeReportBound);
+        BoardUpdatePreview::native(&base, &accepted, &proposed, &changes).check_bound()?;
+        let payload = if !changes.blockers.is_empty() {
+            Payload::Blocked
+        } else if changes.is_noop() {
+            if !choices.is_empty() {
+                return Err(CommandError::InvalidParams("a no-op board update cannot stage remaps".into()));
+            }
+            Payload::NoOp
+        } else if snapshot.board.relations.is_none() && choices.is_empty() {
+            Payload::LegacyLazy
+        } else {
+            use sha2::{Digest, Sha256};
+            let intent = serde_json::to_vec(&json!({"project":target.project,"board":target.board,"source":proposed.source,"choices":choices}))
+                .map_err(relations::commands::invalid)?;
+            let (next, _) = apply_candidate(&snapshot, &accepted, &proposed).map_err(CommandError::InvalidParams)?;
+            let prepared = self.prepare_with(next, &RelationInput { review: true, choices, ..RelationInput::default() })?;
+            Payload::Checked { prepared, intent_digest: format!("{:x}", Sha256::digest(intent)) }
         };
-        serde_json::to_writer(ReportSize { bytes: 0 }, &plan.report())
-            .map_err(|error| CommandError::Unavailable(format!("board update preview is too large to review: {error}")))?;
-        self.update_plan = Some(plan);
+        let plan = CachedPlan { base, accepted, proposed, changes, payload };
+        if matches!(&plan.payload, Payload::Checked { .. }) {
+            #[cfg(test)]
+            relations::probes::hit(relations::probes::Op::CheckedReportBound);
+            plan.report().check_bound()?;
+            #[cfg(test)]
+            relations::probes::hit(relations::probes::Op::RetainChecked);
+        }
+        self.update_plan = Some(ReviewSlot::Eco(plan));
         Ok(())
     }
 
-    /// Validate a session-local capability, rederive the complete physical candidate
-    /// and check native persistence bounds before publishing exactly one history step.
+    /// Validate the exact review and both consent sets. Checked Apply publishes only its
+    /// retained candidate; only LegacyLazy derives a physical candidate on Apply.
     pub(crate) fn apply_board_update(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let token = plan_token(params)?;
-        let plan = self
-            .update_plan
-            .as_ref()
-            .filter(|plan| plan.token == token)
-            .ok_or_else(|| CommandError::Unavailable("unknown or replaced board update preview; preview again".into()))?;
-        if !plan.matches(self) {
-            self.update_plan = None;
+        let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+        let Some(ReviewSlot::Eco(plan)) = &self.update_plan else {
+            return Err(CommandError::Unavailable("unknown or replaced board update preview; preview again".into()));
+        };
+        if plan.base.token != token {
+            return Err(CommandError::Unavailable("unknown or replaced board update preview; preview again".into()));
+        }
+        if !plan.matches(self) || plan.base.target != target {
             return Err(CommandError::Unavailable("board update preview is stale; preview again".into()));
         }
-        if !plan.changes.blockers.is_empty() {
-            return Err(CommandError::Unavailable("resolve the preview's package blockers and preview again".into()));
+        match &plan.payload {
+            Payload::Blocked => return Err(CommandError::Unavailable("resolve the preview's package blockers and preview again".into())),
+            Payload::Checked { prepared, .. } => {
+                prepared.disclosure.consent(params, true)?;
+                let Some(ReviewSlot::Eco(CachedPlan { payload: Payload::Checked { prepared, .. }, .. })) = self.update_plan.take() else {
+                    return Err(relations::commands::stale());
+                };
+                self.publish(prepared);
+            }
+            Payload::LegacyLazy => {
+                Disclosure::default().consent(params, true)?;
+                if plan.base.snapshot.board.relations.is_some() {
+                    return Err(relations::commands::stale());
+                }
+                let (next, _) = apply_candidate(&plan.base.snapshot, &plan.accepted, &plan.proposed).map_err(CommandError::InvalidParams)?;
+                #[cfg(test)]
+                relations::probes::hit(relations::probes::Op::CandidateEncode);
+                crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
+                self.change(next)?;
+            }
+            Payload::NoOp => {
+                Disclosure::default().consent(params, true)?;
+                self.update_plan = None;
+            }
         }
-        if plan.changes.is_noop() {
-            self.update_plan = None;
-            return Ok(());
-        }
-        let (next, _) = apply_candidate(&plan.snapshot, &plan.accepted, &plan.proposed).map_err(CommandError::InvalidParams)?;
-        crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
-        self.change(next)?;
         Ok(())
     }
 
@@ -219,7 +315,7 @@ impl Session {
     /// client's newer preview or make an authored edit appear undone.
     pub(crate) fn cancel_board_update(&mut self, params: &Value) -> Result<(), CommandError> {
         let token = plan_token(params)?;
-        if !self.update_plan.as_ref().is_some_and(|plan| plan.token == token) {
+        if !self.eco_plan().is_some_and(|plan| plan.base.token == token) {
             return Err(CommandError::Unavailable("unknown or replaced board update preview".into()));
         }
         self.update_plan = None;

@@ -149,6 +149,67 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
     }
 }
 
+/// Part placement and package edits use their real native inner assignments, not a second relation preparation.
+#[test]
+fn a_nest_native_part_placement_and_package_edit_prepare_only_outer() {
+    use crate::board::{
+        relations::{
+            commands::LIST,
+            probes::trace,
+            tests::{Observe, add, assert_stage, origin, pick, run},
+        },
+        update,
+    };
+    use std::sync::Arc;
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    let mut docs = documents();
+    let mut alternate: Json = serde_json::from_str(&docs["footprints/resistor-0603.json"]).unwrap();
+    alternate["id"] = json!("resistor-alt");
+    docs.insert("footprints/resistor-alt.json".into(), alternate.to_string());
+    let mut part: Json = serde_json::from_str(&docs["parts/resistor.json"]).unwrap();
+    part["packages"]["alternate"] = part["packages"]["0603"].clone();
+    part["packages"]["alternate"]["footprint"]["id"] = json!("resistor-alt");
+    part["packages"]["alternate"]["mapping"] = json!({"1":["2"],"2":["1"]});
+    docs.insert("parts/resistor.json".into(), part.to_string());
+    s.execute(sources::LOAD, &json!({"source":"native-parts","documents":docs})).unwrap();
+    let mut params = placement(&s, false);
+    params["package"] = json!("0603");
+    apply(&mut s, PLACE_PART, params.clone());
+    let id = s.project().unwrap().components().next().unwrap().id();
+    apply(&mut s, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"component":id,"x_nm":3_000_000,"y_nm":0}));
+    let reference = pick(&mut s, 0, "pad.center", Some("1"));
+    add(&mut s, "horizontal", origin(), reference);
+    params["x_nm"] = json!(10_000_000);
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let history = s.undo.len();
+    let (_, ops) = trace(|| run(&mut s, PLACE_PART, params).unwrap());
+    // Part placement is a sheet command: its symbol and package steps and the sheet
+    // transaction each stage raw once, and only the project change prepares the outer stage.
+    assert_stage(&ops, 3, 1, 1);
+    assert_eq!(s.undo.len(), history + 1);
+    run(&mut s, update::INITIALIZE_BASELINE, json!({})).unwrap();
+    observer.0.lock().unwrap().clear();
+    let pose = s.project().unwrap().board.footprints().to_vec();
+    let history = s.undo.len();
+    let (_, ops) = trace(|| run(&mut s, SET_PART, json!({"component":id,"package":"alternate"})).unwrap());
+    assert_stage(&ops, 1, 1, 1);
+    assert_eq!(s.undo.len(), history + 1);
+    assert_eq!(observer.0.lock().unwrap()[0].command, SET_PART);
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+    assert_eq!(s.project().unwrap().board.footprints(), pose);
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+    let (r, ops) = trace(|| run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap()["board_update_preview"].clone());
+    assert_stage(&ops, 0, 1, 0);
+    let loss = &r["relation_detail"]["losses"][0]["id"];
+    assert!(loss.is_string());
+    let (_, ops) =
+        trace(|| run(&mut s, update::APPLY_UPDATE, json!({"plan_token":r["plan_token"],"accept_loss":[loss],"confirm_remaps":[]})).unwrap());
+    assert_stage(&ops, 0, 0, 1);
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "lost");
+}
+
 /// Requirement edits retain the chosen MPN and expose incompatibility; choosing an unsuitable MPN is refused.
 #[test]
 fn manufacturer_specifications_are_distinct_from_instance_requirements() {

@@ -138,7 +138,8 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
 }
 
 /// Both island paths give the exhaustive eligible-pair result below, at and above the switch
-/// size, preserving separate legacy pad roots until the pad-contact phase, at sampled budgets.
+/// size. Native pad sweeping and the reused builder preserve the separate routed-only groups
+/// and match the resumable pad-contact merge at sampled budgets.
 #[test]
 fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
     for items in [PAIRWISE_BELOW - 1, PAIRWISE_BELOW, PAIRWISE_BELOW + 1] {
@@ -147,6 +148,11 @@ fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
         assert_eq!(compares_every_pair(items), items < PAIRWISE_BELOW, "{items} items");
         let expected = exhaustive(IslandBuilder::new(&lands, &tracks, &vias), items).finish(&lands, &tracks, &vias);
         let pads = exhaustive(IslandBuilder::pad_contacts(&lands, &tracks, &vias, &expected.1), lands.len()).finish(&lands, &tracks, &vias);
+        let copper_items = CopperItems { lands: &lands, tracks: &tracks, vias: &vias, arcs: &[] };
+        assert_eq!(build_islands(copper_items, false), Ok(expected.clone()));
+        assert_eq!(build_islands(copper_items, true), Ok(pads.clone()));
+        assert_eq!(IslandBuilder::complete(&lands, &tracks, &vias, false).finish(&lands, &tracks, &vias), expected);
+        assert_eq!(IslandBuilder::complete(&lands, &tracks, &vias, true).finish(&lands, &tracks, &vias), pads);
         for pairwise in [true, false] {
             for budget in [1, 7, usize::MAX] {
                 let mut builder = IslandBuilder::new(&lands, &tracks, &vias).on_path(pairwise);

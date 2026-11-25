@@ -135,6 +135,12 @@ The result is `revision` plus `merge_tracks`: `before` and `after` track records
 unchanged; otherwise the merge is one undo step. A report that would encode to more
 than 15 MiB is refused with `cap_exceeded` before anything changes, dry run or not, so
 the reply always fits the live editor's limit; merge fewer tracks at a time.
+On a board with relations, an applied merge checks relation references the same way
+as other board edits. Deleted duplicates count as removed copper: if a changed island
+that holds a relation's footprint is shorted, the merge is refused with
+`affected_short` and nothing changes. A merge has no relation review, so a remap or
+lost reference would be refused with `remap_required` or `would_lose` and
+`details.rows`.
 
 `pcb.add_via` places one standalone through via from `at`, with optional `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad

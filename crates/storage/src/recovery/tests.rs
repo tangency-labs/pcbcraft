@@ -160,6 +160,144 @@ fn setup_preview_token_does_not_enter_recovery_records() {
     assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
 }
 
+/// A checked Cut writes one native patch; recovery reads its lost display witness from
+/// F1 bytes and never replays preview authority, clipboard adoption or placement edits.
+/// A subsequent advisory is read-only and does not veto an ordinary native folder Save.
+#[test]
+fn checked_relation_cut_recovers_lost_witness_and_exact_native_documents() {
+    use pcbcraft_engine::{PLACE_FOOTPRINT, persistence::encode_documents};
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::default();
+    let run = |s: &mut Session, id: &str, mut args: Value| {
+        if pcbcraft_engine::command(id).unwrap().params.iter().any(|p| p.name == "expected_revision") {
+            args["expected_revision"] = json!(s.revision());
+        }
+        s.execute(id, &args)
+    };
+    run(&mut s, "project.new", json!({"create_board":true})).unwrap();
+    run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0})).unwrap();
+    let symbol = last_symbol(&s);
+    run(&mut s, PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":5_000_000,"y_nm":1_000_000}))
+        .unwrap();
+    let project = s.project().unwrap();
+    let fp = project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().next().unwrap();
+    let feature = run(&mut s, "pcb.feature_catalog", json!({"fp":fp})).unwrap()["features"][0]["reference"].clone();
+    let row = run(&mut s, "pcb.add_relation", json!({"relation":{"kind":"horizontal","refs":[{"tag":"board.origin"},feature]}})).unwrap();
+    let witness = run(&mut s, "pcb.relations", json!({})).unwrap()["relations"][0]["measure"]["witnesses"].clone();
+    let recorder = Arc::new(JournalRecorder::start(dir.path().to_owned(), "entry".to_owned()).unwrap());
+    s.observe_edits(Some(recorder.clone()));
+    let args = json!({"items":{"footprints":[fp]}});
+    assert!(run(&mut s, "pcb.cut", args.clone()).is_err());
+    let report = run(&mut s, "pcb.preview_relation", json!({"intent":{"command":"pcb.cut","params":args}})).unwrap();
+    let preview = &report["relation_preview"];
+    let approval = json!({"token":preview["token"],"accept_loss":[row["id"]],"confirm_remaps":[]});
+    let result = run(&mut s, "pcb.apply_relation_preview", approval.clone()).unwrap();
+    assert!(result["clipboard"].is_string());
+    assert!(run(&mut s, "pcb.apply_relation_preview", approval).is_err());
+    s.observe_edits(None);
+    Arc::try_unwrap(recorder).unwrap().finish().unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert!(recovered.stop.is_none());
+    assert_eq!(recovered.commands, ["pcb.cut"]);
+    assert_eq!(recovered.documents, encode_documents(s.snapshot().unwrap()).unwrap());
+    let mut opened = Session::default();
+    opened.open_snapshot(recovered.project);
+    let findings = run(&mut opened, "pcb.relations", json!({})).unwrap();
+    assert_eq!(findings["relations"][0]["status"], "lost");
+    assert_eq!(findings["relations"][0]["last_resolved"], witness);
+    assert!(findings["relations"][0].get("measure").is_none());
+    let project = opened.project().unwrap();
+    assert_eq!(project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().len(), 0);
+    let captured = opened.snapshot().unwrap();
+    let revision = opened.revision();
+    let advisory = run(&mut opened, pcbcraft_engine::CHECK_DESIGN, json!({})).unwrap();
+    assert_eq!(advisory["design_check"]["relations"], findings["relations"]);
+    assert!(Arc::ptr_eq(&captured, &opened.snapshot().unwrap()));
+    assert_eq!(opened.revision(), revision);
+    let save = encode_documents(opened.snapshot().unwrap()).unwrap();
+    assert_eq!(save, recovered.documents);
+    let folder = dir.path().join("after-check");
+    crate::save(&folder, None, &save, &mut |_| Ok(())).unwrap();
+    assert_eq!(crate::load(&folder).unwrap(), save);
+    opened.open_snapshot(crate::open(&folder).unwrap());
+    assert_eq!(run(&mut opened, pcbcraft_engine::CHECK_DESIGN, json!({})).unwrap()["design_check"]["relations"], findings["relations"]);
+}
+
+/// The normal storage editing-open, unlike raw decode, normalizes the proven bundled pin.
+#[test]
+fn native_folder_open_normalizes_exact_relation_pins_then_saves_without_motion() {
+    use pcbcraft_engine::{library::sources::symbol_digest, persistence::encode_documents};
+    let dir = tempfile::tempdir().unwrap();
+    let source_folder = dir.path().join("before");
+    let saved_folder = dir.path().join("after");
+    let run = |s: &mut Session, id: &str, mut args: Value| {
+        if pcbcraft_engine::command(id).unwrap().params.iter().any(|p| p.name == "expected_revision") {
+            args["expected_revision"] = json!(s.revision());
+        }
+        s.execute(id, &args).unwrap()
+    };
+    let mut s = Session::default();
+    run(&mut s, "project.new", json!({"create_board":true}));
+    let source = "bundled-starter";
+    let items = s.libraries().source_items(source);
+    let symbol = items.iter().filter(|i| i.key.id == "connector").max_by_key(|i| i.key.revision).unwrap().symbol().unwrap();
+    let footprint = items.iter().filter(|i| i.key.id == "header-1x02-254").max_by_key(|i| i.key.revision).unwrap().footprint().unwrap();
+    run(
+        &mut s,
+        "schematic.place_symbol",
+        json!({"library":"starter","definition":"connector","definition_revision":symbol.revision(),"definition_digest":symbol_digest(&symbol).unwrap(),"x_nm":0,"y_nm":0}),
+    );
+    let component = s.project().unwrap().components().next().unwrap().id();
+    let mapping = s.project().unwrap().default_footprint_mapping(&component, &footprint).unwrap();
+    run(
+        &mut s,
+        "pcb.assign_footprint",
+        json!({"component":component,"library":"starter","definition":footprint.id,"definition_revision":footprint.revision,"mapping":mapping}),
+    );
+    run(&mut s, "pcb.place_assigned_footprint", json!({"component":component,"x_nm":5_000_000,"y_nm":1_000_000}));
+    let pose = |s: &Session| {
+        let p = s.project().unwrap();
+        let view = p.board_view(p.board_target().unwrap()).unwrap().footprints().next().unwrap();
+        (view.id, view.position, view.rotation, view.bottom)
+    };
+    let placed = pose(&s);
+    let features = run(&mut s, "pcb.feature_catalog", json!({"fp":placed.0}));
+    let catalog = features["features"].as_array().unwrap();
+    for tag in ["fp.origin", "pad.center"] {
+        let reference = &catalog.iter().find(|r| r["reference"]["tag"] == tag).unwrap()["reference"];
+        assert_eq!(reference["def"]["library"], "starter");
+        run(&mut s, "pcb.add_relation", json!({"relation":{"kind":"horizontal","refs":[{"tag":"board.origin"},reference]}}));
+    }
+    let list = |s: &mut Session| run(s, "pcb.relations", json!({}))["relations"].as_array().unwrap().clone();
+    let before = list(&mut s);
+    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    crate::save(&source_folder, None, &original, &mut |_| Ok(())).unwrap();
+    s.open_snapshot(crate::open(&source_folder).unwrap());
+    let opened = list(&mut s);
+    assert_eq!(opened.len(), 2);
+    for (old, next) in before.iter().zip(&opened) {
+        assert_eq!(next["id"], old["id"]);
+        assert_eq!(next["status"], "reference");
+        assert_eq!(next["measure"], old["measure"]);
+        let mut expected = old["refs"].clone();
+        expected[1]["def"]["library"] = json!("basic-components");
+        assert_eq!(next["refs"], expected);
+    }
+    assert_eq!(pose(&s), placed);
+    let label = json!({"x_nm":2_000_000,"y_nm":3_000_000});
+    run(&mut s, "pcb.edit_relation", json!({"id":opened[0]["id"],"edit":{"label":label}}));
+    let edited = list(&mut s);
+    assert_eq!(edited[0]["label"], label);
+    assert_eq!(edited[0]["measure"], before[0]["measure"]);
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    crate::save(&saved_folder, None, &saved, &mut |_| Ok(())).unwrap();
+    s.open_snapshot(crate::open(&saved_folder).unwrap());
+    assert_eq!(list(&mut s), edited);
+    assert_eq!(pose(&s), placed);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+    assert_eq!(crate::load(&source_folder).unwrap(), original);
+}
+
 /// A journal with the given edits applied on top of a new project, and the documents after each.
 fn journal_with(dir: &Path, edits: usize) -> (EditJournal, Vec<Documents>) {
     let mut session = Session::default();

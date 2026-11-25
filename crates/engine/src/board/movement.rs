@@ -141,7 +141,7 @@ impl Session {
             board.vias = vias;
         }
         let next = crate::clipboard::validate_candidate(next)?;
-        self.change(next)
+        self.change_with_native_poses(next, plan.items.footprints.iter().filter_map(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
     }
 }
 

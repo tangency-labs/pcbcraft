@@ -554,6 +554,16 @@ encoding refuses zone intent; folders, archives and recovery use the production
 split codec. Deleting the last zone removes the extension without dropping the
 registry's retained identities.
 
+### Reference-only board relations
+
+Any supported board header may carry a nonempty `relations` record for stored
+reference-only dimensions. The record is omitted when the last relation is
+removed and does not select a format. Native folder and packed saves still write
+`pcbcraft-board/43`, and a board can store both `relations` and `test_points`.
+Readers without relation support reject the unknown field rather than dropping
+it. The single-document diagnostic encoder also refuses relations. As with other
+non-teardrop board edits, relation edits are refused while teardrops exist.
+
 ### Test-point records
 
 The current board format `pcbcraft-board/43` adds an optional `test_points`

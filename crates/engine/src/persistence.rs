@@ -508,11 +508,14 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, active footprint and designator locks, test-point marks, occurrence IDs,
-    /// sheet paper, net classes, and part groups require split documents or an archive; refuse loss.
+    /// drawings, rotation, active footprint and designator locks, test-point marks, board relations,
+    /// occurrence IDs, sheet paper, net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.board.has_test_points() {
             return Err("legacy diagnostic encoding cannot represent test-point marks; use split documents".into());
+        }
+        if project.board.relations.is_some() {
+            return Err("Board relations require native split documents or an archive.".into());
         }
         if project.components.values().any(|part| part.designator_locked) {
             return Err("Designator locks require split project format 51 or a packed archive.".into());

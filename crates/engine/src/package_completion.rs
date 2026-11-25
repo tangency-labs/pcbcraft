@@ -33,6 +33,12 @@ type Slots = BTreeMap<usize, BTreeSet<(bool, u64)>>;
 /// Planned unit transfers and skipped-part reports, or `None` when preparation was cancelled.
 type MovePlan<'a> = Option<(Vec<Move<'a>>, Vec<Value>)>;
 
+/// Package completion has no relation review, so it cannot accept a relation loss or remap.
+pub(crate) const WOULD_LOSE: &str = "Package completion would lose board relation references. \
+    Delete the relations listed in the details, complete the packages, then add them again.";
+pub(crate) const REMAP_REQUIRED: &str = "Package completion changes references that board relations pin. \
+    Delete the relations listed in the details, complete the packages, then add them again.";
+
 /// Runtime authority for a deferred package completion, independent of display names or boards.
 #[derive(Clone, Debug)]
 pub struct PackageCompletionSource {
@@ -41,6 +47,7 @@ pub struct PackageCompletionSource {
     opening: u64,
     revision: u64,
     defer_net_reconciliation: bool,
+    relation_stage: crate::board::relations::RelationStage,
 }
 
 impl PackageCompletionSource {
@@ -145,10 +152,17 @@ impl PackageCompletionJob {
             if is_cancelled() {
                 return Ok(None);
             }
-            let (prepared, highest) =
-                Session::prepare_change_from_snapshot(Some(before), self.source.defer_net_reconciliation, next, |candidate, _| {
-                    candidate.rekey_nets(before, &terminals)
-                })?;
+            // The shared detached preparation finalizes relation references after net
+            // reconciliation, so a dry run reports the refusal an Apply would meet.
+            let (prepared, highest) = Session::prepare_change_from_snapshot(
+                Some(before),
+                self.source.revision,
+                self.source.defer_net_reconciliation,
+                self.source.relation_stage,
+                next,
+                |candidate, _| candidate.rekey_nets(before, &terminals),
+                |disclosure| disclosure.refuse_decisions(WOULD_LOSE, REMAP_REQUIRED),
+            )?;
             if self.dry_run {
                 None
             } else {
@@ -189,6 +203,7 @@ impl Session {
                 opening: self.history_root_revision(),
                 revision: self.revision(),
                 defer_net_reconciliation: self.defer_net_reconciliation,
+                relation_stage: self.relation_stage,
             },
             params: params.clone(),
             sheet,

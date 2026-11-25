@@ -184,6 +184,7 @@ async fn delete_candidate(project: &Project, tracks: &[Uuid], vias: &[Uuid]) -> 
         return Err(super::locks::locked(kind, id));
     }
     let board = Board {
+        relations: source.relations.clone(),
         zones: copy_items(&source.zones).await,
         ownership: source.ownership.clone(),
         baseline: source.baseline.clone(),

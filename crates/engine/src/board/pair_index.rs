@@ -153,13 +153,31 @@ impl PairIndex {
     /// Visit one branch or one leaf entry. Only lower-numbered neighbors are emitted, so even
     /// though spatial order differs from source order every unordered pair is considered once.
     pub(super) fn next(&self, source: usize, search: &mut Search) -> Hit {
-        let target = self.bounds[source];
+        self.next_in(self.bounds[source], source, search)
+    }
+
+    /// Query the same broad phase for an external contour. Visit only overlapping bounds,
+    /// stopping on the first exact match from the caller's native contact predicate.
+    pub(super) fn any_overlapping(&self, contour: &Contour, search: &mut Search, mut matches: impl FnMut(usize) -> bool) -> bool {
+        let target = Bounds::from_contour(contour);
+        self.begin(search, 0.);
+        loop {
+            match self.next_in(target, self.len(), search) {
+                Hit::Candidate(item) if matches(item) => return true,
+                Hit::Done => return false,
+                _ => {}
+            }
+        }
+    }
+
+    /// Step a single source or external query with an exclusive index cutoff.
+    fn next_in(&self, target: Bounds, cutoff: usize, search: &mut Search) -> Hit {
         if let Some(position) = search.leaf.next() {
             let candidate = self.order[position];
-            return if candidate < source && target.near(self.bounds[candidate], search.margin) { Hit::Candidate(candidate) } else { Hit::Pending };
+            return if candidate < cutoff && target.near(self.bounds[candidate], search.margin) { Hit::Candidate(candidate) } else { Hit::Pending };
         }
         let Some(node) = search.stack.pop().map(|id| &self.nodes[id]) else { return Hit::Done };
-        if node.min_item < source && target.near(node.bounds, search.margin) {
+        if node.min_item < cutoff && target.near(node.bounds, search.margin) {
             match &node.contents {
                 Contents::Children(left, right) => search.stack.extend([*right, *left]),
                 Contents::Leaf(range) => search.leaf = range.clone(),

@@ -36,6 +36,8 @@ pub const DEFAULT_MIN_ANNULAR_RING_NM: i64 = 100_000;
 /// Violations listed per report; the counts still cover every finding.
 const MAX_LISTED: usize = 1000;
 
+pub use super::relations::advisory::RelationAdvisory;
+
 /// The shared effective board defaults; hard limits and preferences have distinct fields.
 pub use super::rules::Values as Rules;
 
@@ -118,6 +120,9 @@ pub struct Report {
     pub violations: Vec<Violation>,
     pub counts: BTreeMap<Kind, usize>,
     pub total: usize,
+    /// Read-only results from the same checked snapshot. Never included in native counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relations: Option<RelationAdvisory>,
 }
 
 /// Count every finding while retaining only the first canonical report page. The sequence
@@ -149,9 +154,18 @@ impl Findings {
             }
         }
     }
-    /// Produce the deterministic capped report after every phase has completed.
-    fn finish(self, rules: Rules, sources: BTreeMap<String, super::rules::Source>) -> Report {
-        Report { rules, sources, class_rules: None, violations: self.listed.into_values().collect(), counts: self.counts, total: self.total }
+    /// Finish either checker with the advisory from its exact board snapshot. Both sections
+    /// are bounded independently; the advisory cannot change native findings or authored state.
+    fn finish(self, view: BoardView<'_>, effective: super::rules::Effective, class_rules: Option<super::class_rules::Context>) -> Report {
+        Report {
+            rules: effective.values,
+            sources: effective.sources,
+            class_rules,
+            violations: self.listed.into_values().collect(),
+            counts: self.counts,
+            total: self.total,
+            relations: RelationAdvisory::capture(view.project()),
+        }
     }
 }
 
@@ -302,7 +316,7 @@ impl BoardView<'_> {
                     .collect(),
                 nets: Vec::new(),
             });
-            return found.finish(rules, effective.sources);
+            return found.finish(self, effective, None);
         }
         let geometry = BoardGeometry::new(self);
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
@@ -347,9 +361,7 @@ impl BoardView<'_> {
         self.check_outline(items, rules, class_rules.as_ref(), &mut found);
         self.check_courtyards(&mut found);
 
-        let mut report = found.finish(rules, effective.sources);
-        report.class_rules = class_rules;
-        report
+        found.finish(self, effective, class_rules)
     }
 
     /// Check authored track/via dimensions without preparing connectivity or changing state.
@@ -418,9 +430,9 @@ impl BoardView<'_> {
     /// Reports one [`Kind::Short`] violation per copper island that joins distinct intended nets,
     /// including direct pad contacts and arcs touching foreign copper. Listed violations are
     /// capped at [`MAX_LISTED`] (1,000); `report.total > report.violations.len()` indicates
-    /// truncation. Only `violations`, `counts` and `total` carry meaning on the returned
-    /// [`Report`] (`rules` is default and `sources` is empty). Does not run clearance, dimension,
-    /// outline or courtyard DRC checks; refuses teardrop boards.
+    /// truncation. The report carries the board's effective defaults and their sources, but
+    /// physical shorts do not consult class-specific rules, so `class_rules` is absent. Does not
+    /// run clearance, dimension, outline or courtyard DRC checks; refuses teardrop boards.
     pub fn copper_shorts(self) -> Result<Report, String> {
         self.require_no_teardrops()?;
         let lands = super::track::lands(self);
@@ -450,7 +462,7 @@ impl BoardView<'_> {
             },
             &mut found,
         );
-        Ok(found.finish(Rules::default(), BTreeMap::new()))
+        Ok(found.finish(self, self.effective_rules(), None))
     }
 
     /// Report one short per physical island containing pads from distinct intended nets.

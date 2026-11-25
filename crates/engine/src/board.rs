@@ -39,6 +39,7 @@ pub mod output_recipe;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
+pub(crate) mod relations;
 pub mod route;
 pub mod rules;
 pub mod setup;
@@ -373,6 +374,7 @@ pub fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 /// Board-local placements and immutable definitions, indexed independently from view state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Board {
+    pub(crate) relations: Option<Arc<relations::Relations>>,
     pub(crate) zones: Vec<zones::Zone>,
     pub(crate) ownership: identity::Ownership,
     pub(crate) baseline: Option<Arc<update::Baseline>>,
@@ -399,6 +401,49 @@ pub(crate) struct Board {
     by_component: BTreeMap<u64, usize>,
 }
 impl Board {
+    /// Return whether two boards have identical physical state, ignoring reference-only
+    /// `relations`. Exhaustively destructures `Board` so new physical fields are never missed.
+    pub(crate) fn same_physical(&self, other: &Self) -> bool {
+        let Self {
+            relations: _,
+            zones,
+            ownership,
+            baseline,
+            assignments,
+            outline,
+            drawings,
+            setup,
+            silkscreen,
+            rules,
+            placement_origin,
+            assembly_profiles,
+            tracks,
+            vias,
+            arcs,
+            teardrops,
+            definitions,
+            footprints,
+            by_component,
+        } = self;
+        zones == &other.zones
+            && ownership == &other.ownership
+            && baseline == &other.baseline
+            && assignments == &other.assignments
+            && outline == &other.outline
+            && drawings == &other.drawings
+            && setup == &other.setup
+            && silkscreen == &other.silkscreen
+            && rules == &other.rules
+            && placement_origin == &other.placement_origin
+            && assembly_profiles == &other.assembly_profiles
+            && tracks == &other.tracks
+            && vias == &other.vias
+            && arcs == &other.arcs
+            && teardrops == &other.teardrops
+            && definitions == &other.definitions
+            && footprints == &other.footprints
+            && by_component == &other.by_component
+    }
     /// Return placement records in stable ID order for independently diffable saves.
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints

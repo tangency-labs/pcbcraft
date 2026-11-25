@@ -236,6 +236,7 @@ impl Session {
             revision: self.revision,
             history_root_revision: self.history_root_revision,
             defer_net_reconciliation: true,
+            relation_stage: crate::board::relations::RelationStage::Raw,
             ..Self::default()
         };
         transaction.apply_inner(id, params)?;
