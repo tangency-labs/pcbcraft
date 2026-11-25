@@ -329,14 +329,16 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
             members.into_iter().filter(|end| !matches!(end, WireEndpoint::Junction(_))).collect()
         };
         let (members_in, members_out) = (anchors(members_in), anchors(members_out));
-        // A cut wire leaves a branch on the parent. A remote anchor can keep a connection
-        // that is already global, but cannot serve as the hub for wiring that branch back in.
-        let needs_parent_hub = cut_nets.contains(&index);
         let name_at = |end: &WireEndpoint, parent_only: bool| {
             globals.get(end).filter(|(_, sheet)| !parent_only || *sheet == project.sheet_index).map(|(name, _)| name.as_str())
         };
         let names = |members: &[WireEndpoint], parent_only| -> BTreeSet<_> { members.iter().filter_map(|end| name_at(end, parent_only)).collect() };
-        let shared = names(&members_in, false).intersection(&names(&members_out, needs_parent_hub)).next().map(|name| (*name).to_owned());
+        let inside_names = names(&members_in, false);
+        // A branch can reach the selection through a cut wire or through named contacts
+        // with no wire at all. A remote anchor cannot serve as the parent's wiring hub.
+        let needs_parent_hub =
+            cut_nets.contains(&index) || (!inside_names.is_empty() && members_out.iter().any(|end| on_sheet(project, project.sheet_index, *end)));
+        let shared = inside_names.intersection(&names(&members_out, needs_parent_hub)).next().map(|name| (*name).to_owned());
         let listed = |members: &[WireEndpoint]| -> Vec<Value> { members.iter().map(|end| end.inspect()).collect() };
         if let Some(name) = shared {
             let anchor = |members: &[WireEndpoint], parent_only| members.iter().copied().find(|end| name_at(end, parent_only) == Some(name.as_str()));
