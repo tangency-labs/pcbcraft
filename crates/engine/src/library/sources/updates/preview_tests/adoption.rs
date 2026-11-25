@@ -120,27 +120,79 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), adopted_bytes);
 }
 
-/// The footprint review does not authorize moving or clearing a test-point mark.
+/// Clearing both pad purposes and applying a reviewed package are separate edits.
+/// The via mark and routed copper survive each native round trip and history transition.
 #[test]
 fn footprint_revision_refuses_marked_pad_without_editing() {
     let (mut session, _, target) = package_fixture(|pad| pad.center.x_nm += 200_000, false, true);
+    let front = layer(&session, Side::Front);
+    edit(&mut session, ADD_TRACKS, json!({"layer":front,"width_nm":100_000,"points":[{"x_nm":100_000,"y_nm":0},{"x_nm":200_000,"y_nm":0}]}));
+    edit(&mut session, ADD_VIA, json!({"at":{"x_nm":650_000,"y_nm":0},"via_diameter_nm":120_000,"via_drill_nm":60_000}));
     let project = session.snapshot().unwrap();
-    let mut mark = json!({
-        "board": target["board"],
-        "target": {"kind":"pad","footprint":format!("footprint-{}", project.board.footprints()[0].id),"pad":"1"},
-        "purpose":"assembly", "sides":"top", "expected_revision":session.revision(),
-    });
-    session.apply(crate::SET_TEST_POINT, &mark).unwrap();
-    let mut params = reviewed(&mut session, &target);
-    params["mapping"] = json!({"1":"1","2":["2","9"]});
-    assert_apply_refused_without_edit(&mut session, &params, "Clear this footprint's pad test-point marks before applying a different revision.");
-
-    mark["sides"] = Value::Null;
-    mark["expected_revision"] = json!(session.revision());
-    session.apply(crate::SET_TEST_POINT, &mark).unwrap();
-    let mut params = reviewed(&mut session, &target);
-    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    let placement = project.board.footprints()[0].id;
+    let pad = json!({"kind":"pad","footprint":format!("footprint-{placement}"),"pad":"1"});
+    let via = json!({"kind":"via","via":project.board.vias[0].id});
+    let set_mark = |session: &mut Session, address: &Value, purpose: &str, sides: Value| {
+        edit(session, crate::SET_TEST_POINT, json!({"board":target["board"],"target":address,"purpose":purpose,"sides":sides}));
+    };
+    set_mark(&mut session, &via, "fabrication", json!("bottom"));
+    set_mark(&mut session, &pad, "assembly", json!("top"));
+    set_mark(&mut session, &pad, "fabrication", json!("top"));
+    let routed = session.snapshot().unwrap();
+    let via_mark = json!({"target":via,"flags":{"fabrication":"bottom"}});
+    let both = json!([{"target":pad,"flags":{"assembly":"top","fabrication":"top"}}, via_mark]);
+    let partial = json!([{"target":pad,"flags":{"fabrication":"top"}}, via_mark]);
+    let via_only = json!([via_mark]);
+    let save_and_reopen = |session: &Session, revision: u64, marks: &Value| {
+        let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
+        let path = crate::persistence::test_board_path(&bytes);
+        let text = std::str::from_utf8(&bytes[&path]).unwrap();
+        let fields = ["tracks", "vias", "test_points", "assignments", "footprints"]
+            .map(|key| text.find(format!("\n  \"{key}\": [").as_str()).unwrap());
+        assert!(fields.windows(2).all(|pair| pair[0] < pair[1]));
+        let board: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(&board["test_points"], marks);
+        let reopened = decode_documents(&bytes).unwrap();
+        assert_eq!(reopened.board.tracks, routed.board.tracks);
+        assert_eq!(reopened.board.vias, routed.board.vias);
+        let footprint = &reopened.board.footprints()[0];
+        assert_eq!(footprint.id, placement);
+        assert_eq!(footprint.definition_revision, revision);
+        assert_eq!(reopened.board.assignments[&footprint.component].definition_revision, revision);
+        assert_eq!(encode_documents(reopened).unwrap(), bytes);
+        bytes
+    };
+    let apply_params = |session: &mut Session| {
+        let mut params = reviewed(session, &target);
+        params["mapping"] = json!({"1":"1","2":["2","9"]});
+        params
+    };
+    let assert_refused = |session: &mut Session| {
+        let params = apply_params(session);
+        assert_apply_refused_without_edit(session, &params, "Clear this footprint's pad test-point marks before applying a different revision.");
+    };
+    let marked_bytes = save_and_reopen(&session, 1, &both);
+    assert_refused(&mut session);
+    set_mark(&mut session, &pad, "assembly", Value::Null);
+    let partial_bytes = save_and_reopen(&session, 1, &partial);
+    assert_refused(&mut session);
+    set_mark(&mut session, &pad, "fabrication", Value::Null);
+    let cleared_bytes = save_and_reopen(&session, 1, &via_only);
+    let params = apply_params(&mut session);
     session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+    let adopted_bytes = save_and_reopen(&session, 2, &via_only);
+
+    for (command, revision, marks, bytes) in [
+        ("edit.undo", 1, &via_only, &cleared_bytes),
+        ("edit.undo", 1, &partial, &partial_bytes),
+        ("edit.undo", 1, &both, &marked_bytes),
+        ("edit.redo", 1, &partial, &partial_bytes),
+        ("edit.redo", 1, &via_only, &cleared_bytes),
+        ("edit.redo", 2, &via_only, &adopted_bytes),
+    ] {
+        session.apply(command, &Value::Null).unwrap();
+        assert_eq!(&save_and_reopen(&session, revision, marks), bytes);
+    }
 }
 
 /// Link two board-eligible parts on terminal 1, leaving terminal 2 free for pad-only nets.
