@@ -1020,37 +1020,56 @@ fn erc_dialog_empty_state_says_no_problems_found() {
     h.get_by_label("Run again");
 }
 
-/// The dialog and live MCP read one report: MCP's `schematic.erc_report` returns the run the
-/// dialog showed, in the same finding order as its rows; an MCP rerun is what the dialog shows
-/// next; and after an MCP edit both say the report is stale. `check_no_connects` is unchanged.
+/// Live MCP can read the revision and findings shown in the open ERC dialog without rerunning
+/// the check or relaxing other modal refusals. An MCP rerun is what the dialog shows next;
+/// after an MCP edit both say the report is stale. `check_no_connects` is unchanged.
 #[test]
 fn erc_dialog_and_live_mcp_read_the_same_report() {
     use pcbcraft_engine::erc;
     let mut h = marked_editor();
     open_erc(&mut h);
-    click(&mut h, "Close");
+    h.get_by_label("Electrical rules check");
+    assert!(matches!(h.state().dialog, Dialog::NoConnects(_)));
     let (shown, _) = h.state().session.erc_report().unwrap();
-    let ctx = egui::Context::default();
+    let ctx = h.ctx.clone();
     let call = |h: &mut Harness<'static, PcbApp>, command: &str, params: Value| {
         let request = json!({"method":"engine.execute","params":{"command":command,"params":params,"inspect":false}});
         let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
-        pcbcraft_mcp::live::call_editor(&mut editor, &request).unwrap()
+        pcbcraft_mcp::live::call_editor(&mut editor, &request)
     };
-    let read = call(&mut h, erc::REPORT, json!({}));
+    let read = call(&mut h, erc::REPORT, json!({})).unwrap();
     assert_eq!(read, json!({"revision":shown.revision,"status":"current","erc_report":serde_json::to_value(&*shown).unwrap()}));
     assert!(Arc::ptr_eq(&shown, &h.state().session.erc_report().unwrap().0), "reading never reruns");
-    let keys = read["erc_report"]["rules"][0]["result"]["no_connect_check"]["findings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f["key"].clone())
-        .collect::<Vec<_>>();
+    let check = &read["erc_report"]["rules"][0]["result"]["no_connect_check"];
+    h.get_by_label(&format!("Revision {} · {}", read["revision"], erc::NO_CONNECT.title));
+    h.get_by_label(&format!("No-connect markers: {} · Findings: {}", check["total_markers"], check["total_findings"]));
+    let findings = check["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 3);
+    for (finding, pin) in findings.iter().zip(["2", "3", "4"]) {
+        assert_eq!(finding["target"]["terminal"], pin);
+        assert_eq!(finding["rule"], "unconnected_pin");
+        h.get_by_label(&format!("J1 pin {pin} · Unconnected pin"));
+    }
+    assert!(matches!(h.state().dialog, Dialog::NoConnects(_)));
+    for (command, params) in [
+        ("project.rename", json!({"name":"Changed"})),
+        ("file.save", json!({})),
+        (erc::RUN, json!({})),
+        (pcbcraft_engine::no_connect::CHECK, json!({})),
+    ] {
+        let error = call(&mut h, command, params).unwrap_err();
+        assert_eq!(error.code(), "unavailable");
+        assert!(error.message().starts_with("Finish the current dialog or file operation"), "{command}: {error}");
+    }
+    assert_eq!(h.state().session.revision(), shown.revision);
+    assert!(Arc::ptr_eq(&shown, &h.state().session.erc_report().unwrap().0), "the modal still prevents a rerun");
+    click(&mut h, "Close");
+
     let check = shown.no_connect().unwrap();
-    assert_eq!(keys, check.findings.iter().map(|f| json!(f.key)).collect::<Vec<_>>());
-    let focused = call(&mut h, pcbcraft_engine::no_connect::CHECK, json!({}));
+    let focused = call(&mut h, pcbcraft_engine::no_connect::CHECK, json!({})).unwrap();
     assert_eq!(focused["no_connect_check"], serde_json::to_value(check).unwrap());
 
-    let rerun = call(&mut h, erc::RUN, json!({}));
+    let rerun = call(&mut h, erc::RUN, json!({})).unwrap();
     let (latest, _) = h.state().session.erc_report().unwrap();
     assert!(!Arc::ptr_eq(&shown, &latest));
     assert_eq!(rerun["erc_report"], serde_json::to_value(&*latest).unwrap());
@@ -1063,8 +1082,8 @@ fn erc_dialog_and_live_mcp_read_the_same_report() {
     click(&mut h, "Close");
 
     let revision = h.state().session.revision();
-    call(&mut h, "project.rename", json!({"name":"Changed"}));
-    let stale = call(&mut h, erc::REPORT, json!({}));
+    call(&mut h, "project.rename", json!({"name":"Changed"})).unwrap();
+    let stale = call(&mut h, erc::REPORT, json!({})).unwrap();
     assert_eq!(stale, json!({"revision":h.state().session.revision(),"status":"stale","report_revision":revision,"rerun":erc::RUN}));
     let source = h.state().views.active.input(&h.state().session).unwrap();
     h.state_mut().dialog = Dialog::NoConnects(Box::new(crate::no_connect::Inspection { source }));
@@ -1072,6 +1091,11 @@ fn erc_dialog_and_live_mcp_read_the_same_report() {
     h.get_by_label("The schematic changed since this check. Run again to refresh.");
     h.get_by_label("Run again");
     assert!(h.query_by_label("Show J1 pin 2").is_none());
+
+    h.state_mut().dialog = Dialog::About;
+    let error = call(&mut h, erc::REPORT, json!({})).unwrap_err();
+    assert_eq!(error.code(), "unavailable");
+    assert!(error.message().starts_with("Finish the current dialog or file operation"), "{error}");
 }
 
 /// Releasing the source view's input (focus, layout or host changes do this) at an unchanged
