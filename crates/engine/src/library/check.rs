@@ -106,6 +106,8 @@ pub enum CheckError {
     UnknownRule { rule: String },
     /// A severity override lowers a required rule below its floor.
     BelowFloor { rule: String, floor: Severity },
+    /// The rule set registers one identity more than once.
+    DuplicateRule { rule: String },
 }
 
 impl std::fmt::Display for CheckError {
@@ -120,6 +122,7 @@ impl std::fmt::Display for CheckError {
             Self::TooLarge { what, limit } => write!(f, "{what} exceeds the limit of {limit}"),
             Self::UnknownRule { rule } => write!(f, "Unknown library check rule {rule:?}"),
             Self::BelowFloor { rule, floor } => write!(f, "Rule {rule} is required and cannot be set below {}", floor.id()),
+            Self::DuplicateRule { rule } => write!(f, "Library check rule {rule:?} is registered more than once"),
         }
     }
 }
@@ -249,9 +252,14 @@ impl Options {
     /// The rules of `rules` with this run's severities applied.
     ///
     /// # Errors
-    /// Refuses an override naming no rule in `rules`, and one that sets a required rule below
-    /// [`REQUIRED_FLOOR`]; a refused run has no report.
+    /// Refuses a rule set that registers one identity twice, so an override is never validated
+    /// against one rule and applied to another; an override naming no rule in `rules`; and one
+    /// that sets a required rule below [`REQUIRED_FLOOR`]. A refused run has no report.
     fn resolve(&self, rules: &[Rule]) -> Result<Vec<Rule>, CheckError> {
+        let mut seen = BTreeSet::new();
+        if let Some(rule) = rules.iter().find(|rule| !seen.insert(rule.id)) {
+            return Err(CheckError::DuplicateRule { rule: rule.id.id().to_owned() });
+        }
         for (id, severity) in &self.severity {
             let rule = rules.iter().find(|rule| rule.id.id() == id).ok_or_else(|| CheckError::UnknownRule { rule: id.clone() })?;
             if rule.required && *severity < REQUIRED_FLOOR {
@@ -760,7 +768,8 @@ pub fn check(capture: &Capture) -> Report {
 /// and severity overrides; `rules` is the registered rule set, normally [`RULES`].
 ///
 /// # Errors
-/// Refuses an override of an unknown rule or one below a required rule's floor.
+/// Refuses a rule set with a repeated identity, an override of an unknown rule, or one below a
+/// required rule's floor.
 pub fn check_with(capture: &Capture, options: &Options, rules: &[Rule]) -> Result<Report, CheckError> {
     let rules = options.resolve(rules)?;
     Ok(report(capture, &rules, options.stage))

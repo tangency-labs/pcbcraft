@@ -1047,6 +1047,27 @@ fn check_override_required_floor() {
     assert!(matches!(&refused, crate::CommandError::InvalidParams(message) if message.contains("pad.number.repeated")), "{refused}");
 }
 
+/// A rule set that registers one identity twice is refused with or without overrides, so an
+/// `info` override validated against an optional edit rule cannot lower a required publish rule
+/// with the same identity. The built-in rules have unique identities.
+#[test]
+fn check_duplicate_rule_ids_refused() {
+    let fixture = fixture();
+    let capture = Capture::from_documents(&edited(&fixture, |text| repeat_pad(text, 2, 2_000_000)), &Catalog::default()).unwrap();
+    let duplicated = [Rule { stages: &[Stage::Edit], required: false, ..RULES[0] }, Rule { stages: &[Stage::Publish], required: true, ..RULES[0] }];
+    let refused = CheckError::DuplicateRule { rule: "pad.number.repeated".into() };
+    let lowered = Options { stage: Stage::Publish, severity: BTreeMap::from([("pad.number.repeated".to_owned(), Severity::Info)]) };
+    assert_eq!(check_with(&capture, &lowered, &duplicated).unwrap_err(), refused);
+    assert_eq!(check_with(&capture, &Options { stage: Stage::Publish, ..Options::default() }, &duplicated).unwrap_err(), refused);
+    assert!(refused.to_string().contains("pad.number.repeated"), "{refused}");
+    let ids: BTreeSet<_> = RULES.iter().map(|rule| rule.id).collect();
+    assert_eq!(ids.len(), RULES.len());
+    let warned = Options { severity: BTreeMap::from([("pad.number.repeated".to_owned(), Severity::Warning)]), ..lowered };
+    let report = check_with(&capture, &warned, RULES).unwrap();
+    assert_eq!(report.findings()[0].severity, Severity::Warning);
+    assert!(!report.blocks_publish());
+}
+
 /// `blocks_publish` follows the rule's stages, not the stage that ran: the built-in errors block
 /// publication at edit, place and publish, while an error from a rule that never runs at publish
 /// is counted but blocks nothing.
