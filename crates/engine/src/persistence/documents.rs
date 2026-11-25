@@ -2896,6 +2896,11 @@ impl BoardChecks {
                         return Err(format!("a board can hold at most {} circular arcs", crate::board::arc::MAX_ARCS));
                     }
                     self.advance();
+                    if board.arcs.is_empty() && board.teardrops.is_empty() {
+                        // Only arc and teardrop checks use copper identities; do not spend one
+                        // encoder record per track and via collecting none.
+                        self.phase = 6;
+                    }
                 }
             }
             2 => {
