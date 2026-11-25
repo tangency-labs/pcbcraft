@@ -618,10 +618,10 @@ impl ParamKind {
             Self::AuthoringItem if serde_json::to_vec(value).is_ok_and(|bytes| authoring::Item::decode(&bytes).is_ok()) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
             Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part" | "manufacturer_part")) => Ok(()),
-            Self::CheckStage if serde_json::from_value::<library::check::Stage>(value.clone()).is_ok() => Ok(()),
+            Self::CheckStage if value.is_string() && serde_json::from_value::<library::check::Stage>(value.clone()).is_ok() => Ok(()),
             Self::CheckStage => Err("must be edit, publish or place"),
             Self::CheckSeverities
-                if value.as_object().is_some_and(|map| map.len() <= 64)
+                if value.as_object().is_some_and(|map| map.len() <= 64 && map.values().all(Value::is_string))
                     && serde_json::from_value::<std::collections::BTreeMap<String, library::check::Severity>>(value.clone()).is_ok() =>
             {
                 Ok(())

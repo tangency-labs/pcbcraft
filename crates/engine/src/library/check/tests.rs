@@ -1011,6 +1011,22 @@ fn check_override_unknown_rule_refused() {
     assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
 }
 
+/// Stage and severity values are JSON strings as the schema publishes; serde's externally tagged
+/// unit-variant form is refused, not run.
+#[test]
+fn check_stage_and_severity_require_strings() {
+    let mut fixture = fixture();
+    for params in [
+        json!({"documents":fixture.documents,"stage":{"place":null}}),
+        json!({"documents":fixture.documents,"severity":{"pad.number.repeated":{"warning":null}}}),
+    ] {
+        let refused = fixture.session.execute(CHECK, &params).unwrap_err();
+        assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+    }
+    let params = json!({"documents":fixture.documents,"stage":"place","severity":{"pad.number.repeated":"warning"}});
+    assert!(fixture.session.execute(CHECK, &params).is_ok());
+}
+
 /// A required rule can be lowered to a warning (last good value) but not to info (first bad
 /// value); an optional rule can.
 #[test]
