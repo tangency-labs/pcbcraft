@@ -37,10 +37,11 @@ Clearance-based resizing, curved edges and other attachment types are not implem
 The shared track and via edit commands regenerate straight-via teardrops
 against the proposed board before committing in the native engine. Browser
 copper edits refuse boards with active intents before preparing an edit;
-regeneration is not yet available in the browser. `pcb.unroute_connection`
-does not regenerate teardrops, so its preview and apply both refuse a board with
-active intents. To move a centered via and keep
-its taper, move the attached track and via together with `pcb.move_tracks`.
+regeneration is not yet available in the browser. `pcb.unroute_connection` and
+`pcb.merge_tracks` refuse boards with active intents in both preview and apply.
+Unroute does not regenerate teardrops, and a merge could absorb a track named
+by an intent without reporting the loss in preview. To move a centered via and
+keep its taper, move the attached track and via together with `pcb.move_tracks`.
 Deleting either source or breaking the centered attachment removes the intent;
 an attachment whose requested taper no longer fits also loses its intent.
 Undo restores the copper edit and any removed intents in one step.

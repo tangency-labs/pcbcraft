@@ -4172,7 +4172,8 @@ impl Session {
 
     /// Check catalog parameters, board identity and availability without generating query data
     /// or changing the session. Layer-group inspection and output-recipe edits read or store only
-    /// metadata, so they can run regardless of copper geometry. State-specific setup diagnostics
+    /// metadata, so they can run regardless of copper geometry. Track merge and unroute refuse
+    /// active teardrops at admission for both preview and apply. State-specific setup diagnostics
     /// remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
@@ -4187,9 +4188,9 @@ impl Session {
         }
         if check_copper_geometry
             && id != board::teardrop::EDIT_TEARDROPS
-            // Copper edits regenerate active teardrops while preparing; unroute does not, so it
-            // keeps the upfront refusal and its preview cannot promise an edit Apply refuses.
-            && (id == UNROUTE_CONNECTION || !board::track::preparation::is_copper_edit(id))
+            // Unroute cannot regenerate teardrops, and merge can absorb a track referenced by
+            // an intent without reporting its loss in preview. Refuse both before planning.
+            && (matches!(id, MERGE_TRACKS | UNROUTE_CONNECTION) || !board::track::preparation::is_copper_edit(id))
             && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;

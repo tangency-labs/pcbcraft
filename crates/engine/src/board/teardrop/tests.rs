@@ -235,6 +235,41 @@ mod regeneration {
         }
     }
 
+    /// Refuse both preview and apply before scheduling a track merge on a teardrop board.
+    /// Neither direct nor prepared dispatch may change the board, revision or undo history.
+    #[test]
+    fn merge_tracks_with_active_teardrops_is_refused_on_both_paths() {
+        use crate::MERGE_TRACKS;
+        let (mut session, intent) = checked_site();
+        let layer = intent.derive(view(&session)).unwrap().layer;
+        let end = point(1_200_000, 20_000_000);
+        session
+            .apply(
+                ADD_TRACKS,
+                &json!({"board":intent.board.board,"layer":layer,"width_nm":100_000,
+                "points":[point(600_000,20_000_000),end],"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let board = view(&session);
+        assert_eq!(board.teardrops(), &[Record::from(intent)]);
+        let next = board.tracks().iter().find(|track| track.id != intent.track).unwrap().id;
+        let before = session.snapshot().unwrap();
+        let bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        for dry_run in [true, false] {
+            let params = json!({"board":intent.board.board,"tracks":[intent.track,next],"dry_run":dry_run,"expected_revision":revision});
+            let direct = session.execute(MERGE_TRACKS, &params).unwrap_err();
+            assert!(matches!(&direct, CommandError::Unavailable(reason) if reason == UNSUPPORTED), "direct {dry_run}: {direct:?}");
+            let prepared = session.prepare_copper_edit_owned(MERGE_TRACKS, params).err().expect("merge must be refused at admission");
+            assert!(matches!(&prepared, CommandError::Unavailable(reason) if reason == UNSUPPORTED), "prepared {dry_run}: {prepared:?}");
+            assert!(std::sync::Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+        }
+    }
+
     /// A lone via move or deletion of either source drops the now-detached intent; Undo restores it.
     #[test]
     fn detached_or_deleted_via_teardrop_is_removed_atomically() {
