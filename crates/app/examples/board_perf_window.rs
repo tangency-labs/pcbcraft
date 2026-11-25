@@ -63,12 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
-            .with_decorations(!cfg!(target_os = "linux"))
-            .with_resizable(false)
-            .with_active(true)
-            .with_always_on_top(),
+        viewport: pcbcraft_app::desktop_window_chrome(
+            egui::ViewportBuilder::default().with_inner_size([1400.0, 900.0]).with_resizable(false).with_active(true).with_always_on_top(),
+        ),
         persist_window: false,
         ..Default::default()
     };

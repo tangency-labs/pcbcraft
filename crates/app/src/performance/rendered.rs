@@ -300,8 +300,8 @@ impl RenderedApp {
         let mut app = app;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Match the desktop launcher's Linux decoration/titlebar integration.
-            app = app.with_integrated_titlebar(cfg!(target_os = "linux"));
+            // Match the desktop launcher's integrated title bar.
+            app = app.with_integrated_titlebar(true);
             app.live_control = Some(crate::live_control::LiveControl::start(ctx).map_err(|e| e.to_string())?);
         }
         let _ = ctx;
