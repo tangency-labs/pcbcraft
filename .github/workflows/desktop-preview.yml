@@ -2,6 +2,14 @@ name: Desktop preview packages
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        required: true
+        type: string
+      nightly:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -37,14 +46,23 @@ jobs:
         with:
           key: desktop-preview-${{ matrix.platform }}
           save-if: false
+      - name: Abbreviate the nightly revision
+        if: inputs.nightly
+        id: nightly
+        shell: bash
+        run: |
+          revision="$(git rev-parse --short HEAD)"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
       - run: cargo build --locked --release -p pcbcraft -p pcbcraft-cli
         env:
           MACOSX_DEPLOYMENT_TARGET: '11.0'
+          PCBCRAFT_NIGHTLY_REVISION: ${{ steps.nightly.outputs.revision }}
       - run: python -B scripts/package-desktop.py ${{ matrix.platform }} --bin-dir target/release --output dist/preview
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: pcbcraft-preview-${{ matrix.platform }}
+          name: ${{ inputs.artifact-prefix || 'pcbcraft-preview' }}-${{ matrix.platform }}
           path: dist/preview/*
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+          overwrite: true

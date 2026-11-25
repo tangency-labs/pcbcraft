@@ -685,7 +685,7 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     let title = harness.query_all_by_label("Two resistors").find(|node| node.rect().bottom() <= bar_bottom).unwrap();
     assert!(title.rect().width() < 120.0);
     let report = harness.get_by_label("Report a bug");
-    assert!(report.rect().right() < harness.get_by_label(&format!("v{VERSION}")).rect().left());
+    assert!(report.rect().right() < harness.get_by_label(&format!("v{}", display_version())).rect().left());
     report.click();
     harness.step();
     assert!(

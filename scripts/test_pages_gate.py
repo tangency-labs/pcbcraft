@@ -1,4 +1,4 @@
-"""Pages must depend on full CI, the tested revision and a still-current main head."""
+"""Check the full CI gates for Pages and nightly packages."""
 import ast
 import os
 from pathlib import Path
@@ -28,7 +28,7 @@ def needs(block):
 
 
 def job_allowed(job, *, ancestor_results=(), cancelled=False, **changes):
-    """Evaluate a Pages guard, including Actions' implicit ancestor success check.
+    """Evaluate a job guard, including Actions' implicit ancestor success check.
 
     This bounded evaluator supports the workflow's boolean/comparison grammar and
     status functions; it does not simulate the hosted scheduler or deployment.
@@ -71,8 +71,9 @@ class PagesGateTests(unittest.TestCase):
 
     def test_all_validation_jobs_feed_the_gate_without_a_deployment_cycle(self):
         graph = jobs()
-        validation = set(graph) - {"checks", "pages-build", "pages-deploy"}
+        validation = set(graph) - {"checks", "nightly-packages", "pages-build", "pages-deploy"}
         self.assertEqual(needs(graph["checks"]), validation)
+        self.assertEqual(needs(graph["nightly-packages"]), {"changes", "checks"})
         self.assertEqual(needs(graph["pages-build"]), {"changes", "checks"})
         self.assertEqual(needs(graph["pages-deploy"]), {"checks", "pages-build"})
 
@@ -114,6 +115,23 @@ class PagesGateTests(unittest.TestCase):
         for workflow in WORKFLOW.parent.glob("*.yml"):
             if workflow != WORKFLOW:
                 self.assertNotIn("actions/deploy-pages@", workflow.read_text(encoding="utf-8"))
+
+    def test_nightlies_require_full_main_ci(self):
+        for event in ("push", "schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(job_allowed("nightly-packages", ancestor_results=("skipped",),
+                                            **{"github.event_name": event}))
+        for changes in (
+            {"github.ref": "refs/heads/topic"},
+            {"github.event_name": "pull_request"},
+            {"github.event_name": "merge_group"},
+            {"needs.changes.outputs.mode": "docs"},
+            {"needs.checks.result": "failure"},
+            {"needs.checks.result": "skipped"},
+            {"cancelled": True},
+        ):
+            with self.subTest(changes=changes):
+                self.assertFalse(job_allowed("nightly-packages", **changes))
 
     def revision_check(self, current, exit_code=0):
         """Run the real final-revision shell check against a local API stub, never GitHub."""

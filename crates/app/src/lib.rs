@@ -186,6 +186,14 @@ struct Utilities {
     assistant: bool,
 }
 
+/// Include the abbreviated checkout revision in the version shown by nightly packages.
+fn display_version() -> String {
+    match option_env!("PCBCRAFT_NIGHTLY_REVISION") {
+        Some(revision) if !revision.is_empty() => format!("{VERSION} nightly ({revision})"),
+        _ => VERSION.to_owned(),
+    }
+}
+
 /// Draw the utilities every workspace's app bar ends with, so they share one set, order,
 /// tooltips and breakpoints: the version and Report a bug from 950 points, Help from
 /// [`COMPACT_APP_BAR`] (narrower bars leave its rows to the Home page), Preferences, then the
@@ -194,7 +202,7 @@ struct Utilities {
 fn utilities(ui: &mut Ui, width: f32, assistant: Option<(bool, bool)>) -> Utilities {
     let mut picked = Utilities::default();
     if width >= 950.0 {
-        ui.label(dim(format!("v{VERSION}")));
+        ui.label(dim(format!("v{}", display_version())));
         ui.add_space(Tokens::get().space_8);
         if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
@@ -2593,7 +2601,7 @@ impl PcbApp {
             Dialog::About => {
                 let mut close = false;
                 let closing = shell::dialog(ctx, "about_dialog", "About PCBCraft", |ui| {
-                    ui.label(format!("PCBCraft {VERSION}"));
+                    ui.label(format!("PCBCraft {}", display_version()));
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);

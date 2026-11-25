@@ -110,5 +110,7 @@ stages, package consumers, label changes, unknown inputs, strict completion and
 exact-revision reuse. Actual full Windows desktop qualification requires a full
 hosted run; local Linux results do not establish it.
 
-[Desktop preview packages](desktop-preview-packages.md) use a separate
-manual workflow for native download artifacts.
+[Desktop packages](desktop-builds-and-releases.md) are available from the manual
+preview workflow and as nightly artifacts after full CI passes on main.
+The manual **Prepare release** workflow builds the same native packages and
+creates the version tag and draft GitHub release.

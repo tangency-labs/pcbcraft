@@ -331,6 +331,17 @@ jobs:
           CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
 
+  nightly-packages:
+    name: Nightly desktop packages
+    needs: [changes, checks]
+    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-preview.yml
+    with:
+      artifact-prefix: pcbcraft-nightly-${{ github.sha }}
+      nightly: true
+
   pages-build:
     # Only a fully qualified main revision may produce a deployment artifact.
     # Full CI skips quick-compile; do not inherit its implicit ancestor success check.
