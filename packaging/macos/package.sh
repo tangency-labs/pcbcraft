@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Build, sign and (optionally) notarize the macOS release artifacts for PCBCraft:
+# Build, sign and (optionally) notarize the macOS release for PCBCraft.
 #
-#   $DIST/pcbcraft-<version>-macos-<arch>.dmg    PCBCraft.app on a drag-to-Applications DMG
-#   $DIST/pcbcraft-cli-<version>-macos-<arch>.zip   the headless CLI with licence files
+#   $DIST/pcbcraft-<version>-macos-<arch>.dmg    PCBCraft.app with its bundled CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build | --build-only] [--no-run]
 #
@@ -34,7 +33,7 @@ while [ $# -gt 0 ]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --build-only) BUILD_ONLY=1; shift ;;
     --no-run) NO_RUN=1; shift ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -66,7 +65,6 @@ SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/PCBCraft.app"
 DMG="$DIST/pcbcraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/pcbcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 SIGNING=adhoc
@@ -184,6 +182,11 @@ echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/PCBCraft.app"
+if [ "$NO_RUN" = 1 ]; then
+  echo "==> skipping bundled pcbcraft-cli smoke test (--no-run)"
+else
+  "$STAGE/PCBCraft.app/Contents/MacOS/pcbcraft-cli" --version
+fi
 ln -s /Applications "$STAGE/Applications"
 if [ -f "$HERE/dmg/background.tiff" ] && [ -f "$HERE/dmg/dmg-layout.DS_Store" ]; then
   mkdir -p "$STAGE/.background"
@@ -201,23 +204,6 @@ if [ "$NOTARIZE" = 1 ]; then
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
-# ---- CLI ---------------------------------------------------------------------------------------
-echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/pcbcraft-cli-$VERSION-macos-$ARCH"
-mkdir -p "$CLI_DIR"
-cp "$WORK/bin/pcbcraft-cli" "$CLI_DIR/"
-copy_docs "$CLI_DIR"
-sign --options runtime --identifier "$APP_ID.cli" "$CLI_DIR/pcbcraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/pcbcraft-cli"
-rm -f "$CLI_ZIP"
-ditto -c -k --norsrc --noextattr --keepParent "$CLI_DIR" "$CLI_ZIP"
-if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
-
-if [ "$NO_RUN" = 1 ]; then
-  echo "==> skipping pcbcraft-cli smoke test (--no-run)"
-else
-  "$CLI_DIR/pcbcraft-cli" --version
-fi
 if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "signing=$SIGNING" >>"$GITHUB_OUTPUT"; fi
 echo "==> done (signing: $SIGNING)"
-ls -lh "$DMG" "$CLI_ZIP"
+ls -lh "$DMG"

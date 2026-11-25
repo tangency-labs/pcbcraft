@@ -24,7 +24,7 @@
 - Generic/orderable part documents inside Parts Library with exact symbol/package references,
   explicit complete pad maps, footprints of up to 1,024 pads and 256 artwork objects and symbols of
   up to 1,024 terminals, typed fixed values/specifications, authored part description, keywords and
-  labeled HTTP(S) links (`pcbcraft-part/5`), separate Undo/Redo, session-only drafts, publication
+  labeled HTTP(S) links, separate Undo/Redo, session-only drafts, publication
   and dependent-part reference review.
 - Live MCP.
 
@@ -56,8 +56,8 @@
 ### Remaining scope
 
 - Git sources [#93](https://github.com/tangency-labs/pcbcraft/issues/93), provider catalogs
-  [#94](https://github.com/tangency-labs/pcbcraft/issues/94), browser/remote publishing and reviewed
-  project updates.
+  [#94](https://github.com/tangency-labs/pcbcraft/issues/94), browser/remote publishing, and adoption
+  of geometric, pin-map or orderable-selection changes.
 
 ## Implementation notes
 
@@ -124,6 +124,10 @@ loaded native revisions, including through live/headless MCP with `inspect: fals
 It preserves project pins and history, reports missing/conflicting/unresolved
 sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](../libraries/native-library-sources.md#query-available-revisions).
+Reviewed [adoption](../libraries/native-library-sources.md#adopt-non-geometric-revisions)
+moves chosen instances to a newer symbol or generic-part revision whose changes
+are limited to names and default values, through `library.preview_adoption` and
+`library.apply_adoption` or the Parts Library review, as one undoable edit.
 [Preview footprint pad changes](../libraries/native-library-sources.md#preview-footprint-pad-changes)
 reports altered pads and lost contact for straight track ends and through vias
 on one placed instance. It does not check standalone circular track ends, move

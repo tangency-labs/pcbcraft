@@ -115,6 +115,8 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         .find(|layer| layer.purpose == board::setup::LayerPurpose::Outline)
         .unwrap()
         .id;
+    editor.apply(net_classes::CREATE, &json!({"name":"Review class","rules":{},"expected_revision":editor.revision()})).unwrap();
+    let class = editor.project().unwrap().net_classes().definitions[0].id;
     editor.apply(ADD_DRAWING, &json!({"layer":edge,"points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":20_000_000},{"x_nm":-20_000_000,"y_nm":20_000_000}],"closed":true,"expected_revision":editor.revision()})).unwrap();
     let project = editor.snapshot().unwrap();
     let board = project.board_target().unwrap().board;
@@ -185,6 +187,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             board::class_rules::ROUTE_RULES => json!({"at":{"x_nm":0,"y_nm":0},"layer":layer}),
             board::route::PLAN_ROUTE => json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":1_000_000,"y_nm":0},"layer":layer}),
             net_classes::RESOLVE => json!({"classes":[]}),
+            nets::intent::INSPECT => json!({"version":1,"target":{"kind":"net_class","project":project.id(),"class":class}}),
             sources::SEARCH => json!({"query":"resistor"}),
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
@@ -197,6 +200,18 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
                 let params = json!({"board":board,"part_instance":"absent"});
                 let expected = control.execute(id, &params).unwrap_err();
                 assert_eq!(expected.code(), ErrorCode::NotFound, "{id}: {expected}");
+                for error in [reader.execute(id, &params).unwrap_err(), reader.apply(id, &params).unwrap_err()] {
+                    assert_eq!((error.code(), error.to_string()), (expected.code(), expected.to_string()), "{id}");
+                }
+                continue;
+            }
+            sources::PREVIEW_ADOPTION => {
+                // A read: the built-in resistor has no newer loaded revision, so both hosts must give
+                // the same refusal, never a scope refusal. The successful read-only preview is in
+                // library::sources::updates::tests.
+                let params = json!({"instances":[project.components().next().unwrap().id()],"expected_revision":revision});
+                let expected = control.execute(id, &params).unwrap_err();
+                assert_ne!(expected.code(), ErrorCode::OutOfScope, "{id}: {expected}");
                 for error in [reader.execute(id, &params).unwrap_err(), reader.apply(id, &params).unwrap_err()] {
                     assert_eq!((error.code(), error.to_string()), (expected.code(), expected.to_string()), "{id}");
                 }

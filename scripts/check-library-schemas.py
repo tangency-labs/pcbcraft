@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate native symbol, footprint, category, part and lifecycle-assertion JSON against the published schemas.
+"""Validate native symbol, footprint, category, part, model and lifecycle-assertion JSON against the published schemas.
 
 Uses Python 3.10+ and jsonschema 4.18+. References resolve from this repository
 only. Cross-record semantic validation belongs to the engine's library resolver.
@@ -31,12 +31,15 @@ FORMATS = {
     "pcbcraft-footprint/1": "urn:pcbcraft:schema:footprint:1",
     "pcbcraft-footprint/4": "urn:pcbcraft:schema:footprint:4",
     "pcbcraft-footprint/5": "urn:pcbcraft:schema:footprint:5",
+    "pcbcraft-footprint/6": "urn:pcbcraft:schema:footprint:6",
     "pcbcraft-category/1": "urn:pcbcraft:schema:category:1",
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",
     "pcbcraft-part/4": "urn:pcbcraft:schema:part:4",
     "pcbcraft-part/5": "urn:pcbcraft:schema:part:5",
+    "pcbcraft-part/6": "urn:pcbcraft:schema:part:6",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
+    "pcbcraft-model/1": "urn:pcbcraft:schema:model:1",
     "pcbcraft-lifecycle-assertion/1": "urn:pcbcraft:schema:lifecycle:1",
 }
 DIRECTORIES = {
@@ -47,6 +50,8 @@ DIRECTORIES = {
     "manufacturer-parts": "pcbcraft-manufacturer-part/",
     "lifecycle-assertions": "pcbcraft-lifecycle-assertion/",
 }
+# Proposed 3D model records are discovered and checked here, but not yet packaged or loaded.
+CHECKED_DIRECTORIES = {**DIRECTORIES, "models": "pcbcraft-model/"}
 
 
 def distinct_object(pairs):
@@ -84,7 +89,7 @@ def validators():
 
 def records(root):
     """Discover flat native item directories; manifests are validated by the source loader."""
-    return [path for name in DIRECTORIES for path in sorted((root / name).glob("*.json"))]
+    return [path for name in CHECKED_DIRECTORIES for path in sorted((root / name).glob("*.json"))]
 
 
 def validate(paths, sources):
@@ -99,7 +104,7 @@ def validate(paths, sources):
             value = read_json(path)
             if not isinstance(value, dict) or value.get("format") not in FORMATS:
                 raise ValueError("Unsupported native record format")
-            if directory is not None and not value["format"].startswith(DIRECTORIES[directory]):
+            if directory is not None and not value["format"].startswith(CHECKED_DIRECTORIES[directory]):
                 raise ValueError(f"Format {value['format']} does not belong in {directory}/")
             checks[FORMATS[value["format"]]].validate(value)
         except (OSError, ValueError, ValidationError) as error:

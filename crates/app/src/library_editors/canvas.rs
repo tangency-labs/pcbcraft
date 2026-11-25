@@ -770,7 +770,10 @@ impl Document {
                 };
             }
         }
-        let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input();
+        // Keyboard commands follow the same rule as the tool reset above: a batch from an
+        // unfocused viewport carries no key intent the canvas may act on, so no handler —
+        // including the destructive M/E/Delete/Enter keys and Escape — may read key_pressed.
+        let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.focused);
         if keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.tool = Tool::Select;
         }
@@ -838,7 +841,22 @@ impl Document {
                     // click: it never selects, toggles or inserts at the release point.
                     Tool::Select if !response.clicked() => Ok(()),
                     Tool::Select => {
-                        let modify = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+                        // Extend/toggle follows the release event's own modifiers — a
+                        // modifier released or arriving in the same batch cannot swap
+                        // the click's meaning after the fact.
+                        let release_modifiers = ui.input(|i| {
+                            i.events
+                                .iter()
+                                .rev()
+                                .find_map(|event| match event {
+                                    egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => {
+                                        Some(*modifiers)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(i.modifiers)
+                        });
+                        let modify = release_modifiers.shift || release_modifiers.command;
                         if show_courtyard
                             && !modify
                             && let Some((_, pts, _)) = self.selected_courtyard(&item)

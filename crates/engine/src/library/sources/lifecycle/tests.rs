@@ -289,7 +289,7 @@ fn lifecycle_file_is_optional_under_the_current_header_and_refused_under_older_o
     assert!(decode_documents(&overlay).unwrap_err().contains("unknown field `content_format`"));
     // Unshipped numbers are not board-folder formats, so the board-folder registry refuses
     // this project's layout_root before the envelope check names the format.
-    for unshipped in ["pcbcraft-project/47", "pcbcraft-project/52", "pcbcraft-project/58", "pcbcraft-project/64"] {
+    for unshipped in ["pcbcraft-project/58", "pcbcraft-project/64"] {
         let header = edit_project_header(&before, |header| header["format"] = json!(unshipped));
         let error = decode_documents(&header).unwrap_err();
         assert!(error.contains("layout_root requires a supported board-folder project format"), "{unshipped}: {error}");
@@ -304,7 +304,7 @@ fn lifecycle_file_is_optional_under_the_current_header_and_refused_under_older_o
 const CURRENT: &str = crate::persistence::CURRENT_PROJECT_FORMAT;
 
 /// The reader's refusal of a lifecycle document under any other project header.
-const REFUSAL: &str = "library/lifecycle.json requires pcbcraft-project/61";
+const REFUSAL: &str = "library/lifecycle.json requires pcbcraft-project/68";
 
 /// Edit only the project entry point, keeping the exact other documents.
 fn edit_project_header(documents: &crate::persistence::Documents, edit: impl FnOnce(&mut Value)) -> crate::persistence::Documents {

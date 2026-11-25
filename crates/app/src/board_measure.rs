@@ -1,7 +1,7 @@
 //! Inspect › Measure: a view-only ruler between two snapped board points. It never edits the
 //! project and is not saved; Esc clears the measurement, then leaves the tool.
 use crate::canvas_camera::Camera;
-use egui::{PointerButton, Rect, Response, Ui};
+use egui::{Rect, Response, Ui};
 use pcbcraft_chrome::units;
 use pcbcraft_engine::{board::view::BoardView, schematic::Point};
 
@@ -46,7 +46,7 @@ pub(super) fn interact(ui: &Ui, response: &Response, camera: &Camera, view: Boar
     if !enabled {
         return true;
     }
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if crate::board_canvas::secondary_pressed_here(response) {
         state.cancel();
         return true;
     }

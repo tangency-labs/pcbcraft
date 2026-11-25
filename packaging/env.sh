@@ -63,6 +63,9 @@ copy_docs() {
     if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$dest/"; fi
   done
   copy_font_licences "$dest"
+  if [ -n "${PCBCRAFT_PACKAGE_RESOURCES:-}" ]; then
+    cp "$PCBCRAFT_PACKAGE_RESOURCES"/* "$dest/"
+  fi
 }
 
 # Copy bundled font licences (including optional CRAFT_FONTS_DIR embeds) into dest.
