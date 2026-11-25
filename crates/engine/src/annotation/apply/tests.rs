@@ -160,3 +160,21 @@ fn annotation_apply_reports_rotated_and_mirrored_parts_but_excludes_value_only_e
     assert_eq!(stale.code(), crate::error_codes::ErrorCode::StaleRevision);
     assert_eq!(stale.details(), json!({"current_revision":rev,"part_instances":[]}));
 }
+
+/// Closing the project retires its reviewed preview at once: no review of the unloaded project
+/// survives until the next open, and its token cannot authorize an edit.
+#[test]
+fn annotation_apply_close_project_retires_the_reviewed_preview() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let symbol = place(&mut session, "resistor", 0);
+    reference(&mut session, &symbol, "R?", false);
+    let preview = session.execute(PREVIEW, &json!({})).unwrap();
+    assert_eq!(preview["annotation_preview"]["rows"][0]["proposed"], "R1");
+    assert!(session.annotation_preview.is_some());
+    session.close_project();
+    assert!(session.project().is_none());
+    assert!(session.annotation_preview.is_none(), "close must drop the reviewed preview of the unloaded project");
+    assert!(matches!(session.apply(APPLY, &json!({"token":preview["token"]})), Err(CommandError::Unavailable(_))));
+    assert!(session.annotation_preview.is_none());
+}

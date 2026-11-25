@@ -3639,6 +3639,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.annotation_preview = None;
     }
 
     /// Adopt the name, storage layout and occurrence IDs of a completed save without an electrical
