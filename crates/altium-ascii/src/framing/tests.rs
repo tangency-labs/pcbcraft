@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::io::BufReader;
+
 use super::{Dialect, FrameError, Limits, Record, Records};
 
 /// The dialect of the synthetic files below: records named by `KIND`, with multi-line `TEXT`.
@@ -205,6 +207,87 @@ fn record_size_limit_counts_every_line_of_a_multi_line_text() {
     let below = Limits { max_record_bytes: 25, ..Limits::default() };
     let (_, error) = frame_with(text, below);
     assert!(matches!(error, Some(FrameError::RecordTooLarge { record_offset: 0, .. })), "{error:?}");
+}
+
+#[test]
+fn same_line_records_get_separate_byte_and_property_budgets() {
+    let limits = Limits { max_record_bytes: 8, max_properties: 1, ..Limits::default() };
+    let text = b"|KIND=A|kind=B|KiNd=C\r\n";
+    // Force both the kind prefix and CR LF across buffer boundaries.
+    let records: Vec<_> = Records::new(BufReader::with_capacity(1, &text[..]), dialect(), limits).collect::<Result<_, _>>().unwrap();
+    let starts: Vec<_> = records.iter().map(|record| (record.offset(), record.line(), record.kind())).collect();
+    assert_eq!(starts, [(0, 1, Some(&b"A"[..])), (8, 1, Some(&b"B"[..])), (15, 1, Some(&b"C"[..]))]);
+
+    let below = Limits { max_record_bytes: 7, ..limits };
+    let (records, error) = frame_with(text, below);
+    assert!(records.is_empty());
+    assert!(matches!(error, Some(FrameError::RecordTooLarge { record_offset: 0, record_line: 1, limit: 7 })));
+}
+
+#[test]
+fn multiline_budget_stops_at_the_next_same_line_kind() {
+    // First record: 14 bytes + 2-byte internal break + `y|` = 18 bytes.
+    let text = b"|KIND=A|TEXT=x\r\ny|KIND=B\r\n";
+    let limits = Limits { max_record_bytes: 18, ..Limits::default() };
+    let (records, error) = frame_with(text, limits);
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].value("TEXT"), Some(&b"x\r\ny"[..]));
+    assert_eq!((records[1].offset(), records[1].line()), (18, 2));
+    assert_eq!(records[1].kind(), Some(&b"B"[..]));
+
+    let (records, error) = frame_with(text, Limits { max_record_bytes: 17, ..limits });
+    assert!(records.is_empty());
+    assert!(matches!(error, Some(FrameError::RecordTooLarge { record_offset: 0, record_line: 1, limit: 17 })));
+}
+
+#[test]
+fn complete_record_precedes_oversized_record_on_the_next_line() {
+    // A kind prefix on the next line closes the open text, regardless of that line's length.
+    let limits = Limits { max_record_bytes: 14, ..Limits::default() };
+    for text in [&b"|KIND=A|TEXT=x\n|KIND=abcdefghijklmnop\n"[..], &b"|KIND=A|TEXT=x\nkind=abcdefghijklmnop\n"[..]] {
+        let (records, error) = frame_with(text, limits);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].value("TEXT"), Some(&b"x"[..]));
+        assert!(matches!(error, Some(FrameError::RecordTooLarge { record_offset: 15, record_line: 2, limit: 14 })));
+    }
+}
+
+#[test]
+fn oversized_continuation_names_the_open_record_start() {
+    let (records, error) = frame_with(b"|KIND=P\n|KIND=A|TEXT=x\nabcdefghijklmnopq\n", Limits { max_record_bytes: 15, ..Limits::default() });
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].kind(), Some(&b"P"[..]));
+    assert!(matches!(error, Some(FrameError::RecordTooLarge { record_offset: 8, record_line: 2, limit: 15 })));
+}
+
+#[test]
+fn same_line_boundary_yields_before_reading_the_later_value() {
+    let text = b"|KIND=A|KIND=oversized|KIND=C\r\n";
+    let limits = Limits { max_record_bytes: 8, ..Limits::default() };
+    let mut records = Records::new(&text[..], dialect(), limits);
+    assert_eq!(records.next().unwrap().unwrap().kind(), Some(&b"A"[..]));
+    assert_eq!(records.input.reader, b"oversized|KIND=C\r\n");
+    assert!(matches!(records.next(), Some(Err(FrameError::RecordTooLarge { record_offset: 8, record_line: 1, limit: 8 }))));
+    assert!(records.next().is_none());
+}
+
+#[test]
+fn same_line_truncation_does_not_hide_a_complete_record() {
+    let text = b"|KIND=A|KIND=B";
+    let (records, error) = frame(text);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].kind(), Some(&b"A"[..]));
+    assert!(matches!(error, Some(FrameError::Truncated { record_offset: 8, record_line: 1, end_offset: 14 })));
+}
+
+#[test]
+fn excess_property_value_is_not_read() {
+    let limits = Limits { max_properties: 1, ..Limits::default() };
+    let mut records = Records::new(&b"|KIND=A|X=unread\n"[..], dialect(), limits);
+    assert!(matches!(records.next(), Some(Err(FrameError::TooManyProperties { record_offset: 0, record_line: 1, limit: 1 }))));
+    assert_eq!(records.input.reader, b"=unread\n");
+    assert!(records.next().is_none());
 }
 
 /// Property count limit accepts the limit and refuses one more.

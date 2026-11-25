@@ -23,12 +23,14 @@ skipped. Values stay raw bytes at this level.
 
 ## Limits and errors
 
-Each record is bounded before memory for it is allocated: its size in bytes
-(16 MiB by default, counting every line of a multi-line text), its number of
-properties (65,536) and the length of each property name (256 bytes). The reader
-keeps at most one record and one line in memory.
+The reader checks each limit before storing the data it bounds: record size
+(16 MiB by default), property count (65,536), and property name length (256 bytes).
+Record size includes internal line breaks but not the terminating line break.
+When records share a line, the `|` before the next kind counts toward the
+preceding record. The reader yields one record at a time and keeps only enough
+lookahead to recognize a line break or the next kind prefix.
 
 A record cut off at the end of the file, a property without `=`, an empty
 property name and a record over a limit are reported as errors carrying the byte
-offset and line where the record or property starts. Reading stops at the first
-error; nothing after it is read.
+offset and line where the record or property starts. Completed records are
+yielded before errors in later records. Parsing stops at the first error.

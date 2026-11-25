@@ -16,21 +16,23 @@
 //! property, or when the record before it does not end in an open multi-line value. Blank lines
 //! between records are skipped. Names are compared without regard to ASCII case.
 //!
-//! Every record must end with a line break. A file that ends inside a record, a property without
-//! `=`, an empty or over-long property name, and a record over the size or property limits are
+//! A record ends at a line break or at the next kind on the same line. A file that ends
+//! inside a record, a property without `=`, an empty or over-long property name, and a record
+//! over the size or property limits are
 //! each reported as a [`FrameError`] with the byte offset and line where it occurs. Iteration
 //! stops after the first error, so nothing past a damaged record is read or guessed.
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead};
 
 /// Limits applied while framing. Each one is checked before memory for the data it bounds is
 /// allocated, so a damaged or hostile file cannot make the reader grow without bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
-    /// The largest record, in bytes of the file from its first byte to the end of its last
-    /// line, including the line breaks inside it.
+    /// The largest record, in file bytes, including internal line breaks but not the final
+    /// line break. At a same-line split, the separator before the next kind belongs to the
+    /// preceding record.
     pub max_record_bytes: usize,
     /// The most properties one record may hold.
     pub max_properties: usize,
@@ -86,16 +88,6 @@ impl Dialect {
     /// Whether `name` is a multi-line property, ignoring ASCII case.
     pub fn is_multi_line_property(&self, name: &[u8]) -> bool {
         self.multi_line_properties.iter().any(|multi| multi.eq_ignore_ascii_case(name))
-    }
-
-    /// Whether a line (without its line break) starts with the record-kind property, with or
-    /// without a leading `|`.
-    fn starts_with_kind(&self, line: &[u8]) -> bool {
-        let Some(kind) = self.kind_property.as_deref() else {
-            return false;
-        };
-        let rest = line.strip_prefix(b"|").unwrap_or(line);
-        rest.len() > kind.len() && rest[..kind.len()].eq_ignore_ascii_case(kind) && rest[kind.len()] == b'='
     }
 }
 
@@ -171,12 +163,12 @@ impl Record {
     }
 }
 
-/// Why framing stopped. Every variant names the byte offset and line where the problem is.
+/// Why framing stopped. Format errors report a byte offset and line; I/O errors wrap the input error.
 #[derive(Debug)]
 pub enum FrameError {
     /// Reading the input failed.
     Io(io::Error),
-    /// The file ends inside a record: its last line has no line break.
+    /// The file ends inside a record without a terminating line break or next kind.
     Truncated {
         /// Where the cut record starts.
         record_offset: u64,
@@ -273,221 +265,202 @@ impl From<io::Error> for FrameError {
     }
 }
 
-/// One line of the file, without its line break.
-struct Line {
-    /// The byte offset of the line's first byte.
+#[derive(Clone, Copy)]
+struct Position {
     offset: u64,
-    /// The line's 1-based number.
-    number: u64,
-    /// The line's length without its line break.
-    len: usize,
-    /// The line break that ended it: CR LF, LF, or empty at the end of the file.
-    line_break: &'static [u8],
+    line: u64,
 }
 
-/// A record being assembled from one or more lines.
-struct Builder {
-    record: Record,
-    /// File bytes taken by the record so far, including the line breaks inside it.
-    bytes: usize,
-    /// Whether the record's last line ended inside a multi-line value.
-    open_multi_line: bool,
-    /// The line break that ended the record's last line, kept for a continuation.
-    pending_break: &'static [u8],
+/// A cursor with just enough lookahead to recognize CR LF and `|KIND=` across input buffers.
+struct Input<R> {
+    reader: R,
+    lookahead: VecDeque<u8>,
+    position: Position,
 }
 
-impl Builder {
-    fn new(offset: u64, line: u64) -> Self {
-        Self { record: Record { offset, line, properties: Vec::new(), kind: None }, bytes: 0, open_multi_line: false, pending_break: b"" }
+impl<R: BufRead> Input<R> {
+    fn peek(&mut self, index: usize) -> io::Result<Option<u8>> {
+        while self.lookahead.len() <= index {
+            let bytes = match self.reader.fill_buf() {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
+            let Some(&byte) = bytes.first() else {
+                return Ok(None);
+            };
+            self.lookahead.push_back(byte);
+            self.reader.consume(1);
+        }
+        Ok(self.lookahead.get(index).copied())
+    }
+
+    /// Commits bytes already present in lookahead.
+    fn consume(&mut self, count: usize) {
+        for _ in 0..count {
+            self.lookahead.pop_front();
+        }
+        self.position.offset += count as u64;
+    }
+
+    fn line_break(&mut self) -> io::Result<&'static [u8]> {
+        match self.peek(0)? {
+            Some(b'\n') => Ok(b"\n"),
+            Some(b'\r') if self.peek(1)? == Some(b'\n') => Ok(b"\r\n"),
+            _ => Ok(b""),
+        }
+    }
+
+    fn consume_line_break(&mut self, line_break: &[u8]) {
+        self.consume(line_break.len());
+        self.position.line += 1;
     }
 }
 
 /// An iterator over the records of an ASCII save, read from any buffered input.
 ///
-/// It yields each record as soon as the line after it shows the record is complete, keeps at
-/// most one record and one line in memory, and stops after the first [`FrameError`].
+/// It yields at each record boundary and stops after the first [`FrameError`]. Apart from the
+/// caller's input buffer, it keeps only one record and enough bytes to recognize a line break
+/// or a record-kind prefix, not a whole physical line.
 pub struct Records<R> {
-    input: R,
+    input: Input<R>,
     dialect: Dialect,
     limits: Limits,
-    /// The byte offset of the next unread byte.
-    offset: u64,
-    /// The number of the next line.
-    line: u64,
-    current: Option<Builder>,
-    line_buf: Vec<u8>,
-    ready: VecDeque<Record>,
-    error: Option<FrameError>,
     finished: bool,
 }
 
 impl<R: BufRead> Records<R> {
     /// Starts framing `input` with the given dialect and limits.
     pub fn new(input: R, dialect: Dialect, limits: Limits) -> Self {
-        Self { input, dialect, limits, offset: 0, line: 1, current: None, line_buf: Vec::new(), ready: VecDeque::new(), error: None, finished: false }
+        let input = Input { reader: input, lookahead: VecDeque::new(), position: Position { offset: 0, line: 1 } };
+        Self { input, dialect, limits, finished: false }
     }
 
-    /// Reads the next line into `line_buf`, without its line break, reading at most one byte
-    /// more than a record may hold. Returns `None` at the end of the input.
-    fn read_line(&mut self) -> Result<Option<Line>, FrameError> {
-        self.line_buf.clear();
-        // Content plus a CR LF; one byte more than that shows the line is over the limit.
-        let cap = self.limits.max_record_bytes.saturating_add(3) as u64;
-        let read = (&mut self.input).take(cap).read_until(b'\n', &mut self.line_buf)?;
-        if read == 0 {
+    /// Recognizes a kind without consuming it from the parser's cursor or reading its value.
+    fn starts_with_kind(&mut self, allow_bar: bool) -> io::Result<bool> {
+        let Some(kind) = self.dialect.kind_property().filter(|kind| !kind.is_empty()) else {
+            return Ok(false);
+        };
+        let skip = usize::from(allow_bar && self.input.peek(0)? == Some(b'|'));
+        for (index, name_byte) in kind.iter().enumerate() {
+            if matches!(name_byte, b'|' | b'\n' | b'=') || !self.input.peek(index + skip)?.is_some_and(|byte| byte.eq_ignore_ascii_case(name_byte)) {
+                return Ok(false);
+            }
+        }
+        Ok(self.input.peek(kind.len() + skip)? == Some(b'='))
+    }
+
+    fn check_size(&self, start: Position, extra: u64) -> Result<(), FrameError> {
+        let used = self.input.position.offset - start.offset;
+        if used.saturating_add(extra) > self.limits.max_record_bytes as u64 {
+            return Err(FrameError::RecordTooLarge { record_offset: start.offset, record_line: start.line, limit: self.limits.max_record_bytes });
+        }
+        Ok(())
+    }
+
+    fn truncated(&self, start: Position) -> FrameError {
+        FrameError::Truncated { record_offset: start.offset, record_line: start.line, end_offset: self.input.position.offset }
+    }
+
+    fn read_value(&mut self, start: Position, value: &mut Vec<u8>) -> Result<(), FrameError> {
+        while let Some(byte) = self.input.peek(0)? {
+            if byte == b'|' || !self.input.line_break()?.is_empty() {
+                break;
+            }
+            self.check_size(start, 1)?;
+            self.input.consume(1);
+            value.push(byte);
+        }
+        Ok(())
+    }
+
+    fn read_property(&mut self, start: Position) -> Result<Property, FrameError> {
+        let Position { offset, line } = self.input.position;
+        let mut name = Vec::new();
+        loop {
+            match self.input.peek(0)? {
+                None => return Err(self.truncated(start)),
+                Some(b'=') => {
+                    if name.is_empty() {
+                        return Err(FrameError::EmptyPropertyName { offset, line });
+                    }
+                    self.check_size(start, 1)?;
+                    self.input.consume(1);
+                    break;
+                }
+                Some(byte) => {
+                    if byte == b'|' || !self.input.line_break()?.is_empty() {
+                        return Err(FrameError::PropertyWithoutValue { offset, line });
+                    }
+                    if name.len() >= self.limits.max_name_bytes {
+                        return Err(FrameError::PropertyNameTooLong { offset, line, limit: self.limits.max_name_bytes });
+                    }
+                    self.check_size(start, 1)?;
+                    self.input.consume(1);
+                    name.push(byte);
+                }
+            }
+        }
+        let mut value = Vec::new();
+        self.read_value(start, &mut value)?;
+        Ok(Property { name, value, offset, line })
+    }
+
+    fn read_record(&mut self) -> Result<Option<Record>, FrameError> {
+        // Blank lines outside a record have no byte cost.
+        loop {
+            let line_break = self.input.line_break()?;
+            if line_break.is_empty() {
+                break;
+            }
+            self.input.consume_line_break(line_break);
+        }
+        if self.input.peek(0)?.is_none() {
             return Ok(None);
         }
-        let offset = self.offset;
-        let number = self.line;
-        self.offset += read as u64;
-        let line_break: &'static [u8] = if self.line_buf.last() == Some(&b'\n') {
-            self.line_buf.pop();
-            self.line += 1;
-            if self.line_buf.last() == Some(&b'\r') {
-                self.line_buf.pop();
-                b"\r\n"
-            } else {
-                b"\n"
-            }
-        } else {
-            b""
-        };
-        if self.line_buf.len() > self.limits.max_record_bytes {
-            return Err(FrameError::RecordTooLarge { record_offset: offset, record_line: number, limit: self.limits.max_record_bytes });
-        }
-        Ok(Some(Line { offset, number, len: self.line_buf.len(), line_break }))
-    }
 
-    /// Moves the record being assembled, if any, to the ready queue.
-    fn close_current(&mut self) {
-        if let Some(builder) = self.current.take() {
-            self.ready.push_back(builder.record);
-        }
-    }
-
-    /// Frames one line: continues the open record or starts new ones, and parses its properties.
-    fn frame_line(&mut self, content: &[u8], line: &Line) -> Result<(), FrameError> {
-        let continues = self.current.as_ref().is_some_and(|builder| builder.open_multi_line) && !self.dialect.starts_with_kind(content);
-        if content.is_empty() && !continues {
-            // A blank line between records.
-            return Ok(());
-        }
-        if line.line_break.is_empty() {
-            // The last line has no line break: the file was cut inside a record.
-            let (record_offset, record_line) = match (&self.current, continues) {
-                (Some(builder), true) => (builder.record.offset, builder.record.line),
-                _ => {
-                    self.close_current();
-                    (line.offset, line.number)
+        let start = self.input.position;
+        let mut record = Record { offset: start.offset, line: start.line, properties: Vec::new(), kind: None };
+        loop {
+            let line_break = self.input.line_break()?;
+            if !line_break.is_empty() {
+                self.input.consume_line_break(line_break);
+                if let Some(last) = record.properties.last_mut()
+                    && self.dialect.is_multi_line_property(&last.name)
+                    && self.input.peek(0)?.is_some()
+                    && !self.starts_with_kind(true)?
+                {
+                    // This break belongs to the value only after a continuation is known.
+                    self.check_size(start, 0)?;
+                    last.value.extend_from_slice(line_break);
+                    self.read_value(start, &mut last.value)?;
+                    continue;
                 }
-            };
-            return Err(FrameError::Truncated { record_offset, record_line, end_offset: self.offset });
-        }
-
-        let mut segments = content.split(|byte| *byte == b'|');
-        let mut position = 0usize;
-        if continues {
-            let first = segments.next().unwrap_or_default();
-            if let Some(builder) = self.current.as_mut() {
-                builder.bytes = builder.bytes.saturating_add(builder.pending_break.len() + content.len());
-                if builder.bytes > self.limits.max_record_bytes {
-                    return Err(FrameError::RecordTooLarge {
-                        record_offset: builder.record.offset,
-                        record_line: builder.record.line,
-                        limit: self.limits.max_record_bytes,
-                    });
-                }
-                if let Some(last) = builder.record.properties.last_mut() {
-                    last.value.extend_from_slice(builder.pending_break);
-                    last.value.extend_from_slice(first);
-                }
+                return Ok(Some(record));
             }
-            position = first.len() + 1;
-        } else {
-            self.close_current();
-            let mut builder = Builder::new(line.offset, line.number);
-            builder.bytes = content.len();
-            self.current = Some(builder);
-        }
-
-        let mut last_is_multi_line = continues;
-        for segment in segments {
-            let offset = line.offset + position as u64;
-            position += segment.len() + 1;
-            if segment.is_empty() {
-                // A leading, trailing or doubled `|` separates nothing.
-                continue;
+            match self.input.peek(0)? {
+                None => return Err(self.truncated(start)),
+                Some(b'|') => {
+                    self.check_size(start, 1)?;
+                    self.input.consume(1);
+                    continue;
+                }
+                Some(_) if record.kind.is_some() && self.starts_with_kind(false)? => return Ok(Some(record)),
+                Some(_) => {}
             }
-            let property = self.parse_property(segment, offset, line.number)?;
-            last_is_multi_line = self.dialect.is_multi_line_property(&property.name);
-            self.push_property(property, line)?;
+            // A new kind above belongs to the next record even if this record is full.
+            if record.properties.len() >= self.limits.max_properties {
+                return Err(FrameError::TooManyProperties {
+                    record_offset: start.offset,
+                    record_line: start.line,
+                    limit: self.limits.max_properties,
+                });
+            }
+            let property = self.read_property(start)?;
+            if self.dialect.is_kind_property(&property.name) {
+                record.kind = Some(record.properties.len());
+            }
+            record.properties.push(property);
         }
-        if let Some(builder) = self.current.as_mut() {
-            builder.open_multi_line = last_is_multi_line;
-            builder.pending_break = line.line_break;
-        }
-        Ok(())
-    }
-
-    /// Splits one `NAME=VALUE` segment, checking the name against the limits.
-    fn parse_property(&self, segment: &[u8], offset: u64, line: u64) -> Result<Property, FrameError> {
-        let Some(equals) = segment.iter().position(|byte| *byte == b'=') else {
-            return Err(FrameError::PropertyWithoutValue { offset, line });
-        };
-        let (name, value) = (&segment[..equals], &segment[equals + 1..]);
-        if name.is_empty() {
-            return Err(FrameError::EmptyPropertyName { offset, line });
-        }
-        if name.len() > self.limits.max_name_bytes {
-            return Err(FrameError::PropertyNameTooLong { offset, line, limit: self.limits.max_name_bytes });
-        }
-        Ok(Property { name: name.to_vec(), value: value.to_vec(), offset, line })
-    }
-
-    /// Adds a property to the open record. A second record-kind property closes the record and
-    /// starts the next one at that property, for records that share a line.
-    fn push_property(&mut self, property: Property, line: &Line) -> Result<(), FrameError> {
-        let is_kind = self.dialect.is_kind_property(&property.name);
-        let starts_next = is_kind && self.current.as_ref().is_some_and(|builder| builder.record.kind.is_some());
-        if starts_next {
-            // The new record takes the bytes from this property to the end of the line.
-            let taken = usize::try_from(property.offset - line.offset).unwrap_or(line.len);
-            self.close_current();
-            let mut builder = Builder::new(property.offset, property.line);
-            builder.bytes = line.len.saturating_sub(taken);
-            self.current = Some(builder);
-        }
-        let Some(builder) = self.current.as_mut() else {
-            return Ok(());
-        };
-        if builder.record.properties.len() >= self.limits.max_properties {
-            return Err(FrameError::TooManyProperties {
-                record_offset: builder.record.offset,
-                record_line: builder.record.line,
-                limit: self.limits.max_properties,
-            });
-        }
-        if is_kind && builder.record.kind.is_none() {
-            builder.record.kind = Some(builder.record.properties.len());
-        }
-        builder.record.properties.push(property);
-        Ok(())
-    }
-
-    /// Reads lines until at least one record is ready, an error is found or the input ends.
-    fn advance(&mut self) -> Result<(), FrameError> {
-        while self.ready.is_empty() {
-            let Some(line) = self.read_line()? else {
-                self.close_current();
-                self.finished = true;
-                return Ok(());
-            };
-            let content = std::mem::take(&mut self.line_buf);
-            let framed = self.frame_line(&content, &line);
-            self.line_buf = content;
-            framed?;
-        }
-        Ok(())
     }
 }
 
@@ -496,18 +469,20 @@ impl<R: BufRead> Iterator for Records<R> {
 
     /// Returns the next complete record, then any error that stopped framing, then `None`.
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ready.is_empty()
-            && !self.finished
-            && self.error.is_none()
-            && let Err(error) = self.advance()
-        {
-            self.error = Some(error);
-            self.finished = true;
+        if self.finished {
+            return None;
         }
-        if let Some(record) = self.ready.pop_front() {
-            return Some(Ok(record));
+        match self.read_record() {
+            Ok(Some(record)) => Some(Ok(record)),
+            Ok(None) => {
+                self.finished = true;
+                None
+            }
+            Err(error) => {
+                self.finished = true;
+                Some(Err(error))
+            }
         }
-        self.error.take().map(Err)
     }
 }
 
