@@ -13,6 +13,8 @@ use super::{Dialog, IN_BROWSER, PcbApp, shell};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Then {
     Close,
+    /// Unload the project and show Home while the application remains open.
+    CloseProject,
     New,
     /// Start an empty project in PCB layout after the same save decision as New Project.
     NewBoard,
@@ -39,6 +41,24 @@ pub(crate) enum Waiting {
 const SHOWN_NAME: usize = 40;
 
 impl PcbApp {
+    /// Close Project is available for an open project when no file action is in flight.
+    pub(super) fn can_close_document(&self) -> bool {
+        self.can_save_project() && !self.project_action_pending() && matches!(self.dialog, Dialog::None)
+    }
+
+    /// Shared Close Project entry point. An unfinished file action keeps its project and owner.
+    /// The normal save prompt decides the outcome of unsaved changes.
+    pub(super) fn request_close_document(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        if !self.can_close_document() {
+            return Err("Open a project and finish the current dialog or file operation before closing it.".into());
+        }
+        self.views.cancel_gestures();
+        ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), ViewportCommand::Focus);
+        self.unless_unsaved(Then::CloseProject, ctx);
+        self.repaint_editors(ctx);
+        Ok(())
+    }
+
     /// Carry out `then` at once when nothing unsaved would be lost, otherwise ask first.
     /// Displacing a remap form retires its review without editing either document.
     pub(crate) fn unless_unsaved(&mut self, then: Then, ctx: &egui::Context) {
@@ -160,6 +180,7 @@ impl PcbApp {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
             }
             Then::New => self.start_new_project(),
+            Then::CloseProject => self.unload_project(),
             Then::NewBoard => self.start_new_project_in(crate::editor_view::Workspace::Board),
             Then::Open => self.choose_open_location(ctx),
             #[cfg(not(target_arch = "wasm32"))]
@@ -168,6 +189,19 @@ impl PcbApp {
                 self.message = self.files.open_path(path, self.session.revision(), ctx).err();
             }
         }
+    }
+
+    /// Retire the saved location and document bindings after the save decision has completed.
+    /// Independent library and manufacturing panes use the existing project replacement path.
+    fn unload_project(&mut self) {
+        self.checkpoint_arrangements();
+        self.arrangements.release_project();
+        self.session.close_project();
+        self.files.release_project();
+        self.views.bind_opened_project(&self.session);
+        self.file_notice = None;
+        self.message = None;
+        self.show_home();
     }
 
     /// Draw the question and act on the answer. Save starts the ordinary save, which asks for a

@@ -11,6 +11,77 @@ use pcbcraft_engine::PLACE_SYMBOL;
 use super::*;
 use crate::unsaved::Then;
 
+/// Every UI entry point reaches the same prompt, and discarding ends the session's history.
+#[test]
+fn close_project_from_file_home_and_browser() {
+    for source in ["File", "Home", "Browser"] {
+        let mut h = unsaved_project();
+        match source {
+            "File" => press(&mut h, "File"),
+            "Home" => open_home(&mut h),
+            _ => {
+                let name = h.state().session().project().unwrap().name.clone();
+                let pos = h.get_by_role_and_label(egui::Role::Button, &name).rect().center();
+                h.hover_at(pos);
+                settle(&mut h);
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+                    settle(&mut h);
+                }
+            }
+        }
+        press(&mut h, "Close Project");
+        assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::CloseProject)), "{source}");
+        press(&mut h, "Don't Save");
+        assert!(h.state().home && h.state().session().project().is_none(), "{source}");
+        assert!(!h.state().session().available("edit.undo"));
+        assert!(!h.state().session().available("edit.redo"));
+        assert!(!h.state().close_allowed);
+        h.get_by_label("New Schematic");
+    }
+}
+
+/// A live Close asks the person about unsaved edits. Only a successful save completes it.
+#[test]
+fn close_project_after_save_or_stay_open_on_cancel_and_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    for outcome in ["cancel", "saved", "cancelled", "failed", "edited"] {
+        let mut h = unsaved_project();
+        let ctx = h.ctx.clone();
+        let original = h.state().session().snapshot().unwrap();
+        h.state_mut().run_window_command(&ctx, "file.close", &json!({})).unwrap();
+        settle(&mut h);
+        if outcome == "cancel" {
+            press(&mut h, "Cancel");
+        } else {
+            press(&mut h, "Save");
+            assert_eq!(h.state().waiting, Some(crate::unsaved::Waiting::ForSave(Then::CloseProject)));
+            assert!(h.state().project_action_pending());
+            match outcome {
+                "saved" => h.state_mut().files.finish_stand_in(dir.path().join("saved")),
+                "cancelled" => h.state_mut().files.end_stand_in(None),
+                "edited" => {
+                    h.state_mut().run("project.rename", &json!({"name": "Edit during save"}));
+                    h.state_mut().files.finish_stand_in(dir.path().join("edited"));
+                }
+                _ => h.state_mut().files.end_stand_in(Some("Disk full")),
+            }
+            settle(&mut h);
+        }
+        if outcome == "saved" {
+            assert!(h.state().home && h.state().session().project().is_none());
+            assert!(!h.state().close_allowed);
+        } else {
+            if outcome == "edited" {
+                assert_eq!(h.state().session().project().unwrap().name, "Edit during save");
+            } else {
+                assert!(Arc::ptr_eq(&original, &h.state().session().snapshot().unwrap()));
+            }
+            assert!(h.state().files.dirty(h.state().session()));
+        }
+    }
+}
+
 /// Shared prompt actions stay independent at compact widths: disabled or omitted Save never
 /// disables Don't Save or Cancel, and unowned Enter never approves an unsaved-work decision.
 #[test]

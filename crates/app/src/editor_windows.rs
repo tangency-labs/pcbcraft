@@ -300,6 +300,7 @@ impl PcbApp {
     /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
+            ViewAction::Browse(crate::project_browser::Action::CloseProject) => self.message = self.request_close_document(ctx).err(),
             ViewAction::Browse(action) => {
                 self.apply_browser_action(id, action);
                 if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_) | Dialog::BoardUpdate(_)) {

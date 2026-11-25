@@ -22,6 +22,7 @@ impl PcbApp {
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
         let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
+        let can_close_project = self.can_close_document();
         let state = &mut self.views.active.board;
         let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
@@ -46,6 +47,7 @@ impl PcbApp {
                     self.views.active.filters,
                     &self.views.active.inspection,
                     &state.hidden_layers,
+                    can_close_project,
                 );
             })
         } else {

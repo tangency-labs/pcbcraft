@@ -332,6 +332,11 @@ impl ProjectFiles {
         self.job.is_some()
     }
 
+    /// Release the closed project's save baseline and location, retaining recent files and job IDs.
+    pub(super) fn release_project(&mut self) {
+        self.saved = None;
+    }
+
     /// Whether replacing the current project would discard edits since its last known saved snapshot.
     pub(super) fn dirty(&self, session: &Session) -> bool {
         session.snapshot().is_some_and(|project| {

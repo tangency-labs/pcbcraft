@@ -804,6 +804,9 @@ impl PcbApp {
         }
 
         menu::separator(ui);
+        if MenuItem::new("Close Project").enabled(self.can_close_document()).show(ui) {
+            self.message = self.request_close_document(ui.ctx()).err();
+        }
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
@@ -1407,7 +1410,7 @@ impl PcbApp {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
+            Action::CloseProject | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Inspection { source, .. } => match source {
                 pcbcraft_engine::board::correspondence::Source::Terminal(target) => {
@@ -1436,7 +1439,12 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_)
+            | Action::CloseProject
+            | Action::ManageSheet { .. }
+            | Action::SetPage { .. }
+            | Action::SetTemplate { .. }
+            | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
