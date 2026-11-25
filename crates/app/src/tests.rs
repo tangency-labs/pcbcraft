@@ -130,6 +130,12 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
 /// ribbon's left edge, is first scrolled into view as a person would; fully visible controls are
 /// clicked at once, so no extra frame can change the UI.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    queue_click(harness, label);
+    harness.run();
+}
+
+/// Bring the named control into view and queue its click so the caller can wait for the result.
+pub(super) fn queue_click(harness: &mut Harness<'_, PcbApp>, label: &str) {
     let layout = label.strip_prefix("Arrangement ").filter(|name| *name != "name");
     if (layout.is_some() || label == "New arrangement") && harness.query_by_label(label).is_none() {
         harness.get_by_label("File").click();
@@ -149,7 +155,6 @@ pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
         harness.run();
     }
     harness.get_by_label(label).click();
-    harness.run();
 }
 
 /// Select an actual ribbon tab when a Browser row has the same visible label.
