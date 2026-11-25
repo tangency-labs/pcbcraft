@@ -131,10 +131,13 @@ span tolerance is its RMS value `CS = √(CL² + 2·CT²)`, added to `Smin` to g
 The `density` level selects the A (most), B (nominal) or C (least) column. A
 gull-wing package whose `Smin` does not clear its maximum body width uses the
 reduced heel goals of note 1 to Tables 3-2 and 3-3, unless its terminal length
-tolerance exceeds 0.5 mm. The calculation refuses reversed or out-of-range limits,
-terminals that meet inside the body, opposite lands that would meet and
-gull-wing lands no narrower than their pitch. Tools following the later B or C
-revisions of IPC-7351 may give different values.
+tolerance exceeds 0.5 mm. Supply `body_width` for gull-wing packages when that
+tolerance is at most 0.5 mm; above it, the width is optional. The calculation
+refuses reversed or out-of-range limits, terminals that meet inside the body,
+opposite lands that would meet after nanometer rounding, gull-wing lands no
+narrower than their pitch, and lands that exceed the native footprint's size
+or coordinate limits. Tools following the later B or C revisions of IPC-7351
+may give different values.
 
 ## Definition and placement contract
 

@@ -151,8 +151,19 @@ fn gull_wing_reduced_heel_follows_note_1() {
     assert_eq!(calculate(&terminal(900_001)).unwrap().goals.heel_nm, 350_000);
     let narrow_body = LandPatternInput { body_width: Some(limits(3_000_000, 3_999_999)), ..terminal(900_000) };
     assert_eq!(calculate(&narrow_body).unwrap().goals.heel_nm, 350_000);
-    let no_body = LandPatternInput { body_width: None, ..terminal(900_000) };
-    assert_eq!(calculate(&no_body).unwrap().goals.heel_nm, 350_000);
+}
+
+/// Missing body width cannot select a heel at or below 0.5 mm terminal tolerance.
+#[test]
+fn gull_wing_body_width_is_required_only_at_or_below_note_1_tolerance() {
+    let without_body = |max_nm| LandPatternInput { body_width: None, terminal_length: limits(400_000, max_nm), ..soic8() };
+    for max_nm in [899_999, 900_000] {
+        assert_eq!(
+            calculate(&without_body(max_nm)).unwrap_err(),
+            "a gull-wing pattern needs a body width when the terminal length tolerance is at most 0.5 mm"
+        );
+    }
+    assert_eq!(calculate(&without_body(900_001)).unwrap().goals.heel_nm, 350_000);
 }
 
 /// A dimension may have equal limits; a minimum above its maximum is refused.
@@ -186,6 +197,43 @@ fn terminals_meeting_inside_the_body_are_refused() {
 fn opposite_lands_that_would_meet_are_refused() {
     let long_feet = LandPatternInput { terminal_length: limits(400_000, 2_800_000), ..soic8() };
     assert!(calculate(&long_feet).unwrap_err().starts_with("the computed lands do not separate"));
+}
+
+/// Independently rounded centers and length can erase a positive equation gap.
+#[test]
+fn opposite_lands_must_separate_after_rounding() {
+    let input = |span_nm| LandPatternInput {
+        lead_span: limits(span_nm, span_nm),
+        terminal_length: limits(400_000, 500_000),
+        body_width: Some(limits(650_000, 700_000)),
+        ..soic8()
+    };
+    assert_eq!(calculate(&input(1_738_857)).unwrap_err(), "opposite lands do not separate after rounding: 0 nm gap");
+    let lands = calculate(&input(1_738_858)).unwrap().lands;
+    let (left, right) = (&lands[0], &lands[7]);
+    let left_end = left.center.x_nm + left.width_nm - left.width_nm / 2;
+    let right_start = right.center.x_nm - right.width_nm / 2;
+    assert!(right_start > left_end);
+}
+
+/// Full pad width is limited even when both edges lie inside the coordinate envelope.
+#[test]
+fn computed_lands_obey_the_native_full_size_limit() {
+    let input = |terminal_width_nm| LandPatternInput {
+        density: DensityLevel::A,
+        lead_span: limits(1_600_000, 1_600_000),
+        terminal_length: limits(300_000, 300_000),
+        terminal_width: limits(terminal_width_nm, terminal_width_nm),
+        fabrication_tolerance_nm: 0,
+        placement_tolerance_nm: 0,
+        ..chip_0603()
+    };
+    let exact = calculate(&input(MAX_OFFSET_NM - 100_000)).unwrap();
+    assert_eq!(exact.lands[0].height_nm, MAX_OFFSET_NM);
+    assert_eq!(
+        calculate(&input(MAX_OFFSET_NM - 99_999)).unwrap_err(),
+        "the computed lands exceed the 100000000 nm footprint size or coordinate limits"
+    );
 }
 
 /// Adjacent gull-wing lands need a gap: the land width must stay below the pitch.

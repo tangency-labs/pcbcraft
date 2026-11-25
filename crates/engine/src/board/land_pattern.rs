@@ -78,8 +78,8 @@ pub struct LandPatternInput {
     pub terminal_length: Limits,
     /// Width `W` of one terminal or lead.
     pub terminal_width: Limits,
-    /// Body width `A` of a gull-wing package. It selects the reduced heel goals of note 1
-    /// to Tables 3-2 and 3-3 when the inner terminal span does not clear the body.
+    /// Body width `A` of a gull-wing package, required when the terminal length tolerance
+    /// is at most 0.5 mm to determine the heel goal under note 1 to Tables 3-2 and 3-3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_width: Option<Limits>,
     /// Lead pitch of a gull-wing package; chips have none.
@@ -134,8 +134,8 @@ pub struct LandPattern {
 ///
 /// Errors name the first refused value: a dimension outside 1 nm to 100 mm, a minimum above its
 /// maximum, a tolerance outside 0 to 100 mm, terminals that meet inside the body, opposite lands
-/// that would meet, adjacent gull-wing lands that would touch, lands beyond the footprint bounds,
-/// or chip and gull-wing fields used with the other family.
+/// that would meet after rounding, adjacent gull-wing lands that would touch, lands beyond the
+/// footprint size or coordinate limits, missing required fields, or fields for the wrong family.
 pub fn calculate(input: &LandPatternInput) -> Result<LandPattern, String> {
     validate(input)?;
     let (lead_span, terminal_length, terminal_width) = (input.lead_span, input.terminal_length, input.terminal_width);
@@ -146,7 +146,7 @@ pub fn calculate(input: &LandPatternInput) -> Result<LandPattern, String> {
             lead_span.min_nm, inner_span_min_nm
         ));
     }
-    let goals = goals(input, inner_span_min_nm);
+    let goals = goals(input, inner_span_min_nm)?;
     let (fabrication, placement) = (input.fabrication_tolerance_nm as f64, input.placement_tolerance_nm as f64);
     let process = |component: f64| (component * component + fabrication * fabrication + placement * placement).sqrt();
     let length_tolerance = lead_span.tolerance() as f64;
@@ -159,19 +159,25 @@ pub fn calculate(input: &LandPatternInput) -> Result<LandPattern, String> {
     let outer = lead_span.min_nm as f64 + 2. * goals.toe_nm as f64 + process(length_tolerance);
     let inner = inner_span_max - 2. * goals.heel_nm as f64 - process(inner_span_tolerance);
     let land_width = terminal_width.min_nm as f64 + 2. * goals.side_nm as f64 + process(terminal_width.tolerance() as f64);
-    if nm(inner) < 1 || nm(land_width) < 1 || nm((outer - inner) / 2.) < 1 {
-        return Err(format!("the computed lands do not separate: outer {} nm, gap {} nm, width {} nm", nm(outer), nm(inner), nm(land_width)));
+    let (inner_nm, land_width_nm) = (nm(inner), nm(land_width));
+    let length_nm = nm((outer - inner) / 2.);
+    let row_offset_nm = nm((outer + inner) / 4.);
+    if inner_nm < 1 || land_width_nm < 1 || length_nm < 1 {
+        return Err(format!("the computed lands do not separate: outer {} nm, gap {inner_nm} nm, width {land_width_nm} nm", nm(outer)));
     }
-    let land_length = (outer - inner) / 2.;
-    let row_offset = (outer + inner) / 4.;
+    // Use the same integer X centers and size that the emitted rectangles will use.
+    let gap_nm = 2 * row_offset_nm - length_nm;
+    if gap_nm < 1 {
+        return Err(format!("opposite lands do not separate after rounding: {gap_nm} nm gap"));
+    }
     let lands = match input.family {
-        PackageFamily::Chip => vec![land("1", -row_offset, 0., land_length, land_width), land("2", row_offset, 0., land_length, land_width)],
-        PackageFamily::GullWing => gull_wing_lands(input, row_offset, land_length, land_width)?,
+        PackageFamily::Chip => vec![land("1", -row_offset_nm, 0, length_nm, land_width_nm), land("2", row_offset_nm, 0, length_nm, land_width_nm)],
+        PackageFamily::GullWing => gull_wing_lands(input, row_offset_nm, length_nm, land_width_nm)?,
     };
     if !lands.iter().all(within_bounds) {
-        return Err(format!("the computed lands extend beyond the {MAX_OFFSET_NM} nm footprint bounds"));
+        return Err(format!("the computed lands exceed the {MAX_OFFSET_NM} nm footprint size or coordinate limits"));
     }
-    Ok(LandPattern { goals, outer_nm: nm(outer), inner_nm: nm(inner), land_width_nm: nm(land_width), lands })
+    Ok(LandPattern { goals, outer_nm: nm(outer), inner_nm, land_width_nm, lands })
 }
 
 /// Refuse out-of-range dimensions and fields that belong to the other package family.
@@ -213,14 +219,14 @@ fn validate(input: &LandPatternInput) -> Result<(), String> {
 /// pitch) or 3-5 and 3-6 (chips from and below the 1608 metric nominal length). A gull-wing
 /// package whose minimum inner span `Smin` is at most its maximum body width uses the reduced
 /// heel goals of note 1 to Tables 3-2 and 3-3, unless its terminal length tolerance exceeds 0.5 mm.
-fn goals(input: &LandPatternInput, inner_span_min_nm: i64) -> FilletGoals {
+fn goals(input: &LandPatternInput, inner_span_min_nm: i64) -> Result<FilletGoals, String> {
     let level = |a: i64, b: i64, c: i64| match input.density {
         DensityLevel::A => a,
         DensityLevel::B => b,
         DensityLevel::C => c,
     };
     let courtyard = level(500_000, 250_000, 100_000);
-    match input.family {
+    Ok(match input.family {
         PackageFamily::Chip if nominal(input.lead_span) >= CHIP_TABLE_3_5_MIN_LENGTH_NM => FilletGoals {
             table: "3-5",
             toe_nm: level(550_000, 350_000, 150_000),
@@ -237,8 +243,12 @@ fn goals(input: &LandPatternInput, inner_span_min_nm: i64) -> FilletGoals {
         },
         PackageFamily::GullWing => {
             let wide_pitch = input.pitch_nm.is_some_and(|pitch| pitch > GULL_WING_TABLE_3_2_PITCH_ABOVE_NM);
-            let short_heel = input.body_width.is_some_and(|body| inner_span_min_nm <= body.max_nm)
-                && input.terminal_length.tolerance() <= GULL_WING_SHORT_HEEL_MAX_TERMINAL_TOLERANCE_NM;
+            let short_heel = if input.terminal_length.tolerance() <= GULL_WING_SHORT_HEEL_MAX_TERMINAL_TOLERANCE_NM {
+                let body = input.body_width.ok_or("a gull-wing pattern needs a body width when the terminal length tolerance is at most 0.5 mm")?;
+                inner_span_min_nm <= body.max_nm
+            } else {
+                false
+            };
             FilletGoals {
                 table: if wide_pitch { "3-2" } else { "3-3" },
                 toe_nm: level(550_000, 350_000, 150_000),
@@ -247,34 +257,34 @@ fn goals(input: &LandPatternInput, inner_span_min_nm: i64) -> FilletGoals {
                 courtyard_excess_nm: courtyard,
             }
         }
-    }
+    })
 }
 
 /// Place two rows of leads: pin 1 at the top of the left row, counting down the left row and
 /// back up the right row. Adjacent lands of a row must leave a gap.
-fn gull_wing_lands(input: &LandPatternInput, row_offset: f64, land_length: f64, land_width: f64) -> Result<Vec<Land>, String> {
+fn gull_wing_lands(input: &LandPatternInput, row_offset_nm: i64, length_nm: i64, width_nm: i64) -> Result<Vec<Land>, String> {
     let (Some(pitch), Some(pins)) = (input.pitch_nm, input.pin_count) else {
         return Err("a gull-wing land pattern needs a pitch and a pin count".into());
     };
-    if nm(land_width) >= pitch {
-        return Err(format!("adjacent lands touch: the {} nm land width is not less than the {pitch} nm pitch", nm(land_width)));
+    if width_nm >= pitch {
+        return Err(format!("adjacent lands touch: the {width_nm} nm land width is not less than the {pitch} nm pitch"));
     }
     let per_row = usize::from(pins / 2);
-    let row_y = |index: usize| pitch as f64 * (index as f64 - (per_row as f64 - 1.) / 2.);
-    let left = (0..per_row).map(|index| land(&(index + 1).to_string(), -row_offset, row_y(index), land_length, land_width));
-    let right = (0..per_row).map(|index| land(&(per_row + index + 1).to_string(), row_offset, row_y(per_row - 1 - index), land_length, land_width));
+    let row_y = |index: usize| nm(pitch as f64 * (index as f64 - (per_row as f64 - 1.) / 2.));
+    let left = (0..per_row).map(|index| land(&(index + 1).to_string(), -row_offset_nm, row_y(index), length_nm, width_nm));
+    let right = (0..per_row).map(|index| land(&(per_row + index + 1).to_string(), row_offset_nm, row_y(per_row - 1 - index), length_nm, width_nm));
     Ok(left.chain(right).collect())
 }
 
 /// Build one land with its length along the X axis.
-fn land(number: &str, x: f64, y: f64, length: f64, width: f64) -> Land {
-    Land { number: number.into(), center: Point { x_nm: nm(x), y_nm: nm(y) }, width_nm: nm(length), height_nm: nm(width) }
+fn land(number: &str, x_nm: i64, y_nm: i64, length_nm: i64, width_nm: i64) -> Land {
+    Land { number: number.into(), center: Point { x_nm, y_nm }, width_nm: length_nm, height_nm: width_nm }
 }
 
-/// Keep every computed land inside the footprint definition's coordinate envelope.
+/// Keep every full land extent within the native size limit and each edge within the envelope.
 fn within_bounds(land: &Land) -> bool {
-    let reach = |center: i64, size: i64| center.abs() + (size + 1) / 2;
-    reach(land.center.x_nm, land.width_nm) <= MAX_OFFSET_NM && reach(land.center.y_nm, land.height_nm) <= MAX_OFFSET_NM
+    let axis_fits = |center: i64, size: i64| (1..=MAX_OFFSET_NM).contains(&size) && center.abs() + (size + 1) / 2 <= MAX_OFFSET_NM;
+    axis_fits(land.center.x_nm, land.width_nm) && axis_fits(land.center.y_nm, land.height_nm)
 }
 
 /// Middle of a validated dimension range.
