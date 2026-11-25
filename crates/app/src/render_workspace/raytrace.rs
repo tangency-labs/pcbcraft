@@ -21,7 +21,7 @@ use solidcraft_viewport::{
 };
 use std::{
     f64::consts::{FRAC_PI_2, PI, TAU},
-    sync::{Arc, Mutex, OnceLock, mpsc},
+    sync::{Arc, Mutex, OnceLock, Weak, mpsc},
     time::Duration,
 };
 
@@ -54,8 +54,21 @@ pub(super) struct Worker {
 struct Backend {
     adapter: wgpu::Adapter,
     host: OnceLock<Result<ImageHost, String>>,
-    scene: Mutex<Option<(Request, ProductScene)>>,
+    scene: Mutex<Option<CachedScene>>,
     studio: OnceLock<Result<Arc<EnvironmentSource>, String>>,
+}
+
+struct CachedScene {
+    request: Request,
+    // Preserve allocation identity without keeping the board snapshot alive.
+    project: Weak<Project>,
+    scene: ProductScene,
+}
+
+impl CachedScene {
+    fn matches(&self, request: Request, project: &Arc<Project>) -> bool {
+        self.request == request && std::ptr::eq(self.project.as_ptr(), Arc::as_ptr(project))
+    }
 }
 
 impl Worker {
@@ -130,11 +143,12 @@ impl Worker {
                     let host = host.as_ref().map_err(Clone::clone)?;
                     let scene = {
                         let mut cached = backend.scene.lock().map_err(|_| "The ray-traced scene cache is unavailable.")?;
-                        if cached.as_ref().is_none_or(|(key, _)| *key != request) {
+                        if cached.as_ref().is_none_or(|entry| !entry.matches(request, &project)) {
                             background.report("Building ray-tracing geometry…");
-                            *cached = Some((request, build_scene(&project, request, &background_cancel)?));
+                            let scene = build_scene(&project, request, &background_cancel)?;
+                            *cached = Some(CachedScene { request, project: Arc::downgrade(&project), scene });
                         }
-                        cached.as_ref().ok_or("The ray-traced scene is unavailable.")?.1.clone()
+                        cached.as_ref().ok_or("The ray-traced scene is unavailable.")?.scene.clone()
                     };
                     let environment = backend.studio.get_or_init(studio_environment).as_ref().map_err(Clone::clone)?;
                     let frame = Frame { scene, pose, environment: Some(Arc::clone(environment)) };
@@ -360,6 +374,19 @@ mod tests {
         assert!(!hardware(wgpu::DeviceType::Other));
         assert!(hardware(wgpu::DeviceType::DiscreteGpu));
         assert!(!Worker::default().available());
+    }
+
+    #[test]
+    fn cached_scene_requires_the_same_project_snapshot() {
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &serde_json::json!({"create_board": true})).unwrap();
+        let project = session.snapshot().unwrap();
+        let copy = Arc::new((*project).clone());
+        let request = Request { view: ViewId(0), target: project.board_target().unwrap(), revision: session.revision() };
+        let entry = CachedScene { request, project: Arc::downgrade(&project), scene: ProductScene { bounds: Aabb3::EMPTY, meshes: Vec::new() } };
+        assert!(entry.matches(request, &Arc::clone(&project)));
+        assert!(!entry.matches(request, &copy));
+        assert!(!entry.matches(Request { revision: request.revision + 1, ..request }, &project));
     }
 
     /// Exercise the real SolidCraft path tracer on a routed board, including an eight-degree view.

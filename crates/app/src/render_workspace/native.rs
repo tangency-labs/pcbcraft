@@ -135,6 +135,8 @@ impl State {
             self.trace.clear_frames();
             self.camera = Camera::default();
             self.fit();
+        } else if self.error.take().is_some() {
+            self.request = None;
         }
     }
 
@@ -413,9 +415,17 @@ impl PcbApp {
         let previous = std::mem::replace(&mut self.integrated_titlebar, integrated);
         self.app_bar(ui, enabled);
         self.integrated_titlebar = previous;
+        let main = self.views.host == self.views.main;
+        if main {
+            self.assistant_shortcuts(&ctx);
+        }
         ui.add_enabled_ui(enabled, |ui| {
             self.render_ribbon(ui);
-            self.editor_workspace(ui, ui.available_rect_before_wrap());
+            let area = ui.available_rect_before_wrap();
+            self.editor_workspace(ui, area);
+            if main {
+                self.host_assistant(&ctx, Some(area), false, self.session.project().is_some());
+            }
         });
         let dialog_host =
             self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).or_else(|| self.render_browse_host()).unwrap_or(self.views.main);
@@ -796,11 +806,35 @@ mod tests {
         h.get_by_label("Board");
         click(&mut h, "Cancel");
         assert!(matches!(h.state().dialog, Dialog::None));
+        let valid = h.state().views.active.render.as_ref().unwrap();
+        let key = valid.key;
+        let camera = valid.camera;
+        click(&mut h, "Choose a board in this project");
+        click(&mut h, "Open");
+        let valid = h.state().views.active.render.as_ref().unwrap();
+        assert_eq!(valid.key, key);
+        assert_eq!(valid.camera, camera);
+
+        // The engine supports one physical board per project. A recoverable error on that
+        // board makes confirmation observable even when the selected target stays the same.
+        let failed = h.state_mut().views.active.render.as_mut().unwrap();
+        failed.mesh = None;
+        failed.error = Some("Preview worker unavailable".into());
         click(&mut h, "Choose a board in this project");
         click(&mut h, "Open");
         assert!(matches!(h.state().dialog, Dialog::None));
-        assert_eq!(h.state().views.active.render.as_ref().unwrap().target, Some(target));
+        wait_for_preview(&mut h);
+        let rebuilt = h.state().views.active.render.as_ref().unwrap();
+        assert_eq!(rebuilt.target, Some(target));
+        assert_eq!(rebuilt.camera, camera);
+        assert!(rebuilt.mesh.is_some());
+        assert!(rebuilt.error.is_none());
+        assert_eq!(rebuilt.key, key + 1);
         assert_eq!(h.state().session.inspect(), before);
+
+        click(&mut h, "Assistant");
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput);
+        click(&mut h, "Close Assistant");
 
         let camera = {
             let state = h.state_mut().views.active.render.as_mut().unwrap();
