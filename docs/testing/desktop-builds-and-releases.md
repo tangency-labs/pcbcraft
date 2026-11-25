@@ -9,7 +9,7 @@ jobs reuse this build.
 | --- | --- |
 | Linux x86-64 | Tarball with `pcbcraft` and `pcbcraft-cli`, built on Ubuntu 22.04 |
 | Windows x64 | Portable ZIP with `pcbcraft.exe` and `pcbcraft-cli.exe`, built with MSVC |
-| macOS Apple silicon | DMG with `PCBCraft.app` and a separate CLI ZIP |
+| macOS Apple silicon | DMG with `PCBCraft.app` and its bundled CLI |
 
 Each download group includes `SHA256SUMS.txt`. Packages include the build
 revision and the project and dependency notices. The packaging check runs the
@@ -18,6 +18,13 @@ reuses the existing packaging script, which checks the bundle signature. The
 preview workflow uses ad-hoc signing on macOS. A broadly distributed macOS
 release needs Developer ID signing and notarization. Windows preview binaries
 are unsigned.
+
+After moving `PCBCraft.app` to Applications, you can run the macOS CLI directly
+from the app bundle.
+
+```sh
+/Applications/PCBCraft.app/Contents/MacOS/pcbcraft-cli --version
+```
 
 ## Nightlies
 
@@ -31,7 +38,7 @@ selected revisions.
 
 When all three platforms finish and the commit is still at the tip of
 `main`, CI updates the rolling [Nightly prerelease](https://github.com/tangency-labs/pcbcraft/releases/tag/nightly).
-Its notes link to the tested commit's CI run, the four packages and their
+Its notes link to the tested commit's CI run, the three packages and their
 combined checksums. The page stays at the same address as the `nightly` tag
 moves forward. Nightly is marked as a prerelease so GitHub's Latest release
 continues to point to a stable version.
@@ -53,7 +60,7 @@ continues to point to a stable version.
 
 The workflow reads the version from the selected commit. After it verifies the
 packages, it creates the corresponding tag, such as `v0.1.0`, on that commit
-and attaches all four packages and `SHA256SUMS.txt` to the draft. A prerelease
+and attaches all three packages and `SHA256SUMS.txt` to the draft. A prerelease
 version such as `0.1.0-rc.1` creates a prerelease draft. You can rerun a failed
 attempt from its Actions run. An existing tag must point to the same commit,
 and only a draft's assets can be refreshed.

@@ -82,7 +82,6 @@ jobs:
             "packages/pcbcraft-release-linux-x86_64/pcbcraft-$RELEASE_VERSION-linux-x86_64.tar.gz" \
             "packages/pcbcraft-release-windows-x64/pcbcraft-$RELEASE_VERSION-windows-x64.zip" \
             "packages/pcbcraft-release-macos-aarch64/pcbcraft-$RELEASE_VERSION-macos-aarch64.dmg" \
-            "packages/pcbcraft-release-macos-aarch64/pcbcraft-cli-$RELEASE_VERSION-macos-aarch64.zip" \
             release/
           (cd release && sha256sum -- * > SHA256SUMS.txt)
       - name: Tag the built commit and stage the draft

@@ -16,26 +16,22 @@ current_main() {
 }
 
 collect() {
-    local platform="$1" directory pattern
-    shift
+    local platform="$1" pattern="$2" directory
     directory="packages/pcbcraft-nightly-$GITHUB_SHA-$platform"
     (cd "$directory" && sha256sum --check --strict SHA256SUMS.txt)
-    local matches=()
-    for pattern in "$@"; do
-        matches=("$directory"/$pattern)
-        if [[ "${#matches[@]}" != 1 ]]; then
-            echo "Expected one Nightly package matching $pattern for $platform." >&2
-            exit 1
-        fi
-        cp -- "${matches[0]}" "nightly-assets/$prefix-${matches[0]##*/}"
-    done
+    local matches=("$directory"/$pattern)
+    if [[ "${#matches[@]}" != 1 ]]; then
+        echo "Expected one Nightly package matching $pattern for $platform." >&2
+        exit 1
+    fi
+    cp -- "${matches[0]}" "nightly-assets/$prefix-${matches[0]##*/}"
 }
 
 current_main || exit 0
 mkdir nightly-assets
 collect linux-x86_64 'pcbcraft-*-linux-x86_64.tar.gz'
 collect windows-x64 'pcbcraft-*-windows-x64.zip'
-collect macos-aarch64 'pcbcraft-*-macos-aarch64.dmg' 'pcbcraft-cli-*-macos-aarch64.zip'
+collect macos-aarch64 'pcbcraft-*-macos-aarch64.dmg'
 (cd nightly-assets && sha256sum -- * > "$prefix-SHA256SUMS.txt")
 
 release="$(gh api --paginate "$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "nightly")' |

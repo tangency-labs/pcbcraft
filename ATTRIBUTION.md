@@ -1839,8 +1839,7 @@ are adapted from:
   `codesign` + `notarytool` workflow, and `hdiutil` retry loop.
 - `UCS-Care-Group/mailcraft` at commit
   `b1e2d1ce0aa9b1e780dcec57e658df261b5bc452` (MIT OR Apache-2.0): minimal
-  hardened-runtime `entitlements.plist`, DMG layout hooks, and CLI archive
-  packaging flow.
+  hardened-runtime `entitlements.plist` and DMG layout hooks.
 
 Changes for PCBCraft: set bundle identifier `io.tangencylabs.pcbcraft`,
 adapted desktop/CLI target names (`pcbcraft`, `pcbcraft-cli`) and `.pc`
