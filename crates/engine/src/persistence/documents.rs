@@ -1937,7 +1937,7 @@ impl DocumentsEncoder {
     /// compact membership records. Only disposable encoding state changes; no project edit or Save refusal is
     /// introduced. Legacy layout metadata is adopted on the save snapshot before writing.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
-        match self.step_records(records) {
+        match self.step_records(records, MAX_DOCUMENT_BYTES) {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
                 let project = self.project.clone();
                 *self = Self::new(project);
@@ -1981,8 +1981,8 @@ impl DocumentsEncoder {
         }
     }
 
-    /// Advance the current representation within the caller's incremental record budget.
-    fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
+    /// Advance within the caller's record budget, checking the active buffer against the document byte limit.
+    fn step_records(&mut self, records: usize, document_byte_limit: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
                 26 => {
@@ -2473,14 +2473,19 @@ impl DocumentsEncoder {
                     }
                 }
                 34 => {
-                    if let Some(baseline) = &self.project.board.baseline {
-                        if !self.baseline_encoding.step(baseline, &mut self.bytes, true)? {
-                            continue;
+                    let baseline = &self.project.board.baseline;
+                    let complete = match baseline {
+                        Some(baseline) => self.baseline_encoding.step(baseline, &mut self.bytes, true)?,
+                        None => true,
+                    };
+                    if complete {
+                        if baseline.is_some() {
+                            self.bytes.write_all(b",\n").map_err(|error| error.to_string())?;
                         }
-                        self.bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+                        board_metadata_tail(&mut self.bytes, &self.project)?;
+                        self.phase = 30;
                     }
-                    board_metadata_tail(&mut self.bytes, &self.project)?;
-                    self.phase = 30;
+                    // The embedded bytes count against the board limit even before the baseline is complete.
                 }
                 30 => {
                     if self.board_rows.step(&mut self.bytes, &self.project.board)? {
@@ -2580,7 +2585,7 @@ impl DocumentsEncoder {
                 }
                 _ => return Err("document encoding is already complete".to_owned()),
             }
-            if self.bytes.len() > MAX_DOCUMENT_BYTES {
+            if self.bytes.len() > document_byte_limit {
                 self.size_limit_exceeded = true;
                 return Err("encoded document exceeds its size limit".to_owned());
             }
@@ -3171,4 +3176,53 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     }
     bytes.extend_from_slice(b"  \"net_labels\": [\n");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DocumentsEncoder;
+    use crate::{Session, board::update::INITIALIZE_BASELINE};
+    use serde_json::json;
+
+    /// The first embedded write counts against the board limit before phase 34 finishes.
+    #[test]
+    fn incomplete_baseline_step_checks_board_document_size() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        assert!(snapshot.board.baseline.is_some());
+
+        let at_baseline = || {
+            let mut encoder = DocumentsEncoder::new(snapshot.clone());
+            for _ in 0..128 {
+                assert!(encoder.step(1).unwrap().is_none());
+                if encoder.phase == 34 {
+                    break;
+                }
+            }
+            assert_eq!(encoder.phase, 34);
+            encoder
+        };
+        let mut reference = at_baseline();
+        let mut fits = at_baseline();
+        let mut too_large = at_baseline();
+        let board_header_len = reference.bytes.len();
+        let checked = (0..32).any(|_| {
+            assert!(reference.step(1).unwrap().is_none());
+            assert_eq!(reference.phase, 34, "the baseline must still be incomplete");
+            let written = reference.bytes.len();
+            assert!(fits.step_records(1, written).unwrap().is_none());
+            assert_eq!(fits.bytes, reference.bytes);
+            if written == board_header_len {
+                assert!(too_large.step_records(1, written).unwrap().is_none());
+                return false;
+            }
+            assert_eq!(too_large.step_records(1, written - 1).unwrap_err(), "encoded document exceeds its size limit");
+            assert!(too_large.size_limit_exceeded);
+            assert_eq!(too_large.phase, 34);
+            true
+        });
+        assert!(checked, "the empty baseline must start emitting within the step bound");
+    }
 }
