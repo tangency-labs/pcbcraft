@@ -51,7 +51,9 @@ validation, not a manufacturing tolerance or a claim that a route is safe.
 Board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`),
 ratsnest (`ratsnest`), via inspection (`inspect_vias`) and the engine short
 detection primitive (`copper_shorts`) evaluate exact circular arc contact
-geometry without chord substitution. Via inspection resolves derived `net` and
+geometry without chord substitution. Contact tests and spatial bounds include
+the end projected onto the start circle as well as the authored round end.
+Via inspection resolves derived `net` and
 `connected_to_pad` across arcs while retaining authored `net_assignment`,
 `assignment_mode` and registry `net_state`.
 

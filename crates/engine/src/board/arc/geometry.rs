@@ -2,8 +2,8 @@
 //!
 //! All coordinates use board nanometers (`Point`, X right, Y down, bounded to ±1 m) and the
 //! validation conventions in [`super::ArcTrack`]. No chord substitution or tessellation is used:
-//! every contact predicate evaluates exact closed-form distances to the circular centerline and
-//! authored round endpoints.
+//! every contact predicate evaluates closed-form distances to the circular sweep, including
+//! its projected end, and the authored round endpoints.
 //!
 //! ## Contact tolerance
 //! At the ±1 m (±10⁹ nm) coordinate limit, IEEE-754 `f64` has ~2.2×10⁻⁷ nm per ULP.
@@ -32,6 +32,8 @@ pub struct ArcGeometry {
     radius: f64,
     start: (f64, f64),
     end: (f64, f64),
+    /// Point on the start circle in the direction of the authored end.
+    circular_end: (f64, f64),
     start_point: Point,
     end_point: Point,
     start_angle: f64,
@@ -55,7 +57,10 @@ impl ArcGeometry {
             return Err("an arc needs a nonzero finite radius".into());
         }
         let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
-        let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
+        let (ex, ey) = (end.0 - center.0, end.1 - center.1);
+        let end_angle = ey.atan2(ex);
+        let scale = radius / ex.hypot(ey);
+        let circular_end = (center.0 + ex * scale, center.1 + ey * scale);
         let mut sweep = match arc.direction {
             Direction::Clockwise => (end_angle - start_angle).rem_euclid(TAU),
             Direction::Counterclockwise => (start_angle - end_angle).rem_euclid(TAU),
@@ -82,6 +87,7 @@ impl ArcGeometry {
             radius,
             start,
             end,
+            circular_end,
             start_point: arc.start,
             end_point: arc.end,
             start_angle,
@@ -168,10 +174,10 @@ impl ArcGeometry {
 
     /// Conservative axis-aligned copper bounding box `[min_x, min_y, max_x, max_y]` in nm.
     pub fn bounds(&self) -> [f64; 4] {
-        let mut min_x = self.start.0.min(self.end.0);
-        let mut min_y = self.start.1.min(self.end.1);
-        let mut max_x = self.start.0.max(self.end.0);
-        let mut max_y = self.start.1.max(self.end.1);
+        let mut min_x = self.start.0.min(self.end.0).min(self.circular_end.0);
+        let mut min_y = self.start.1.min(self.end.1).min(self.circular_end.1);
+        let mut max_x = self.start.0.max(self.end.0).max(self.circular_end.0);
+        let mut max_y = self.start.1.max(self.end.1).max(self.circular_end.1);
         for angle in [0.0, FRAC_PI_2, PI, -FRAC_PI_2] {
             if self.contains_angle(angle) {
                 let (x, y) = self.point_at_angle(angle);
@@ -198,6 +204,7 @@ impl ArcGeometry {
         };
         include(self.start);
         include(self.end);
+        include(self.circular_end);
         for step in 0..8 {
             let angle = step as f64 * FRAC_PI_4;
             if self.contains_angle(angle) {
@@ -210,9 +217,9 @@ impl ArcGeometry {
         (std::array::from_fn(|a| min[a] - pad[a]), std::array::from_fn(|a| max[a] + pad[a]))
     }
 
-    /// Shortest Euclidean distance from a point to the arc's centerline (including authored ends).
+    /// Shortest Euclidean distance to the closed sweep or the authored end.
     pub fn distance_to_point(&self, point: (f64, f64)) -> f64 {
-        let mut best = hypot_diff(point, self.start).min(hypot_diff(point, self.end));
+        let mut best = hypot_diff(point, self.start).min(hypot_diff(point, self.end)).min(hypot_diff(point, self.circular_end));
         let dx = point.0 - self.center.0;
         let dy = point.1 - self.center.1;
         let dist_c = dx.hypot(dy);
@@ -233,6 +240,7 @@ impl ArcGeometry {
     fn distance_to_segment_f64(&self, a: (f64, f64), b: (f64, f64)) -> f64 {
         let mut best = point_to_segment_distance(self.start, a, b)
             .min(point_to_segment_distance(self.end, a, b))
+            .min(point_to_segment_distance(self.circular_end, a, b))
             .min(self.distance_to_point(a))
             .min(self.distance_to_point(b));
         let p0 = (a.0 - self.center.0, a.1 - self.center.1);
@@ -275,8 +283,10 @@ impl ArcGeometry {
         let mut best = self
             .distance_to_point(other.start)
             .min(self.distance_to_point(other.end))
+            .min(self.distance_to_point(other.circular_end))
             .min(other.distance_to_point(self.start))
-            .min(other.distance_to_point(self.end));
+            .min(other.distance_to_point(self.end))
+            .min(other.distance_to_point(self.circular_end));
 
         let dx = other.center.0 - self.center.0;
         let dy = other.center.1 - self.center.1;
@@ -405,6 +415,25 @@ mod tests {
         // Center (0,0), radius 5_000_000, width 200_000 (half_width 100_000).
         // CW in X-right Y-down: (5_000_000, 0) -> (0, 5_000_000) (positive X, positive Y quadrant).
         ArcGeometry::from_track(&make_arc(pt(0, 0), pt(5_000_000, 0), pt(0, 5_000_000), 200_000, Direction::Clockwise)).unwrap()
+    }
+
+    /// Contacts just inside the projected cap survive a valid 1 nm endpoint discrepancy.
+    #[test]
+    fn off_circle_end_preserves_sweep_and_authored_cap_contacts() {
+        let arc = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(5_000_000, 0), pt(0, 5_000_001), 200_001, Direction::Clockwise)).unwrap();
+        let contact = pt(-120_000, 4_840_000);
+        // The projected end is 200,000 nm away, the authored end about 200,000.8 nm.
+        // The two copper radii sum to 200,000.5 nm.
+        assert!(arc.touches_via(contact, 200_000).unwrap());
+        assert!(arc.touches_segment(contact, pt(-220_000, 4_740_000), 200_000).unwrap());
+        assert!(!arc.touches_via(pt(-120_002, 4_840_000), 200_000).unwrap());
+        let other =
+            ArcGeometry::from_track(&make_arc(pt(-120_000, 3_840_000), contact, pt(-1_120_000, 3_840_000), 200_000, Direction::Clockwise)).unwrap();
+        assert!(arc.touches_arc(&other));
+        assert!(other.touches_arc(&arc));
+
+        assert_eq!(arc.end_point(), pt(0, 5_000_001));
+        assert!(arc.touches_via(pt(-120_000, 5_160_001), 200_000).unwrap());
     }
 
     #[test]
