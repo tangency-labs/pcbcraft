@@ -105,3 +105,6 @@ This work is separate from the investigation/container work in
 stages, package consumers, label changes, unknown inputs, strict completion and
 exact-revision reuse. Actual full Windows desktop qualification requires a full
 hosted run; local Linux results do not establish it.
+
+[Desktop preview packages](desktop-preview-packages.md) use a separate
+manual workflow for native download artifacts.

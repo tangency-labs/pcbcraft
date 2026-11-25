@@ -1,0 +1,50 @@
+name: Desktop preview packages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_TARGET_DIR: target
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: windows-x64
+            runner: windows-2025
+          - platform: macos-aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: desktop-preview-${{ matrix.platform }}
+          save-if: false
+      - run: cargo build --locked --release -p pcbcraft -p pcbcraft-cli
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+      - run: python -B scripts/package-desktop.py ${{ matrix.platform }} --bin-dir target/release --output dist/preview
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pcbcraft-preview-${{ matrix.platform }}
+          path: dist/preview/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
