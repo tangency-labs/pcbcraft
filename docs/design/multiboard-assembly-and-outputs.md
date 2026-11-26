@@ -203,8 +203,9 @@ The writer omits the main flash, pins and outlines for any placed part whose
 current instance is marked **Do not populate**. A historical placement with no
 current instance still uses its accepted reference; the accepted baseline does
 not record population intent. The writer is not included in the fabrication
-archive and does not apply named variants or write manifest entries. There is no
-pick-and-place export to compare against yet. Bare-board fabrication is unchanged.
+archive and does not apply named variants or write manifest entries. It does not
+apply **Exclude from pick-and-place files**; there is no pick-and-place export yet.
+Bare-board fabrication is unchanged.
 
 Use a new export destination or a deliberate replace operation, with failures
 leaving the previous complete output intact. Deleting a board must separately
@@ -369,8 +370,10 @@ than treating it as a harmless BOM substitution.
 
 Variant preview is user-local view state. Export recipes capture an explicit
 board and optional variant ID, and output records retain that choice. DNP parts
-remain in the circuit and physical design but are marked unpopulated in assembly
-outputs. A variant does not assert that the unpopulated circuit is electrically
+remain in the circuit and physical design. Variant-aware outputs must represent
+those parts as unpopulated; the current Gerber X3 writer instead omits placements
+based on the instance flag and does not apply variants. A variant does not assert
+that the unpopulated circuit is electrically
 functional; assembly-specific validation must report that separately. Shared
 structural edits validate affected variants and require explicit resolution for
 removed components or incompatible alternatives.
