@@ -5,7 +5,7 @@
 //! lengths are nanometres. It resolves what the format leaves to the reader:
 //!
 //! - A library symbol that `extends` another draws as its parent does; only its own fields
-//!   differ. The drawing is copied from the parent chain.
+//!   differ. The drawing is shared with the symbol at the end of the chain.
 //! - A placed symbol's reference and unit come from its instance record for this file's own
 //!   place (KiCad 7 and later), else its first instance record, else the file's
 //!   `symbol_instances` list (KiCad 6), else its `Reference` field.
@@ -97,6 +97,9 @@ pub struct LibSymbol {
     pub name: String,
     /// Whether the symbol is marked as a power symbol.
     pub power: bool,
+    /// Whether a power symbol's net stays on its own sheet (KiCad 10's `(power local)`) instead
+    /// of reaching the whole schematic. Always false for a symbol that isn't a power symbol.
+    pub power_local: bool,
     /// The symbol's own fields: reference prefix, value, footprint and the rest.
     pub properties: Vec<Property>,
     /// Whether the symbol hides its pins' names.
@@ -104,11 +107,15 @@ pub struct LibSymbol {
     /// Whether the symbol hides its pins' numbers.
     pub pin_numbers_hidden: bool,
     /// The drawing, by unit and body style. Unit 0 is common to every unit. Symbol frame.
-    /// Symbols that `extends` one parent share its drawing rather than copying it.
+    /// Symbols that `extends` one parent share its drawing rather than copying it: within one
+    /// [`Schematic`], [`Arc::ptr_eq`] tells whether two symbols draw with the same one.
     pub units: Arc<Vec<SymbolUnit>>,
-    /// Groups of pin numbers the part joins inside itself (KiCad 10's `jumper_pin_groups`),
-    /// from the symbol and every symbol up its `extends` chain.
-    pub jumper_pin_groups: Vec<Vec<String>>,
+    /// Groups of pin numbers the part joins inside itself (KiCad 10's `jumper_pin_groups`): the
+    /// symbol's own list and the list of each symbol up its `extends` chain, nearest first,
+    /// lists without a group left out. Each list is shared with the symbol that wrote it, so
+    /// symbols deriving from one parent copy none of its groups, and within one [`Schematic`]
+    /// [`Arc::ptr_eq`] tells whether two symbols carry the same list.
+    pub jumper_pin_groups: Vec<Arc<Vec<Vec<String>>>>,
     /// Whether the part joins pins that share a number (KiCad 10's
     /// `duplicate_pin_numbers_are_jumpers`), said by the symbol or any symbol up its chain.
     pub duplicate_pin_numbers_are_jumpers: bool,
@@ -126,7 +133,8 @@ impl LibSymbol {
 pub struct SymbolUnit {
     /// 0 for what all units share, else the unit's number from 1.
     pub unit: u32,
-    /// 1 for the normal body style, 2 for the alternate (De Morgan) one.
+    /// 1 for the normal body style, 2 for the alternate (De Morgan) one; 0 is read as drawn in
+    /// every style.
     pub style: u32,
     pub name: Option<String>,
     pub graphics: Vec<Graphic>,
@@ -187,6 +195,12 @@ pub struct PlacedSymbol {
     pub mirror: Mirror,
     /// The unit placed, from 1.
     pub unit: u32,
+    /// The body style shown, from 1 (`body_style`, as KiCad 10 writes it); 1, the normal style,
+    /// when the file doesn't say. The library symbol need not have that style: KiCad 10.0.8
+    /// then gives the part none of the normal style's pins, so a caller that must keep every
+    /// connection can't use those pins for a style other than 1 without checking
+    /// [`LibSymbol::units`].
+    pub body_style: u32,
     /// The resolved reference, such as `R1`; `R?` when unannotated, `?` when the file gives none.
     pub reference: String,
     /// Where [`Self::reference`] and [`Self::unit`] came from.
@@ -413,7 +427,25 @@ pub enum Fill {
 
 /// Read one schematic file. Fails only when the text is not a KiCad schematic, is malformed or
 /// is larger than [`MAX_BYTES`] or [`MAX_ITEMS`]; anything else that can't be read is left out
-/// and counted in [`Schematic::notes`].
+/// and counted, so a successful read can still have lost content:
+///
+/// - [`Schematic::notes`] counts what doesn't change connections: drawings, text, appearance.
+///   It also counts a library symbol left out for a broken `extends` chain and a file newer
+///   than the reader knows.
+/// - [`Schematic::lost`] counts what can carry a connection, such as a blank label, a wire
+///   whose points can't all be read, a pin without a number, or a top-level item,
+///   library-symbol setting or symbol-unit item the reader doesn't know.
+///
+/// `notes` alone doesn't say whether connections were kept. A caller that needs the file's
+/// exact connectivity must:
+///
+/// - refuse a result whose `lost` isn't empty;
+/// - refuse a placed symbol whose library symbol isn't in [`Schematic::lib_symbols`];
+/// - check each placed symbol's [`PlacedSymbol::body_style`], which the reader only reports;
+/// - decide what to do with [`Schematic::sheets`], buses and a library symbol's jumper
+///   settings, which the reader carries without acting on them.
+///
+/// Settings of a placed symbol that the reader doesn't know are skipped without a count.
 pub fn read_schematic(text: &str) -> Result<Schematic, Error> {
     if text.len() > MAX_BYTES {
         return Err(Error::TooLarge(format!("the schematic is larger than {} MiB", MAX_BYTES >> 20)));
@@ -454,11 +486,13 @@ struct State {
 struct RawLibSymbol {
     extends: Option<String>,
     power: bool,
+    power_local: bool,
     properties: Vec<Property>,
     pin_names_hidden: bool,
     pin_numbers_hidden: bool,
     units: Arc<Vec<SymbolUnit>>,
-    jumper_pin_groups: Vec<Vec<String>>,
+    /// The symbol's own jumper pin groups, shared with every symbol that extends it.
+    jumper_pin_groups: Arc<Vec<Vec<String>>>,
     duplicate_pin_numbers_are_jumpers: bool,
 }
 
@@ -507,7 +541,7 @@ impl State {
                     let line = Line { uuid: node.child("uuid").and_then(uuid), points };
                     if kind == "wire" { self.schematic.wires.push(line) } else { self.schematic.buses.push(line) }
                 }
-                _ => self.schematic.lost.add(&format!("{kind} without two points in range left out")),
+                _ => self.schematic.lost.add(&format!("{kind} without two points, or with a point that can't be read, left out")),
             },
             kind @ ("polyline" | "rectangle" | "circle" | "arc" | "bezier") => match graphic(node, kind) {
                 Some(graphic) => {
@@ -665,21 +699,24 @@ impl State {
         }
         let properties = properties(node);
         self.count(properties.len())?;
+        let power = node.child("power");
+        // Every list counts, should a symbol carry more than one.
+        let jumper_pin_groups: Vec<Vec<String>> = node
+            .all("jumper_pin_groups")
+            .flat_map(|groups| groups.args())
+            .map(|group| group.head().into_iter().chain(group.args().iter().filter_map(Node::word)).map(str::to_owned).collect::<Vec<_>>())
+            .filter(|group| !group.is_empty())
+            .collect();
         Ok(RawLibSymbol {
             extends: node.child("extends").and_then(|e| e.text(0)).map(str::to_owned),
-            power: node.child("power").is_some() || node.flag("power"),
+            power: power.is_some() || node.flag("power"),
+            power_local: power.is_some_and(|p| p.flag("local")),
             properties,
             pin_names_hidden: node.child("pin_names").is_some_and(hidden),
             pin_numbers_hidden: node.child("pin_numbers").is_some_and(hidden),
             units: Arc::new(units),
-            jumper_pin_groups: node
-                .child("jumper_pin_groups")
-                .into_iter()
-                .flat_map(|groups| groups.args())
-                .map(|group| group.head().into_iter().chain(group.args().iter().filter_map(Node::word)).map(str::to_owned).collect::<Vec<_>>())
-                .filter(|group| !group.is_empty())
-                .collect(),
-            duplicate_pin_numbers_are_jumpers: node.child("duplicate_pin_numbers_are_jumpers").and_then(|n| n.text(0)) == Some("yes"),
+            jumper_pin_groups: Arc::new(jumper_pin_groups),
+            duplicate_pin_numbers_are_jumpers: node.all("duplicate_pin_numbers_are_jumpers").any(|n| n.text(0) == Some("yes")),
         })
     }
 
@@ -745,7 +782,9 @@ impl State {
         Ok(())
     }
 
-    /// A placed symbol. Its reference and unit are settled in [`State::finish`].
+    /// A placed symbol. Its reference and unit are settled in [`State::finish`]. One without a
+    /// library symbol, out of range, or whose `body_style` isn't a whole number from 1 or is
+    /// given more than once is left out and counted in [`Schematic::lost`].
     fn placed_symbol(&mut self, node: &Node) -> Result<(), Error> {
         let lib_id = node.child("lib_id").and_then(|n| n.text(0)).unwrap_or_default();
         let lib_symbol = node.child("lib_name").and_then(|n| n.text(0)).unwrap_or(lib_id);
@@ -753,6 +792,18 @@ impl State {
         let (Some(position), false) = (point(at, 0), lib_symbol.is_empty()) else {
             self.schematic.lost.add("placed symbol without a library symbol or out of range left out");
             return Ok(());
+        };
+        // Which body style is shown decides which pins the symbol has.
+        let mut styles = node.all("body_style");
+        let body_style = match styles.next() {
+            None => 1,
+            Some(style) => match style.number(0).filter(|s| *s >= 1.0 && s.fract() == 0.0 && *s <= f64::from(u32::MAX) && styles.next().is_none()) {
+                Some(style) => style as u32,
+                None => {
+                    self.schematic.lost.add("placed symbol whose body style can't be read left out");
+                    return Ok(());
+                }
+            },
         };
         let records = node
             .child("instances")
@@ -781,6 +832,7 @@ impl State {
             },
             // Settled in `finish`; the symbol's own `(unit N)` until then.
             unit: unit_of(node).unwrap_or(1),
+            body_style,
             reference: String::new(),
             reference_from: ReferenceSource::None,
             instances: Vec::new(),
@@ -887,8 +939,10 @@ impl State {
     /// fields kept. Jumper settings are gathered from every symbol on the chain: its jumper pin
     /// groups are all of theirs, and it joins duplicate pin numbers when any of them says so.
     /// `None`, with a note, when the chain breaks or is longer than [`MAX_EXTENDS`]. Symbols
-    /// extending one parent share its drawing, so however many there are, the drawing is held
-    /// once.
+    /// extending one parent share its drawing and its jumper pin groups, so however many there
+    /// are, each is held once: a derived symbol costs one pointer per symbol on its chain.
+    /// A power symbol's scope is its own when it says `power` itself, else that of the symbol
+    /// it draws with.
     fn resolved(&mut self, name: &str) -> Option<LibSymbol> {
         let own = self.raw_lib.get(name)?;
         let mut drawn = own;
@@ -896,12 +950,17 @@ impl State {
         let mut jumper_pin_groups = Vec::new();
         let mut duplicate_pin_numbers_are_jumpers = false;
         for _ in 0..=MAX_EXTENDS {
-            jumper_pin_groups.extend(drawn.jumper_pin_groups.iter().cloned());
+            if !drawn.jumper_pin_groups.is_empty() {
+                jumper_pin_groups.push(Arc::clone(&drawn.jumper_pin_groups));
+            }
             duplicate_pin_numbers_are_jumpers |= drawn.duplicate_pin_numbers_are_jumpers;
             let Some(parent) = &drawn.extends else {
+                let power = own.power || drawn.power;
                 return Some(LibSymbol {
                     name: name.to_owned(),
-                    power: own.power || drawn.power,
+                    power,
+                    // The symbol's own word counts; one that doesn't say takes its drawing's.
+                    power_local: power && if own.power { own.power_local } else { drawn.power_local },
                     properties: own.properties.clone(),
                     pin_names_hidden: drawn.pin_names_hidden,
                     pin_numbers_hidden: drawn.pin_numbers_hidden,
@@ -1003,9 +1062,10 @@ fn positive(mm: f64) -> Option<i64> {
     nm(mm).filter(|n| *n > 0)
 }
 
-/// The points of a `pts` list; `None` when any is out of range.
+/// The points of a `pts` list; `None` when any is out of range or the list holds anything but
+/// `xy` points, so that an entry this reader doesn't know can't shorten a wire.
 fn points(node: &Node) -> Option<Vec<Point>> {
-    node.child("pts")?.all("xy").map(|p| xy(p, 0)).collect()
+    node.child("pts")?.args().iter().map(|p| if p.head() == Some("xy") { xy(p, 0) } else { None }).collect()
 }
 
 /// The character height a text's effects give, or the usual 1.27 mm.
@@ -1027,7 +1087,8 @@ fn justify(node: &Node) -> Justify {
     }
 }
 
-/// A drawing; `None` when a point or size is missing or out of range.
+/// A drawing; `None` when a point or size is missing or out of range, or its point list holds
+/// anything but points.
 fn graphic(node: &Node, kind: &str) -> Option<Graphic> {
     let at = |name: &str| node.child(name).and_then(|n| xy(n, 0));
     let shape = match kind {
@@ -1050,9 +1111,9 @@ fn graphic(node: &Node, kind: &str) -> Option<Graphic> {
 
 /// Text on a sheet or in a symbol; `None` when blank or out of range.
 ///
-/// The format documents a symbol text's angle in tenths of a degree, while KiCad writes whole
-/// degrees in the files observed. A value that is a quarter turn only when read as degrees is
-/// read as degrees; anything else in a symbol is read as tenths.
+/// A symbol text's angle is in tenths of a degree and a sheet text's in degrees, as the
+/// published format says ("Symbol `text` ANGLEs are stored in tenth's of a degree. All other
+/// ANGLEs are stored in degrees.").
 fn text(node: &Node, in_symbol: bool) -> Option<Text> {
     let words = node.text(0)?;
     if words.trim().is_empty() {
@@ -1060,13 +1121,7 @@ fn text(node: &Node, in_symbol: bool) -> Option<Text> {
     }
     let at = node.child("at")?;
     let raw = at.number(2).unwrap_or(0.0);
-    let degrees = if in_symbol && (raw / 10.0) % 90.0 != 0.0 && raw % 90.0 == 0.0 {
-        raw
-    } else if in_symbol {
-        raw / 10.0
-    } else {
-        raw
-    };
+    let degrees = if in_symbol { raw / 10.0 } else { raw };
     Some(Text {
         text: words.to_owned(),
         at: xy(at, 0)?,

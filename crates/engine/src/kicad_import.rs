@@ -8,7 +8,8 @@
 //!
 //! The import is exact or refused. Whatever would change which pins connect refuses the whole
 //! file with a list of up to 20 reasons: sub-sheets, buses, hierarchical labels, diagonal wires, symbols
-//! the native format can't represent, and pins that touch without a wire. The finished project
+//! the native format can't represent, parts shown in another body style than the normal one,
+//! and pins that touch without a wire. The finished project
 //! is checked against KiCad's nets, worked out from the file alone. Text, drawings and other
 //! appearance the native model doesn't hold are left out and listed in the [`Report`].
 
@@ -185,6 +186,8 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     for (what, count) in schematic.lost.iter() {
         refusals.add(if count > 1 { format!("{what} ({count}×)") } else { what.to_owned() });
     }
+    // Before power flags are set aside, since a flag's pins depend on its body style too.
+    refuse_body_styles(&schematic, &mut refusals);
     // Power flags only tell KiCad's electrical rules check that a net is driven and have no part
     // of their own, so they are left out; flags that, alone or together, join wires that would
     // otherwise stay apart are refused below.
@@ -253,6 +256,16 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     let pins = LibraryPins::new(&schematic, converted.keys().copied().chain(flags.iter().map(|f| f.lib_symbol.as_str())));
     refuse_name_clashes(&schematic, &converted, &mut refusals);
     check_values(&schematic, &converted, &mut refusals, &mut report);
+    // One sheet is the whole schematic here (sub-sheets are refused above), so a net that stays
+    // on its sheet reaches the same pins as a global one. Importing sub-sheets must keep the
+    // local scope or refuse these symbols.
+    let local_power = schematic
+        .symbols
+        .iter()
+        .filter(|s| converted.get(s.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some()))
+        .filter(|s| schematic.lib_symbols.get(&s.lib_symbol).is_some_and(|lib| lib.power_local))
+        .count();
+    report.add("local power symbols imported as global ones (the same net on a single sheet)", local_power);
     let poses: Vec<Option<(u8, bool)>> = schematic.symbols.iter().map(pose).collect();
     for (symbol, pose) in schematic.symbols.iter().zip(&poses) {
         if pose.is_none() {
@@ -449,9 +462,10 @@ fn is_power_flag(symbol: &pcbcraft_kicad::schematic::LibSymbol) -> bool {
     symbol.power && only.is_some_and(|p| p.electrical == pcbcraft_kicad::schematic::Electrical::PowerOut && symbols::valid_number(&p.number))
 }
 
-/// Refuse a net name used by more than one kind of named marker: local labels, global labels
-/// and power symbols. PCBCraft joins every marker of one name on a sheet; whether KiCad does
-/// across those kinds isn't confirmed, so such files are refused rather than guessed at.
+/// Refuse a net name used by more than one kind of named marker: local labels, global labels,
+/// power symbols and local power symbols (KiCad 10's `(power local)`). PCBCraft joins every
+/// marker of one name on a sheet; whether KiCad does across those kinds isn't confirmed, so
+/// such files are refused rather than guessed at.
 fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, refusals: &mut Refusals) {
     let mut kinds: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for label in &schematic.labels {
@@ -461,7 +475,8 @@ fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols
         if converted.get(symbol.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some())
             && let Some(value) = symbol.property("Value")
         {
-            kinds.entry(value).or_default().insert("power symbol");
+            let local = schematic.lib_symbols.get(&symbol.lib_symbol).is_some_and(|lib| lib.power_local);
+            kinds.entry(value).or_default().insert(if local { "local power symbol" } else { "power symbol" });
         }
     }
     for (name, kinds) in kinds.iter().filter(|(_, kinds)| kinds.len() > 1) {
@@ -515,9 +530,57 @@ fn native_value(symbol: &PlacedSymbol) -> Option<String> {
     symbol.property("Value").and_then(|v| symbols::clip(v, 64)).filter(|v| check_value(v).is_ok())
 }
 
+/// Refuse every placed symbol, power flags included, that shows a body style other than the
+/// normal one. The import reads and converts the normal style's pins only. KiCad 10.0.8 gives a
+/// part shown in a style its symbol lacks none of the normal style's pins (#503), and how it
+/// counts the styles of a symbol that has more isn't confirmed, so connecting the normal pins
+/// could invent connections.
+fn refuse_body_styles(schematic: &Schematic, refusals: &mut Refusals) {
+    for symbol in schematic.symbols.iter().filter(|symbol| symbol.body_style != 1) {
+        refusals.add(format!(
+            "{} shows body style {} of `{}`; only parts shown in the normal body style (1) are imported",
+            symbol.reference,
+            symbol.body_style,
+            symbol.lib_symbol.chars().take(80).collect::<String>()
+        ));
+    }
+}
+
+/// How many jumper pin groups a refusal names.
+const NAMED_GROUPS: usize = 4;
+/// How many pins of each jumper pin group a refusal names.
+const NAMED_PINS: usize = 8;
+
+/// The groups of `list` that join two or more different pins, each as its pin numbers joined
+/// by `+`: at most one more than [`NAMED_GROUPS`], so the caller can tell there are more, and
+/// at most [`NAMED_PINS`] pins of 16 characters each, with `+…` for the rest. A group of one
+/// pin, or of one pin repeated, joins nothing.
+fn joining_groups(list: &[Vec<String>]) -> Vec<String> {
+    list.iter()
+        .filter(|group| group.first().is_some_and(|first| group.iter().any(|pin| pin != first)))
+        .take(NAMED_GROUPS + 1)
+        .map(|group| {
+            let mut pins: Vec<String> = Vec::new();
+            for pin in group {
+                if pins.len() == NAMED_PINS {
+                    pins.push("…".into());
+                    break;
+                }
+                let pin: String = pin.chars().take(16).collect();
+                if !pins.contains(&pin) {
+                    pins.push(pin);
+                }
+            }
+            pins.join("+")
+        })
+        .collect()
+}
+
 /// Refuse what changes connectivity and has no native form in this slice: sub-sheets, buses,
 /// hierarchical labels, labels the native model can't name, and parts that join their own pins
-/// (KiCad 10 jumpers), named by reference and library symbol.
+/// (KiCad 10 jumpers), named by reference and library symbol. Each list of jumper groups is
+/// read once, however many symbols share it through `extends` and however often they are
+/// placed; a placement then costs a few short strings.
 fn refuse_unsupported(schematic: &Schematic, refusals: &mut Refusals) {
     if !schematic.sheets.is_empty() {
         refusals.add(format!("it has {} sub-sheet(s); only self-contained single-sheet schematics are supported", schematic.sheets.len()));
@@ -533,19 +596,17 @@ fn refuse_unsupported(schematic: &Schematic, refusals: &mut Refusals) {
             refusals.add(format!("label `{}` is longer than 200 characters or spans lines", label.name.chars().take(40).collect::<String>()));
         }
     }
+    let mut described: BTreeMap<*const Vec<Vec<String>>, Vec<String>> = BTreeMap::new();
     for symbol in &schematic.symbols {
         let Some(lib) = schematic.lib_symbols.get(&symbol.lib_symbol) else { continue };
         let name = symbol.lib_symbol.chars().take(80).collect::<String>();
-        // A group of one pin joins nothing.
-        let joining: Vec<String> = lib
-            .jumper_pin_groups
-            .iter()
-            .filter(|group| group.iter().collect::<BTreeSet<_>>().len() > 1)
-            .map(|group| group.iter().map(|pin| pin.chars().take(16).collect::<String>()).collect::<Vec<_>>().join("+"))
-            .collect();
+        let mut joining: Vec<String> = Vec::new();
+        for list in &lib.jumper_pin_groups {
+            joining.extend(described.entry(Arc::as_ptr(list)).or_insert_with(|| joining_groups(list)).iter().cloned());
+        }
         if !joining.is_empty() {
-            let more = if joining.len() > 4 { ", …" } else { "" };
-            let groups = format!("{}{more}", joining[..joining.len().min(4)].join(", "));
+            let more = if joining.len() > NAMED_GROUPS { ", …" } else { "" };
+            let groups = format!("{}{more}", joining[..joining.len().min(NAMED_GROUPS)].join(", "));
             refusals.add(format!(
                 "{} (`{name}`) joins pins {groups} inside the part (a KiCad 10 jumper pin group), which PCBCraft doesn't have yet",
                 symbol.reference
@@ -968,7 +1029,9 @@ fn pins_of(symbol: &PlacedSymbol, pins: &LibraryPins) -> Result<Vec<(String, Poi
 
 /// A part's native metadata from KiCad's fields: the datasheet and description by their native
 /// identities, the footprint link as an ordinary `KiCad footprint` field (assigning a footprint
-/// is separate work), the other fields by new identities, and the fitting attributes.
+/// is separate work), the other fields by new identities, and the fitting attributes. A kept
+/// value holds at most 2,048 characters and no control characters; one changed to fit is noted
+/// in `report`.
 fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, CommandError> {
     let mut fields = serde_json::Map::new();
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -991,11 +1054,15 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
                 }
             },
         };
-        let value: String = value.chars().filter(|c| !c.is_control()).take(2048).collect();
+        let kept: String = value.chars().filter(|c| !c.is_control()).take(2048).collect();
         if fields.len() >= 64 || !names.insert(name.to_lowercase()) {
             report.note("fields beyond 64 per part, or repeated, left out");
             continue;
         }
+        if kept != value {
+            report.note("field values shortened to 2,048 characters or stripped of control characters");
+        }
+        let value = kept;
         fields.insert(id, json!({"name": name, "value": value}));
     }
     if symbol.properties.iter().any(|p| p.at.is_some() && matches!(p.key.as_str(), "Reference" | "Value")) {

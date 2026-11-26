@@ -128,6 +128,7 @@ fn every_rotation_and_mirror_puts_each_pin_where_kicad_does() {
                 _ => Mirror::None,
             },
             unit: 1,
+            body_style: 1,
             reference: format!("Q{}", i + 1),
             reference_from: Default::default(),
             instances: Vec::new(),
@@ -166,6 +167,7 @@ fn kicad_pin_rules_turn_counterclockwise_then_mirror() {
         rotation_mdeg,
         mirror,
         unit: 1,
+        body_style: 1,
         reference: String::new(),
         reference_from: Default::default(),
         instances: Vec::new(),
@@ -462,6 +464,7 @@ fn a_wire_ending_where_the_other_mirror_order_puts_a_pin_refuses_the_pose() {
         rotation_mdeg: 90_000,
         mirror: Mirror::X,
         unit: 1,
+        body_style: 1,
         reference: "Q1".into(),
         reference_from: Default::default(),
         instances: Vec::new(),
@@ -968,4 +971,137 @@ fn kicad_10_counts_as_kicad_8_or_later_for_power_net_names() {
     let says = |version: Option<&str>| value_names_power_nets(&Schematic { generator_version: version.map(str::to_owned), ..Default::default() });
     assert!(says(Some("10.0")) && says(Some("8.0")) && says(Some("9.0")));
     assert!(!says(Some("7.0")) && !says(None));
+}
+
+#[test]
+fn a_part_shown_in_another_body_style_than_the_normal_one_refuses_the_file() {
+    // The control imports with J1.1 on JUMPER_BUS, as KiCad exports it. With J1 showing a style
+    // the symbol doesn't have, KiCad 10.0.8 shows none of its pins and exports no nets (#503), so
+    // importing the normal style's pins would invent a connection.
+    let (control, xml) = kicad10("jumper-control");
+    assert_eq!(partition(&import(&control, "Control").unwrap().project), kicad_partition(&xml));
+    assert_eq!(control.matches("(body_style 1)").count(), 1);
+    for style in [2, 3] {
+        let refused = import(&control.replace("(body_style 1)", &format!("(body_style {style})")), "Style");
+        assert!(
+            matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains(&format!("J1 shows body style {style} of `Fixture:InternalJumper`"))),
+            "{refused:?}"
+        );
+    }
+    // A symbol that has the style shown refuses too, wherever that style puts its pins: only the
+    // normal style's are read.
+    let gate = |shown: u32| {
+        format!(
+            r#"(kicad_sch (version 20260306) (generator_version "10.0") (lib_symbols (symbol "L:G" (property "Reference" "U")
+            (symbol "G_1_1" (pin input line (at -2.54 0 0) (length 1.27) (number "1")))
+            (symbol "G_1_2" (pin input line (at -2.54 0 0) (length 1.27) (number "1")))))
+            (symbol (lib_id "L:G") (at 0 0 0) (unit 1) (body_style {shown}) (property "Reference" "U1")))"#
+        )
+    };
+    assert!(import(&gate(1), "Gate").is_ok());
+    let refused = import(&gate(2), "Gate");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("U1 shows body style 2 of `L:G`")), "{refused:?}");
+}
+
+#[test]
+fn a_power_flag_shown_in_another_body_style_refuses_the_file() {
+    // A flag is left out for what its normal style's pin joins; another style could put the pin
+    // elsewhere, so the flag is refused before it is set aside.
+    let flag = place("power:PWR_FLAG", "#FLG01", 0.0, 3.81, 0, "");
+    let items = |flag: &str| [place("T:R", "R1", 0.0, 0.0, 0, ""), flag.to_owned()].concat();
+    assert!(import(&file(&items(&flag)), "Flag").is_ok());
+    let refused = import(&file(&items(&flag.replace("(unit 1)", "(unit 1) (body_style 2)"))), "Flag");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("#FLG01 shows body style 2 of `power:PWR_FLAG`")), "{refused:?}");
+}
+
+#[test]
+fn a_kicad_10_symbol_that_declares_body_styles_refuses_the_file() {
+    // KiCad 10.0.8 writes `(body_styles demorgan)` on a symbol with a De Morgan style (#503). Until
+    // the setting is read, such a file is refused by name, even placed in the normal style.
+    let (control, _) = kicad10("jumper-control");
+    let declared = control.replace("(duplicate_pin_numbers_are_jumpers no)", "(duplicate_pin_numbers_are_jumpers no) (body_styles demorgan)");
+    let refused = import(&declared, "Declared");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("library symbol setting `body_styles` left out")), "{refused:?}");
+}
+
+#[test]
+fn a_local_power_symbol_imports_as_a_global_one_and_says_so() {
+    let (text, xml) = kicad10("divider-kicad10");
+    let note = "local power symbols imported as global ones (the same net on a single sheet)";
+    assert!(!import(&text, "Divider").unwrap().report.notes().any(|(what, _)| what == note));
+    // The fixture's netlist is KiCad's export of the `(power global)` file; in the review of
+    // #503 KiCad 10.0.8 kept `(power local)` on GND and exported the same pins on it.
+    let gnd = "(symbol \"power:GND\"\n\t\t\t(power global)";
+    assert_eq!(text.matches(gnd).count(), 1);
+    let local = import(&text.replace(gnd, "(symbol \"power:GND\"\n\t\t\t(power local)"), "Divider").unwrap();
+    assert!(local.report.notes().any(|(what, n)| what == note && n == 1), "{:?}", local.report);
+    assert_eq!(partition(&local.project), kicad_partition(&xml));
+    assert_eq!(named_nets(&local.project), kicad_named_nets(&xml));
+}
+
+#[test]
+fn a_name_used_by_a_local_and_a_global_power_symbol_is_refused() {
+    let text = file(&[place("power:GND", "#PWR01", 0.0, 0.0, 0, ""), place("power:GND2", "#PWR02", 10.16, 0.0, 0, "")].concat()).replace(
+        "(symbol \"power:PWR_FLAG\"",
+        r##"(symbol "power:GND2" (power local) (property "Reference" "#PWR") (property "Value" "GND")
+            (symbol "GND2_1_1" (pin power_in line (at 0 0 270) (length 0) hide (name "GND") (number "1"))))
+          (symbol "power:PWR_FLAG""##,
+    );
+    // Both power symbols name the net GND.
+    let text = text.replace(r#"(property "Value" "GND2")"#, r#"(property "Value" "GND")"#);
+    assert_eq!(text.matches(r#"(property "Value" "GND"))"#).count(), 2);
+    let refused = import(&text, "Scopes");
+    assert!(
+        matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("`GND` is used by a local power symbol and a power symbol")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_field_value_changed_to_fit_is_reported() {
+    let part = |value: &str| {
+        let symbol = place("T:R", "R1", 0.0, 0.0, 0, "")
+            .replace(r#"(property "Value" "v")"#, &format!(r#"(property "Value" "v") (property "Note" "{value}")"#));
+        import(&file(&symbol), "Fields").unwrap()
+    };
+    let note = "field values shortened to 2,048 characters or stripped of control characters";
+    let kept = |imported: &Imported| {
+        imported.project.components().next().unwrap().metadata.fields.values().map(|f| f.value.chars().count()).collect::<Vec<_>>()
+    };
+    let fits = part(&"x".repeat(2048));
+    assert_eq!(kept(&fits), [2048]);
+    assert!(!fits.report.notes().any(|(what, _)| what == note));
+    let long = part(&"x".repeat(2049));
+    assert_eq!(kept(&long), [2048]);
+    assert!(long.report.notes().any(|(what, n)| what == note && n == 1));
+    // A line break inside a value is taken out, and reported too.
+    let lines = part("a\\nb");
+    assert_eq!(kept(&lines), [2]);
+    assert!(lines.report.notes().any(|(what, n)| what == note && n == 1));
+}
+
+#[test]
+fn a_wire_whose_point_list_holds_something_else_refuses_the_file() {
+    let items = [place("T:R", "R1", 0.0, 0.0, 0, ""), "(wire (pts (xy 0 3.81) (via 0 6.35) (xy 0 8.89)))".into()].concat();
+    let refused = import(&file(&items), "Points");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("with a point that can't be read")), "{refused:?}");
+}
+
+#[test]
+fn a_jumper_refusal_names_a_few_pins_of_a_few_groups_whatever_their_size() {
+    let (text, _) = kicad10("jumper-control");
+    let pins = (1..=5000).map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(" ");
+    let groups = (0..6).map(|_| format!("({pins})")).collect::<Vec<_>>().join(" ");
+    // Groups of one pin, repeated or not, join nothing and aren't named.
+    let text = text.replace(
+        "(duplicate_pin_numbers_are_jumpers no)",
+        &format!("(duplicate_pin_numbers_are_jumpers no) (jumper_pin_groups (\"7\") (\"8\" \"8\") {groups})"),
+    );
+    let Err(CommandError::InvalidParams(message)) = import(&text, "Jumper") else { panic!("imported") };
+    let group = "1+2+3+4+5+6+7+8+…";
+    assert!(
+        message.contains(&format!("J1 (`Fixture:InternalJumper`) joins pins {group}, {group}, {group}, {group}, … inside the part")),
+        "{message}"
+    );
+    assert!(message.len() < 400, "{message}");
 }

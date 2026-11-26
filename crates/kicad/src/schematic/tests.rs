@@ -168,7 +168,7 @@ fn sheets_buses_and_unsupported_items_are_kept_apart_or_noted() {
             "junction out of range left out",
             "label that is blank or out of range left out",
             "mystery left out",
-            "wire without two points in range left out",
+            "wire without two points, or with a point that can't be read, left out",
         ]
     );
 }
@@ -190,14 +190,14 @@ fn paper_sizes_turn_for_portrait_and_users_give_their_own() {
 }
 
 #[test]
-fn symbol_text_angles_read_tenths_unless_only_degrees_make_a_quarter_turn() {
+fn symbol_text_angles_are_tenths_of_a_degree_and_sheet_text_angles_degrees() {
     let s = read_schematic(&file(
         r#"(lib_symbols (symbol "L:T" (symbol "T_1_1" (text "a" (at 0 0 900)) (text "b" (at 0 0 90)) (text "c" (at 0 0 455)))))
            (text "d" (at 0 0 90))"#,
     ))
     .unwrap();
     let angles: Vec<_> = s.lib_symbols["L:T"].units[0].texts.iter().map(|t| t.rotation_mdeg).collect();
-    assert_eq!(angles, [90_000, 90_000, 45_500]);
+    assert_eq!(angles, [90_000, 9_000, 45_500]);
     assert_eq!(s.texts[0].rotation_mdeg, 90_000);
 }
 
@@ -248,24 +248,86 @@ fn simulation_and_position_file_flags_are_read_from_the_placed_symbol() {
 
 #[test]
 fn jumper_settings_follow_the_extends_chain() {
+    // Every group of a symbol and its chain, nearest symbol first, each as `1+2`.
+    let groups = |symbol: &LibSymbol| symbol.jumper_pin_groups.iter().flat_map(|list| list.iter().map(|group| group.join("+"))).collect::<Vec<_>>();
     let s = read_schematic(JUMPER_KICAD10).unwrap();
     let j = &s.lib_symbols["Fixture:InternalJumper"];
-    assert_eq!(j.jumper_pin_groups, [vec!["1".to_owned(), "2".to_owned()]]);
+    assert_eq!(groups(j), ["1+2"]);
     assert!(!j.duplicate_pin_numbers_are_jumpers);
     assert!(read_schematic(JUMPER_CONTROL).unwrap().lib_symbols["Fixture:InternalJumper"].jumper_pin_groups.is_empty());
     let s = read_schematic(&file(
         r#"(lib_symbols
-             (symbol "L:Base" (duplicate_pin_numbers_are_jumpers yes) (jumper_pin_groups ("1" "2") ("3" "4" "5") ())
+             (symbol "L:Base" (duplicate_pin_numbers_are_jumpers no) (duplicate_pin_numbers_are_jumpers yes)
+               (jumper_pin_groups ("1" "2")) (jumper_pin_groups ("3" "4" "5") ())
                (symbol "Base_1_1" (pin passive line (at 0 0 0) (length 1.27) (number "1"))))
              (symbol "L:Child" (extends "Base") (jumper_pin_groups ("6" "7"))))"#,
     ))
     .unwrap();
     let base = &s.lib_symbols["L:Base"];
     assert!(base.duplicate_pin_numbers_are_jumpers);
-    assert_eq!(base.jumper_pin_groups.len(), 2, "an empty group is dropped");
+    assert_eq!(groups(base), ["1+2", "3+4+5"], "a second list counts too, and an empty group is dropped");
     let child = &s.lib_symbols["L:Child"];
     assert!(child.duplicate_pin_numbers_are_jumpers);
-    assert_eq!(child.jumper_pin_groups.iter().map(|g| g.join("+")).collect::<Vec<_>>(), ["6+7", "1+2", "3+4+5"]);
+    assert_eq!(groups(child), ["6+7", "1+2", "3+4+5"]);
+}
+
+#[test]
+fn symbols_extending_one_parent_share_its_jumper_groups() {
+    let s = read_schematic(&file(
+        r#"(lib_symbols
+             (symbol "L:Base" (jumper_pin_groups ("1" "2")) (symbol "Base_1_1" (pin passive line (at 0 0 0) (length 1.27) (number "1"))))
+             (symbol "L:A" (extends "Base")) (symbol "L:B" (extends "Base") (jumper_pin_groups ("3" "4"))) (symbol "L:Plain"))"#,
+    ))
+    .unwrap();
+    let lists = |name: &str| s.lib_symbols[name].jumper_pin_groups.clone();
+    // The parent's list is held once: its own, A's only one and B's second are the same list.
+    assert_eq!((lists("L:Base").len(), lists("L:A").len(), lists("L:B").len(), lists("L:Plain").len()), (1, 1, 2, 0));
+    assert!(Arc::ptr_eq(&lists("L:Base")[0], &lists("L:A")[0]) && Arc::ptr_eq(&lists("L:Base")[0], &lists("L:B")[1]));
+}
+
+#[test]
+fn a_placed_symbols_body_style_is_read_and_an_unreadable_one_is_lost() {
+    let s = read_schematic(&file(
+        r#"(symbol (lib_id "L:R") (at 0 0 0) (unit 1)) (symbol (lib_id "L:R") (at 0 0 0) (unit 1) (body_style 3))
+           (symbol (lib_id "L:R") (at 0 0 0) (body_style 0)) (symbol (lib_id "L:R") (at 0 0 0) (body_style demorgan))
+           (symbol (lib_id "L:R") (at 0 0 0) (body_style 1) (body_style 3))"#,
+    ))
+    .unwrap();
+    assert_eq!(s.symbols.iter().map(|p| p.body_style).collect::<Vec<_>>(), [1, 3], "the normal style unless the file says");
+    // Zero, a word, and a style given twice.
+    assert_eq!(s.lost.iter().collect::<Vec<_>>(), [("placed symbol whose body style can't be read left out", 3)]);
+    // KiCad 10.0.8 writes the style on every placed symbol.
+    assert!(read_schematic(JUMPER_CONTROL).unwrap().symbols.iter().all(|p| p.body_style == 1));
+}
+
+#[test]
+fn a_point_list_with_an_entry_that_isnt_a_point_loses_its_wire() {
+    let s =
+        read_schematic(&file("(wire (pts (xy 0 0) (xy 5 0) (xy 5 5))) (wire (pts (xy 0 0) (bend 5 0) (xy 5 5))) (bus (pts (xy 0 0) mid (xy 5 5)))"))
+            .unwrap();
+    assert_eq!((s.wires.len(), s.buses.len()), (1, 0), "a wire is never shortened to the points that were read");
+    let lost: Vec<_> = s.lost.iter().collect();
+    assert_eq!(
+        lost,
+        [
+            ("bus without two points, or with a point that can't be read, left out", 1),
+            ("wire without two points, or with a point that can't be read, left out", 1)
+        ]
+    );
+}
+
+#[test]
+fn a_power_symbols_scope_is_read_and_follows_the_symbol_that_says_power() {
+    let s = read_schematic(&file(
+        r#"(lib_symbols (symbol "P:Old" (power)) (symbol "P:Global" (power global)) (symbol "P:Local" (power local))
+             (symbol "P:Child" (extends "Local")) (symbol "P:Own" (power global) (extends "Local")) (symbol "P:Not"))"#,
+    ))
+    .unwrap();
+    let scope = |name: &str| (s.lib_symbols[name].power, s.lib_symbols[name].power_local);
+    assert_eq!([scope("P:Old"), scope("P:Global"), scope("P:Local")], [(true, false), (true, false), (true, true)]);
+    assert_eq!([scope("P:Child"), scope("P:Own"), scope("P:Not")], [(true, true), (true, false), (false, false)]);
+    // KiCad 10.0.8 writes `(power global)` for the divider's power symbols.
+    assert!(read_schematic(DIVIDER_KICAD10).unwrap().lib_symbols.values().all(|symbol| !symbol.power_local));
 }
 
 #[test]
@@ -289,4 +351,12 @@ fn unknown_symbol_settings_and_pins_outside_units_are_lost() {
         ]
     );
     assert_eq!(s.notes.iter().map(|(what, _)| what).collect::<Vec<_>>(), ["symbol drawing outside a unit left out"]);
+}
+
+#[test]
+fn a_library_symbol_that_declares_body_styles_is_lost() {
+    // KiCad 10.0.8 writes `(body_styles demorgan)` on a symbol with a De Morgan style (#503). The
+    // setting isn't read yet, so it counts as lost and callers refuse the file.
+    let s = read_schematic(&file(r#"(lib_symbols (symbol "L:G" (body_styles demorgan) (symbol "G_1_1") (symbol "G_1_2")))"#)).unwrap();
+    assert_eq!(s.lost.iter().collect::<Vec<_>>(), [("library symbol setting `body_styles` left out", 1)]);
 }

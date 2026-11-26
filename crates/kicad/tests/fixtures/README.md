@@ -15,8 +15,10 @@ didn't save it, but its netlist was still exported by KiCad.
 travle1 made them for the review of
 [#503](https://github.com/tangency-labs/pcbcraft/pull/503#issuecomment-7094236070)
 (archive `pcbcraft-pr503-kicad10-fixtures.zip`, SHA-256
-`462514ff01de906846772b908d0b3f24cb445141fefe13e633c34b2b2a9f0067`). They are
-committed byte for byte. Keep each schematic and its netlist together, since the
+`462514ff01de906846772b908d0b3f24cb445141fefe13e633c34b2b2a9f0067`), and
+[contributed](https://github.com/tangency-labs/pcbcraft/pull/503#issuecomment-7118993713)
+the schematics and their netlist exports under MIT OR Apache-2.0, at the
+recipient's option. They are committed byte for byte. Keep each schematic and its netlist together, since the
 tests compare the import with KiCad's nets.
 
 | File | What it exercises |

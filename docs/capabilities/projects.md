@@ -101,8 +101,8 @@
   `.kicad_sch` through `project.import_kicad_schematic` in headless MCP and
   `pcbcraft-cli import-kicad`: symbols, units, pins, references, values, fields, power symbols,
   wires, labels and no-connects.
-- The import is exact or refused with reasons (including KiCad 10 jumper pin groups), checked
-  against the nets the file describes.
+- The import is exact or refused with reasons (including KiCad 10 jumper pin groups and parts
+  shown in another body style than the normal one), checked against the nets the file describes.
 
 ### Remaining scope
 

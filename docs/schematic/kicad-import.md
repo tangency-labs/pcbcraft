@@ -43,17 +43,31 @@ replaces anything. There is no desktop menu entry yet.
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
 | Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
-| Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
+| Power symbols | Parts whose power terminal joins the global net their Value names. A local power symbol (KiCad 10's `(power local)`) imports as a global one, reported: on the single sheet this slice imports, both reach the same pins. Importing sub-sheets will have to keep the local scope or refuse such files. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
 | Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
 
 ## What refuses a file
 
 - Anything the reader couldn't read that can carry a connection: a pin without a
-  number, a wire, junction, label or symbol out of range, a symbol unit whose name
-  gives no unit, a pin outside a unit, or an item, library-symbol setting or
-  symbol-unit item it doesn't know. Unknown settings of a placed symbol are not
-  checked yet.
+  number, a wire, junction, label or symbol out of range, a wire or bus whose
+  point list holds anything but points, a symbol unit whose name gives no unit,
+  a pin outside a unit, or an item, library-symbol setting or symbol-unit item
+  it doesn't know. Of a placed symbol's settings only its body style is checked;
+  other settings the reader doesn't know are not checked yet.
+- A placed symbol, power flags included, that shows another body style than the
+  normal one. KiCad 10 writes the style shown as `body_style`; for a style the
+  library symbol doesn't have, KiCad 10.0.8 connects none of the normal style's
+  pins, so importing them would invent connections. Only the normal style's
+  pins are read, so any other style refuses for now. A placed symbol without
+  `body_style` is read as showing the normal style: the published format has no
+  such setting, and whether KiCad 6 to 9 write it under another name isn't
+  confirmed. For those files an alternate style is accepted only when it has the
+  normal style's pins, as described below.
+- A KiCad 10 library symbol that declares body styles (`body_styles`, which
+  KiCad 10 writes for a symbol with a De Morgan style). The setting isn't read
+  yet, so the file is refused as having a library-symbol setting the reader
+  doesn't know, even when both styles have the same pins.
 - Parts that join their own pins: a library symbol with a KiCad 10 jumper pin
   group of two or more pins, or with *duplicate pin numbers are jumpers* set
   (even if no number repeats), including through `extends`. The message names
@@ -64,7 +78,8 @@ replaces anything. There is no desktop menu entry yet.
 - Pins of two ordinary symbols touching without a wire. Power symbols and labels
   on pins connect as in KiCad.
 - One name used by more than one kind of named marker (local label, global label,
-  power symbol), such as a global label `+3V3` beside a `+3V3` power symbol.
+  power symbol, local power symbol), such as a global label `+3V3` beside a
+  `+3V3` power symbol.
   PCBcraft joins every marker of a name on a sheet; KiCad's rule across those
   kinds isn't confirmed.
 - In a file that doesn't say it comes from KiCad 8 or later (through its
@@ -117,7 +132,9 @@ Sheet text and drawings, images, text boxes and tables; field text positions,
 which use the native defaults; global label shapes; alternate (De Morgan) body
 styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not
-on a pin or wire end; and drawing details the native format holds differently. Curves are drawn
+on a pin or wire end; and drawing details the native format holds differently.
+Field values are kept up to 2,048 characters without control characters; a value
+changed to fit is reported. Curves are drawn
 as polylines, fills are kept only on convex outlines, and very long pin names are
 shortened to 32 characters.
 
@@ -128,7 +145,8 @@ were written from KiCad's
 [published file format documentation](https://dev-docs.kicad.org/en/file-formats/)
 and from reading schematic files of public designs saved by KiCad; see
 [ATTRIBUTION.md](../../ATTRIBUTION.md#adapted-from-circuitcraft). No KiCad source
-was consulted. The fixtures and their provenance are listed in
+was consulted. A symbol text's angle is read in tenths of a degree, as that
+documentation says. The fixtures and their provenance are listed in
 [`crates/kicad/tests/fixtures`](../../crates/kicad/tests/fixtures/README.md): the
 divider was written by hand, and its KiCad 10 variants were saved and exported
 by KiCad 10.0.8 so the import is checked against KiCad's own netlists.
