@@ -134,11 +134,19 @@ impl Project {
     /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
     /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically.
     pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, mirrored: bool, revision: u64) -> Result<Self, CommandError> {
-        if !valid_point(&to) || rotation > 3 {
-            return Err(CommandError::InvalidParams("invalid symbol pose".into()));
-        }
+        self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision)
+    }
+
+    /// Apply several current-sheet poses in order with the same contact retention as
+    /// [`Self::retained_symbol_pose`], cleaning up once after the last. Any invalid pose rejects all.
+    pub(crate) fn retained_symbol_poses(&self, poses: &[(usize, Point, u8, bool)], revision: u64) -> Result<Self, CommandError> {
         let mut edit = Edit::new(self, revision);
-        edit.pose_symbol(index, to, rotation, mirrored)?;
+        for &(index, to, rotation, mirrored) in poses {
+            if !valid_point(&to) || rotation > 3 {
+                return Err(CommandError::InvalidParams("invalid symbol pose".into()));
+            }
+            edit.pose_symbol(index, to, rotation, mirrored)?;
+        }
         if edit.touched.is_empty() { Ok(edit.project) } else { edit.finish(false) }
     }
 

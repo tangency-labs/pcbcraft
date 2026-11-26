@@ -335,3 +335,19 @@ fn edited_generated_leg_becomes_authored_across_reopen() {
     assert_eq!(after.wires(), &[edited], "the edited route is authored and must survive");
     assert!(!after.symbols()[1].is_mirrored());
 }
+
+/// A one-symbol group mirror of an offset power terminal retains its named contact exactly as
+/// Mirror Symbol does, generated leg included. Both start at the same revision, so new wire
+/// identities match too.
+#[test]
+fn group_mirror_of_one_offset_power_symbol_matches_mirror_symbol() {
+    let (mut single, symbol, _) = offset_power_fixture();
+    let (mut group, _, _) = offset_power_fixture();
+    apply(&mut single, MIRROR_SYMBOL, json!({"symbol":symbol,"axis":"horizontal"}));
+    apply(&mut group, crate::MIRROR_ITEMS, json!({"items":Selection::one_symbol(symbol),"axis":"horizontal"}));
+    let (single, group) = (single.project().unwrap(), group.project().unwrap());
+    assert_eq!(group.wires().len(), 1, "the moved named pin gains a connecting leg");
+    assert_eq!(group.symbols(), single.symbols());
+    assert_eq!(group.wires(), single.wires());
+    assert_eq!(group.generated_legs, single.generated_legs);
+}

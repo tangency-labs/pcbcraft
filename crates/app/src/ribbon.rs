@@ -292,7 +292,9 @@ impl Action {
                         || app.views.active.schematic.selection.single_net_label().is_some())
             }
             Self::MirrorHorizontal | Self::MirrorVertical => {
-                schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
+                schematic
+                    && app.views.active.schematic.tool.is_none()
+                    && (app.views.active.schematic.selection.single_symbol().is_some() || app.views.active.schematic.selection.len() > 1)
             }
             Self::Delete => {
                 schematic
@@ -419,12 +421,8 @@ impl PcbApp {
                     self.edit_selected(if action == Action::Move { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
                 }
             }
-            Action::MirrorHorizontal => {
-                self.edit_selected(SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Horizontal));
-            }
-            Action::MirrorVertical => {
-                self.edit_selected(SymbolAction::Mirror(pcbcraft_engine::schematic::MirrorAxis::Vertical));
-            }
+            Action::MirrorHorizontal => self.mirror_selected(pcbcraft_engine::schematic::MirrorAxis::Horizontal),
+            Action::MirrorVertical => self.mirror_selected(pcbcraft_engine::schematic::MirrorAxis::Vertical),
             Action::Delete => {
                 if let Some(label) = self
                     .views

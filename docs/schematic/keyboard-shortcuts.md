@@ -94,7 +94,7 @@ selection action.
 | M | Move, disconnecting | With several items or a single wire selected: picks the group up, leaving attached wiring in place — the pointer must be on the canvas to provide the move origin. With a symbol selected or hovered (selection of at most one): picks that symbol up, leaving its wiring; a selected symbol moves regardless of pointer position and takes priority over a different hovered symbol. No active tool. On a net label or sheet symbol: moves that item. Compare **G**. |
 | G | Grab, keeping connections | Picks up a multi-item selection, a hovered wire reshape handle, or a hovered symbol while retaining external wiring; click to place. Pointer must be over the canvas; no active tool (or a wire tool that has not started). |
 | R | Rotate | While a placement or move tool is active: rotates the preview 90°. While placing a net label: rotates the label. Hovering a symbol field: rotates the field about its anchor. Hovering a net label: rotates the label. Otherwise rotates the hovered or selected symbol 90° counterclockwise. |
-| X | Mirror horizontally | Mirrors the hovered or selected symbol across its center; wiring stays attached. No active tool. |
+| X | Mirror horizontally | Mirrors the hovered or selected symbol across its center; wiring stays attached. A multi-item selection mirrors as one group about its grid-snapped center. No active tool. |
 | Y | Mirror vertically | Same as X, on the other axis. Note this is mirror, not the board's rotate-clockwise **Shift+R**. |
 | E | Edit | Hovering a visible symbol field: opens inline text editing. Hovering or selecting a symbol: opens its fields. On a net label: opens its properties. On a sheet symbol: edits the sheet. |
 | D | Datasheet | Opens the component datasheet for the hovered or selected symbol. |
@@ -134,7 +134,7 @@ listed beside it.
 | M | `PcbApp::shortcuts` → `schematic.move_requested`, applied in the canvas block as `Click::MoveItems`/`SymbolAction::DisconnectMove`; labels and sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Move` | `tests/selection_move.rs` (`group_m_…`, `selected_wire_m_…`) |
 | G | `schematic_canvas.rs` → `Click::MoveItems`/`GrabReshape`/`grab_symbol` | `tests/grab.rs` |
 | R | `PcbApp::shortcuts` → `rotate_requested` or the active tool's turns; `net_labels.rs` rotates a placing/hovered label; `Click::RotateField` rotates a field | `tests/grab.rs` (pickup rotation), `tests/net_labels.rs` |
-| X, Y | `PcbApp::shortcuts` → `mirror_requested` → `SymbolAction::Mirror` | `tests/mirror.rs` (`x_and_y_mirror_hovered_symbols…`) |
+| X, Y | `PcbApp::shortcuts` → `mirror_requested` → `SymbolAction::Mirror`, or `schematic.mirror_items` for a multi-item selection | `tests/mirror.rs` (`x_and_y_mirror_hovered_symbols…`, `box_selected_groups_mirror…`) |
 | E | `PcbApp::shortcuts` → `edit_requested`; labels/sheets route through `net_labels.rs`/`hierarchy.rs` `Action::Properties`/`Edit` | `tests/net_labels.rs`, `tests/hierarchy.rs` |
 | D | `PcbApp::shortcuts` → `datasheet_requested` → `open_datasheet` | — |
 | Q | `schematic_canvas.rs` → `Click::BeginNoConnect`/`NoConnect` | `tests/no_connect.rs` |

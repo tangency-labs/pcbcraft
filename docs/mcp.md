@@ -111,6 +111,11 @@ the screen's `horizontal` (left-to-right) or `vertical` (top-to-bottom) axis,
 composes with its quarter-turn rotation, keeps attached wires on their terminals,
 and is one undoable revision-checked edit. Applying the same axis twice restores
 the original pose; inspection publishes `mirrored` on each affected symbol.
+`schematic.mirror_items` mirrors an `items` selection (the shape `schematic.move_items`
+takes) across `axis` as one revision-checked undo step. The pivot is the center of
+the selected symbol origins, net-label anchors and wire vertices, snapped so grid
+points stay on the grid; mirroring twice on the same axis restores the group. An
+empty selection, an unknown ID or an item on another sheet is refused unchanged.
 
 `schematic.set_symbol_fields` applies reference, value and optional `rotation`,
 `x_nm` and `y_nm` together as one revision-checked undo step, matching the schematic
