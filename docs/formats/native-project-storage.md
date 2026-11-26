@@ -968,8 +968,10 @@ additionally join matching global names across sheets. Derived net names and gra
 a second set of electrical identities. All aliases remain in inspection, with
 global names preferred for display and lexical ordering within each scope.
 
-Sheets with named anchors use version 3; sheets without them retain version 1
-or 2 as appropriate. Earlier versions reject named-label fields, and the legacy
+The writer now saves every sheet at sheet/10 (see
+[Current sheet records](#current-sheet-records)). Sheet/3 was the first version
+with named anchors; earlier sheet/1 and sheet/2 documents are still read.
+Earlier versions reject named-label fields, and the legacy
 single-file writer refuses named anchors rather than losing them. Named-anchor
 records do not themselves change the entry-point registry; the independent
 single-board ownership slice adds the zero-or-one `boards` list in project/9

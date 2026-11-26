@@ -85,7 +85,8 @@ them by UUID, as for net classes:
 Memberships live in the project's instance home beside the sheet occurrences and
 any net registry: `schematic_instances` in `project.json` when there is no board,
 or the board folder's [instances.json](native-project-storage.md#board-instance-records).
-Both representations use instances/9 in board projects. Expanded records sort by part instance and
+In a board project both representations are written at the current instances/12, with
+`project.json` at project/68. Expanded records sort by part instance and
 then group, unique, and one per line:
 
 ```json
