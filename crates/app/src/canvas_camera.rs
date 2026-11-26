@@ -256,8 +256,10 @@ impl Camera {
     }
 
     /// Bring a report anchor into view, even if this canvas has yet to supply its geometry.
+    /// Supersede any pending center, including when the anchor is already visible.
     pub(crate) fn reveal_report_anchor(&mut self, at: Point) {
         if self.uncovered.is_some_and(|rect| rect.is_positive()) {
+            self.center_requested = None;
             self.reveal_bounds(Rect::from_pos(self.screen(at, Rect::ZERO)));
         } else {
             self.request_center(at);
@@ -709,6 +711,27 @@ mod tests {
         camera.reveal_bounds(outside);
         assert_eq!(camera.offset, before);
         assert_eq!(camera.zoom, 2.0);
+    }
+
+    /// A second report reveal replaces the first even before the canvas geometry settles.
+    #[test]
+    fn second_report_reveal_supersedes_unsettled_first_center() {
+        let mut camera = Camera::default();
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let uncovered = Rect::from_min_size(pos2(300.0, 0.0), vec2(500.0, 600.0));
+        let first = Point { x_nm: 0, y_nm: 0 };
+        let second = Point { x_nm: 254_000_000, y_nm: 0 };
+
+        camera.reveal_report_anchor(first);
+        assert!(camera.set_uncovered(canvas, uncovered));
+        assert_eq!(camera.screen(first, canvas), uncovered.center());
+        assert!(!uncovered.contains(camera.screen(second, canvas)));
+
+        camera.reveal_report_anchor(second);
+        let revealed = camera.screen(second, canvas);
+        assert!((revealed - uncovered.center()).length() < 0.01);
+        assert!(!camera.set_uncovered(canvas, uncovered));
+        assert_eq!(camera.screen(second, canvas), revealed);
     }
 
     /// A mirrored camera draws model X right-to-left, maps the pointer back to the same model

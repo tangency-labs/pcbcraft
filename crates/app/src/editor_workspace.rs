@@ -64,6 +64,7 @@ pub(super) enum PaintHighlight<T> {
 impl<T> Deref for PaintHighlight<T> {
     type Target = T;
 
+    /// Borrow either highlight set without cloning it.
     fn deref(&self) -> &T {
         match self {
             Self::Shared(value) => value,
@@ -835,11 +836,13 @@ impl EditorViews {
         PaintHighlight::Owned(self.board_selection_highlight(id, session))
     }
 
+    /// Copy the schematic highlights that would be painted in this view, not its edit selection.
     #[cfg(test)]
     pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
         self.schematic_paint_highlight(id, session).clone()
     }
 
+    /// Copy the footprint IDs that would be highlighted in this board view, not its edit selection.
     #[cfg(test)]
     pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> BTreeSet<String> {
         self.board_paint_highlight(id, session).clone()
