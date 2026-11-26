@@ -460,6 +460,42 @@ fn board_selection_footprints_follow_the_symbol_limit() {
     assert_eq!(schema["properties"]["footprints"]["maxItems"].as_u64(), Some(max as u64));
 }
 
+/// The board clipboard decoder's own footprint count follows the symbol limit, independently of
+/// the selection parser. A captured fragment grown to 4,097 and to 8,192 footprint records passes
+/// the count check and reaches per-footprint validation (the repeated owner is refused there);
+/// 8,193 records are refused by the count check itself. Byte limits are not exercised here.
+#[test]
+fn board_clipboard_decoder_footprint_count_follows_the_symbol_limit() {
+    let s = fixture();
+    let text = BoardFragment::capture(s.project().unwrap(), &all(&s), false).unwrap().to_text().unwrap();
+    assert!(BoardFragment::from_text(&text).is_ok());
+    let original: Value = serde_json::from_str(&text).unwrap();
+    let decode = |count: usize| {
+        let mut value = original.clone();
+        let footprint = value["footprints"][0].clone();
+        value["footprints"] = (0..count)
+            .map(|index| {
+                let mut copy = footprint.clone();
+                if index > 0 {
+                    copy["id"] = json!(1_000_000 + index as u64);
+                }
+                copy
+            })
+            .collect();
+        let text = value.to_string();
+        assert!(text.len() <= crate::clipboard::MAX_BYTES);
+        match BoardFragment::from_text(&text) {
+            Err(CommandError::InvalidParams(message)) => message,
+            other => panic!("unexpected decode result {:?}", other.map(|_| ())),
+        }
+    };
+    let max = crate::schematic::MAX_SYMBOLS;
+    for count in [4097, max] {
+        assert_eq!(decode(count), "invalid or duplicate copied footprint");
+    }
+    assert_eq!(decode(max + 1), "board clipboard resource limit exceeded");
+}
+
 /// Mixed deletion retains the established ability to remove pending physical remnants, even
 /// when a logical component no longer exists and therefore cannot be exported as a circuit copy.
 #[test]
