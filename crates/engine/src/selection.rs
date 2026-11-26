@@ -302,8 +302,9 @@ impl Selection {
     /// Reflect the group across one screen axis about its grid-snapped center, so grid points
     /// stay on the grid and the same mirror twice restores it. Symbols compose the reflection with
     /// their pose as Mirror Symbol does, named-net anchors flip their text direction, selected
-    /// routes reflect their authored bends, and unselected attached wires follow their pins.
-    /// A route whose reflected bends no longer reach a fixed pin gains orthogonal end legs.
+    /// routes whose ends both move with the group reflect their authored bends, and every other
+    /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
+    /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
     /// Validation and contact checks finish before a candidate is returned; any invalid item rejects all.
     pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
         self.validate(project)?;
@@ -340,20 +341,11 @@ impl Selection {
         for (index, wire) in base.wires().iter().enumerate() {
             // Routes without authored bends are derived from their ends, which already reflect.
             let (true, Some(bends)) = (self.wires.contains(&wire.id()), wire.bends()) else { continue };
+            let mut ends = wire.endpoints().into_iter().map(|end| (project.endpoint_position(end), next.endpoint_position(end)));
+            if !ends.all(|(old, new)| old.zip(new).is_some_and(|(old, new)| reflect(old).is_ok_and(|old| old == new))) {
+                continue;
+            }
             let bends = bends.iter().map(|&point| reflect(point)).collect::<Result<Vec<_>, _>>()?;
-            let [Some(from), Some(to)] = wire.endpoints().map(|end| next.endpoint_position(end)) else {
-                return Err(CommandError::NotFound("wire endpoint does not exist".to_owned()));
-            };
-            let path: Vec<_> = std::iter::once(from).chain(bends.iter().copied()).chain(std::iter::once(to)).collect();
-            let bends = if path.windows(2).all(|leg| leg[0] != leg[1] && (leg[0].x_nm == leg[1].x_nm || leg[0].y_nm == leg[1].y_nm)) {
-                bends
-            } else {
-                let path = crate::schematic::orthogonal_path(path, true);
-                if path.len() < 2 || path.len() > crate::wire::MAX_BENDS + 2 {
-                    return Err(CommandError::InvalidParams("mirrored wire route exceeds its bounds".to_owned()));
-                }
-                path[1..path.len() - 1].to_vec()
-            };
             Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(bends);
         }
         next.healed(&base, revision, false)

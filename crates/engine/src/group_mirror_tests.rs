@@ -166,3 +166,24 @@ fn half_grid_spans_restore_after_two_mirrors() {
     }
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
 }
+
+/// A selected wire whose ends stay on unselected labels keeps an invertible route: its authored
+/// bends come back after two mirrors and the netlist never changes.
+#[test]
+fn a_selected_wire_between_fixed_ends_restores_after_two_mirrors() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Fixed ends"})).unwrap();
+    for (name, at) in [("A", grid(0, 0)), ("B", grid(4, 4))] {
+        apply(&mut session, net_labels::ADD, json!({"name":name,"style":"local","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    }
+    let ends: Vec<_> = session.project().unwrap().net_labels().iter().map(|label| WireEndpoint::NetLabel(label.id).inspect()).collect();
+    apply(&mut session, DRAW_WIRE, json!({"from":ends[0],"to":ends[1],"bends":[grid(0, 1), grid(4, 1)]}));
+    let before = session.snapshot().unwrap();
+    let documents = encode_documents(before.clone()).unwrap();
+    let items = Selection::one_wire(before.wires()[0].id());
+    for _ in 0..2 {
+        apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+        assert_eq!(before.inspect_schematic()["netlist"], session.project().unwrap().inspect_schematic()["netlist"]);
+    }
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
+}
