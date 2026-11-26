@@ -1103,17 +1103,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
     if (assigned_vias && !has_assigned_vias) || (!extended_board_format && !reported && !assigned_vias && has_assigned_vias) {
-        return Err("board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41, 42 or 43; format 24 requires an assignment.".into());
+        return Err(format!(
+            "board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 24 requires an assignment."
+        ));
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
     if (profiled && board.assembly_profiles.is_none())
         || (!extended_board_format && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
-        return Err(
-            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43. Format 22 requires at least one profile."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}. Format 22 requires at least one profile."
+        ));
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
         return Err("board.json: an empty assembly_profiles array is not allowed".into());
@@ -1123,10 +1124,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (originated && board.placement_origin.is_none())
         || (!extended_board_format && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
-        return Err(
-            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43, and format 21 requires a placement origin."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}, and format 21 requires a placement origin."
+        ));
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
@@ -1136,10 +1136,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err(
-            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43 and a nonempty array; format 20 requires zones."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT} and a nonempty array; format 20 requires zones."
+        ));
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
@@ -1459,11 +1458,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
     if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41, 42 or 43; format 25 requires at least one of them.".into());
+        return Err(format!(
+            "board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 25 requires at least one of them."
+        ));
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
     if (stacked && !stack_fields) || (!extended_board_format && !reported && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41, 42 or 43; format 23 requires at least one of them.".into());
+        return Err(format!(
+            "board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 23 requires at least one of them."
+        ));
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();

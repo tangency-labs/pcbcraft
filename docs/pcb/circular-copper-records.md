@@ -67,8 +67,8 @@ Inspection exposes the exact `arcs` list and `geometry_supported: false`.
 Logical schematic inspection remains independent of physical geometry.
 
 Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available.
-Folder and archive saves preserve authored arcs in
-[board format 43](../formats/native-project-storage.md#current-board-records),
+Folder and archive saves preserve authored arcs in the
+[current board format](../formats/native-project-storage.md#current-board-records),
 alongside locks, profiles, setup and via intent. Clearing the last arc
 omits the array and keeps the board header. The diagnostic single-document
 writer refuses arcs.
