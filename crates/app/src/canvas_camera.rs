@@ -64,6 +64,12 @@ impl CameraState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CenterRequest {
+    NextLayout(Point),
+    GeometryChange(Point),
+}
+
 /// Viewport and snapping state in egui points. Navigation and the snap grid stay outside the
 /// project and its undo history. Clones retain pending navigation and host geometry; independent
 /// views are seeded with `fork_navigation` instead.
@@ -80,8 +86,8 @@ pub(crate) struct Camera {
     pub(super) performance_rect: Option<Rect>,
     offset: Vec2,
     fit_requested: bool,
-    /// A Browser destination waits for its own panel geometry before centering.
-    center_requested: Option<Point>,
+    /// Deferred centering uses this canvas's own panel geometry.
+    center_requested: Option<CenterRequest>,
     /// Usable canvas rectangle relative to its center, clear of floating cards.
     uncovered: Option<Rect>,
     /// Spacing of the points the pointer snaps to, in nanometres. It never changes the scale:
@@ -256,10 +262,13 @@ impl Camera {
     }
 
     /// Bring a report anchor into view, even if this canvas has yet to supply its geometry.
-    /// Supersede any pending center, including when the anchor is already visible.
+    /// If a center is still pending, follow the latest anchor through geometry changes without
+    /// nudging an already visible anchor when the geometry stays the same.
     pub(crate) fn reveal_report_anchor(&mut self, at: Point) {
         if self.uncovered.is_some_and(|rect| rect.is_positive()) {
-            self.center_requested = None;
+            if self.center_requested.is_some() {
+                self.center_requested = Some(CenterRequest::GeometryChange(at));
+            }
             self.reveal_bounds(Rect::from_pos(self.screen(at, Rect::ZERO)));
         } else {
             self.request_center(at);
@@ -278,21 +287,26 @@ impl Camera {
     pub(crate) fn request_center(&mut self, point: Point) {
         self.cancel_zoom();
         self.fit_requested = false;
-        self.center_requested = Some(point);
+        self.center_requested = Some(CenterRequest::NextLayout(point));
     }
 
     /// Set the rectangle available to Fit and centering, relative to the full canvas. Opening
     /// or moving a card changes this target without moving the camera unless centering is pending.
-    /// A Browser center request is consumed only after panel geometry settles; true requests
-    /// another frame. Explicit navigation cancels that pending authority.
+    /// A center request is consumed only after panel geometry settles; true requests another
+    /// frame. Explicit navigation cancels that pending authority.
     pub(crate) fn set_uncovered(&mut self, canvas: Rect, uncovered: Rect) -> bool {
         let next = Some(uncovered.translate(-canvas.center().to_vec2()));
         let stable = self.uncovered == next;
         self.uncovered = next;
-        if let Some(point) = self.center_requested.take() {
+        if let Some(request) = self.center_requested.take() {
+            let point = match request {
+                CenterRequest::NextLayout(point) => point,
+                CenterRequest::GeometryChange(point) if !stable => point,
+                CenterRequest::GeometryChange(_) => return false,
+            };
             self.center_on(point);
             if !stable {
-                self.center_requested = Some(point);
+                self.center_requested = Some(request);
                 return true;
             }
         }
@@ -732,6 +746,35 @@ mod tests {
         assert!((revealed - uncovered.center()).length() < 0.01);
         assert!(!camera.set_uncovered(canvas, uncovered));
         assert_eq!(camera.screen(second, canvas), revealed);
+    }
+
+    #[test]
+    fn second_report_reveal_recenters_when_uncovered_geometry_changes() {
+        let mut camera = Camera::default();
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let interim = Rect::from_min_size(pos2(300.0, 0.0), vec2(500.0, 600.0));
+        let settled = Rect::from_min_size(Pos2::ZERO, vec2(200.0, 600.0));
+        let first = Point { x_nm: 0, y_nm: 0 };
+        let second = Point { x_nm: 5 * GRID_NM, y_nm: 0 };
+
+        camera.reveal_report_anchor(first);
+        assert!(camera.set_uncovered(canvas, interim));
+        assert_eq!(camera.screen(first, canvas), interim.center());
+
+        let before = camera.screen(second, canvas);
+        assert!(interim.contains(before));
+        assert_ne!(before, interim.center());
+        assert!(!settled.contains(before));
+        camera.reveal_report_anchor(second);
+        assert_eq!(camera.screen(second, canvas), before);
+        let mut unchanged = camera.clone();
+        assert!(!unchanged.set_uncovered(canvas, interim));
+        assert_eq!(unchanged.screen(second, canvas), before);
+
+        assert!(camera.set_uncovered(canvas, settled));
+        assert!((camera.screen(second, canvas) - settled.center()).length() < 0.01);
+        assert!(!camera.set_uncovered(canvas, settled));
+        assert!((camera.screen(second, canvas) - settled.center()).length() < 0.01);
     }
 
     /// A mirrored camera draws model X right-to-left, maps the pointer back to the same model
