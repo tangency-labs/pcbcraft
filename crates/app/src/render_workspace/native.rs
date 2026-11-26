@@ -690,6 +690,24 @@ fn array(v: solidcore_record::Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
 }
 
+/// Step the harness until the current revision's preview result arrives or the wait expires.
+#[cfg(test)]
+pub(crate) fn wait_for_preview(h: &mut egui_kittest::Harness<'_, PcbApp>) {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        h.step();
+        let app = h.state();
+        if let Some(state) = &app.views.active.render
+            && state.request.is_some_and(|request| request.revision == app.session.revision())
+            && (state.error.is_some() || state.mesh.is_some())
+        {
+            break;
+        }
+        assert!(Instant::now() < until, "3D preview did not settle");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,23 +728,6 @@ mod tests {
         session
             .apply(ADD_DRAWING, &json!({"layer":layer, "points":points, "closed":true, "stroke_nm":250_000, "expected_revision":session.revision()}))
             .unwrap();
-    }
-
-    /// Read the current revision's result, stepping the normal worker adoption path.
-    fn wait_for_preview(h: &mut egui_kittest::Harness<'_, PcbApp>) {
-        let until = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            h.step();
-            let app = h.state();
-            if let Some(state) = &app.views.active.render
-                && state.request.is_some_and(|request| request.revision == app.session.revision())
-                && (state.error.is_some() || state.mesh.is_some())
-            {
-                break;
-            }
-            assert!(std::time::Instant::now() < until, "3D preview did not settle");
-            std::thread::sleep(Duration::from_millis(5));
-        }
     }
 
     #[test]
