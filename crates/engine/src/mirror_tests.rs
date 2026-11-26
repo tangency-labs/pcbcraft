@@ -351,3 +351,18 @@ fn group_mirror_of_one_offset_power_symbol_matches_mirror_symbol() {
     assert_eq!(group.wires(), single.wires());
     assert_eq!(group.generated_legs, single.generated_legs);
 }
+
+/// In one group, an earlier pose can move another pin onto a power terminal's old contact point.
+/// The power terminal must keep its original contact, not gain a leg to that pin, so the whole
+/// group mirrors with an unchanged netlist.
+#[test]
+fn group_mirror_captures_named_contacts_before_any_pose() {
+    let (mut session, _, _) = offset_power_fixture();
+    // A third part widens the group so the resistor's far pin lands on the power pin's old point.
+    apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":12*GRID_NM,"y_nm":0}));
+    let before = session.snapshot().unwrap();
+    let items = Selection { symbols: before.symbols().iter().map(|symbol| symbol.id()).collect(), ..Selection::default() };
+    apply(&mut session, crate::MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    let after = session.snapshot().unwrap();
+    assert_eq!(before.inspect_schematic()["netlist"], after.inspect_schematic()["netlist"]);
+}
