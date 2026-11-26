@@ -654,6 +654,31 @@ mod tests {
         assert_eq!(nets.len(), 2, "{nets:?}");
     }
 
+    /// A pin stacked on a connection's endpoint was in contact before the wire, so the route
+    /// does not refuse it. Contacts join by identity only, so it stays on its own net, and
+    /// dropping it back onto the wire end is refused rather than joining two fixed pins.
+    #[test]
+    fn a_pin_stacked_on_an_endpoint_stays_on_its_own_net() {
+        let mut session = empty();
+        for y in [0, 0, 16] {
+            session
+                .apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":y * GRID_NM,"expected_revision":session.revision()}))
+                .unwrap();
+        }
+        connect(&mut session, ("symbol-2", "1"), ("symbol-4", "1")).unwrap();
+        let mut move_stacked = |x: i64| {
+            let params = json!({"symbol":"symbol-3","x_nm":x,"y_nm":0,"expected_revision":session.revision()});
+            session.apply(crate::MOVE_SYMBOL, &params).map(|_| ())
+        };
+        move_stacked(16 * GRID_NM).unwrap();
+        assert!(move_stacked(0).is_err());
+        let connectivity = session.project().unwrap().connectivity();
+        let stacked = crate::schematic::Terminal::parse(&json!({"symbol":"symbol-3","terminal":"1"})).unwrap();
+        assert_eq!(connectivity.nets.len(), 1, "{:?}", connectivity.nets);
+        assert_eq!(connectivity.nets[0].len(), 2);
+        assert!(connectivity.net_for(stacked).is_none());
+    }
+
     /// A pin whose every way out runs along another net's wire is refused without an edit.
     #[test]
     fn a_pin_boxed_in_by_another_net_is_refused() {
