@@ -273,10 +273,12 @@ impl Selection {
             .collect()
     }
 
-    /// Twice the group's center along the mirrored coordinate, rounded half away from zero to a
-    /// whole grid step. The center spans symbol origins, named-net anchors and selected wire
+    /// Twice the group's center along the mirrored coordinate, rounded to a whole grid step with
+    /// ties to an even step. The center spans symbol origins, named-net anchors and selected wire
     /// vertices, so one symbol keeps its origin as Mirror Symbol does. Doubling keeps an odd span
-    /// exact, and the symmetric rounding gives a repeated mirror the same pivot.
+    /// exact. A reflected group's doubled center lies as far past the pivot as the original lay
+    /// before it, so a tie on one side is a tie on the other and both round to the same even
+    /// step: a repeated mirror reuses the pivot even for half-grid positions.
     fn doubled_pivot(&self, project: &Project, axis: MirrorAxis) -> Result<i64, CommandError> {
         let coordinate = |point: Point| match axis {
             MirrorAxis::Horizontal => point.x_nm,
@@ -292,8 +294,9 @@ impl Selection {
             .fold(None, |span: Option<(i64, i64)>, value| Some(span.map_or((value, value), |(low, high)| (low.min(value), high.max(value)))))
             .ok_or_else(|| CommandError::InvalidParams("mirror needs a selected symbol, wire or named-net anchor".to_owned()))?;
         let sum = low.checked_add(high).ok_or_else(|| CommandError::InvalidParams("mirror exceeds schematic coordinate bounds".to_owned()))?;
-        let snapped = (sum.abs() + GRID_NM / 2) / GRID_NM * GRID_NM;
-        Ok(if sum < 0 { -snapped } else { snapped })
+        let (steps, rest) = (sum.div_euclid(GRID_NM), sum.rem_euclid(GRID_NM));
+        let steps = if 2 * rest > GRID_NM || (2 * rest == GRID_NM && steps % 2 != 0) { steps + 1 } else { steps };
+        steps.checked_mul(GRID_NM).ok_or_else(|| CommandError::InvalidParams("mirror exceeds schematic coordinate bounds".to_owned()))
     }
 
     /// Reflect the group across one screen axis about its grid-snapped center, so grid points

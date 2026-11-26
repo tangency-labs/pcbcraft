@@ -150,3 +150,19 @@ fn invalid_group_mirrors_change_nothing() {
         assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()), "{params}");
     }
 }
+
+/// Two parts half a grid step apart sit on a rounding tie; mirroring twice still restores them.
+#[test]
+fn half_grid_spans_restore_after_two_mirrors() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Half grid"})).unwrap();
+    for x in [0, GRID_NM / 2] {
+        apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":x,"y_nm":0}));
+    }
+    let items = all(session.project().unwrap());
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    for _ in 0..2 {
+        apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    }
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
+}
