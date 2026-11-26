@@ -1654,6 +1654,13 @@ converter below creates a separate copy of the immediately previous split layout
 The oldest readable split project entry-point format is `pcbcraft-project/5`,
 in project folders and `.pc` packages. `pcbcraft-cli --help` reports this limit.
 
+A project saved by a newer PCBCraft is refused by name before any other check.
+When the entry point, instance, sheet or board document, a pinned symbol or
+footprint copy, or a packed manifest carries a format number above the newest
+this build reads, Open reports `<path>: saved by a newer PCBCraft in format
+<format>; this version reads formats up to <newest>.` and leaves the project files unchanged.
+Retired or skipped older numbers keep their own refusal.
+
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions
 remain supported under the new entry-point path; sheet, board and library

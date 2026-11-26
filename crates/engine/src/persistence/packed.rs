@@ -238,6 +238,7 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
     // a missing new entry point may disguise a present unsupported or malformed manifest.
     if let Some(manifest) = entries.get(MANIFEST) {
         let header: serde_json::Value = serde_json::from_slice(manifest).map_err(error)?;
+        super::documents::refuse_newer_format(MANIFEST, header["format"].as_str().unwrap_or_default(), FORMAT)?;
         if header["format"].as_str() != Some(format) {
             return Err(format!("manifest.json: unsupported container format {}; expected {format}", header["format"]));
         }
