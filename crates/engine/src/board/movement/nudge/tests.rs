@@ -215,3 +215,76 @@ fn conflicting_junctions_and_held_ends_refuse_the_whole_step() {
     let message = refused(&mut s, &mv);
     assert!(message.contains("cannot follow its moving pad"), "{message}");
 }
+
+/// Two selected legs cross at their shared midpoint and pivot about opposite ends: one is held
+/// at its start, the other at its end. An odd step puts that midpoint on a half-nanometre tie,
+/// and both legs must round it the same way, so the stub ending there follows instead of the
+/// step being refused as a junction asked to follow in two ways.
+#[test]
+fn opposite_pivots_round_a_shared_midpoint_the_same_way() {
+    let (mut s, layer) = fixture();
+    let track = |s: &Session, from: Point, to: Point| {
+        view(s).tracks().iter().find(|t| (t.start, t.end) == (from, to)).unwrap_or_else(|| panic!("missing track")).id
+    };
+    let add = |s: &mut Session, from: Point, to: Point| edit(s, ADD_TRACKS, json!({"layer":layer,"width_nm":100_000,"points":[from,to]}));
+    // The first leg is held at its start by a vertical rail, the second at its end by a horizontal one.
+    add(&mut s, p(30_000_000, 30_000_000), p(30_000_000, 40_000_000));
+    add(&mut s, p(32_000_000, 40_000_000), p(38_000_000, 40_000_000));
+    let (first_held, first_free) = (p(30_000_000, 35_000_000), p(40_000_000, 35_000_000));
+    let (second_free, second_held) = (p(35_000_000, 30_000_000), p(35_000_000, 40_000_000));
+    add(&mut s, first_held, first_free);
+    add(&mut s, second_free, second_held);
+    let (middle, far) = (p(35_000_000, 35_000_000), p(42_000_000, 28_000_000));
+    add(&mut s, middle, far);
+    let (first, second, stub) = (track(&s, first_held, first_free), track(&s, second_free, second_held), track(&s, middle, far));
+
+    let step = 254_001;
+    let mv = params(&s, json!({"tracks":[first, second]}), 0, step);
+    let revision = s.revision();
+    let applied = s.apply(super::super::MOVE_ITEMS, &mv);
+    assert!(applied.is_ok(), "{applied:?}");
+    assert_eq!(s.revision(), revision + 1);
+    let after = view(&s);
+    let ends = |id| after.tracks().iter().find(|t| t.id == id).map(|t| (t.start, t.end)).unwrap_or_else(|| panic!("missing track"));
+    assert_eq!(ends(first), (first_held, p(first_free.x_nm, first_free.y_nm + step)));
+    assert_eq!(ends(second), (p(second_free.x_nm, second_free.y_nm + step), second_held));
+    // Half of 254 001 nm is 127 000.5 nm, which rounds away from zero for both legs.
+    assert_eq!(ends(stub), (p(middle.x_nm, middle.y_nm + 127_001), far));
+}
+
+/// Off the midpoint, too: two 32 mm legs cross 0.2 mm from their held ends, one held at its
+/// start and one at its end, so the crossing moves by 1/160 of the step on both. For 254 000 nm
+/// that is a 1587.5 nm tie, which both legs round away from zero in either direction, and the
+/// stub ending at the crossing follows instead of the step being refused.
+#[test]
+fn opposite_pivots_round_an_off_center_shared_point_the_same_way_in_both_directions() {
+    for step in [254_000, -254_000] {
+        let (mut s, layer) = fixture();
+        let track = |s: &Session, from: Point, to: Point| {
+            view(s).tracks().iter().find(|t| (t.start, t.end) == (from, to)).unwrap_or_else(|| panic!("missing track")).id
+        };
+        let add = |s: &mut Session, from: Point, to: Point| edit(s, ADD_TRACKS, json!({"layer":layer,"width_nm":100_000,"points":[from,to]}));
+        // A vertical rail holds the first leg's start; a horizontal rail holds the second leg's end.
+        add(&mut s, p(30_000_000, 25_000_000), p(30_000_000, 45_000_000));
+        add(&mut s, p(20_000_000, 35_200_000), p(31_000_000, 35_200_000));
+        let (first_held, first_free) = (p(30_000_000, 35_000_000), p(62_000_000, 35_000_000));
+        let (second_free, second_held) = (p(30_200_000, 3_200_000), p(30_200_000, 35_200_000));
+        add(&mut s, first_held, first_free);
+        add(&mut s, second_free, second_held);
+        let (crossing, far) = (p(30_200_000, 35_000_000), p(37_200_000, 28_000_000));
+        add(&mut s, crossing, far);
+        let (first, second, stub) = (track(&s, first_held, first_free), track(&s, second_free, second_held), track(&s, crossing, far));
+
+        let mv = params(&s, json!({"tracks":[first, second]}), 0, step);
+        let revision = s.revision();
+        let applied = s.apply(super::super::MOVE_ITEMS, &mv);
+        assert!(applied.is_ok(), "{step}: {applied:?}");
+        assert_eq!(s.revision(), revision + 1);
+        let after = view(&s);
+        let ends = |id| after.tracks().iter().find(|t| t.id == id).map(|t| (t.start, t.end)).unwrap_or_else(|| panic!("missing track"));
+        assert_eq!(ends(first), (first_held, p(first_free.x_nm, first_free.y_nm + step)));
+        assert_eq!(ends(second), (p(second_free.x_nm, second_free.y_nm + step), second_held));
+        let tie = if step > 0 { 1_588 } else { -1_588 };
+        assert_eq!(ends(stub), (p(crossing.x_nm, crossing.y_nm + tie), far), "{step}");
+    }
+}
