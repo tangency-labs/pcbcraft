@@ -3,7 +3,7 @@
 use crate::{
     CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS, PREVIEW_ASSEMBLY_PROFILE,
     PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources, net_classes, netlist,
-    nets, no_connect, parameters, part_groups, sheets,
+    nets, no_connect, parameters, part_groups, sheet_split, sheets,
 };
 
 /// Command access set by the host when a session is created.
@@ -51,8 +51,8 @@ impl Session {
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard. Export/publication preparation does
-/// not write files, netlist comparison only reads the text it is given, and annotation
-/// preview caches no proposal. Loading/removing library sources and Cut are not reads.
+/// not write files, netlist comparison only reads the text it is given, and the annotation
+/// and split previews cache no proposal. Loading/removing library sources and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -65,6 +65,7 @@ fn is_read_command(id: &str) -> bool {
             | parameters::LIST
             | parameters::RESOLVE
             | annotation::PREVIEW
+            | sheet_split::PREVIEW
             | netlist::EXPORT_NETLIST
             | netlist::COMPARE_NETLIST
             | netlist::EXPORT_BOARD_NETLIST
@@ -81,11 +82,13 @@ fn is_read_command(id: &str) -> bool {
             | net_classes::INSPECT
             | net_classes::RESOLVE
             | nets::INSPECT_CLASSES
+            | nets::intent::INSPECT
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | sources::LIST
             | sources::SEARCH
             | sources::AVAILABLE_REVISIONS
+            | sources::PREVIEW_ADOPTION
             | sources::WHERE_USED
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY

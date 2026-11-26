@@ -1,5 +1,6 @@
 //! Library definitions are document workspaces, separate from project instances and history.
 mod canvas;
+pub(super) mod courtyard;
 pub(super) mod editing;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod export_tests;
@@ -54,13 +55,17 @@ struct Document {
     drawing_stroke_nm: i64,
     drawing_fill: pcbcraft_engine::library_graphics::Fill,
     array_requested: bool,
+    courtyard_requested: bool,
     details_requested: bool,
+    show_courtyard: bool,
+    selected_vertex: Option<usize>,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
     tool: canvas::Tool,
     ribbon_tab: usize,
     error: Option<String>,
+    last_change: Option<pcbcraft_engine::authoring::ChangeRecord>,
 }
 impl Editors {
     /// Published drawing identity is enough for used-by inspection and creating a part association.
@@ -237,7 +242,20 @@ impl Editors {
     /// clone a displaced report merely to overwrite it; all other fields share the normal emitter.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect_with_remap(&self, pin_remap: Value) -> Value {
-        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        let documents: Vec<Value> = self
+            .documents
+            .iter()
+            .map(|(id, doc)| {
+                let mut entry = json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}});
+                if let Some(change) = &doc.last_change
+                    && let Some(object) = entry.as_object_mut()
+                {
+                    object.insert("last_change".into(), json!(change));
+                }
+                entry
+            })
+            .collect();
+        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":documents})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -271,19 +289,27 @@ impl Editors {
                 drawing_stroke_nm: 100_000,
                 drawing_fill: Default::default(),
                 array_requested: false,
+                courtyard_requested: false,
                 details_requested: false,
+                show_courtyard: true,
+                selected_vertex: None,
                 draft: None,
                 camera,
                 collapsed: [false, false],
                 tool: canvas::Tool::Select,
                 ribbon_tab: 0,
                 error: None,
+                last_change: None,
             },
         );
         self.next_id = id;
         self.focus(Some(id))?;
         self.pending_document = Some(id);
         Ok(id)
+    }
+    /// Validate and record a dry-run change summary without mutating document state or history.
+    fn preview(&mut self, id: u64, revision: u64, action: Action) -> Result<(), String> {
+        self.documents.get_mut(&id).ok_or("Unknown library document ID.")?.preview(revision, action)
     }
     /// GUI and MCP edits share this document/revision check and engine transaction path.
     fn edit(&mut self, id: u64, revision: u64, action: Action) -> Result<(), String> {
@@ -369,10 +395,21 @@ impl Document {
             }
             self.selection = ids;
             self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
+            self.selected_vertex = None;
             self.draft = None;
             self.tool = canvas::Tool::Select;
             self.error = None;
         }
+        Ok(())
+    }
+    /// Validate one transaction without mutating the document, storing its readable change record.
+    fn preview(&mut self, revision: u64, action: Action) -> Result<(), String> {
+        if self.pending() {
+            return Err("Apply or reset the property fields before editing the document.".into());
+        }
+        let record = self.session.preview(revision, action)?;
+        self.last_change = Some(record);
+        self.error = None;
         Ok(())
     }
     /// Validate a shared transaction and invalidate cached forms/tools after an effective edit.
@@ -385,11 +422,16 @@ impl Document {
         }
         let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
         let remapping = matches!(&action, Action::RemapPins { .. });
+        let transforming = matches!(&action, Action::Transform { .. });
+        let previous_selected = self.selected;
         let old = self.session.snapshot();
-        self.session.execute(revision, action)?;
+        let record = self.session.execute_change(revision, action)?;
         let next = self.session.snapshot();
         if remapping && std::sync::Arc::ptr_eq(&old, &next) {
             return Ok(());
+        }
+        if !remapping {
+            self.last_change = Some(record);
         }
         let inserted: std::collections::BTreeSet<_> = next.objects.keys().filter(|id| !old.objects.contains_key(id)).copied().collect();
         self.selection.retain(|id| next.objects.contains_key(id));
@@ -404,7 +446,38 @@ impl Document {
         if self.selected.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
             self.selected = None;
         }
+        // A vertex index belongs to the outline it was chosen on, never to a newly selected copy.
+        if self.selected != previous_selected {
+            self.selected_vertex = None;
+        }
+        self.remap_selected_vertex_after(&old, transforming);
         self.error = None;
+        Ok(())
+    }
+    /// Carry the chosen courtyard vertex across an edit already applied to the session: keep or
+    /// remap it by point identity while the selection is still a closed courtyard outline, and
+    /// clear it otherwise. Every path that replaces the selected outline goes through this.
+    fn remap_selected_vertex_after(&mut self, old: &Item, preserve_index: bool) {
+        use pcbcraft_engine::authoring::courtyard::courtyard_polygon;
+        let next = self.session.snapshot();
+        if let Some(id) = self.selected
+            && let Some((points, _)) = next.objects.get(&id).and_then(courtyard_polygon)
+        {
+            if let Some(idx) = self.selected_vertex {
+                let old_points = old.objects.get(&id).and_then(courtyard_polygon).map(|(pts, _)| pts);
+                self.selected_vertex = old_points.and_then(|old_pts| remap_selected_vertex(old_pts, points, idx, preserve_index));
+            }
+        } else {
+            self.selected_vertex = None;
+        }
+    }
+    /// Apply a validated Properties draft as one transaction, then remap the chosen courtyard
+    /// vertex exactly as `execute` does, so an inspector Apply never leaves a stale index.
+    fn apply_properties(&mut self, revision: u64, action: Action) -> Result<(), String> {
+        let transforming = matches!(&action, Action::Transform { .. });
+        let old = self.session.snapshot();
+        self.session.execute(revision, action)?;
+        self.remap_selected_vertex_after(&old, transforming);
         Ok(())
     }
     /// A form retains invalid input and its original revision until Apply or Reset.
@@ -448,6 +521,12 @@ impl Document {
             properties::identity(ui, &format!("{} objects", self.selection.len()), &self.session.snapshot().name);
             return;
         }
+        if let Some(id) = self.selected
+            && item.kind == Kind::Footprint
+            && self.courtyard_outline_inspector(ui, id, expanded)
+        {
+            return;
+        }
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
             if self.pending() {
                 self.error = Some("The library document changed; reset these fields before applying new edits.".into());
@@ -463,6 +542,7 @@ impl Document {
             ui.label(shell::error(error));
         }
         draft.show(ui, expanded);
+        let dirty = draft.dirty();
         if expanded
             && self.selected.is_none()
             && let Some(source) = &snapshot.original_source
@@ -473,20 +553,27 @@ impl Document {
                 ui.add(egui::Label::new(&source.locator).wrap());
             });
         }
+        if item.kind == Kind::Footprint && self.selected.is_none() {
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+            self.courtyard_summary_section(ui);
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_4);
+        }
         let (mut apply, mut reset) = (false, false);
         ui.horizontal(|ui| {
-            apply = pcbcraft_chrome::controls::enabled_button(ui, draft.dirty(), "Apply").clicked();
+            apply = pcbcraft_chrome::controls::enabled_button(ui, dirty, "Apply").clicked();
             reset = pcbcraft_chrome::controls::button(ui, "Reset").clicked();
         });
         if apply {
-            let result = draft.action().and_then(|action| self.session.execute(draft.revision, action));
-            match result {
-                Ok(_) => {
-                    self.draft = None;
-                    self.tool = canvas::Tool::Select;
-                    self.error = None;
+            if let Some((revision, action_result)) = self.draft.as_ref().map(|d| (d.revision, d.action())) {
+                let result = action_result.and_then(|action| self.apply_properties(revision, action));
+                match result {
+                    Ok(()) => {
+                        self.draft = None;
+                        self.tool = canvas::Tool::Select;
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error),
                 }
-                Err(error) => self.error = Some(error),
             }
         } else if reset {
             self.draft = None;
@@ -522,7 +609,7 @@ impl Document {
         if !open {
             return;
         }
-        for (object_id, primitive) in &item.objects {
+        for (object_id, primitive) in browser_objects(&item) {
             let label = format!("{} · {}", canvas::name(primitive), object_id);
             let row = TreeRow {
                 depth: 1,
@@ -531,12 +618,12 @@ impl Document {
                 label: &label,
                 accessibility_label: None,
                 tip: "",
-                selected: self.selection.contains(object_id),
+                selected: self.selection.contains(&object_id),
             };
             if tree_row(ui, ui.make_persistent_id(("definition_primitive", object_id)), &row).clicked {
                 let mut selection = if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
-                if !selection.insert(*object_id) {
-                    selection.remove(object_id);
+                if !selection.insert(object_id) {
+                    selection.remove(&object_id);
                 }
                 let _ = self.select_many(selection);
             }
@@ -1026,7 +1113,11 @@ impl PcbApp {
                 if matches!(&action, Action::RemapPins { .. }) {
                     return Err("Use app.library_pin_remap to review current nets before applying a remap.".into());
                 }
-                self.library_editors.edit(document()?, revision, action)?;
+                if params["dry_run"].as_bool() == Some(true) {
+                    self.library_editors.preview(document()?, revision, action)?;
+                } else {
+                    self.library_editors.edit(document()?, revision, action)?;
+                }
             }
             "app.library_pin_remap" => {
                 let document = pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(&params["document"])?;
@@ -1128,4 +1219,59 @@ impl PcbApp {
         ctx.request_repaint();
         Ok(())
     }
+}
+
+/// Order primitives for the definition browser so pads and pins sort naturally (`A2` before `A10`,
+/// `Y26` before `AA1`), followed by non-electrical primitives in stable ID order.
+pub(super) fn browser_objects(item: &Item) -> Vec<(u64, &pcbcraft_engine::authoring::Primitive)> {
+    use pcbcraft_engine::authoring::{Primitive, natural_cmp};
+    /// Extract the natural-sort pin/pad number key for electrical primitives.
+    fn key(primitive: &Primitive) -> Option<&str> {
+        match primitive {
+            Primitive::Pad { pad } => Some(pad.number.as_str()),
+            Primitive::Pin { number, .. } => Some(number.as_str()),
+            _ => None,
+        }
+    }
+    let mut entries: Vec<(u64, &Primitive)> = item.objects.iter().map(|(id, p)| (*id, p)).collect();
+    entries.sort_by(|(id_a, a), (id_b, b)| match (key(a), key(b)) {
+        (Some(na), Some(nb)) => natural_cmp(na, nb).then_with(|| id_a.cmp(id_b)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => id_a.cmp(id_b),
+    });
+    entries
+}
+
+/// Keep a selected courtyard vertex index only for genuine coordinate-only edits (unchanged
+/// outline, single-vertex coordinate move, uniform translation, or rigid `Action::Transform`).
+/// For structural edits or same-count reorderings, remap by unique point identity and clear if
+/// the selected point is gone or ambiguous.
+pub(super) fn remap_selected_vertex(
+    old_pts: &[pcbcraft_engine::schematic::Point],
+    new_pts: &[pcbcraft_engine::schematic::Point],
+    idx: usize,
+    preserve_index: bool,
+) -> Option<usize> {
+    let &point = old_pts.get(idx)?;
+    if old_pts.len() == new_pts.len() && (preserve_index || is_coordinate_only_vertex_edit(old_pts, new_pts)) {
+        return Some(idx);
+    }
+    let mut matches = new_pts.iter().enumerate().filter_map(|(i, &p)| (p == point).then_some(i));
+    matches.next().filter(|_| matches.next().is_none())
+}
+
+fn is_coordinate_only_vertex_edit(old_pts: &[pcbcraft_engine::schematic::Point], new_pts: &[pcbcraft_engine::schematic::Point]) -> bool {
+    if old_pts.len() != new_pts.len() {
+        return false;
+    }
+    if old_pts.iter().zip(new_pts).filter(|(a, b)| a != b).count() <= 1 {
+        return true;
+    }
+    if let (Some(first_old), Some(first_new)) = (old_pts.first(), new_pts.first())
+        && let (Some(dx), Some(dy)) = (first_new.x_nm.checked_sub(first_old.x_nm), first_new.y_nm.checked_sub(first_old.y_nm))
+    {
+        return old_pts.iter().zip(new_pts).all(|(a, b)| b.x_nm.checked_sub(a.x_nm) == Some(dx) && b.y_nm.checked_sub(a.y_nm) == Some(dy));
+    }
+    false
 }

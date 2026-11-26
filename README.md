@@ -44,6 +44,8 @@ save the schematic and board together with shared undo/redo.
   circular non-plated footprint holes go in a separate drill file, in the same archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
+- **3D preview:** inspect the board substrate, cutouts and round through holes in
+  the desktop [3D render workspace](docs/pcb-layout-workflow.md#preview-the-board-in-3d).
 - **Libraries:** browse built-in, project-pinned and registered native libraries
   in Parts Library. Place generic or orderable parts, choose packages and assign
   footprints. Author symbols and footprints in their own workspaces, then publish
@@ -55,11 +57,11 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots and independent
+and assembled 3D models and STEP export remain in development. Footprint slots and independent
 footprint mask/paste controls are not yet supported.
 The current checks and exporters do not establish manufacturing readiness.
 
-The [capability table](docs/capabilities.md) separates available features from
+The [capability inventory](docs/capabilities.md) separates available features from
 remaining work. The [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1)
 tracks the first collaboration-ready preview; [VISION.md](VISION.md) explains
 the longer-term direction, including familiar KiCad controls and links with SolidCraft.
@@ -111,7 +113,7 @@ local connection** and copy the configuration. For a separate headless session:
 cargo run --locked -p pcbcraft-cli -- mcp
 ```
 
-Native live MCP also supports [UI automation](docs/ui-automation.md): locate named
+Native live MCP also supports [UI automation](docs/automation/ui-automation.md): locate named
 controls and send clicks, drags, keys, text and scrolling through ordinary editor
 input. Input currently targets the original native window and its split panes;
 headless sessions operate separately from the open editor.
@@ -130,7 +132,7 @@ contributors and agents.
 | [Quickstart](docs/quickstart.md) · [Example project](examples/README.md) | First editing session |
 | [Editor guide](docs/editor-guide.md) | Tools, shortcuts, wiring, views and project files |
 | [Capabilities](docs/capabilities.md) | Current support, limits and planned work |
-| [AI assistants and MCP](docs/mcp.md) · [UI automation](docs/ui-automation.md) | Agent connections, shared commands and native UI input |
+| [AI assistants and MCP](docs/mcp.md) · [UI automation](docs/automation/ui-automation.md) | Agent connections, shared commands and native UI input |
 | [Contributing](CONTRIBUTING.md) · [Agent instructions](AGENTS.md) | Repository workflow, architecture and checks |
 | [Reference and formats](docs/README.md#reference-and-formats) | Project storage, library schemas, nets, rules and shared geometry |
 

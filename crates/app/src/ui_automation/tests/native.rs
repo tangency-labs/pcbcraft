@@ -1,4 +1,6 @@
 //! Opt-in native-window proof, using the same authenticated transport as a demonstration.
+//! Each ignored scenario owns a winit event loop, which a process can create only once:
+//! run one scenario per process, e.g. `cargo test -p pcbcraft-app -- --ignored native_window_resizes`.
 use super::*;
 use pcbcraft_mcp::{Backend, live::Remote};
 use std::sync::{Arc, Mutex, mpsc};
@@ -138,6 +140,167 @@ fn native_window_input_uses_real_controls() {
                 let _ = send.send(run());
             });
             Ok(Box::new(Window { app, done, result: outcome, saw_wire: false, closing: false }))
+        }),
+    )
+    .unwrap();
+    result.lock().unwrap().take().expect("native window closed without a result").unwrap();
+}
+
+/// Open `view` in a detached editor window, wait until that window is measured, close it
+/// natively, then expect `ui.window` and `ui.resize` to refuse the same window ID.
+fn closed_window(remote: &mut Remote, ctx: &egui::Context, view: u64) -> Result<(), String> {
+    let mut call =
+        |id: &str, params: Value| remote.call("engine.execute", json!({"command":id,"params":params})).map_err(|failure| failure.to_string());
+    let ready =
+        |status: Value| status["ready_windows"].as_array().map(|ids| ids.iter().filter_map(Value::as_u64).collect::<Vec<_>>()).unwrap_or_default();
+    let before = ready(call("ui.inspect", json!({}))?);
+    call("view.open_window", json!({"view":view}))?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let opened = loop {
+        if let Some(id) = ready(call("ui.inspect", json!({}))?).into_iter().find(|id| !before.contains(id)) {
+            break id;
+        }
+        if Instant::now() > deadline {
+            return Err("No detached window was opened and measured".into());
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    };
+    call("ui.window", json!({"window":opened}))?;
+    ctx.send_viewport_cmd_to(crate::editor_windows::viewport(HostId(opened)), egui::ViewportCommand::Close);
+    ctx.request_repaint();
+    let refused = |result: Result<Value, String>| result.is_err_and(|error| error.contains("Unknown editor window"));
+    while !refused(call("ui.window", json!({"window":opened}))) {
+        if Instant::now() > deadline {
+            return Err(format!("Detached window {opened} did not close"));
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    if !refused(call("ui.resize", json!({"window":opened,"width":1280.0,"height":800.0}))) {
+        return Err(format!("Closed window {opened} accepted a resize"));
+    }
+    Ok(())
+}
+
+/// Request one size, then poll `ui.window` until the window reports it applied or constrained.
+fn resize(remote: &mut Remote, width: f64, height: f64) -> Result<Value, String> {
+    let call = |remote: &mut Remote, id: &str, params: Value| {
+        remote.call("engine.execute", json!({"command":id,"params":params})).map_err(|failure| failure.to_string())
+    };
+    let requested = call(remote, "ui.resize", json!({"window":0,"width":width,"height":height}))?;
+    if requested["state"] != "pending" {
+        return Err(format!("Resize was not accepted: {requested}"));
+    }
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let window = call(remote, "ui.window", json!({"window":0}))?;
+        if window["resize"]["state"] != "pending" {
+            return Ok(window);
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    Err(format!("Resize to {width}×{height} did not settle"))
+}
+
+struct Sized {
+    app: PcbApp,
+    done: mpsc::Receiver<Result<(), String>>,
+    result: Arc<Mutex<Option<Result<(), String>>>>,
+    closing: bool,
+}
+
+impl eframe::App for Sized {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut RawInput) {
+        self.app.automation_input(ctx, raw);
+    }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Skip the app once closing, so its unsaved-project guard cannot cancel the test's Close.
+        if self.closing {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        self.app.frame(ui);
+        if let Ok(result) = self.done.try_recv() {
+            *self.result.lock().unwrap() = Some(result);
+            self.closing = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
+    }
+}
+
+/// Run on an isolated X11 display of at least 1920×1080 logical points plus decorations, managed by a
+/// window manager that enforces WM_NORMAL_HINTS (for example Openbox) so the constraint case is real.
+#[test]
+#[ignore = "requires isolated X11 of at least 1920×1080 with a hint-enforcing window manager, a GPU/software adapter and local sockets"]
+fn native_window_resizes_to_recording_sizes() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    let result = Arc::new(Mutex::new(None));
+    let outcome = result.clone();
+    let (send, done) = mpsc::sync_channel(1);
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_title("PCBcraft window size test").with_inner_size([1600.0, 1000.0]).with_active(true),
+        persist_window: false,
+        event_loop_builder: Some(Box::new(|builder| {
+            builder.with_x11().with_any_thread(true);
+        })),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "PCBcraft window size test",
+        options,
+        Box::new(move |cc| {
+            pcbcraft_chrome::install(&cc.egui_ctx);
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).map_err(|e| e.to_string())?;
+            app.views.active.bind_opened_project(&app.session);
+            app.automation.observing = true;
+            let control = crate::live_control::LiveControl::start(&cc.egui_ctx)?;
+            let (port, token) = (control.port(), control.secret().to_owned());
+            app.live_control = Some(control);
+            let (ctx, view) = (cc.egui_ctx.clone(), app.views.active.id().0);
+            std::thread::spawn(move || {
+                let run = || -> Result<(), String> {
+                    let mut remote = Remote::new(port, &token)?;
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while remote.call("engine.execute", json!({"command":"ui.window","params":{"window":0}})).is_err() {
+                        if Instant::now() > deadline {
+                            return Err("Native window geometry did not become ready".into());
+                        }
+                        std::thread::sleep(Duration::from_millis(16));
+                    }
+                    for (width, height) in [(1280.0, 800.0), (1920.0, 1080.0)] {
+                        let window = resize(&mut remote, width, height)?;
+                        if window["resize"]["state"] != "applied" || window["client"] != json!({"width":width,"height":height}) {
+                            return Err(format!("Window did not reach {width}×{height}: {window}"));
+                        }
+                        let at = remote
+                            .call("engine.execute", json!({"command":"ui.at","params":{"window":0,"handle":"toolbar:Connect:Wire"}}))
+                            .map_err(|failure| failure.to_string())?;
+                        if at["layout"] != window["layout"]
+                            || at["x"].as_f64().is_none_or(|x| x >= width)
+                            || at["y"].as_f64().is_none_or(|y| y >= height)
+                        {
+                            return Err(format!("Targets were not measured at {width}×{height}: {at}"));
+                        }
+                        capture(&format!("{width}x{height}"))?;
+                    }
+                    // The window manager, not the app, keeps the window one point short of the request.
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::MaxInnerSize(egui::vec2(1279.0, 800.0)));
+                    ctx.request_repaint();
+                    let window = resize(&mut remote, 1280.0, 800.0)?;
+                    let (width, height) = (window["client"]["width"].as_f64(), window["client"]["height"].as_f64());
+                    if window["resize"]["state"] != "constrained"
+                        || window["resize"]["requested"] != json!({"width":1280.0,"height":800.0})
+                        || !width.is_some_and(|w| w <= 1279.5)
+                        || !height.is_some_and(|h| h <= 800.5)
+                    {
+                        return Err(format!("A window-manager constraint was not reported with the measured size: {window}"));
+                    }
+                    closed_window(&mut remote, &ctx, view)
+                };
+                let _ = send.send(run());
+            });
+            Ok(Box::new(Sized { app, done, result: outcome, closing: false }))
         }),
     )
     .unwrap();

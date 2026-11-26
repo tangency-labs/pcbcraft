@@ -119,20 +119,20 @@ fn copper_locks_round_trip_and_old_format_headers_refuse_them() {
     let documents = encode_documents(locked.clone()).unwrap();
     let path = crate::persistence::test_board_path(&documents);
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    assert!(text.contains("pcbcraft-board/18"));
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT));
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     let packed = encode_packed(locked).unwrap();
     let reopened = decode_packed(&packed).unwrap();
     assert_eq!(encode_packed(reopened.project).unwrap(), packed);
     for old in ["pcbcraft-board/13", "pcbcraft-board/17"] {
         let mut bad = documents.clone();
-        bad.insert(path.clone(), text.replace("pcbcraft-board/18", old).into_bytes());
+        bad.insert(path.clone(), text.replace(crate::persistence::CURRENT_BOARD_FORMAT, old).into_bytes());
         assert!(decode_documents(&bad).is_err());
     }
     apply(&mut session, SET_COPPER_LOCKED, json!({"tracks":tracks,"vias":[via],"locked":false}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
     let mut bad = original;
-    let text = String::from_utf8(bad[&path].clone()).unwrap().replace("pcbcraft-board/13", "pcbcraft-board/18");
+    let text = String::from_utf8(bad[&path].clone()).unwrap().replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/18");
     bad.insert(path, text.into_bytes());
     assert!(decode_documents(&bad).is_err(), "format 18 requires at least one authored lock");
 }
@@ -243,7 +243,7 @@ fn locked_format_preserves_multipad_package_intent() {
     apply(&mut session, SET_COPPER_LOCKED, json!({"vias":[via],"locked":true}));
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
     let path = crate::persistence::test_board_path(&documents);
-    assert!(String::from_utf8_lossy(&documents[&path]).contains("pcbcraft-board/18"));
+    assert!(String::from_utf8_lossy(&documents[&path]).contains(crate::persistence::CURRENT_BOARD_FORMAT));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), documents);
     assert!(

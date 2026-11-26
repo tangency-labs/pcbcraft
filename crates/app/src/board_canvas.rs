@@ -1,7 +1,7 @@
 //! Board selection and transform previews over resolved engine geometry; commands own edits.
 use crate::{
     board_appearance::{CopperFocus, FootprintColors},
-    canvas_camera::Camera,
+    canvas_camera::{Camera, pointer_release},
     editor_view::{BoardState, ViewInput},
     preferences::Navigation,
 };
@@ -107,6 +107,8 @@ pub(super) struct Interaction {
     pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) zone_edit: Option<crate::board_drawing::Command>,
+    /// A validated outline command from the canvas's own open context menu.
+    pub(super) vertex_menu_edit: bool,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) inspection: Option<(pcbcraft_engine::board::Pad, egui::Modifiers)>,
@@ -144,7 +146,8 @@ impl FootprintCache {
 
 /// Select footprints by click or directional marquee; preview one footprint transform at a time.
 /// Empty-space primary drags and secondary drags box-select visible footprint bounds; Shift adds
-/// and Ctrl/Command toggles against the captured selection. Invalid release cancels the box.
+/// and Ctrl/Command toggles against the captured selection. A box clamps to the canvas and commits
+/// on release even over a floating panel; Escape, focus loss, disabled input or stale authority cancel it.
 /// Transform drags retain their grab offset; M moves the origin
 /// to the pointer. R rotates counterclockwise on screen, including in a mirrored view or a move.
 /// Only completion on the canvas emits an edit; secondary click, disabled input or stale
@@ -159,6 +162,7 @@ impl FootprintCache {
 /// ordinary source, enabled-input and focus checks while crossing pad copper.
 /// Eligible pad presses take priority over owner/track picks, and idle Shift+Space cycles
 /// through the visible selectable items at the pointer.
+/// `navigation_enabled` grants pan and zoom alone, so an unfocused pane follows the pointer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -170,6 +174,7 @@ pub(super) fn show(
     filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
     owner_enabled: bool,
+    navigation_enabled: bool,
     navigation: Navigation,
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
@@ -196,11 +201,11 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     let enabled = owner_enabled && !egui::Popup::is_any_open(ui.ctx());
     let route_menu_open = state.tracks.tool && response.context_menu_opened();
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if secondary_pressed_here(&response) {
         state.context_menu_allowed = idle;
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
-    camera.navigate_board(&response, rect, project, enabled, navigation);
+    camera.navigate_board(&response, rect, project, navigation_enabled && !egui::Popup::is_any_open(ui.ctx()), navigation);
     let placement_enabled = enabled;
     let enabled = enabled && state.placement.is_none();
     // The view-only ruler owns its clicks, so nothing else selects or edits while it is armed.
@@ -465,7 +470,7 @@ pub(super) fn show(
     let rotation = camera.model_rotation(std::mem::take(&mut state.rotate_requested));
     let rotating = rotation != 0;
     let flipping = std::mem::take(&mut state.flip_requested);
-    let cancelled = enabled && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
+    let cancelled = enabled && secondary_pressed_here(&response);
     if cancelled {
         state.draft = None;
     }
@@ -497,8 +502,9 @@ pub(super) fn show(
             && filters.footprints
             && let Some(source) = source
         {
+            let drag_origin = footprint_drag.then(|| ui.input(|i| i.pointer.press_origin())).flatten();
             let picked = if footprint_drag {
-                ui.input(|i| i.pointer.press_origin()).and_then(hit)
+                drag_origin.and_then(hit)
             } else if moving || rotating || flipping {
                 hovered.or_else(|| {
                     (state.selection.len() == 1)
@@ -508,14 +514,22 @@ pub(super) fn show(
             } else {
                 None
             };
-            if let Some(footprint) = picked {
+            // Dragging a member of a larger selection keeps it and moves the whole group, as Move does.
+            let group = if let Some(press) = drag_origin
+                && picked.is_some_and(|footprint| state.selection.contains(&footprint.id))
+            {
+                let items = crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id));
+                (items.len() > 1).then_some((press, items))
+            } else {
+                None
+            };
+            if let Some((press, items)) = group {
+                state.movement.request_drag(source, camera.snap(press, rect), items);
+                ui.ctx().request_repaint();
+            } else if let Some(footprint) = picked {
                 state.drawing.select(None);
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
-                let anchor = if footprint_drag {
-                    ui.input(|i| i.pointer.press_origin()).map(|p| camera.unsnapped(p, rect)).unwrap_or(footprint.position)
-                } else {
-                    footprint.position
-                };
+                let anchor = drag_origin.map_or(footprint.position, |p| camera.unsnapped(p, rect));
                 let draft = Draft {
                     source,
                     footprint: footprint.id.clone(),
@@ -671,13 +685,15 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
-    let (mut openings, mut slots) = (Vec::new(), Vec::new());
-    let marquee = state.box_drag.as_ref().zip(ui.input(|i| i.pointer.interact_pos())).map(|(drag, pointer)| {
+    let (mut openings, mut slots, mut collision_pads) = (Vec::new(), Vec::new(), Vec::new());
+    let marquee = state.box_drag.as_ref().and_then(|drag| {
+        let release = pointer_release(&response, drag.button);
+        let pointer = rect.clamp(release.or_else(|| ui.input(|i| i.pointer.interact_pos()))?);
         let window = egui::Rect::from_two_pos(drag.start, pointer);
         let crossing = pointer.x < drag.start.x;
         let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
         hits.footprints = footprints_for_box(footprints, &hit_bounds, window, crossing, filters);
-        (window, crossing, hits)
+        Some((window, crossing, hits, release.is_some()))
     });
     for (footprint, projection) in footprints.iter().zip(projections) {
         let pose = shown.filter(|d| d.footprint == footprint.id);
@@ -735,6 +751,15 @@ pub(super) fn show(
                 }
             }
         }
+        if let Some(collisions) = state.tracks.routing_collisions() {
+            for pad in &mut pads {
+                if pad.copper.is_some() && collisions.contains(&format!("{}:{}", footprint.id, pad.number)) {
+                    let color = pcbcraft_chrome::Tokens::get().route_collision;
+                    pad.color = Some(color);
+                    collision_pads.push(egui::Shape::closed_line(board::pad_contour(pad), egui::Stroke::new(1.5, color)));
+                }
+            }
+        }
         if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
             for pad in &mut pads {
                 pad.net = None;
@@ -788,12 +813,12 @@ pub(super) fn show(
             board::drc_marker(&p, at, *focused);
         }
     }
-    if let Some((window, crossing, hits)) = marquee
+    if let Some((window, crossing, hits, released)) = marquee
         && let Some(drag) = &state.box_drag
     {
         pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
-        if ui.input(|i| i.pointer.button_released(drag.button)) {
-            if enabled && response.contains_pointer() {
+        if released {
+            if enabled {
                 out.items = Some(combine_box(&drag.base, hits, drag.add, drag.toggle));
             }
             state.box_drag = None;
@@ -803,6 +828,10 @@ pub(super) fn show(
     }
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
+    }
+    crate::board_tracks::paint_collisions(&p, rect, camera, project, &state.tracks, &state.hidden_layers);
+    if !collision_pads.is_empty() {
+        p.extend(collision_pads);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if footprints.is_empty()
@@ -819,10 +848,30 @@ pub(super) fn show(
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
-    if source.is_some() && idle && state.context_menu_allowed && !crate::board_clipboard::busy(state) {
-        response.context_menu(|ui| {
+    if let Some(source) = source.filter(|_| idle && state.context_menu_allowed && !crate::board_clipboard::busy(state)) {
+        if response.secondary_clicked() {
+            state.vertex_menu = response.interact_pointer_pos().and_then(|pointer| {
+                [(&state.zones, filters.zones), (&state.drawing, filters.graphics)]
+                    .into_iter()
+                    .filter(|(_, selectable)| *selectable)
+                    .find_map(|(outline, _)| crate::board_drawing::vertex_menu(outline, project, &state.hidden_layers, pointer, camera, rect, source))
+            });
+        }
+        pcbcraft_chrome::menu::context(&response, |ui| {
             use crate::board_clipboard::Action;
             use pcbcraft_chrome::menu::MenuItem;
+            if let Some(menu) = &state.vertex_menu {
+                let (outline, selectable, edit) = if menu.zone() {
+                    (&state.zones, filters.zones, &mut out.zone_edit)
+                } else {
+                    (&state.drawing, filters.graphics, &mut out.drawing_edit)
+                };
+                if let Some(command) = menu.show(ui, source, outline, &state.hidden_layers, selectable) {
+                    *edit = Some(command);
+                    out.vertex_menu_edit = true;
+                    return;
+                }
+            }
             let zones = !state.zones.selection().is_empty();
             let portable = !zones && (!state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty());
             out.clipboard = [
@@ -904,9 +953,7 @@ fn place_group(
         state.placement = Some(placement);
         return None;
     }
-    if ui.input(|i| {
-        i.pointer.button_pressed(PointerButton::Secondary) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
-    }) {
+    if secondary_pressed_here(response) || ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
         return None;
     }
     if !enabled {
@@ -1145,6 +1192,27 @@ fn reference_bounds(
     })
 }
 
+/// A secondary press on this canvas cancels its gesture. A press over another pane, such as a
+/// right-drag pan there, or on a floating card or window above the canvas leaves this canvas's
+/// tools and gestures running. Each press is judged where it happened, not where the pointer
+/// moved to later in the same frame.
+pub(super) fn secondary_pressed_here(response: &Response) -> bool {
+    let presses: Vec<Pos2> = response.ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+            .collect()
+    });
+    presses.into_iter().any(|pos| {
+        response.rect.contains(pos)
+            && response.ctx.layer_id_at(pos).is_none_or(|layer| layer == response.layer_id || layer.order == egui::Order::Background)
+    })
+}
+
 /// Project a local reference displacement into the editor-only label's screen coordinates.
 fn reference_shift(footprint: &FootprintView<'_>, camera: &Camera, rect: Rect) -> Vec2 {
     let local = footprint.reference_offset;
@@ -1167,7 +1235,7 @@ fn move_reference(
 ) -> (bool, Option<ReferenceDrag>) {
     let rect = response.rect;
     let mut draft = if let Some(draft) = state.reference_drag.take() {
-        if Some(draft.source) != source || response.ctx.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if Some(draft.source) != source || secondary_pressed_here(response) {
             return (true, None);
         }
         draft
@@ -1715,6 +1783,7 @@ mod tests {
                     Default::default(),
                     &appearance,
                     preview,
+                    preview,
                     Navigation::default(),
                     0,
                     pcbcraft_chrome::grid::Style::Off,
@@ -1798,6 +1867,7 @@ mod tests {
                     &BTreeSet::new(),
                     Default::default(),
                     &appearance,
+                    preview,
                     preview,
                     Navigation::default(),
                     0,

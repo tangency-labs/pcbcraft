@@ -49,6 +49,74 @@ struct Payload {
 /// Recover and read under the writer lock. If opening the lock file is denied by filesystem
 /// permissions, allow a read without recovery only while no committed journal exists.
 pub fn load(root: &Path) -> Result<Documents, String> {
+    load_with_upgrade(root).map(|(documents, _)| documents)
+}
+
+/// Move an archived working folder to system Trash while holding its normal save lock.
+/// The caller must first durably publish and verify the archive. The folder must still match
+/// the open baseline and contain only managed files and ordinary desktop metadata.
+pub fn trash_archived_folder(root: &Path, expected: &Documents) -> Result<(), String> {
+    trash_archived_folder_with(root, expected, crate::trash::directory)
+}
+
+/// Validate the complete source before passing it to the injected trash operation.
+fn trash_archived_folder_with(root: &Path, expected: &Documents, trash: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    regular_directory(root)?;
+    let _lock = lock(root, false)?;
+    require_no_journal(root)?;
+    for directory in root.ancestors() {
+        if has_git_metadata(directory)? {
+            return Err("The original folder is in a Git working tree.".into());
+        }
+    }
+    let raw = read_documents(root, false)?;
+    if &readable_documents(raw.clone())? != expected {
+        return Err("The original project changed on disk.".into());
+    }
+    let owned: BTreeSet<_> = raw.keys().map(|name| root.join(name)).collect();
+    let directories: BTreeSet<_> = owned
+        .iter()
+        .flat_map(|file| file.ancestors().skip(1).take_while(|path| *path != root).map(Path::to_owned))
+        .chain(["assets", "library", "sheets"].map(|name| root.join(name)))
+        .collect();
+    check_archive_source(root, &owned, &directories)?;
+    if read_documents(root, false)? != raw {
+        return Err("The original project changed while preparing to move it to Trash.".into());
+    }
+    trash(root)
+}
+
+/// A worktree has a Git pointer file or a metadata directory with a HEAD reference.
+fn has_git_metadata(directory: &Path) -> Result<bool, String> {
+    let git = directory.join(".git");
+    match fs::symlink_metadata(&git) {
+        Ok(metadata) if metadata.is_dir() => git.join("HEAD").try_exists().map_err(error),
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(error(err)),
+    }
+}
+
+/// Reject extra paths and symlinks, including in directories outside the usual project scans.
+fn check_archive_source(directory: &Path, owned: &BTreeSet<PathBuf>, directories: &BTreeSet<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(directory).map_err(error)? {
+        let entry = entry.map_err(error)?;
+        let path = entry.path();
+        let kind = entry.file_type().map_err(error)?;
+        if kind.is_dir() && directories.contains(&path) {
+            check_archive_source(&path, owned, directories)?;
+        } else if !(kind.is_file()
+            && (owned.contains(&path) || matches!(entry.file_name().to_str(), Some(".DS_Store" | "Thumbs.db" | "desktop.ini"))))
+        {
+            return Err(format!("The original folder contains an unpackaged item at {}.", path.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Read, recover if needed, and validate a split project folder, also reporting whether reading
+/// normalized a legacy entry point (`project.pc`) or power-marker representation in memory.
+pub fn load_with_upgrade(root: &Path) -> Result<(Documents, bool), String> {
     regular_directory(root)?;
     let lock = lock(root, true)?;
     if lock.can_recover {
@@ -56,12 +124,14 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     } else {
         require_no_journal(root)?;
     }
-    let documents = readable_documents(read_documents(root, false)?)?;
+    let raw = read_documents(root, false)?;
+    let documents = readable_documents(raw.clone())?;
+    let upgraded = documents != raw;
     if !lock.can_recover {
         require_no_journal(root)?;
     }
     decode_documents(&documents)?;
-    Ok(documents)
+    Ok((documents, upgraded))
 }
 
 /// Read a disposable preview without recovering data or holding a lock during I/O.
@@ -634,6 +704,39 @@ mod tests {
     use pcbcraft_engine::{Session, library::sources, persistence::encode_documents};
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    /// Only the exact saved folder is eligible for Trash, even if its normal reader ignores
+    /// extra files or would normalize its documents.
+    #[test]
+    fn archive_folder_cleanup_rechecks_contents_and_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        let root = dir.path().join("project");
+        let documents = pinning("archive", "resistor");
+        save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+        let extra = root.join("notes.txt");
+        fs::write(&extra, "personal notes").unwrap();
+        let trash = |_: &Path| panic!("unsafe folder reached Trash");
+        let reason = trash_archived_folder_with(&root, &documents, trash).unwrap_err();
+        assert!(reason.contains("notes.txt"), "{reason}");
+        assert!(extra.is_file());
+        fs::remove_file(extra).unwrap();
+        fs::create_dir(&git).unwrap();
+        fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(trash_archived_folder_with(&root, &documents, trash).unwrap_err().contains("Git working tree"));
+        fs::remove_file(git.join("HEAD")).unwrap();
+        fs::remove_dir(git).unwrap();
+        let entry = root.join(ENTRY_POINT);
+        let mut changed = documents[ENTRY_POINT].clone();
+        changed.push(b'\n');
+        fs::write(&entry, changed).unwrap();
+        assert!(trash_archived_folder_with(&root, &documents, trash).unwrap_err().contains("changed on disk"));
+        fs::write(entry, &documents[ENTRY_POINT]).unwrap();
+        let recycled = dir.path().join("recycled");
+        trash_archived_folder_with(&root, &documents, |source| fs::rename(source, &recycled).map_err(error)).unwrap();
+        assert_eq!(load(&recycled).unwrap(), documents);
+        assert!(!root.exists());
+    }
 
     /// Documents for a project that pins one symbol from a loaded native library, placed through
     /// production commands, so both IDs reach the folder paths.

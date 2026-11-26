@@ -1938,6 +1938,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2406,6 +2408,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2671,6 +2682,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-io-surface"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2919,18 +2940,29 @@ dependencies = [
  "egui",
  "egui-winit",
  "egui_kittest",
+ "image",
  "js-sys",
  "keyring",
  "log",
+ "pcbcraft-board-solid",
  "pcbcraft-chrome",
  "pcbcraft-engine",
+ "pcbcraft-geometry",
  "pcbcraft-mcp",
  "pcbcraft-storage",
  "rfd",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
  "sha2",
+ "solidcore-record",
+ "solidcraft-geom",
+ "solidcraft-gpu",
+ "solidcraft-render",
+ "solidcraft-viewport",
+ "solidcraft-viewport-egui",
+ "solidcraft-viewport-gpu",
  "tempfile",
  "ureq",
  "uuid",
@@ -2946,7 +2978,10 @@ version = "0.1.0"
 dependencies = [
  "pcbcraft-engine",
  "pcbcraft-geometry",
+ "pcbcraft-storage",
+ "pcbcraft-units",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2973,6 +3008,7 @@ dependencies = [
  "pcbcraft-mcp",
  "pcbcraft-storage",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3006,6 +3042,7 @@ dependencies = [
  "solidcore-record",
  "solidcore-step",
  "solidcore-tess",
+ "spade",
 ]
 
 [[package]]
@@ -4124,6 +4161,39 @@ version = "0.41.0"
 source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
 
 [[package]]
+name = "solidcraft-geom"
+version = "0.41.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
+dependencies = [
+ "serde",
+ "solidcore",
+ "solidcore-ops",
+ "solidcore-record",
+ "solidcore-tess",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "solidcraft-gpu"
+version = "0.41.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
+dependencies = [
+ "log",
+ "pollster 0.4.0",
+ "robust",
+ "serde",
+ "solidcore-record",
+ "solidcore-tess",
+ "solidcraft-color",
+ "solidcraft-geom",
+ "solidcraft-render",
+ "solidcraft-viewport",
+ "solidcraft-viewport-gpu",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "solidcraft-look"
 version = "0.41.0"
 source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
@@ -4133,6 +4203,28 @@ dependencies = [
  "solidcraft-theme",
  "solidcraft-ui-kit",
  "toml",
+]
+
+[[package]]
+name = "solidcraft-render"
+version = "0.41.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=73bdb6cdd39efc3899fb54e7217289a630a89efe#73bdb6cdd39efc3899fb54e7217289a630a89efe"
+dependencies = [
+ "image",
+ "moxcms",
+ "png 0.18.1",
+ "robust",
+ "serde",
+ "serde_json",
+ "sha2",
+ "solidcore-record",
+ "solidcore-tess",
+ "solidcraft-color",
+ "solidcraft-geom",
+ "solidcraft-viewport",
+ "sysinfo",
+ "web-time",
+ "weezl",
 ]
 
 [[package]]
@@ -4328,6 +4420,20 @@ dependencies = [
  "libc",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.40.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e8a3edbe0394ce115f3917a00349dd242be09eb5a091ed509eaf67b55cfb8a8"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows",
 ]
 
 [[package]]
@@ -5239,6 +5345,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5246,6 +5368,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.60.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"

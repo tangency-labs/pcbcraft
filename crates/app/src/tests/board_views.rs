@@ -673,7 +673,7 @@ fn board_canvas_and_ribbon_remain_distinct_from_schematic() {
 }
 
 /// Keyboard navigation reaches available workspaces and placement actions without leaking keys
-/// into the canvas. Planned workspaces are skipped when moving between rows.
+/// into the canvas. From Manufacturing, the picker skips planned workspaces and wraps to Schematic.
 #[test]
 fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     let mut h = board_harness();
@@ -707,7 +707,26 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.run();
     h.key_press(Key::Enter);
     h.run();
+    assert_eq!(h.state().workspace_key(), "manufacturing");
+    click(&mut h, "Choose workspace");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    // The native preview spinner repaints until its worker finishes.
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::render_workspace::wait_for_preview(&mut h);
+    #[cfg(target_arch = "wasm32")]
+    h.run();
+    if !crate::IN_BROWSER {
+        assert_eq!(h.state().workspace_key(), "render");
+        click(&mut h, "Choose workspace");
+        h.key_press(Key::ArrowDown);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    }
     assert!(h.state().library_editors.active.is_none());
+    assert_eq!(h.state().workspace_key(), "schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
     let card = h.get_by_label("PCB Layout").rect();
@@ -1273,6 +1292,280 @@ fn footprint_tools_in_split_views_share_history_without_sharing_input() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// With right-drag panning on, a right drag over the other pane pans it while the focused board
+/// keeps its footprint move, ruler or drawing tool. A right press on the board itself still
+/// cancels each of them.
+#[test]
+fn right_drag_pan_in_the_other_pane_keeps_the_board_move() {
+    #[derive(Clone, Copy, Debug)]
+    enum Gesture {
+        Move,
+        Ruler,
+        Rectangle,
+    }
+    let live = |h: &Harness<'_, PcbApp>, gesture: Gesture| {
+        let board = &h.state().views.view(ViewId(2)).unwrap().board;
+        match gesture {
+            Gesture::Move => board.draft.is_some(),
+            Gesture::Ruler => board.measure.tool,
+            Gesture::Rectangle => board.drawing.tool.is_some(),
+        }
+    };
+    for gesture in [Gesture::Move, Gesture::Ruler, Gesture::Rectangle] {
+        let mut h = board_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = true;
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB Layout beside current view");
+        let board_id = ViewId(2);
+        h.state_mut().views.view_mut(board_id).unwrap().camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        h.run();
+        let rect = h.get_by_label("PCB canvas 3").rect();
+        let origin = h.state().views.view(board_id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        click_canvas_at(&mut h, origin);
+        h.hover_at(origin);
+        h.run();
+        match gesture {
+            Gesture::Move => h.key_press(Key::M),
+            Gesture::Ruler => h.state_mut().start_measure(),
+            Gesture::Rectangle => {
+                let layer = h.state().session.project().unwrap().boards().next().unwrap().layers().into_iter().next().unwrap().id.to_string();
+                let board = &mut h.state_mut().views.active.board;
+                board.set_layer(&layer, true, Some(true));
+                board.drawing.start(crate::board_drawing::Tool::Rectangle, Some(layer));
+            }
+        }
+        h.run();
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert!(live(&h, gesture), "{gesture:?}");
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let schematic = h.get_by_label("Schematic canvas 1").rect();
+        let cards = h.state().views.view(ViewId(0)).unwrap().canvas_cards.clone();
+        let from = [0.5, 0.35, 0.65, 0.2, 0.8]
+            .into_iter()
+            .flat_map(|x| [0.5, 0.3, 0.7].map(|y| schematic.lerp_inside(egui::vec2(x, y))))
+            .find(|point| !cards.iter().any(|card| card.contains(*point)))
+            .unwrap();
+        let to = from + egui::vec2(23.0, 17.0);
+        let camera = |h: &Harness<'_, PcbApp>| h.state().views.view(ViewId(0)).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, schematic);
+        let panned = camera(&h);
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.hover_at(from);
+        h.run();
+        h.event(secondary(from, true));
+        h.run();
+        h.event(egui::Event::PointerMoved(to));
+        h.run();
+        h.event(secondary(to, false));
+        h.run();
+        assert_ne!(camera(&h), panned, "the right drag pans the schematic pane ({gesture:?})");
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert!(live(&h, gesture), "a press in the other pane keeps the board {gesture:?}");
+        h.hover_at(origin);
+        h.run();
+        h.event(secondary(origin, true));
+        h.run();
+        h.event(secondary(origin, false));
+        h.run();
+        assert!(!live(&h, gesture), "a right press on the board ends its {gesture:?}");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// The same holds for a copper move in a split of two board panes: a right drag over the other
+/// pane pans it and keeps the move, and a right press on the focused board ends the move
+/// without editing.
+#[test]
+fn right_drag_pan_in_the_other_pane_keeps_the_copper_move() {
+    let mut h = super::board_tracks::routable();
+    h.state_mut().preferences.navigation.right_drag_pan = true;
+    h.state_mut().browser.open = false;
+    let track = super::board_tracks::add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    // The split may restore a pane that kept another workspace; show the board in both panes and
+    // address them by the canvas labels actually painted.
+    {
+        let app = h.state_mut();
+        for pane in app.views.all_mut().filter(|pane| pane.workspace != Workspace::Board) {
+            pane.switch(Workspace::Board, &app.session);
+        }
+    }
+    h.run();
+    let panes: Vec<ViewId> = (0..8).map(ViewId).filter(|id| h.query_by_label(&format!("PCB canvas {}", id.0 + 1)).is_some()).collect();
+    assert_eq!(panes.len(), 2, "two board panes are painted: {panes:?}");
+    let (focused, other) = (panes[0], panes[1]);
+    let ctx = h.ctx.clone();
+    h.state_mut().activate_editor(&ctx, focused);
+    let center = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    h.state_mut().views.view_mut(focused).unwrap().camera.center_on(center);
+    h.run();
+    assert_eq!(h.state().views.active.id(), focused);
+    let rect = |h: &Harness<'_, PcbApp>, id: ViewId| h.get_by_label(&format!("PCB canvas {}", id.0 + 1)).rect();
+    let middle = h.state().views.active.camera.screen(center, rect(&h, focused));
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]));
+    let revision = h.state().session.revision();
+    h.hover_at(middle);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert!(h.state().views.active.board.tracks.busy());
+    let pane = rect(&h, other);
+    let cards = h.state().views.view(other).unwrap().canvas_cards.clone();
+    let from = [0.5, 0.35, 0.65, 0.2, 0.8]
+        .into_iter()
+        .flat_map(|x| [0.5, 0.3, 0.7].map(|y| pane.lerp_inside(egui::vec2(x, y))))
+        .find(|point| !cards.iter().any(|card| card.contains(*point)))
+        .unwrap();
+    let to = from + egui::vec2(23.0, 17.0);
+    let camera = |h: &Harness<'_, PcbApp>| h.state().views.view(other).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, pane);
+    let panned = camera(&h);
+    let secondary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    h.hover_at(from);
+    h.run();
+    h.event(secondary(from, true));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(secondary(to, false));
+    h.run();
+    assert_ne!(camera(&h), panned, "the right drag pans the other board pane");
+    assert_eq!(h.state().views.active.id(), focused);
+    assert!(h.state().views.view(focused).unwrap().board.tracks.busy(), "a press in the other pane keeps the copper move");
+    h.hover_at(middle);
+    h.run();
+    h.event(secondary(middle, true));
+    h.run();
+    h.event(secondary(middle, false));
+    h.run();
+    assert!(!h.state().views.view(focused).unwrap().board.tracks.busy(), "a right press on the board ends the copper move");
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// A right press on a floating window over the board belongs to that window, so the board keeps
+/// its footprint move or ruler. A right press on the bare board still ends each one.
+#[test]
+fn a_right_press_on_a_floating_window_keeps_the_board_move() {
+    for ruler in [false, true] {
+        let overlay = std::rc::Rc::new(std::cell::Cell::new(None::<egui::Pos2>));
+        let shown = overlay.clone();
+        let mut app = PcbApp::default();
+        app.parts.set_repeat(false);
+        for view in app.views.all_mut() {
+            view.filters_open = false;
+        }
+        let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+            move |ui, app: &mut PcbApp| {
+                app.frame(ui);
+                if let Some(at) = shown.get() {
+                    egui::Window::new("Overlay").fixed_pos(at).show(ui.ctx(), |ui| {
+                        ui.label("Overlay text");
+                    });
+                }
+            },
+            app,
+        );
+        h.run();
+        resistor_with_board_at_origin(&mut h);
+        {
+            let app = h.state_mut();
+            app.browser.open = false;
+            app.run(
+                pcbcraft_engine::PLACE_FOOTPRINT,
+                &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":2}),
+            );
+            app.views.active.switch(Workspace::Board, &app.session);
+            app.views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        }
+        h.run();
+        let rect = h.get_by_label("PCB canvas").rect();
+        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        click_canvas_at(&mut h, origin);
+        h.hover_at(origin);
+        h.run();
+        if ruler {
+            h.state_mut().start_measure();
+        } else {
+            h.key_press(Key::M);
+        }
+        h.run();
+        let live = |h: &Harness<'_, PcbApp>| {
+            let board = &h.state().views.active.board;
+            if ruler { board.measure.tool } else { board.draft.is_some() }
+        };
+        assert!(live(&h), "ruler: {ruler}");
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        overlay.set(Some(origin + egui::vec2(150.0, -150.0)));
+        h.run();
+        h.run();
+        let over = h.get_by_label("Overlay text").rect().center();
+        assert!(rect.contains(over), "the window floats over the board");
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        for at in [over, origin] {
+            h.hover_at(at);
+            h.run();
+            h.event(secondary(at, true));
+            h.run();
+            h.event(secondary(at, false));
+            h.run();
+            assert_eq!(live(&h), at == over, "a right press on the window keeps the board gesture, one on the board ends it (ruler: {ruler})");
+        }
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// A right press is judged where it lands, even when the pointer moves on within the same frame:
+/// a press on the board that moves off it still ends the ruler, and a press in the other pane
+/// that moves onto the board keeps it.
+#[test]
+fn a_right_press_counts_where_it_lands_within_the_frame() {
+    for on_board in [true, false] {
+        let mut h = board_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = true;
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB Layout beside current view");
+        let board_id = ViewId(2);
+        h.state_mut().views.view_mut(board_id).unwrap().camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        h.run();
+        let rect = h.get_by_label("PCB canvas 3").rect();
+        let origin = h.state().views.view(board_id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        click_canvas_at(&mut h, origin);
+        h.hover_at(origin);
+        h.run();
+        h.state_mut().start_measure();
+        h.run();
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert!(h.state().views.active.board.measure.tool);
+        let schematic = h.get_by_label("Schematic canvas 1").rect();
+        let cards = h.state().views.view(ViewId(0)).unwrap().canvas_cards.clone();
+        let elsewhere = [0.5, 0.35, 0.65, 0.2, 0.8]
+            .into_iter()
+            .flat_map(|x| [0.5, 0.3, 0.7].map(|y| schematic.lerp_inside(egui::vec2(x, y))))
+            .find(|point| !cards.iter().any(|card| card.contains(*point)))
+            .unwrap();
+        let (from, to) = if on_board { (origin, elsewhere) } else { (elsewhere, origin) };
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.hover_at(from);
+        h.run();
+        // `Harness::event` runs one frame per event; the raw input carries both in one frame.
+        h.input_mut().events.extend([secondary(from, true), egui::Event::PointerMoved(to)]);
+        h.run();
+        h.event(secondary(to, false));
+        h.run();
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert_eq!(
+            h.state().views.view(board_id).unwrap().board.measure.tool,
+            !on_board,
+            "a press that lands on the board ends the ruler, one that lands elsewhere keeps it (pressed on board: {on_board})"
+        );
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// A successful folder/archive Open from PCB layout binds the incoming project's board before
 /// constructing its fallback arrangement, including cached views of the outgoing project.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1630,6 +1923,26 @@ fn footprint_deletion_uses_selected_placements_and_shared_undo() {
     }
 }
 
+/// Backspace, which is the delete key on Mac keyboards, deletes an explicit board selection
+/// exactly as Delete does, in one undo step.
+#[test]
+fn backspace_deletes_the_board_selection_like_delete() {
+    let mut h = editable_board();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(!h.state().views.active.board.selection.is_empty());
+    let revision = h.state().session.revision();
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Live clients use the same deletion command and stale gate, and can undo from the GUI.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -1860,7 +2173,7 @@ fn footprint_box_excludes_locked_without_hiding_inspection() {
     assert_eq!(h.state().views.active.board.selection.len(), 1);
 }
 
-/// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
+/// Escape, focus loss and changed revisions cannot commit a box. Disabled
 /// footprint filters and hidden geometry produce no hits, including fast move/release frames.
 #[test]
 fn pcb_box_selection_cancels_and_respects_filters() {
@@ -1868,7 +2181,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
     let mut h = editable_board();
     let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
     let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
-    for cancellation in ["escape", "focus", "revision", "panel"] {
+    for cancellation in ["escape", "focus", "revision"] {
         board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
         match cancellation {
             "escape" => h.key_press(Key::Escape),
@@ -1883,8 +2196,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
             _ => {}
         }
         h.run();
-        let end = if cancellation == "panel" { h.get_by_label("Collapse Layers").rect().center() } else { to };
-        board_box_release(&mut h, end, Primary, Modifiers::NONE);
+        board_box_release(&mut h, to, Primary, Modifiers::NONE);
         assert!(h.state().views.active.board.box_drag.is_none());
         assert!(h.state().views.active.board.selection.is_empty(), "{cancellation}");
         h.event(egui::Event::WindowFocused(true));

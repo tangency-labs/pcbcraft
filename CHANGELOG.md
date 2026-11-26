@@ -2,12 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Native saves use `pcbcraft-project/68` and, for registered boards, `pcbcraft-instances/12` whether or not a declaration is present. Files using the previous headers still open and migrate on save. Declarations are optional `authored_intent` fields, and the project envelope versions those fields inside the unchanged `pcbcraft-net-classes/1` catalog.
+- Add shared exact circular arc contact geometry (`board::arc::geometry::ArcGeometry`) and wire circular arcs into board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`), ratsnest, via inspection and the engine `copper_shorts` primitive. Clearance queries, DRC, copper preparation, transforms, clipboard, fabrication and PCB editing keep refusing arc boards until follow-up PRs account for arcs.
+
 A self-contained KiCad 6–10 schematic can be imported as a new project, through
 `project.import_kicad_schematic` in headless MCP or `pcbcraft-cli import-kicad`.
 Symbols, units, references, values, fields, fitting and exclusion flags, power
 symbols, wires, labels and no-connects carry over; the import refuses, with
 reasons, anything that would change which pins connect, such as KiCad 10 jumper
-pin groups, and lists what it left out. See [KiCad schematic import](docs/kicad-import.md) (#60).
+pin groups, and lists what it left out. See [KiCad schematic import](docs/schematic/kicad-import.md) (#60).
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
@@ -15,6 +18,7 @@ its old slot. Splitting a pane itself opens another view. Separate Split window
 up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
+- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -23,15 +27,30 @@ has its own highlight and read-only Properties label without selecting an owner
 for editing. These filters start off to preserve existing picking defaults;
 project edits and reopened documents do not restore stale inspection selections.
 
+`pcb.set_test_point` marks individual placed pads and vias for assembly or
+bare-board fabrication testing. The two marks are independent, name the board
+face, and survive Undo/Redo and native save/reopen. Saved boards now use board
+format 43: the format 42 records plus optional marks. Format 42 boards still
+open and refuse marks, and earlier releases refuse format 43. Clearing the last
+mark keeps format 43. This change does not add reports.
+
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+[command API version](docs/automation/command-api.md#command-api-version). MCP `execute` now
 accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
-See [stating a version](docs/mcp.md#stating-a-version).
+See [stating a version](docs/automation/command-api.md#stating-a-version).
+
+`pcb.merge_tracks` tidies routed copper: it merges the listed collinear segments
+on the same layer and width that meet at a free end, and absorbs stacked
+duplicates, keeping the lowest UUID with the merged ends. Ends at a junction,
+via or pad and locked segments stay as they are, so connectivity does not change.
+The whole merge is one undo step, and a dry run returns the same diff without
+changing the project. In the PCB editor, **Layout → Modify → Merge Tracks** runs
+it on the selected tracks.
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -49,7 +68,7 @@ rejected before changing layers.
 Failed MCP calls and live editor replies now carry a stable error code, such
 as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
 details, so an agent can act on a failure without parsing its message. The
-codes are published in [error codes](docs/mcp.md#error-codes) and are never
+codes are published in [error codes](docs/automation/command-api.md#error-codes) and are never
 renamed or reused. Messages are unchanged, except that `ui.` commands now
 refuse unknown keys, missing required keys and non-null scalar or array
 parameter lists with the same wording as window commands. Omitted or null

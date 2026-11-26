@@ -906,16 +906,18 @@ impl EditorViews {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
                     let library = self.active.library.clone();
+                    let manufacturing = self.active.manufacturing.as_mut().map(crate::manufacturing::State::fork);
+                    let render = self.active.render.as_ref().map(crate::render_workspace::State::fork);
+                    let definition = self.active.definition;
                     if let Some(view) = self.view_mut(id) {
                         view.library = library;
-                        if view.library.is_some() {
+                        view.manufacturing = manufacturing;
+                        view.render = render;
+                        if view.library.is_some() || view.manufacturing.is_some() || view.render.is_some() {
                             view.definition = None;
+                        } else if definition.is_some() {
+                            view.definition = definition;
                         }
-                    }
-                    if let Some(document) = self.active.definition
-                        && let Some(view) = self.view_mut(id)
-                    {
-                        view.definition = Some(document);
                     }
                     let camera = self.active.camera.fork_navigation();
                     let workspace = self.active.workspace;
@@ -976,6 +978,9 @@ impl PcbApp {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
         let Some(view) = self.views.view(id) else { return plain() };
+        if view.manufacturing.is_some() || view.render.is_some() {
+            return vec![egui::Shape::rect_filled(area, 0, t.board_canvas)];
+        }
         if view.unavailable() || view.library.is_some() {
             return plain();
         }
@@ -1079,15 +1084,46 @@ impl PcbApp {
 
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
+    /// A middle press alone only navigates, so it pans or zooms a project pane without focusing it.
+    /// When right-drag pans, a right press waits for its click: the click focuses the pane and
+    /// opens its menu, while a drag pans it without taking focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
         if self.parts.is_modal() || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
-        let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
+        let right_pans = self.preferences.navigation.right_drag_pan;
+        // Each button event carries its own position; the frame's last pointer position may
+        // already lie in another pane.
+        let pressed = ctx.input(|input| {
+            let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
+            // A primary press decides focus whenever there is one, then another press that can
+            // focus (right when right-drag does not pan), even when a navigation-only press
+            // came first in the same frame.
+            let navigates =
+                |button: egui::PointerButton| button == egui::PointerButton::Middle || (right_pans && button == egui::PointerButton::Secondary);
+            let press_of = |wanted: &dyn Fn(egui::PointerButton) -> bool| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::PointerButton { pos, button, pressed: true, .. } if wanted(*button) => Some(*pos),
+                    _ => None,
+                })
+            };
+            let press = press_of(&|button| button == egui::PointerButton::Primary)
+                .or_else(|| press_of(&|button| !navigates(button)))
+                .or_else(|| press_of(&|_| true));
+            let click = input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, .. } => Some(*pos),
+                _ => None,
+            });
+            press.or(click.filter(|_| right_click))
+        });
+        let navigating = ctx.input(|input| {
+            let right = input.pointer.secondary_pressed();
+            (input.pointer.button_pressed(egui::PointerButton::Middle) || right) && !input.pointer.primary_pressed() && (right_pans || !right)
+        });
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
             && (self.views.view(*id).is_some_and(|view| view.auxiliary())
-                || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
+                || !navigating && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
         }
@@ -1133,7 +1169,7 @@ impl PcbApp {
             area,
             self.browser.rect(),
             &slot_panels,
-            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open],
+            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open, false],
             true,
         );
         let properties_area = slots[crate::workspace_panels::PROPERTIES];
@@ -1175,12 +1211,12 @@ impl PcbApp {
             Rect::NOTHING
         };
         if board && let Some((panels, _)) = board_panel {
-            use crate::workspace_panels::{FILTERS, follow, on_side};
+            use crate::workspace_panels::{FILTERS, ROUTER, follow, on_side};
             use pcbcraft_chrome::workspace::panels::Position;
             // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
             let mut drc_area = area;
-            // `board_panels` returns the Browser, Layers and Properties cards in that order.
-            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + if compact { 0. } else { 8. });
+            let router = on_side(&self.views.active.panels, ROUTER, Position::Right, panels[3]);
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom().max(router.bottom()) + if compact { 0. } else { 8. });
             // In Compact it also follows a right-docked Selection filters card instead of overlapping it.
             let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
@@ -1232,6 +1268,15 @@ impl PcbApp {
                 // Workspace painters may fill their maximum rectangle. Keep the shared
                 // pane header outside their clip, including Library and definition panes.
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.views.view(id).is_some_and(|view| view.render.is_some()) {
+                    self.render_pane(ui, id);
+                    return;
+                }
+                if self.views.view(id).is_some_and(|view| view.manufacturing.is_some()) {
+                    self.manufacturing_pane(ui, id);
+                    return;
+                }
                 if self.views.view(id).is_some_and(|view| view.library.is_some()) {
                     self.library_workspace_pane(ui, id);
                     return;
@@ -1287,6 +1332,14 @@ impl PcbApp {
                     if matches!(self.dialog, Dialog::None) && self.views.reveal_for(id, &self.session, self.preferences.selection_follow) {
                         ui.ctx().request_repaint();
                     }
+                    // Pan and zoom follow the pointer here, without granting selection, tools or keys.
+                    let navigation_enabled = ui.is_enabled()
+                        && (crate::IN_BROWSER || ui.input(|input| input.focused))
+                        && !self.home
+                        && !self.project_action_pending()
+                        && matches!(self.dialog, Dialog::None)
+                        && !self.parts.is_modal()
+                        && !egui::Popup::is_any_open(ui.ctx());
                     let highlight = self.views.highlight_for(id, &self.session);
                     let label = format!("Schematic canvas {}", id.0 + 1);
                     let Some(view) = self.views.view_mut(id) else {
@@ -1314,7 +1367,7 @@ impl PcbApp {
                                     &view.inspection,
                                     view.filters,
                                     false,
-                                    false,
+                                    navigation_enabled,
                                     self.preferences.navigation,
                                     self.preferences.schematic_display(),
                                     self.preferences.auto_heal_wires,
@@ -1386,6 +1439,7 @@ impl PcbApp {
         let browser_area = self.parts.browser_area(area).intersect(area);
         let browser_area =
             if self.properties_open && !self.parts.open { pcbcraft_chrome::properties::browser_area(browser_area) } else { browser_area };
+        let can_close_project = self.can_close_document();
         let pick = self.browser.show(
             ui,
             browser_area,
@@ -1396,6 +1450,7 @@ impl PcbApp {
             self.views.active.filters,
             &self.views.active.inspection,
             &self.views.active.board.hidden_layers,
+            can_close_project,
         );
         // Panels belong to individual hosts; apply personal criteria to each bound chooser.
         self.parts.set_filter(self.library_preferences.filter.clone());
