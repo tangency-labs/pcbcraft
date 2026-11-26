@@ -245,6 +245,32 @@ fn pin_remap_cold_graph_budget_counts_unrelated_direct_contacts() {
     }
 }
 
+/// A sheet at the raised per-sheet label limit, with every label stacked on one point, is refused
+/// by the modeled graph budget before any cold graph work rather than prepared at full fanout.
+#[test]
+fn pin_remap_cold_graph_budget_refuses_a_sheet_at_the_label_limit() {
+    let (mut project, editor) = fixture();
+    edit(&mut project, crate::sheets::CREATE_SHEET, json!({"name":"Labels"}));
+    let target = project.project().unwrap().sheets().last().unwrap().target;
+    let at = crate::schematic::Point { x_nm: 0, y_nm: 0 };
+    let mut snapshot = graph_marker_fixture(project.project().unwrap(), target, at);
+    let sheet = Arc::make_mut(&mut snapshot.sheets).iter_mut().find(|sheet| sheet.sheet_id == target.id()).unwrap();
+    sheet.net_labels = Arc::new(
+        (0..crate::net_labels::MAX_LABELS)
+            .map(|index| crate::net_labels::Label {
+                id: 20_000 + index as u64,
+                name: format!("STACKED-{index}"),
+                style: crate::net_labels::Style::Local,
+                at,
+                rotation: 0,
+                text: None,
+            })
+            .collect(),
+    );
+    assert_eq!(snapshot.for_sheet(target).unwrap().net_labels().len(), crate::net_labels::MAX_LABELS);
+    check_graph_command(&mut project, &editor.snapshot(), snapshot, Some("Pin remap graph preparation budget exceeded."));
+}
+
 /// Add unrelated diagonal routes expanding to 130 physical segments per wire after resolution.
 fn graph_route_fixture(project: &Project, target: crate::SheetTarget, count: i64) -> Project {
     use crate::schematic::{Point, Wire, WireEndpoint};
