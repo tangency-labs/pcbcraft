@@ -12,6 +12,7 @@ up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
 - Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
+- Copper zones can remove islands that touch no pad, via or track of their net (**Remove unconnected islands** in zone Properties, `remove_unconnected_islands` in zone options). Fill inspection now lists each removed island with its reason, area and bounds (#232).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,

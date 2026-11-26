@@ -41,6 +41,7 @@ struct WireZone {
     layer: Uuid,
     islands: Vec<WireIsland>,
     dropped: usize,
+    removed: Vec<RemovedIsland>,
     clearance_nm: i64,
 }
 #[derive(Serialize, Deserialize)]
@@ -175,7 +176,15 @@ fn encode_fill(fill: &Fill) -> Result<WireFill, String> {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(WireZone { id: zone.id, net: zone.net, layer: zone.layer, islands, dropped: zone.dropped, clearance_nm: zone.clearance_nm })
+            Ok(WireZone {
+                id: zone.id,
+                net: zone.net,
+                layer: zone.layer,
+                islands,
+                dropped: zone.dropped,
+                removed: zone.removed.clone(),
+                clearance_nm: zone.clearance_nm,
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(WireFill {
@@ -204,6 +213,15 @@ fn decode_fill(wire: WireFill, view: BoardView<'_>) -> Result<Fill, String> {
         {
             return Err("Invalid fill worker zone identity.".into());
         }
+        if zone.removed.len() != zone.dropped
+            || zone.removed.iter().any(|removed| {
+                !removed.area_nm2.is_finite()
+                    || removed.area_nm2 < 0.0
+                    || removed.bounds_nm.iter().any(|v| !v.is_finite() || v.abs() > pcbcraft_units::MAX_LENGTH_NM as f64)
+            })
+        {
+            return Err("Invalid fill worker island removal report.".into());
+        }
         let mut islands = Vec::new();
         for island in zone.islands {
             if island.mesh.vertices_nm.len() > 1_000_000
@@ -219,7 +237,15 @@ fn decode_fill(wire: WireFill, view: BoardView<'_>) -> Result<Fill, String> {
                 contacts: island.contacts,
             });
         }
-        zones.push(ZoneFill { id: zone.id, net: zone.net, layer: zone.layer, islands, dropped: zone.dropped, clearance_nm: zone.clearance_nm });
+        zones.push(ZoneFill {
+            id: zone.id,
+            net: zone.net,
+            layer: zone.layer,
+            islands,
+            dropped: zone.dropped,
+            removed: zone.removed,
+            clearance_nm: zone.clearance_nm,
+        });
     }
     if seen.len() != view.zones().iter().filter(|zone| view.zone_net_state(zone.net) == "active").count() {
         return Err("Fill worker omitted an active zone.".into());

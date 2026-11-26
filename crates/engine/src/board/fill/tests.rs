@@ -832,3 +832,145 @@ fn complex_clearance_does_not_send_all_the_planes_holes_through_the_boolean_budg
         assert!(!island.display_mesh(5_000).unwrap().triangles.is_empty());
     }
 }
+
+/// Two Board Outline rectangles of equal size, one around every fixture footprint and one empty,
+/// under one zone of a pad's net. The zone fills one island on each.
+fn two_islands(remove_unconnected_islands: bool) -> Session {
+    let mut s = routed_fixture();
+    super::super::drc::tests::outline(&mut s);
+    let outline = view(&s).layers().into_iter().find(|layer| layer.purpose == super::super::setup::LayerPurpose::Outline).unwrap().id;
+    let p = |x: i64, y: i64| json!({"x_nm":x,"y_nm":y});
+    s.apply(
+        crate::ADD_DRAWING,
+        &json!({"layer":outline,"points":[p(35_000_000,-5_000_000),p(65_000_000,-5_000_000),p(65_000_000,35_000_000),p(35_000_000,35_000_000)],"closed":true,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let pad = {
+        let line = view(&s).ratsnest().unwrap().lines[0].clone();
+        format!("{}:{}", line.from.footprint, line.from.pad.number.as_str())
+    };
+    let target = view(&s).net_class_target_for_copper(&pad).unwrap().unwrap();
+    let layer = copper_layers(&s)[0];
+    let points = [[-5_000_000, -5_000_000], [65_000_000, -5_000_000], [65_000_000, 35_000_000], [-5_000_000, 35_000_000]]
+        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
+    let options = Options { connection: Connection::Solid, remove_unconnected_islands, ..Options::default() };
+    s.apply(ADD_ZONE, &json!({"layer":layer,"target":target,"points":points,"options":options,"expected_revision":s.revision()})).unwrap();
+    s
+}
+
+/// Connection removal drops the island that touches none of the zone net's copper, keeps an
+/// island of the same size that does, and reports the removed island with its reason.
+#[test]
+fn unconnected_island_removal_keeps_a_connected_island_of_the_same_size() {
+    let kept = compute(view(&two_islands(false))).unwrap();
+    assert_eq!(kept.zones[0].islands.len(), 2);
+    assert!(kept.zones[0].removed.is_empty());
+    assert_eq!(kept.zones[0].islands.iter().filter(|island| island.contacts.is_empty()).count(), 1);
+
+    let s = two_islands(true);
+    let target = view(&s).target;
+    let filled = compute(view(&s)).unwrap();
+    let zone = &filled.zones[0];
+    assert_eq!(zone.islands.len(), 1);
+    assert!(!zone.islands[0].contacts.is_empty());
+    let connected = zone.islands[0].region.bounds_nm().unwrap();
+    assert!(connected[2] < 30_000_000.0, "{connected:?}");
+    assert_eq!(zone.dropped, 1);
+    let [removed] = zone.removed.as_slice() else { panic!("{:?}", zone.removed) };
+    assert_eq!(removed.reason, RemovalReason::Unconnected);
+    assert!(removed.bounds_nm[0] > 30_000_000.0, "{removed:?}");
+    assert!(removed.area_nm2 >= zone.islands[0].region.area().unwrap().value_nm2);
+    assert!(filled.problems.is_empty(), "{:?}", filled.problems);
+
+    let mut s = s;
+    let inspected = s.execute(super::REFILL_ZONES, &json!({"board":target.board})).unwrap();
+    let report = &inspected["zone_fill"]["result"]["zones"][0];
+    assert_eq!(report["islands"], 1);
+    assert_eq!(report["dropped"], 1);
+    assert_eq!(report["removed"][0]["reason"], "unconnected");
+    assert_eq!(report["removed"][0]["bounds_nm"], json!(removed.bounds_nm));
+}
+
+/// Minimum-area removal now reports each removed island with its reason.
+#[test]
+fn minimum_area_removal_reports_each_removed_island() {
+    let filled = compute(view(&fixture(Connection::Solid, 5_000_000_000_000_000))).unwrap();
+    let zone = &filled.zones[0];
+    assert!(zone.islands.is_empty());
+    assert_eq!(zone.removed.len(), zone.dropped);
+    assert!(zone.removed.iter().all(|removed| removed.reason == RemovalReason::MinimumArea && removed.area_nm2 > 0.0));
+}
+
+/// The browser worker carries the removal report and refuses one that disagrees with its count.
+#[test]
+fn worker_transport_carries_and_checks_the_removal_report() {
+    let s = two_islands(true);
+    let mut job = s.prepare_zone_fill(view(&s).target, false).unwrap();
+    let request = job.worker_request().unwrap();
+    let response = super::worker::execute(&request);
+    let filled = job.accept_worker_response(&response).unwrap().unwrap();
+    assert_eq!(filled.zones[0].removed, compute(view(&s)).unwrap().zones[0].removed);
+    let mut wrong: serde_json::Value = serde_json::from_str(&response).unwrap();
+    wrong["result"]["Ok"]["zones"][0]["removed"] = json!([]);
+    let mut job = s.prepare_zone_fill(view(&s).target, true).unwrap();
+    let _ = job.worker_request().unwrap();
+    assert!(job.accept_worker_response(&wrong.to_string()).unwrap_err().contains("removal report"));
+}
+
+/// All saves use the current format and record the policy even when off. Older boards
+/// load with the policy off and migrate on save without changing their zone behavior.
+#[test]
+fn island_policy_storage_round_trips_and_is_refused_in_other_formats() {
+    use crate::persistence::{decode_documents, encode_documents};
+    let board_path = crate::persistence::test_board_path;
+    let no_zones = encode_documents(routed_fixture().snapshot().unwrap()).unwrap();
+    let no_zones_board: serde_json::Value = serde_json::from_slice(&no_zones[&board_path(&no_zones)]).unwrap();
+    assert_eq!(no_zones_board["format"], "pcbcraft-board/59");
+    assert!(no_zones_board.get("zones").is_none());
+    assert_eq!(encode_documents(decode_documents(&no_zones).unwrap()).unwrap(), no_zones);
+
+    let mut s = two_islands(false);
+    let plain = encode_documents(s.snapshot().unwrap()).unwrap();
+    let path = board_path(&plain);
+    let plain_board: serde_json::Value = serde_json::from_slice(&plain[&path]).unwrap();
+    assert_eq!(plain_board["format"], "pcbcraft-board/59");
+    assert_eq!(plain_board["zones"][0]["options"]["remove_unconnected_islands"], false);
+    assert_eq!(encode_documents(decode_documents(&plain).unwrap()).unwrap(), plain);
+
+    for format in ["pcbcraft-board/43", "pcbcraft-board/42", "pcbcraft-board/20"] {
+        let mut legacy = plain.clone();
+        let mut old_board = plain_board.clone();
+        old_board["format"] = json!(format);
+        legacy.insert(path.clone(), serde_json::to_vec(&old_board).unwrap());
+        assert!(decode_documents(&legacy).unwrap_err().contains("forbidden in earlier formats"));
+        old_board["zones"][0]["options"].as_object_mut().unwrap().remove("remove_unconnected_islands");
+        legacy.insert(path.clone(), serde_json::to_vec(&old_board).unwrap());
+        let reopened = decode_documents(&legacy).unwrap();
+        assert!(!reopened.board.zones[0].options.remove_unconnected_islands);
+        let target = reopened.board_target().unwrap();
+        assert_eq!(compute(reopened.board_view(target).unwrap()).unwrap().zones[0].islands.len(), 2);
+        assert_eq!(encode_documents(reopened).unwrap(), plain);
+    }
+
+    let zone = view(&s).zones()[0].clone();
+    let options = Options { remove_unconnected_islands: true, ..zone.options };
+    s.apply(super::super::zones::SET_ZONE, &json!({"zone":zone.id,"options":options,"expected_revision":s.revision()})).unwrap();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let board: serde_json::Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/59");
+    assert_eq!(board["zones"][0]["options"]["remove_unconnected_islands"], true);
+    let reopened = decode_documents(&saved).unwrap();
+    assert!(reopened.board.zones[0].options.remove_unconnected_islands);
+    assert_eq!(encode_documents(reopened).unwrap(), saved);
+
+    let mut older = saved.clone();
+    let mut older_board = board.clone();
+    older_board["format"] = json!("pcbcraft-board/43");
+    older.insert(path.clone(), serde_json::to_vec(&older_board).unwrap());
+    assert!(decode_documents(&older).unwrap_err().contains("forbidden in earlier formats"));
+    let mut incomplete = plain;
+    let mut incomplete_board = plain_board;
+    incomplete_board["zones"][0]["options"].as_object_mut().unwrap().remove("remove_unconnected_islands");
+    incomplete.insert(path, serde_json::to_vec(&incomplete_board).unwrap());
+    assert!(decode_documents(&incomplete).unwrap_err().contains("required in pcbcraft-board/59"));
+}

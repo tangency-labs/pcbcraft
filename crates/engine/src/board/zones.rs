@@ -45,6 +45,9 @@ pub struct Options {
     pub spoke_width_nm: i64,
     pub connection: Connection,
     pub min_island_area_nm2: u64,
+    /// Remove filled islands that touch no pad, via or track of the zone's net.
+    #[serde(default)]
+    pub remove_unconnected_islands: bool,
 }
 /// Omission inherits board clearance; explicit stored null is refused.
 fn clearance<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<i64>, D::Error> {
@@ -59,6 +62,7 @@ impl Default for Options {
             spoke_width_nm: 300_000,
             connection: Connection::Thermal,
             min_island_area_nm2: 0,
+            remove_unconnected_islands: false,
         }
     }
 }
@@ -271,7 +275,7 @@ impl Session {
 /// Shared command schema for complete settings; runtime validation enforces the same bounds.
 pub(crate) fn options_schema() -> Value {
     let dimension = json!({"type":"integer","minimum":super::track::MIN_WIDTH_NM,"maximum":super::track::MAX_WIDTH_NM});
-    json!({"type":"object","additionalProperties":false,"required":["priority","thermal_gap_nm","spoke_width_nm","connection","min_island_area_nm2"],"properties":{"priority":{"type":"integer","minimum":0,"maximum":1000},"clearance_nm":dimension,"thermal_gap_nm":dimension,"spoke_width_nm":dimension,"connection":{"enum":["thermal","solid","none"]},"min_island_area_nm2":{"type":"integer","minimum":0,"maximum":MAX_ISLAND_AREA_NM2}}})
+    json!({"type":"object","additionalProperties":false,"required":["priority","thermal_gap_nm","spoke_width_nm","connection","min_island_area_nm2"],"properties":{"priority":{"type":"integer","minimum":0,"maximum":1000},"clearance_nm":dimension,"thermal_gap_nm":dimension,"spoke_width_nm":dimension,"connection":{"enum":["thermal","solid","none"]},"min_island_area_nm2":{"type":"integer","minimum":0,"maximum":MAX_ISLAND_AREA_NM2},"remove_unconnected_islands":{"type":"boolean"}}})
 }
 
 #[cfg(test)]

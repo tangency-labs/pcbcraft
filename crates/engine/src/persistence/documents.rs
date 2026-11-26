@@ -109,9 +109,10 @@ const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 /// The format 42 vocabulary without test-point marks; still read, never written.
 const UNMARKED_BOARD_FORMAT: &str = "pcbcraft-board/42";
-/// Current board write format: the format 42 vocabulary plus optional test-point marks, with an
-/// optional setup and optional authored records.
-pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/43";
+/// The format 43 vocabulary adds optional test-point marks; still read, never written.
+const MARKED_BOARD_FORMAT: &str = "pcbcraft-board/43";
+/// Current board write format: the format 43 vocabulary plus the explicit zone island-removal policy.
+pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/59";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -386,7 +387,7 @@ struct BoardDocument {
     #[serde(default, deserialize_with = "present")]
     teardrops: Option<Vec<crate::board::teardrop::Record>>,
     #[serde(default, deserialize_with = "present")]
-    zones: Option<Vec<crate::board::zones::Zone>>,
+    zones: Option<Vec<Box<serde_json::value::RawValue>>>,
     #[serde(default, deserialize_with = "present")]
     rules: Option<crate::board::rules::Settings>,
     #[serde(default, deserialize_with = "present")]
@@ -1077,10 +1078,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
 
     // Current boards use one record vocabulary. The older headers still require or forbid
     // particular records, while all versions share the record and geometry validators.
-    let current = board.format == CURRENT_BOARD_FORMAT || board.format == UNMARKED_BOARD_FORMAT;
+    let has_island_policy = board.format == CURRENT_BOARD_FORMAT;
+    let supports_test_points = has_island_policy || board.format == MARKED_BOARD_FORMAT;
+    let current = supports_test_points || board.format == UNMARKED_BOARD_FORMAT;
     let grouped = board.format == GROUP_BOARD_FORMAT;
-    if (board.format != CURRENT_BOARD_FORMAT && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: test-point marks require format 43 and a nonempty array.".into());
+    if (!supports_test_points && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
+        return Err(format!("board.json: test-point marks require format 43 or {CURRENT_BOARD_FORMAT} and a nonempty array."));
     }
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (!current && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
@@ -1388,8 +1391,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
+        (CURRENT_BOARD_FORMAT | MARKED_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT | MARKED_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1697,12 +1700,33 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             class.authored_intent.validate_split_baselines(None, &project_data.net_registry.records)?;
         }
     }
-    let mut zones = board.zones.unwrap_or_default();
+    let mut zones = board.zones.unwrap_or_default().iter().map(|zone| decode_zone(zone, has_island_policy)).collect::<Result<Vec<_>, _>>()?;
     zones.sort_by_key(|zone| zone.id);
     Arc::make_mut(&mut project_data.board).zones = zones;
     crate::board::zones::validate(project_data).map_err(|e| format!("board.json: {e}"))?;
     validate_watermark(&project)?;
     Ok(project)
+}
+
+/// Check the stored field's presence before decoding the shared command/model record,
+/// whose default intentionally accepts omitted options from older boards and commands.
+fn decode_zone(raw: &serde_json::value::RawValue, has_island_policy: bool) -> Result<crate::board::zones::Zone, String> {
+    #[derive(Deserialize)]
+    struct ZonePolicy {
+        options: Policy,
+    }
+    #[derive(Deserialize)]
+    struct Policy {
+        #[serde(default, deserialize_with = "present")]
+        remove_unconnected_islands: Option<bool>,
+    }
+    let policy: ZonePolicy = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
+    if has_island_policy != policy.options.remove_unconnected_islands.is_some() {
+        return Err(format!(
+            "board.json: remove_unconnected_islands is required in {CURRENT_BOARD_FORMAT} zone options and forbidden in earlier formats"
+        ));
+    }
+    serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))
 }
 
 /// Version 2 retains its original field vocabulary; migration preserves labels and dimensions

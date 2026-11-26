@@ -63,6 +63,26 @@ pub struct Island {
     pub contacts: Vec<usize>,
 }
 
+/// Why a zone policy removed an island from the fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovalReason {
+    /// Smaller than the zone's minimum island area.
+    MinimumArea,
+    /// Touches no pad, via or track of the zone's net.
+    Unconnected,
+}
+
+/// One island a zone policy removed, reported so the removal can be reviewed.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemovedIsland {
+    pub reason: RemovalReason,
+    pub area_nm2: f64,
+    /// Minimum x, minimum y, maximum x and maximum y.
+    pub bounds_nm: [f64; 4],
+}
+
 /// Completed fill of one authored zone; every island retains that zone's UUID/net/layer.
 #[derive(Clone, Debug)]
 pub struct ZoneFill {
@@ -70,7 +90,9 @@ pub struct ZoneFill {
     pub net: Uuid,
     pub layer: Uuid,
     pub islands: Vec<Island>,
+    /// The number of removed islands, equal to the length of `removed`.
     pub dropped: usize,
+    pub removed: Vec<RemovedIsland>,
     pub clearance_nm: i64,
 }
 
@@ -264,7 +286,8 @@ fn zone_fill(
         }
     };
     let material = cuts.subtract(base, canceled)?;
-    let mut result = ZoneFill { id: zone.id, net: zone.net, layer: zone.layer, islands: Vec::new(), dropped: 0, clearance_nm: clearance };
+    let mut result =
+        ZoneFill { id: zone.id, net: zone.net, layer: zone.layer, islands: Vec::new(), dropped: 0, removed: Vec::new(), clearance_nm: clearance };
     for island in material.islands() {
         check_cancel(canceled)?;
         let mut contacts = Vec::new();
@@ -285,8 +308,10 @@ fn zone_fill(
                 contacts.push(index);
             }
         }
-        if island.area().map_err(|e| e.to_string())?.value_nm2 < zone.options.min_island_area_nm2 as f64 {
+        let area_nm2 = island.area().map_err(|e| e.to_string())?.value_nm2;
+        if area_nm2 < zone.options.min_island_area_nm2 as f64 {
             result.dropped += 1;
+            result.removed.push(RemovedIsland { reason: RemovalReason::MinimumArea, area_nm2, bounds_nm: bounds });
             let items: Vec<_> = contacts.iter().filter(|i| objects[**i].pad).map(|i| objects[*i].object.name.clone()).collect();
             if !items.is_empty() {
                 fill.problems.push(Problem {
@@ -297,6 +322,10 @@ fn zone_fill(
                     items,
                 });
             }
+        } else if zone.options.remove_unconnected_islands && contacts.is_empty() {
+            // No same-net pad, via or track touches this island, so it cannot carry the net.
+            result.dropped += 1;
+            result.removed.push(RemovedIsland { reason: RemovalReason::Unconnected, area_nm2, bounds_nm: bounds });
         } else {
             let mesh = island.display_mesh(5_000).map_err(|e| e.to_string())?;
             result.islands.push(Island { region: island, mesh, contacts });
