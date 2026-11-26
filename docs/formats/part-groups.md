@@ -122,7 +122,7 @@ and a sorted, nonempty `groups` array of zero-based integer dictionary reference
 The dictionary contains exactly the UUIDs used by the rows. Positions
 are local compression references, not object identities or catalog positions;
 loading expands them back into ordinary UUID memberships before model validation.
-At 4,096 fully grouped instances the compact membership payload is below 4 MiB;
+At 4,096 fully grouped instances, the former limit, the compact membership payload is below 4 MiB;
 at the supported 8,192-instance maximum it is below 8 MiB.
 
 Both storage homes validate the dictionary, row ordering, uniqueness, integer
