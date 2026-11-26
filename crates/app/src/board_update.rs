@@ -463,9 +463,13 @@ fn mapping_label(package: Option<&Package>) -> String {
     package.map_or_else(
         || "Unassigned".into(),
         |package| {
-            let mut entries: Vec<_> = package.mapping.iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect();
+            let mut pairs: Vec<_> = package.mapping.iter().map(|(terminal, pad)| (terminal.as_str(), pad)).collect();
+            pairs.sort_by(|(a, _), (b, _)| pcbcraft_engine::authoring::natural_cmp(a, b));
+            let mut entries: Vec<_> = pairs.into_iter().map(|(terminal, pad)| format!("Pin {terminal} → pad {pad}")).collect();
             if !package.unconnected_pads.is_empty() {
-                entries.push(format!("unconnected pads {}", package.unconnected_pads.join(", ")));
+                let mut unconnected: Vec<&str> = package.unconnected_pads.iter().map(String::as_str).collect();
+                unconnected.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a, b));
+                entries.push(format!("unconnected pads {}", unconnected.join(", ")));
             }
             entries.join(", ")
         },

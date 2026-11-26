@@ -58,7 +58,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(inspect(&mut s, id)["status"], "ready");
     let assigned = s.snapshot().unwrap();
     let saved = encode_documents(assigned.clone()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
+    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     round_trip(&s);
     let addressed = address(&s, id);
     apply(&mut s, SET_CLASSES, json!({"target":addressed,"classes":[power]}));
@@ -78,7 +78,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(id_for(&s, &pins[0]), id);
     assert_eq!(
         serde_json::from_slice::<Value>(&encode_documents(s.snapshot().unwrap()).unwrap()[ENTRY_POINT]).unwrap()["format"],
-        "pcbcraft-project/23"
+        crate::persistence::CURRENT_PROJECT_FORMAT
     );
     apply(&mut s, "edit.undo", json!({}));
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
@@ -256,7 +256,10 @@ fn first_board_and_consumers_preserve_identity_and_intent() {
     let board = p.board_target().unwrap();
     let scope = p.net_scope();
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[&p.instances_document_path().unwrap()]).unwrap()["format"], "pcbcraft-instances/4");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&docs[&p.instances_document_path().unwrap()]).unwrap()["format"],
+        crate::persistence::CURRENT_INSTANCES_FORMAT
+    );
     round_trip(&s);
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope: schematic, net: id }).is_err());
     assert!(p.resolve_net_assignment(NetAddress { project: p.id, scope, net: id }).is_ok());

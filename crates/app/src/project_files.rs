@@ -11,7 +11,12 @@ use std::{
 use inspection::Finished;
 #[cfg(target_arch = "wasm32")]
 use pcbcraft_engine::persistence::Encoding;
-use pcbcraft_engine::{Project, Session};
+use pcbcraft_engine::{
+    Project, Session,
+    persistence::{
+        CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, ENTRY_POINT, project_board_path,
+    },
+};
 
 /// Desktop working folders and portable archives use the same split documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -19,6 +24,10 @@ pub(super) enum SaveFormat {
     #[default]
     Folder,
     Archive,
+    #[cfg(not(target_arch = "wasm32"))]
+    ArchiveFolder {
+        trash_source: bool,
+    },
 }
 
 mod abandon;
@@ -31,6 +40,59 @@ mod native;
 mod stand_in;
 #[cfg(target_arch = "wasm32")]
 mod web;
+
+/// Check a stored header before retaining raw bytes during a save.
+fn has_document_format(documents: &Documents, path: &str, expected: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        format: String,
+    }
+    documents.get(path).and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok()).is_some_and(|header| header.format == expected)
+}
+
+/// Reuse the full source only when its managed documents use current write formats.
+fn has_current_write_formats(documents: &Documents, snapshot: &Project) -> bool {
+    has_document_format(documents, ENTRY_POINT, CURRENT_PROJECT_FORMAT)
+        && snapshot.board_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_BOARD_FORMAT))
+        && snapshot.instances_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_INSTANCES_FORMAT))
+        && snapshot.sheets().all(|sheet| has_document_format(documents, &format!("sheets/{}.json", sheet.target.id()), CURRENT_SHEET_FORMAT))
+}
+
+/// Keep exact unaffected bytes by comparing the snapshots' current encodings and looking up
+/// the corresponding source path. Upgrade managed document headers on Save even when
+/// their authored data is unchanged.
+fn retain_unchanged_documents(
+    documents: &mut Documents,
+    canonical: &Documents,
+    original: &Documents,
+    old_board: Option<&str>,
+    new_board: Option<&str>,
+) -> Result<(), String> {
+    let current = has_document_format(original, ENTRY_POINT, CURRENT_PROJECT_FORMAT);
+    let canonical_board = project_board_path(&canonical[ENTRY_POINT])?;
+    for (path, bytes) in documents {
+        if path == ENTRY_POINT && !current {
+            continue;
+        }
+        let (comparison, source) = if Some(path.as_str()) == new_board {
+            let source = old_board.unwrap_or(path);
+            if !has_document_format(original, source, CURRENT_BOARD_FORMAT) {
+                continue;
+            }
+            (canonical_board.as_deref().unwrap_or(path), source)
+        } else {
+            (path.as_str(), path.as_str())
+        };
+        if canonical.get(comparison) == Some(bytes)
+            && let Some(retained) = original.get(source)
+            && (!path.starts_with("sheets/") || has_document_format(original, source, CURRENT_SHEET_FORMAT))
+            && (!path.ends_with("/instances.json") || has_document_format(original, source, CURRENT_INSTANCES_FORMAT))
+        {
+            bytes.clone_from(retained);
+        }
+    }
+    Ok(())
+}
 
 /// Suggest a file name, without extension, for a project's first desktop save or a browser
 /// download. Characters that can't appear in a file name on common desktops become `-`; a name
@@ -108,6 +170,8 @@ struct Saved {
     #[cfg(target_arch = "wasm32")]
     needs_manifest: bool,
     #[cfg(target_arch = "wasm32")]
+    needs_project_upgrade: bool,
+    #[cfg(target_arch = "wasm32")]
     documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
 }
 
@@ -129,7 +193,7 @@ impl Saved {
 struct Upgrades {
     /// Bundled library references moved to their current addresses.
     libraries: bool,
-    /// Sheets from before paper got paper around their drawing.
+    /// Sheets without paper got paper around their drawing.
     paper: bool,
 }
 
@@ -177,6 +241,15 @@ pub(super) enum Update {
 }
 
 impl ProjectFiles {
+    /// Return the current working folder only when it belongs to the open project.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn archive_source(&self, session: &Session) -> Option<&std::path::Path> {
+        self.saved
+            .as_ref()
+            .filter(|saved| saved.target.format() == "folder" && session.project().is_some_and(|project| saved.snapshot.same_document(project)))
+            .map(|saved| saved.target.path())
+    }
+
     /// Supply a local-copy discriminator only after a project has a successfully adopted file.
     pub(super) fn arrangement_location(&self, session: &Session) -> Option<String> {
         let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
@@ -188,6 +261,21 @@ impl ProjectFiles {
         {
             let _ = saved;
             Some("browser".into())
+        }
+    }
+
+    /// Folder containing this opening's project files, or the parent of its packed archive.
+    /// No directory lookup is needed on the editor thread.
+    pub(super) fn project_directory(&self, session: &Session) -> Option<&std::path::Path> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
+            saved.target.project_directory()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = session;
+            None
         }
     }
 
@@ -244,6 +332,11 @@ impl ProjectFiles {
         self.job.is_some()
     }
 
+    /// Release the closed project's save baseline and location, retaining recent files and job IDs.
+    pub(super) fn release_project(&mut self) {
+        self.saved = None;
+    }
+
     /// Whether replacing the current project would discard edits since its last known saved snapshot.
     pub(super) fn dirty(&self, session: &Session) -> bool {
         session.snapshot().is_some_and(|project| {
@@ -259,6 +352,18 @@ impl ProjectFiles {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn has_location(&self, session: &Session) -> bool {
         session.snapshot().is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project)))
+    }
+
+    /// Whether the next Save to the current location would perform a first-time format,
+    /// manifest, layout or compatibility upgrade. Timed Save holds back for these targets so
+    /// only an explicit Save upgrades legacy files in place.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn needs_upgrade(&self, session: &Session) -> bool {
+        session.snapshot().is_some_and(|project| {
+            self.saved
+                .as_ref()
+                .is_some_and(|saved| saved.snapshot.same_document(&project) && (saved.opened.is_some() || saved.target.needs_upgrade()))
+        })
     }
 
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.
@@ -296,6 +401,10 @@ impl ProjectFiles {
     /// Capture an immutable snapshot. An explicit encoding starts a Save As or browser download.
     /// Browser exports of migrated files encode the current schema instead of reusing old bytes.
     pub(super) fn save(&mut self, session: &Session, encoding: Option<SaveFormat>, ctx: &egui::Context) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(encoding, Some(SaveFormat::ArchiveFolder { .. })) && self.busy() {
+            return Err("A project file operation is already running".to_owned());
+        }
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
         #[cfg(target_arch = "wasm32")]
@@ -334,7 +443,9 @@ impl ProjectFiles {
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest)
+                .filter(|saved| {
+                    saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.needs_manifest && !saved.needs_project_upgrade
+                })
                 .map(|saved| Arc::clone(&saved.bytes));
             let original =
                 self.saved.as_ref().and_then(|saved| download::Original::for_project(saved.snapshot.clone(), saved.documents.clone()?, &snapshot));
@@ -443,21 +554,36 @@ impl ProjectFiles {
                 Some(Update::Error("Project changed while opening the file. Open it again to replace the current project.".to_owned()))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Ok(Outcome::Saved(saved, original)) => {
+            Ok(Outcome::Saved(mut saved, original)) => {
                 session.adopt_saved_metadata(&original, &saved.snapshot);
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 finished.path = Some(saved.target.path().display().to_string());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
+                let cleanup = saved.target.take_archive_cleanup();
                 self.saved = Some(saved);
-                let text = if !current {
-                    "Earlier version saved. Current edits are unsaved."
+                let text = if let Some(cleanup) = cleanup {
+                    let notice = match cleanup {
+                        Ok(source) => {
+                            self.recent.remove(&source);
+                            "Project archived. Original folder moved to Trash.".to_owned()
+                        }
+                        Err(error) => {
+                            let notice = format!("Archive saved. Original folder kept. {error}");
+                            finished.status = "failed";
+                            finished.error = Some(notice.clone());
+                            notice
+                        }
+                    };
+                    if current { notice } else { notice + " Current edits are unsaved." }
+                } else if !current {
+                    "Earlier version saved. Current edits are unsaved.".to_owned()
                 } else if added_manifest {
-                    "Project saved with a verified manifest"
+                    "Project saved with a verified manifest".to_owned()
                 } else {
-                    "Project saved"
+                    "Project saved".to_owned()
                 };
-                Some(Update::Message(text.to_owned()))
+                Some(Update::Message(text))
             }
             #[cfg(target_arch = "wasm32")]
             Ok(Outcome::Downloaded) => Some(Update::Message("Project download requested".to_owned())),

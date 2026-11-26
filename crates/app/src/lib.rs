@@ -11,6 +11,8 @@ mod app_workspace;
 mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave;
 mod board_appearance;
 mod board_canvas;
 mod board_clipboard;
@@ -48,14 +50,17 @@ mod library_preview;
 mod library_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
+mod manufacturing;
 mod native_part_properties;
 mod native_sources;
+mod net_appearance;
 mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
 mod part_documents;
 mod parts_browser;
+mod path_edit;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
 mod placement_filters;
@@ -65,6 +70,7 @@ mod project_files;
 mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod render_workspace;
 mod requirement_input;
 mod ribbon;
 mod rule_diagram;
@@ -72,6 +78,7 @@ mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
 mod sheet_parameters;
+mod sheet_split;
 #[cfg(not(target_arch = "wasm32"))]
 mod ui_automation;
 mod unsaved;
@@ -98,7 +105,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-pub use editor_windows::APP_TITLE;
+pub use editor_windows::{APP_TITLE, MAIN_WINDOW_MIN_SIZE, desktop_window_chrome};
 pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
@@ -180,6 +187,14 @@ struct Utilities {
     assistant: bool,
 }
 
+/// Include the abbreviated checkout revision in the version shown by nightly packages.
+fn display_version() -> String {
+    match option_env!("PCBCRAFT_NIGHTLY_REVISION") {
+        Some(revision) if !revision.is_empty() => format!("{VERSION} nightly ({revision})"),
+        _ => VERSION.to_owned(),
+    }
+}
+
 /// Draw the utilities every workspace's app bar ends with, so they share one set, order,
 /// tooltips and breakpoints: the version and Report a bug from 950 points, Help from
 /// [`COMPACT_APP_BAR`] (narrower bars leave its rows to the Home page), Preferences, then the
@@ -188,7 +203,7 @@ struct Utilities {
 fn utilities(ui: &mut Ui, width: f32, assistant: Option<(bool, bool)>) -> Utilities {
     let mut picked = Utilities::default();
     if width >= 950.0 {
-        ui.label(dim(format!("v{VERSION}")));
+        ui.label(dim(format!("v{}", display_version())));
         ui.add_space(Tokens::get().space_8);
         if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
@@ -244,12 +259,15 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
+    SplitSheet(Box<sheet_split::Edit>),
     NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
     Footprint(Box<footprint_assignment::Edit>),
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     BoardColor(board_appearance::Edit),
+    #[cfg(not(target_arch = "wasm32"))]
+    BrowseRenderBoard(render_workspace::Browse),
     Zone(Box<board_zones::Edit>),
     CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
@@ -259,12 +277,14 @@ enum Dialog {
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
     Rules(Box<net_class_editor::Edit>),
+    /// Sparse schematic wire appearance owned by one captured net identity and revision.
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
+    LibraryCourtyard(Box<library_editors::courtyard::CourtyardDraft>),
     LibraryPinRemap(Box<library_editors::remap::Draft>),
     LibraryPublish(library_editors::publishing::Draft),
     PartReference(Box<part_documents::picker::State>),
@@ -273,6 +293,10 @@ enum Dialog {
     SaveChanges(unsaved::Then),
     OpenLocation,
     SaveEncoding,
+    #[cfg(not(target_arch = "wasm32"))]
+    ArchiveFolder {
+        trash_source: bool,
+    },
     #[cfg(not(target_arch = "wasm32"))]
     LocalMcp {
         error: Option<String>,
@@ -298,6 +322,9 @@ pub struct PcbApp {
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
     library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
+    manufacturing_files: manufacturing::Files,
+    #[cfg(not(target_arch = "wasm32"))]
+    render_worker: render_workspace::Worker,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -352,6 +379,14 @@ pub struct PcbApp {
     properties_open: bool,
     /// Set once closing the window has been answered for, so the next close request passes.
     close_allowed: bool,
+    /// Set when closing chose not to wait for a pending file job, so exit keeps recovery even if
+    /// that job finishes or fails before `on_exit` runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    close_keeps_recovery: bool,
+    /// Session revision covered by Close approval; if any edit commits afterwards, exit keeps
+    /// recovery rather than discarding an unapproved change.
+    #[cfg(not(target_arch = "wasm32"))]
+    close_approved_revision: Option<u64>,
     /// Close, New Project or Open held back until the running file operation finishes.
     waiting: Option<unsaved::Waiting>,
     /// The snapped point under the pointer on a schematic canvas in the last frame, for the
@@ -364,6 +399,9 @@ pub struct PcbApp {
     leave_warning: Option<bool>,
     /// The palette and zoom last applied, so they are set only when they change.
     applied: Option<(bool, f32)>,
+    /// Recovery snapshots of unsaved work and the opt-in timed save to the project.
+    #[cfg(not(target_arch = "wasm32"))]
+    autosave: autosave::Autosave,
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
@@ -421,11 +459,20 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             current: false,
         },
         workspace::Workspace {
+            id: "manufacturing",
+            title: "Manufacturing",
+            description: "Review Gerber layers and drill hits from a fabrication ZIP",
+            tabs: Some("Review · View"),
+            icon: workspace::WorkspaceIcon::Factory,
+            multiple_views: true,
+            current: false,
+        },
+        workspace::Workspace {
             id: "render",
             multiple_views: true,
             title: "3D render",
-            description: "Inspect the assembled board, layers and components",
-            tabs: None,
+            description: "Inspect the PCB outline, thickness and drill holes",
+            tabs: if IN_BROWSER { None } else { Some("View") },
             icon: workspace::WorkspaceIcon::Render,
             current: false,
         },
@@ -466,6 +513,8 @@ impl PcbApp {
             routing_presets: board_presets::Presets::from_storage(cc.storage.and_then(|storage| storage.get_string(board_presets::STORAGE_KEY))),
             views,
             #[cfg(not(target_arch = "wasm32"))]
+            render_worker: render_workspace::Worker::new(cc.wgpu_render_state.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(
@@ -478,8 +527,13 @@ impl PcbApp {
 
     /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
     pub fn with_integrated_titlebar(mut self, enabled: bool) -> Self {
-        self.integrated_titlebar = enabled;
+        self.set_integrated_titlebar(enabled);
         self
+    }
+
+    /// Configure window controls in place, avoiding a whole-app move during desktop startup.
+    pub fn set_integrated_titlebar(&mut self, enabled: bool) {
+        self.integrated_titlebar = enabled;
     }
 
     /// Open `path` through the ordinary project-file worker when this window first draws,
@@ -490,8 +544,15 @@ impl PcbApp {
     /// way. Desktop only: the browser has no command line.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
-        self.startup_open = Some(path);
+        self.set_startup_project(path);
         self
+    }
+
+    /// Queue a project for the first frame without moving the application state.
+    /// The normal file worker opens it with the same error handling as `with_startup_project`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_startup_project(&mut self, path: std::path::PathBuf) {
+        self.startup_open = Some(path);
     }
 
     pub fn session(&self) -> &Session {
@@ -505,7 +566,9 @@ impl PcbApp {
     /// Run a command through the shared session, then discard view state invalidated by it.
     /// A failure shows in the status bar and leaves the document and surviving view state intact.
     /// Commands that support automatic wire cleanup default to the person's current preference;
-    /// the explicit Heal command always cleans up, without changing that preference.
+    /// the explicit Heal command always cleans up, without changing that preference. On the
+    /// desktop, a command that changes the session and ran for a long time requests a recovery
+    /// snapshot on the next frame.
     fn run(&mut self, id: &str, params: &Value) {
         self.file_notice = None;
         let mut params = params.clone();
@@ -521,7 +584,13 @@ impl PcbApp {
         {
             object.insert("sheet".into(), json!(sheet.id()));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let (started, revision) = (std::time::Instant::now(), self.session.revision());
         self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.revision() != revision {
+            self.autosave.command_took(started.elapsed());
+        }
         if self.message.is_none() && matches!(id, "edit.undo" | "edit.redo") {
             self.restore_local_history();
         }
@@ -724,9 +793,20 @@ impl PcbApp {
             if MenuItem::new("Save As…").icon(MenuIcon::Save).shortcut(&save_as_shortcut).enabled(can_save).show(ui) {
                 self.dialog = Dialog::SaveEncoding;
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            if MenuItem::new("Archive Project Folder…")
+                .icon(MenuIcon::Save)
+                .enabled(can_save && self.files.archive_source(&self.session).is_some())
+                .show(ui)
+            {
+                self.dialog = Dialog::ArchiveFolder { trash_source: false };
+            }
         }
 
         menu::separator(ui);
+        if MenuItem::new("Close Project").enabled(self.can_close_document()).show(ui) {
+            self.message = self.request_close_document(ui.ctx()).err();
+        }
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
@@ -1330,7 +1410,7 @@ impl PcbApp {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
+            Action::CloseProject | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Inspection { source, .. } => match source {
                 pcbcraft_engine::board::correspondence::Source::Terminal(target) => {
@@ -1359,7 +1439,12 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_)
+            | Action::CloseProject
+            | Action::ManageSheet { .. }
+            | Action::SetPage { .. }
+            | Action::SetTemplate { .. }
+            | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1533,6 +1618,15 @@ impl PcbApp {
                 }
             },
             |ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(notice) = self.autosave.notice() {
+                    // The notice is shown in the bar, cut short past 360 points so the grid and
+                    // unit controls keep their room; hovering shows all of it.
+                    ui.scope(|ui| {
+                        ui.set_max_width(ui.available_width().min(360.0));
+                        ui.add(egui::Label::new(shell::error(notice)).truncate()).on_hover_text(notice);
+                    });
+                }
                 // Right to left: units, then grid, then the pointer's coordinates. With no
                 // schematic showing there is nothing to measure, so none of them appear.
                 if grid_view.is_some() {
@@ -1590,6 +1684,11 @@ impl PcbApp {
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
+        // Disabled input on any frame cancels a box and keeps the selection it started from, so a
+        // later enabled release cannot commit it. Canvas clicks are dropped while a dialog is open.
+        if !input_enabled && matches!(self.views.active.schematic.tool, Some(Tool::BoxSelect { .. })) {
+            self.views.active.schematic.tool = None;
+        }
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
@@ -1774,6 +1873,7 @@ impl PcbApp {
                 self.message = Some("No-connect marks attach to a pin lead or an open wire end.".into())
             }
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
+            (None, Click::SplitNetLabel(id)) => self.begin_split_sheet_with_items(Selection::one_net_label(id)),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
                 self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
@@ -1984,6 +2084,7 @@ impl PcbApp {
             ToolAction::Copy | ToolAction::Cut => self.copy_schematic_clipboard(ctx, matches!(action, ToolAction::Cut)),
             ToolAction::Paste | ToolAction::PasteOptions => self.request_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
             ToolAction::Duplicate => self.duplicate_schematic_clipboard(),
+            ToolAction::MoveToNewSheet => self.begin_split_sheet(),
             ToolAction::Symbols => self.parts.focus_search(),
             ToolAction::Wire => self.begin_wire(),
             ToolAction::Ground => self.begin_ground(ctx),
@@ -2134,7 +2235,13 @@ impl PcbApp {
             {
                 self.select_board_items(Default::default());
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+            // Backspace deletes like Delete (it is the delete key on Mac keyboards), except while a
+            // route or line tool owns it for removing the last vertex below.
+            let board = &self.views.active.board;
+            let backspace_deletes =
+                !board.tracks.tool && board.zones.tool != Some(board_drawing::Tool::Lines) && board.drawing.tool != Some(board_drawing::Tool::Lines);
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || (backspace_deletes && i.consume_key(Modifiers::NONE, Key::Backspace)))
+            {
                 if !board_clipboard::busy(&self.views.active.board) {
                     self.delete_board_items();
                 } else if !self.views.active.board.tracks.selected.is_empty() {
@@ -2403,16 +2510,20 @@ impl PcbApp {
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
+            Dialog::LibraryCourtyard(draft) => self.library_courtyard_dialog(ctx, draft),
             Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::BrowseRenderBoard(browse) => self.render_board_dialog(ctx, browse),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
+            Dialog::SplitSheet(edit) => self.split_sheet_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
@@ -2457,6 +2568,27 @@ impl PcbApp {
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
+            Dialog::ArchiveFolder { mut trash_source } => {
+                if let Some(source) = self.files.archive_source(&self.session) {
+                    let mut archive = false;
+                    let mut cancel = false;
+                    let closing = shell::dialog(ctx, "archive_folder", "Archive Project Folder", |ui| {
+                        ui.label("Save the current edits to a compressed .pc and switch to that archive.");
+                        ui.label(source.display().to_string());
+                        pcbcraft_chrome::controls::checkbox(ui, &mut trash_source, "Move original folder to Trash");
+                        ui.horizontal(|ui| {
+                            cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
+                            archive = pcbcraft_chrome::controls::button(ui, "Choose archive location…").clicked();
+                        });
+                    });
+                    if archive {
+                        self.save_project_file(Some(SaveFormat::ArchiveFolder { trash_source }), ctx);
+                    } else if !(closing || cancel) {
+                        self.dialog = Dialog::ArchiveFolder { trash_source };
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Dialog::LocalMcp { error, copied } => self.local_mcp_dialog(ctx, error, copied),
             Dialog::Preferences(mut window) => {
                 let shortcuts = shortcut_list(ctx, self.preferences.navigation);
@@ -2494,7 +2626,7 @@ impl PcbApp {
             Dialog::About => {
                 let mut close = false;
                 let closing = shell::dialog(ctx, "about_dialog", "About PCBCraft", |ui| {
-                    ui.label(format!("PCBCraft {VERSION}"));
+                    ui.label(format!("PCBCraft {}", display_version()));
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
@@ -2617,35 +2749,22 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Poll project and library file owners once through the framework root, even after its native
-    /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
+    /// Drive a complete frame for embedded/test hosts that don't call eframe's logic hook.
     pub fn frame(&mut self, ui: &mut Ui) {
-        let ctx = ui.ctx().clone();
-        // Apply source availability before restored readers capture their catalog generation.
-        self.sync_library_preferences();
-        self.poll_library_sources(&ctx);
-        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
-        self.sync_style(&ctx);
-        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
-        self.checkpoint_arrangements();
-        self.handle_close_request(&ctx);
-        self.library_editors.poll();
-        self.poll_library_publication(&ctx);
-        self.adopt_opened_library(&ctx);
-        self.sync_library_bindings();
-        match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
-            #[cfg(any(test, target_arch = "wasm32"))]
-            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
-                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
-            }
-            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
-            Some(Err(error)) => self.message = Some(error),
-        }
+        self.frame_inner(ui, false);
+    }
+
+    /// Adopt project file results and handle Close before considering a timed Save, even in
+    /// a logic-only native pass. Repaint hosts when adoption or finishing a job changes them.
+    fn project_file_tick(&mut self, ctx: &egui::Context) {
+        self.handle_close_request(ctx);
+        self.poll_manufacturing(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_render(ctx);
         // The desktop command line's open starts once, before this frame's poll can report it.
         #[cfg(not(target_arch = "wasm32"))]
-        self.begin_startup_open(&ctx);
-        let update = self.files.poll(&mut self.session, &ctx);
+        self.begin_startup_open(ctx);
+        let update = self.files.poll(&mut self.session, ctx);
         // A command-line startup open that failed also prints its error once to the launching
         // terminal, the same line the status bar shows; result-free frames leave the arming
         // intact. Only begin_startup_open arms it, so picker and recents opens never print.
@@ -2666,8 +2785,43 @@ impl PcbApp {
                 project_files::Update::Message(text) => self.file_notice = Some(text),
                 project_files::Update::Error(error) => self.message = Some(error),
             }
+            self.repaint_editors(ctx);
         }
-        self.finish_waiting(&ctx);
+        self.finish_waiting(ctx);
+    }
+
+    /// Native timers must run even when the window has no paint pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_project_tick(&mut self, ctx: &egui::Context, now: std::time::Duration) {
+        self.project_file_tick(ctx);
+        self.autosave_tick(ctx, now);
+    }
+
+    /// Process explicit editor actions before timed Save on a painted pass. The framework
+    /// path uses the same monotonic clock as logic-only passes; embedded hosts use input time.
+    fn frame_inner(&mut self, ui: &mut Ui, _native_framework: bool) {
+        let ctx = ui.ctx().clone();
+        // Apply source availability before restored readers capture their catalog generation.
+        self.sync_library_preferences();
+        self.poll_library_sources(&ctx);
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
+        self.sync_style(&ctx);
+        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
+        self.checkpoint_arrangements();
+        self.library_editors.poll();
+        self.poll_library_publication(&ctx);
+        self.adopt_opened_library(&ctx);
+        self.sync_library_bindings();
+        match self.fabrication_exports.poll() {
+            Some(Ok(board_outputs::Outcome::Saved(_))) => self.file_notice = Some("Saved fabrication ZIP".into()),
+            #[cfg(any(test, target_arch = "wasm32"))]
+            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
+                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
+            }
+            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
+            Some(Err(error)) => self.message = Some(error),
+        }
+        self.project_file_tick(&ctx);
         #[cfg(target_arch = "wasm32")]
         self.warn_before_leaving();
         self.views.sync(&self.session);
@@ -2700,6 +2854,12 @@ impl PcbApp {
         self.checkpoint_arrangements();
         if let Some(notice) = self.arrangements.notice.take() {
             self.message = Some(notice);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let now =
+                if _native_framework { self.autosave.now() } else { std::time::Duration::from_secs_f64(ctx.input(|input| input.time).max(0.0)) };
+            self.autosave_tick(&ctx, now);
         }
         if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
@@ -2740,6 +2900,15 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.views.active.render.is_some() && !(main && self.home) {
+            self.render_frame(ui, integrated_titlebar);
+            return;
+        }
+        if self.views.active.manufacturing.is_some() && !(main && self.home) {
+            self.manufacturing_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.library.is_some() && !(main && self.home) {
             self.library_workspace_frame(ui, integrated_titlebar);
             return;
@@ -2863,6 +3032,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
+    list.push(("PCB Layout", "Delete selected items", "Del or Backspace".to_owned()));
     list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
     list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
     list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));
@@ -2925,12 +3095,22 @@ impl eframe::App for PcbApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         self.automation_input(ctx, input);
     }
-    /// Run shared project logic and visible hosts, then release a dismissed native root and
+    /// Service project files and timers here only if this integration pass has no UI callback.
+    /// A painted pass services timers after explicit actions such as Open have run.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut Frame) {
+        if frame.is_logic_only() {
+            let now = self.autosave.now();
+            self.native_project_tick(ctx, now);
+        }
+    }
+
+    /// Draw visible hosts, then release a dismissed native root and
     /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
         let previous_libraries = self.library_preferences.clone();
-        self.frame(ui);
+        self.frame_inner(ui, !IN_BROWSER);
         #[cfg(not(target_arch = "wasm32"))]
         if !self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             // Release the native surface after the frame; surviving host/window IDs stay put.
@@ -2978,6 +3158,16 @@ impl eframe::App for PcbApp {
             storage.set_string(ASSISTANT_SETTINGS_KEY, self.assistant.settings_text());
             storage.set_string(ASSISTANT_LAYOUT_KEY, self.assistant.layout_setting());
         }
+    }
+
+    /// Always stop recording. An error or framework exit that bypasses the project's close
+    /// decision must leave the current recovery entry behind, and so must a close that didn't
+    /// wait for a running save or open or saw a later edit: that job ends with the process, or
+    /// the later edit was never covered by Close approval, so recovery may hold the only copy.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_exit(&mut self) {
+        let approved = self.close_discard_approved();
+        self.autosave.finish(&mut self.session, approved);
     }
 }
 

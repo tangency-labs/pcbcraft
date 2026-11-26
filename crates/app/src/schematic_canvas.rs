@@ -27,7 +27,7 @@ mod tests;
 pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
-use crate::preferences::Navigation;
+use crate::{canvas_camera::pointer_release, preferences::Navigation};
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
@@ -143,6 +143,7 @@ pub(crate) enum Click {
     EditField(fields::Drag),
     FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
+    SplitNetLabel(u64),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
@@ -283,7 +284,8 @@ pub(crate) enum SymbolAction {
 /// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
 /// opts out of handles and reshaping for explicit whole-route movement. G over a wire starts
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
-/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
+/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. A box commits on
+/// release even over a floating panel; Escape, focus loss or disabled input cancel it. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// M picks up a multi-item selection or an explicitly selected wire and commits on a valid
 /// primary click; Escape, right-click or focus loss cancels that preview.
@@ -329,6 +331,9 @@ pub(crate) fn show(
     editing: Option<&crate::inline_text::Target>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
+    // Remember the committed snapshot before previews can shadow `project`, so a transient
+    // transformed snapshot never reuses or pollutes the appearance cache.
+    let base_project = project;
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
@@ -465,7 +470,8 @@ pub(crate) fn show(
     // A transformed snapshot already contains the preview's pin positions and orientation.
     // Overriding them with the captured starting symbol would draw wires to its old rotation.
     let moved_wires = if group_preview.is_some() { None } else { moved.clone() };
-    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires);
+    let appearances: wires::Appearances = draft.appearances(project, revision, !std::ptr::eq(project, base_project));
+    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires, &appearances, display.appearance);
     if group_preview.is_some()
         && let Some(target) = reshape_target
         && !matches!(target, Anchor::Free(_))
@@ -647,13 +653,15 @@ pub(crate) fn show(
         if lost_focus {
             return Some(Click::SelectItems(drag.base.clone()));
         }
-        let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        // A box that started here clamps to the canvas and commits even when released over a floating panel.
+        let release = pointer_release(&response, drag.button);
+        let pointer = release.or_else(|| response.interact_pointer_pos()).or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
+            let pointer = rect.clamp(pointer);
             let hits = selection::boxed(ui, project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
-            if ui.input(|i| i.pointer.button_released(drag.button)) {
-                let valid = input_enabled && response.contains_pointer();
-                return Some(Click::SelectItems(if valid { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
+            if release.is_some() {
+                return Some(Click::SelectItems(if input_enabled { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
             }
         }
         return None;
@@ -910,6 +918,10 @@ pub(crate) fn show(
                 menu::separator(ui);
             }
             if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_sheet.is_some()) {
+                return Some(Click::ToolAction(action, ui.ctx().clone()));
+            }
+            menu::separator(ui);
+            if let Some(action) = tool_menu::split(ui, !selected.symbols.is_empty() || !selected.net_labels.is_empty()) {
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
             menu::separator(ui);

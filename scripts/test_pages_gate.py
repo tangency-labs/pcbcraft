@@ -1,4 +1,4 @@
-"""Pages must depend on full CI, the tested revision and a still-current main head."""
+"""Check the full CI gates for Pages and nightly packages."""
 import ast
 import os
 from pathlib import Path
@@ -28,14 +28,15 @@ def needs(block):
 
 
 def job_allowed(job, *, ancestor_results=(), cancelled=False, **changes):
-    """Evaluate a Pages guard, including Actions' implicit ancestor success check.
+    """Evaluate a job guard, including Actions' implicit ancestor success check.
 
     This bounded evaluator supports the workflow's boolean/comparison grammar and
     status functions; it does not simulate the hosted scheduler or deployment.
     """
     values = {"needs.changes.result": "success", "needs.checks.result": "success",
               "needs.changes.outputs.mode": "full",
-              "needs.pages-build.result": "success",
+              "needs.web.result": "success",
+              "needs.nightly-packages.result": "success",
               "github.ref": "refs/heads/main", "github.event_name": "push",
               "github.event.repository.private": False, **changes}
     block = jobs()[job]
@@ -61,9 +62,9 @@ def job_allowed(job, *, ancestor_results=(), cancelled=False, **changes):
     return eval(compile(tree, str(WORKFLOW), "eval"), {"__builtins__": {}}, {})
 
 
-def build_allowed(**changes):
-    """Evaluate the build guard for the public-main publication policy cases."""
-    return job_allowed("pages-build", **changes)
+def deploy_allowed(**changes):
+    """Evaluate the deployment guard for the public-main publication policy cases."""
+    return job_allowed("pages-deploy", **changes)
 
 
 class PagesGateTests(unittest.TestCase):
@@ -71,49 +72,68 @@ class PagesGateTests(unittest.TestCase):
 
     def test_all_validation_jobs_feed_the_gate_without_a_deployment_cycle(self):
         graph = jobs()
-        validation = set(graph) - {"checks", "pages-build", "pages-deploy"}
+        validation = set(graph) - {"checks", "nightly-packages", "nightly-release", "pages-deploy"}
         self.assertEqual(needs(graph["checks"]), validation)
-        self.assertEqual(needs(graph["pages-build"]), {"changes", "checks"})
-        self.assertEqual(needs(graph["pages-deploy"]), {"checks", "pages-build"})
+        self.assertEqual(needs(graph["nightly-packages"]), {"changes", "checks"})
+        self.assertEqual(needs(graph["nightly-release"]), {"nightly-packages"})
+        self.assertEqual(needs(graph["pages-deploy"]), {"changes", "checks", "web"})
 
-    def test_intentional_upstream_skip_does_not_suppress_qualified_pages_jobs(self):
+    def test_intentional_upstream_skip_does_not_suppress_qualified_pages_deploy(self):
         # Full main CI skips quick-compile, then the aggregate checks job succeeds.
-        for job in ("pages-build", "pages-deploy"):
-            with self.subTest(job=job):
-                self.assertTrue(job_allowed(job, ancestor_results=("success", "skipped", "success")))
+        self.assertTrue(deploy_allowed(ancestor_results=("success", "skipped", "success")))
 
     def test_failed_or_unfinished_dependencies_and_cancellation_cannot_publish(self):
-        for job in ("pages-build", "pages-deploy"):
+        for dependency in ("checks", "web"):
             for result in ("failure", "cancelled", "skipped", "in_progress", "", None):
-                with self.subTest(job=job, checks=result):
-                    self.assertFalse(job_allowed(job, ancestor_results=("skipped",),
-                                                 **{"needs.checks.result": result}))
-            with self.subTest(job=job, cancelled=True):
-                self.assertFalse(job_allowed(job, cancelled=True))
-        for result in ("failure", "cancelled", "skipped", "in_progress", "", None):
-            with self.subTest(build=result):
-                self.assertFalse(job_allowed("pages-deploy", **{"needs.pages-build.result": result}))
+                with self.subTest(dependency=dependency, result=result):
+                    self.assertFalse(deploy_allowed(ancestor_results=("skipped",),
+                                                    **{f"needs.{dependency}.result": result}))
+        self.assertFalse(deploy_allowed(cancelled=True))
 
     def test_only_successful_full_main_pushes_and_manual_runs_can_publish(self):
-        self.assertTrue(build_allowed())
-        self.assertTrue(build_allowed(**{"github.event_name": "workflow_dispatch"}))
-        for result in ("failure", "cancelled", "skipped", "in_progress", "", None):
-            with self.subTest(result=result):
-                self.assertFalse(build_allowed(**{"needs.checks.result": result}))
+        self.assertTrue(deploy_allowed())
+        self.assertTrue(deploy_allowed(**{"github.event_name": "workflow_dispatch"}))
         for mode in ("docs", "quick", "approved", "carry", "draft", "", None):
             with self.subTest(mode=mode):
-                self.assertFalse(build_allowed(**{"needs.changes.outputs.mode": mode}))
+                self.assertFalse(deploy_allowed(**{"needs.changes.outputs.mode": mode}))
         for event in ("pull_request", "pull_request_target", "schedule", "merge_group", "workflow_run"):
-            self.assertFalse(build_allowed(**{"github.event_name": event}))
-        self.assertFalse(build_allowed(**{"github.ref": "refs/heads/topic"}))
-        self.assertFalse(build_allowed(**{"github.event.repository.private": True}))
+            self.assertFalse(deploy_allowed(**{"github.event_name": event}))
+        self.assertFalse(deploy_allowed(**{"github.ref": "refs/heads/topic"}))
+        self.assertFalse(deploy_allowed(**{"github.event.repository.private": True}))
 
     def test_build_uses_tested_commit_and_no_independent_workflow_can_deploy(self):
-        self.assertIn("ref: ${{ github.sha }}", jobs()["pages-build"])
+        web = jobs()["web"]
+        self.assertIn("ref: ${{ github.sha }}", web)
+        self.assertIn("actions/upload-pages-artifact@", web)
+        self.assertEqual(WORKFLOW.read_text(encoding="utf-8").count("trunk build --release --locked"), 1)
         self.assertFalse((WORKFLOW.parent / "pages.yml").exists())
         for workflow in WORKFLOW.parent.glob("*.yml"):
             if workflow != WORKFLOW:
                 self.assertNotIn("actions/deploy-pages@", workflow.read_text(encoding="utf-8"))
+
+    def test_nightlies_require_full_main_ci(self):
+        for event in ("push", "schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(job_allowed("nightly-packages", ancestor_results=("skipped",),
+                                            **{"github.event_name": event}))
+        for changes in (
+            {"github.ref": "refs/heads/topic"},
+            {"github.event_name": "pull_request"},
+            {"github.event_name": "merge_group"},
+            {"needs.changes.outputs.mode": "docs"},
+            {"needs.checks.result": "failure"},
+            {"needs.checks.result": "skipped"},
+            {"cancelled": True},
+        ):
+            with self.subTest(changes=changes):
+                self.assertFalse(job_allowed("nightly-packages", **changes))
+
+    def test_nightly_release_requires_successful_packaging(self):
+        self.assertTrue(job_allowed("nightly-release", ancestor_results=("skipped",)))
+        for result in ("failure", "cancelled", "skipped"):
+            with self.subTest(result=result):
+                self.assertFalse(job_allowed("nightly-release", **{"needs.nightly-packages.result": result}))
+        self.assertFalse(job_allowed("nightly-release", cancelled=True))
 
     def revision_check(self, current, exit_code=0):
         """Run the real final-revision shell check against a local API stub, never GitHub."""

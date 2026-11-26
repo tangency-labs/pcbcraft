@@ -75,18 +75,25 @@ impl Document {
         }
     }
 }
+/// Inputs that decide the ball-grid summary: document revision, columns, rows, pitches, JEDEC skip.
+type PreviewKey = (u64, String, String, String, String, bool);
 /// Array parameters remain independent of the document until one validated Apply.
 #[derive(Debug)]
 pub(crate) struct ArrayDraft {
     document: u64,
     view: crate::ViewId,
     revision: u64,
+    footprint: bool,
     objects: Vec<u64>,
     columns: String,
     rows: String,
     column_pitch: String,
     row_pitch: String,
+    ball_grid: bool,
+    skip_jedec: bool,
     error: Option<String>,
+    /// Last dry-run summary and the inputs it was computed from.
+    preview: Option<(PreviewKey, Option<String>)>,
 }
 impl ArrayDraft {
     /// Capture selection and revision so later host/focus changes cannot redirect the operation.
@@ -96,13 +103,30 @@ impl ArrayDraft {
             document,
             view,
             revision: doc.session.revision(),
+            footprint: doc.session.snapshot().kind == Kind::Footprint,
             objects: doc.selection.iter().copied().collect(),
             columns: "4".into(),
             rows: "1".into(),
             column_pitch: pitch.to_string(),
             row_pitch: pitch.to_string(),
+            ball_grid: false,
+            skip_jedec: true,
             error: None,
+            preview: None,
         }
+    }
+    /// The summary is shown only for footprints with ball-grid naming on; then a dry run is needed
+    /// only when an input changed since the last one, so the dialog does not plan the array every frame.
+    fn preview_summary(&mut self, document_revision: u64, run: impl FnOnce(&Self) -> Option<String>) -> Option<String> {
+        if !(self.footprint && self.ball_grid) {
+            return None;
+        }
+        let key = (document_revision, self.columns.clone(), self.rows.clone(), self.column_pitch.clone(), self.row_pitch.clone(), self.skip_jedec);
+        if self.preview.as_ref().is_none_or(|(cached, _)| *cached != key) {
+            let summary = run(self);
+            self.preview = Some((key, summary));
+        }
+        self.preview.as_ref().and_then(|(_, summary)| summary.clone())
     }
     /// Resolve typed units before submitting a bounded row/column array transaction.
     fn action(&self) -> Result<Action, String> {
@@ -119,6 +143,8 @@ impl ArrayDraft {
             rows,
             column_step: Point { x_nm: x, y_nm: 0 },
             row_step: Point { x_nm: 0, y_nm: y },
+            numbering: (self.footprint && self.ball_grid)
+                .then_some(pcbcraft_engine::authoring::ArrayNumbering::BallGrid { skip_jedec: self.skip_jedec }),
         })
     }
 }
@@ -127,11 +153,27 @@ impl PcbApp {
     pub(crate) fn library_array_dialog(&mut self, ctx: &Context, mut draft: Box<ArrayDraft>) {
         let mut apply = false;
         let mut cancel = false;
+        let preview_summary = self.library_editors.documents.get(&draft.document).and_then(|doc| {
+            draft.preview_summary(doc.session.revision(), |draft| {
+                draft.action().ok().and_then(|action| doc.session.preview(draft.revision, action).ok()).map(|record| record.summary)
+            })
+        });
         let dismissed = shell::dialog(ctx, "library_array", "Create Array", |ui| {
             properties::text(ui, "Columns", &mut draft.columns);
             properties::text(ui, "Rows", &mut draft.rows);
             properties::text(ui, "Column pitch (mm)", &mut draft.column_pitch);
             properties::text(ui, "Row pitch (mm)", &mut draft.row_pitch);
+            if draft.footprint {
+                pcbcraft_chrome::controls::checkbox(ui, &mut draft.ball_grid, "Ball-grid pad names (A1, A2, …)");
+                if draft.ball_grid {
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.skip_jedec, "Skip JEDEC letters (I, O, Q, S, X, Z)");
+                }
+            }
+            if draft.ball_grid
+                && let Some(summary) = &preview_summary
+            {
+                ui.label(egui::RichText::new(summary).small());
+            }
             if let Some(error) = &draft.error {
                 ui.label(shell::error(error));
             }
@@ -155,6 +197,56 @@ impl PcbApp {
             }
         } else if !(cancel || dismissed) {
             self.dialog = Dialog::LibraryArray(draft);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dry run is skipped while ball-grid naming is hidden or off, and runs again only when
+    /// an input or the document revision changes.
+    #[test]
+    fn array_preview_runs_only_for_shown_ball_grid_names_and_changed_inputs() {
+        for kind in [Kind::Symbol, Kind::Footprint] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let id = app.library_editors.active.unwrap();
+            let mut draft = ArrayDraft::new(id, app.views.active.id(), &app.library_editors.documents[&id]);
+            let runs = std::cell::Cell::new(0);
+            let summary = |draft: &mut ArrayDraft, revision| {
+                draft.preview_summary(revision, |_| {
+                    runs.set(runs.get() + 1);
+                    Some(format!("run {}", runs.get()))
+                })
+            };
+            assert_eq!(summary(&mut draft, 0), None);
+            draft.ball_grid = true;
+            if kind == Kind::Symbol {
+                assert_eq!(summary(&mut draft, 0), None);
+                assert_eq!(runs.get(), 0);
+                continue;
+            }
+            assert_eq!(summary(&mut draft, 0).as_deref(), Some("run 1"));
+            assert_eq!(summary(&mut draft, 0).as_deref(), Some("run 1"));
+            draft.columns = "26".into();
+            assert_eq!(summary(&mut draft, 0).as_deref(), Some("run 2"));
+            draft.skip_jedec = false;
+            assert_eq!(summary(&mut draft, 0).as_deref(), Some("run 3"));
+            assert_eq!(summary(&mut draft, 1).as_deref(), Some("run 4"));
+            draft.rows = "26".into();
+            assert_eq!(summary(&mut draft, 1).as_deref(), Some("run 5"));
+            assert_ne!(draft.column_pitch, "0.65");
+            draft.column_pitch = "0.65".into();
+            assert_eq!(summary(&mut draft, 1).as_deref(), Some("run 6"));
+            assert_ne!(draft.row_pitch, "0.55");
+            draft.row_pitch = "0.55".into();
+            assert_eq!(summary(&mut draft, 1).as_deref(), Some("run 7"));
+            assert_eq!(summary(&mut draft, 1).as_deref(), Some("run 7"));
+            draft.ball_grid = false;
+            assert_eq!(summary(&mut draft, 1), None);
+            assert_eq!(runs.get(), 7);
         }
     }
 }

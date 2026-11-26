@@ -229,7 +229,8 @@ fn decode_fill(wire: WireFill, view: BoardView<'_>) -> Result<Fill, String> {
     {
         return Err("Invalid fill worker copper addresses.".into());
     }
-    let copper = Copper { pads: wire.pads.into_iter().collect(), tracks: wire.tracks, vias: wire.vias };
+    // Fill refuses circular copper before calculating, so its islands never contain arcs.
+    let copper = Copper { pads: wire.pads.into_iter().collect(), tracks: wire.tracks, vias: wire.vias, arcs: BTreeMap::new() };
     if copper.pads.values().chain(copper.tracks.values()).chain(copper.vias.values()).any(|index| *index >= wire.members.len()) {
         return Err("Invalid fill worker copper membership.".into());
     }

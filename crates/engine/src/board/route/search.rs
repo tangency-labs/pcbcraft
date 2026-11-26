@@ -20,7 +20,8 @@ pub(super) async fn walk(
     progress: Arc<AtomicUsize>,
 ) -> Result<Plan, CommandError> {
     let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
-    match walker.run_target(request).await {
+    let result = if request.mode == Mode::Highlight { walker.highlight(request).await } else { walker.run_target(request).await };
+    match result {
         Ok(mut plan) => {
             if request.mode == Mode::Walkaround
                 && !plan.start_blocked
@@ -36,11 +37,13 @@ pub(super) async fn walk(
         Err(walkaround::Stop::Exhausted) => Ok(Plan {
             adjusted_target: None,
             start_blocked: false,
+            via_moves: Vec::new(),
             replacements: Vec::new(),
             shove: None,
             points: vec![request.head],
             outcome: Outcome::Incomplete,
             blocker: None,
+            collisions: Default::default(),
             probes: walker.probes(),
         }),
         Err(walkaround::Stop::Failed(error)) => Err(error),
@@ -50,8 +53,8 @@ pub(super) async fn walk(
 /// Select a read-only solver for inputs already validated by the caller.
 async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     match request.mode {
-        Mode::Walkaround => walk(query.into(), request, budget, progress).await,
-        Mode::Shove => shove::run(query, request, budget, progress).await,
+        Mode::Walkaround | Mode::Highlight => walk(query.into(), request, budget, progress).await,
+        Mode::Shove | Mode::ShoveVias => shove::run(query, request, budget, progress).await,
     }
 }
 
@@ -66,11 +69,13 @@ pub(super) fn complete(query: &ClearanceQuery, request: &Request, budget: usize,
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: vec![request.head],
                 outcome: Outcome::Canceled,
                 blocker: None,
+                collisions: Default::default(),
                 probes: progress.load(Ordering::Relaxed),
             });
         }
@@ -81,7 +86,7 @@ pub(super) fn complete(query: &ClearanceQuery, request: &Request, budget: usize,
 }
 
 /// Owned continuation suitable for either the native snapshot worker or browser frame queue.
-pub(super) struct Search {
+pub(in crate::board) struct Search {
     future: Pin<Box<dyn Future<Output = Result<Plan, CommandError>> + Send>>,
     progress: Arc<AtomicUsize>,
 }
@@ -96,12 +101,19 @@ impl Search {
         });
         Self { future, progress }
     }
+    /// Own the drag input across cooperative host steps, just like a route gesture.
+    pub(in crate::board) fn drag(query: Arc<ClearanceQuery>, ends: Vec<crate::board::track::Ends>, mode: Mode) -> Self {
+        let progress = Arc::new(AtomicUsize::new(0));
+        let counter = progress.clone();
+        let future = Box::pin(async move { shove::drag(&query, ends, mode, mode.default_probe_budget(), counter).await });
+        Self { future, progress }
+    }
     /// Exact probes completed so far, independent of host scheduling frequency.
     pub(super) fn probes(&self) -> usize {
         self.progress.load(Ordering::Relaxed)
     }
     /// Advance at most the supplied suspension boundaries; partial paths stay private.
-    pub(super) fn step(&mut self, budget: usize) -> Option<Result<Plan, CommandError>> {
+    pub(in crate::board) fn step(&mut self, budget: usize) -> Option<Result<Plan, CommandError>> {
         let mut cx = Context::from_waker(Waker::noop());
         for _ in 0..budget {
             if let Poll::Ready(plan) = self.future.as_mut().poll(&mut cx) {

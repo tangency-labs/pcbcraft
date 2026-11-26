@@ -72,6 +72,7 @@ def main() -> None:
         packages = affected(metadata, changed_paths("pull_request", payload))
     print("Native packages: " + ("whole workspace" if packages is None else ", ".join(packages)), flush=True)
     for command in commands(packages, mode == "full"):
+        print("Running: " + " ".join(command), flush=True)
         subprocess.run(command, check=True)
 
 

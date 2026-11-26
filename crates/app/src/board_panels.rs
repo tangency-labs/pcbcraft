@@ -13,19 +13,20 @@ impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
     /// Browser picks, layer color and the Board Setup draft remain available without derived copper connectivity.
-    /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
-    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
+    /// Dock slots keep Layers, Properties, Router Settings and Selection filters separate on either edge.
+    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 4], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
         let Some(project) = self.session.snapshot() else {
-            return ([Rect::NOTHING; 3], Rect::NOTHING);
+            return ([Rect::NOTHING; 4], Rect::NOTHING);
         };
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
         let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
+        let can_close_project = self.can_close_document();
         let state = &mut self.views.active.board;
         let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
-            return ([Rect::NOTHING; 3], Rect::NOTHING);
+            return ([Rect::NOTHING; 4], Rect::NOTHING);
         };
         let host = Id::unique(("board_panels", self.views.host));
         let mut browser_area = area;
@@ -46,6 +47,7 @@ impl PcbApp {
                     self.views.active.filters,
                     &self.views.active.inspection,
                     &state.hidden_layers,
+                    can_close_project,
                 );
             })
         } else {
@@ -54,7 +56,13 @@ impl PcbApp {
         if collapse {
             state.browser_collapsed = !state.browser_collapsed;
         }
-        let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
+        let slots = crate::workspace_panels::areas(
+            area,
+            browser,
+            &self.views.active.panels,
+            [true, true, self.views.active.filters_open, state.router_settings_open],
+            false,
+        );
         let compact = self.preferences.panel_style == workspace::PanelStyle::Compact;
         let can_isolate = state.active_layer.is_some();
         let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
@@ -115,7 +123,8 @@ impl PcbApp {
                 if setup_open {
                     self.begin_board_setup(view_id);
                 }
-                return ([browser, layers, Rect::NOTHING], Rect::NOTHING);
+                let router = self.router_settings_panel(ui, area, slots[crate::workspace_panels::ROUTER]);
+                return ([browser, layers, Rect::NOTHING, router], Rect::NOTHING);
             }
         };
         let names_pending = net_presentation.names_pending;
@@ -332,12 +341,21 @@ impl PcbApp {
         if setup_open {
             self.begin_board_setup(view_id);
         }
-        let filters = {
-            use crate::workspace_panels::{FILTERS, LAYERS, PROPERTIES, follow, on_side};
-            let (panels, side) = (&self.views.active.panels, self.views.active.panels[FILTERS].position());
-            follow(slots[FILTERS], [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties)], compact)
+        use crate::workspace_panels::{FILTERS, LAYERS, PROPERTIES, ROUTER, follow, on_side};
+        let router_dock = {
+            let (panels, side) = (&self.views.active.panels, self.views.active.panels[ROUTER].position());
+            follow(slots[ROUTER], [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties)], compact)
         };
-        ([browser, layers, properties], filters)
+        let router = self.router_settings_panel(ui, area, router_dock);
+        let filters = {
+            let (panels, side) = (&self.views.active.panels, self.views.active.panels[FILTERS].position());
+            follow(
+                slots[FILTERS],
+                [on_side(panels, LAYERS, side, layers), on_side(panels, PROPERTIES, side, properties), on_side(panels, ROUTER, side, router)],
+                compact,
+            )
+        };
+        ([browser, layers, properties, router], filters)
     }
 }
 

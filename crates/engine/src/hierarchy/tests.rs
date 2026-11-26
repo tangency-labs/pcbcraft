@@ -6,7 +6,7 @@ fn apply(s: &mut Session, command: &str, mut params: Value) {
     s.apply(command, &params).unwrap();
 }
 
-/// Parent pins and child labels join across documents; text alone never joins siblings.
+/// Parent pins and child labels stay connected through historical migration and optional edits.
 #[test]
 fn hierarchy_connects_explicit_interfaces_and_round_trips() {
     let mut s = Session::default();
@@ -45,6 +45,60 @@ fn hierarchy_connects_explicit_interfaces_and_round_trips() {
     assert!(persistence::encode(p.clone()).is_err());
     let packed = persistence::encode_packed(p.clone()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_packed(&packed).unwrap().project).unwrap(), docs);
+    // A released hierarchical sheet has no paper or named-anchor array. Raw saves
+    // keep its geometry and hierarchy, and ordinary open adopts paper on both sheets.
+    let mut old_docs = docs.clone();
+    for sheet in [parent, child] {
+        let path = format!("sheets/{}.json", sheet.id());
+        let mut record: Value = serde_json::from_slice(&docs[&path]).unwrap();
+        assert_eq!(record["format"], persistence::CURRENT_SHEET_FORMAT);
+        record["format"] = json!("pcbcraft-sheet/2");
+        record.as_object_mut().unwrap().remove("page");
+        record.as_object_mut().unwrap().remove("net_labels");
+        old_docs.insert(path, serde_json::to_vec(&record).unwrap());
+    }
+    let raw = persistence::decode_documents(&old_docs).unwrap();
+    assert!(raw.page().is_none());
+    let raw_packed = persistence::encode_packed(raw.clone()).unwrap();
+    let migrated = persistence::decode_packed(&raw_packed).unwrap();
+    assert_eq!(persistence::encode_packed(migrated.project.clone()).unwrap(), raw_packed);
+    let fitted = persistence::prepare_opened(migrated.project).unwrap();
+    assert_eq!(fitted.parent_sheet(child), Some(parent));
+    assert_eq!(fitted.electrical_connectivity().nets, p.electrical_connectivity().nets);
+    for sheet in [parent, child] {
+        let before = p.for_sheet(sheet).unwrap();
+        let after = fitted.for_sheet(sheet).unwrap();
+        assert!(after.page().is_some());
+        assert_eq!(after.symbols(), before.symbols());
+        assert_eq!(after.wires(), before.wires());
+    }
+
+    // Exercise a format-selecting optional edit on the raw, paperless snapshot.
+    let mut raw_session = Session::default();
+    raw_session.open_snapshot(raw);
+    apply(&mut raw_session, crate::net_labels::ADD, json!({"sheet":child.id(),"name":"SPARE","style":"local","x_nm":-30_000_000,"y_nm":0}));
+    let path = format!("sheets/{}.json", child.id());
+    let projection = raw_session.project().unwrap().for_sheet(child).unwrap();
+    let id = projection.net_labels()[0].object_id();
+    let with_label = persistence::encode_documents(raw_session.snapshot().unwrap()).unwrap();
+    apply(&mut raw_session, crate::net_labels::DELETE, json!({"sheet":child.id(),"id":id}));
+    let removed = persistence::encode_documents(raw_session.snapshot().unwrap()).unwrap();
+    raw_session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(persistence::encode_documents(raw_session.snapshot().unwrap()).unwrap(), with_label);
+    raw_session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(persistence::encode_documents(raw_session.snapshot().unwrap()).unwrap(), removed);
+    for (documents, anchors) in [(&with_label, 1), (&removed, 0)] {
+        let record: Value = serde_json::from_slice(&documents[&path]).unwrap();
+        assert_eq!(record["format"], persistence::CURRENT_SHEET_FORMAT);
+        assert_eq!(record["net_labels"].as_array().unwrap().len(), anchors);
+        assert!(record.get("page").is_none());
+        let reopened = persistence::decode_documents(documents).unwrap();
+        let connectivity = reopened.electrical_connectivity();
+        // The standalone label contributes an empty named net without joining any pins.
+        assert_eq!(connectivity.nets.iter().filter(|net| net.is_empty()).count(), anchors);
+        assert!(connectivity.nets.iter().filter(|net| !net.is_empty()).eq(&p.electrical_connectivity().nets));
+    }
+
     let block = &p.subsheets[0];
     let destination = Point { x_nm: block.at.x_nm + 1_000_000, y_nm: block.at.y_nm + 2_000_000 };
     let preview = p.moved_hierarchy(&format!("sheet-symbol-{}", block.id), destination).unwrap();
@@ -233,7 +287,7 @@ fn resize_sheet_is_atomic_persistent_and_preserves_pin_identity() {
     assert!(s.apply(RESIZE_SHEET, &stale).is_err());
     s.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
-    // Existing sheet/2 records omit size and retain their exact canonical bytes.
+    // An untouched sheet symbol omits size and retains its exact canonical bytes.
     assert_eq!(prior_docs, persistence::encode_documents(persistence::decode_documents(&prior_docs).unwrap()).unwrap());
     let path = format!("sheets/{}.json", parent.id());
     for size in [Value::Null, json!({"x_nm":-1,"y_nm":1}), json!({"x_nm":i64::MAX,"y_nm":20_320_000})] {

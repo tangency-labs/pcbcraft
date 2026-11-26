@@ -21,6 +21,21 @@ const WHEEL_ZOOM_SECONDS: f32 = 0.14;
 /// How much a point of vertical middle-button drag zooms when that drag is set to zoom.
 const MIDDLE_DRAG_ZOOM_PER_POINT: f32 = 0.01;
 
+/// Get the active button's first release position in canvas coordinates. Later motion
+/// in the same frame must not change where an already-held gesture ends.
+pub(super) fn pointer_release(response: &Response, button: PointerButton) -> Option<Pos2> {
+    let position = response.ctx.input(|input| {
+        if !input.pointer.button_released(button) {
+            return None;
+        }
+        input.events.iter().find_map(|event| match event {
+            Event::PointerButton { pos, button: released, pressed: false, .. } if *released == button => Some(*pos),
+            _ => None,
+        })
+    })?;
+    Some(response.ctx.layer_transform_from_global(response.layer_id).map_or(position, |transform| transform * position))
+}
+
 /// Transient wheel motion belongs to one camera and is never saved in an arrangement.
 #[derive(Clone, Debug)]
 struct WheelZoom {

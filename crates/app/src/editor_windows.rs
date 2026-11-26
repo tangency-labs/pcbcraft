@@ -31,6 +31,48 @@ pub(super) struct EditorWindows {
 /// The application name in native window titles, shown alone or after the window's document.
 pub const APP_TITLE: &str = "PCBCraft";
 
+/// Give a native editor viewport the application's integrated title bar.
+pub fn desktop_window_chrome(viewport: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    integrated_window_chrome(viewport, cfg!(target_os = "macos"))
+}
+
+fn integrated_window_chrome(viewport: egui::ViewportBuilder, macos: bool) -> egui::ViewportBuilder {
+    if macos {
+        // AppKit owns edge resizing. Winit cannot begin a native resize from a client gesture.
+        viewport
+            .with_decorations(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+            .with_titlebar_buttons_shown(false)
+            .with_fullsize_content_view(true)
+    } else {
+        viewport.with_decorations(false)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn desktop_chrome_hides_the_system_title_bar_and_retains_macos_resize() {
+    let viewport = egui::ViewportBuilder::default().with_title("Board");
+    let mac = integrated_window_chrome(viewport.clone(), true);
+    assert_eq!(mac.decorations, Some(true));
+    assert_eq!(mac.titlebar_shown, Some(false));
+    assert_eq!(mac.title_shown, Some(false));
+    assert_eq!(mac.titlebar_buttons_shown, Some(false));
+    assert_eq!(mac.fullsize_content_view, Some(true));
+    assert_eq!(mac.title, viewport.title);
+    let client = integrated_window_chrome(viewport.clone(), false);
+    assert_eq!(client.decorations, Some(false));
+    assert_eq!(client.title, viewport.title);
+}
+
+/// The smallest client size of the main native window, in logical points.
+pub const MAIN_WINDOW_MIN_SIZE: [f32; 2] = [640.0, 400.0];
+
+/// The smallest client size of a detached editor window, in logical points.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const DETACHED_WINDOW_MIN_SIZE: [f32; 2] = [480.0, 400.0];
+
 /// The native title for a window showing `document`, the same for the main and detached
 /// windows. An empty document (Home, or no project open) gives the application name alone.
 #[cfg(not(target_arch = "wasm32"))]
@@ -258,6 +300,7 @@ impl PcbApp {
     /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
+            ViewAction::Browse(crate::project_browser::Action::CloseProject) => self.message = self.request_close_document(ctx).err(),
             ViewAction::Browse(action) => {
                 self.apply_browser_action(id, action);
                 if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_) | Dialog::BoardUpdate(_)) {
@@ -420,6 +463,10 @@ impl PcbApp {
     /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.render_browse_host().is_some_and(|host| host != self.views.host) {
+            return;
+        }
         if self.rule_dialog_host().is_some_and(|host| host != self.views.host) {
             return;
         }
@@ -444,6 +491,9 @@ impl PcbApp {
             Dialog::BoardUpdate(edit) => {
                 self.views.bind(edit.source.view());
             }
+            Dialog::SplitSheet(edit) => {
+                self.views.bind(edit.source.view());
+            }
             _ => {}
         }
         self.dialogs(ctx);
@@ -452,17 +502,11 @@ impl PcbApp {
         } else {
             self.views.bind(previous);
         }
-        if self.files.busy()
-            && matches!(
-                self.waiting,
-                Some(
-                    crate::unsaved::Waiting::ToDecide(crate::unsaved::Then::Close)
-                        | crate::unsaved::Waiting::ForSave(crate::unsaved::Then::Close)
-                        | crate::unsaved::Waiting::Discarding(crate::unsaved::Then::Close)
-                )
-            )
-            && matches!(self.dialog, Dialog::None)
-        {
+        use crate::unsaved::{Then, Waiting};
+        let quitting =
+            matches!(self.waiting, Some(Waiting::ToDecide(Then::Close) | Waiting::ForSave(Then::Close) | Waiting::Discarding(Then::Close)));
+        let closing_project = matches!(self.waiting, Some(Waiting::ForSave(Then::CloseProject) | Waiting::Discarding(Then::CloseProject)));
+        if self.files.busy() && (quitting || closing_project) && matches!(self.dialog, Dialog::None) {
             let (mut cancel, mut stop, mut close) = (false, false, false);
             let open = self.files.abandonable();
             let warning = if !open {
@@ -477,12 +521,12 @@ impl PcbApp {
             // A save or open stalled on an unresponsive disk would otherwise hold the close forever.
             let dismissed = pcbcraft_chrome::shell::dialog(ctx, "close_wait", "Close Project", |ui| {
                 ui.label("Waiting for the current file operation before closing.");
-                if let Some(warning) = warning {
+                if quitting && let Some(warning) = warning {
                     ui.label(warning);
                 }
                 // Stopping an open returns to the editor and its Save question, so it obeys the stalled-worker limit.
-                stop = open && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
-                close = pcbcraft_chrome::controls::button(ui, "Close without waiting").clicked();
+                stop = quitting && open && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
+                close = quitting && pcbcraft_chrome::controls::button(ui, "Close without waiting").clicked();
                 cancel = pcbcraft_chrome::controls::button(ui, "Cancel close").clicked();
             });
             if close {
@@ -490,7 +534,7 @@ impl PcbApp {
             } else if stop && let Err(error) = self.stop_waiting_for_file(None) {
                 self.message = Some(error);
             } else if cancel || dismissed {
-                // Keep the worker and its immutable snapshot; only withdraw the quit request.
+                // Keep the worker and its immutable snapshot while withdrawing the close request.
                 self.waiting = None;
                 self.file_notice = None;
             }
@@ -528,8 +572,8 @@ impl PcbApp {
             let title = window_title(&self.view_title(id));
             let integrated_titlebar = self.integrated_titlebar;
             let panels = self.windows.panels.entry(host).or_default();
-            let mut builder =
-                egui::ViewportBuilder::default().with_title(title).with_decorations(!integrated_titlebar).with_min_inner_size([480.0, 400.0]);
+            let builder = egui::ViewportBuilder::default().with_title(title).with_min_inner_size(DETACHED_WINDOW_MIN_SIZE);
+            let mut builder = if integrated_titlebar { desktop_window_chrome(builder) } else { builder.with_decorations(true) };
             if !panels.placed {
                 builder = builder.with_inner_size([1100.0, 760.0]);
                 if let Some(position) = self.windows.spawn_positions.remove(&host) {
@@ -596,13 +640,13 @@ impl PcbApp {
             self.begin_project_close(ctx);
             return;
         }
-        let close_rules = self.rule_dialog_host() == Some(host);
+        let close_dialog = self.rule_dialog_host() == Some(host) || self.render_browse_host() == Some(host);
         let next = if host == self.views.main { self.views.hosts.keys().copied().find(|id| *id != host) } else { Some(self.views.main) };
         if let Some(next) = next {
             self.bind_editor_host(next);
         }
         self.views.close_host(host);
-        if close_rules || self.arrangement_dialog_host() == Some(host) {
+        if close_dialog || self.arrangement_dialog_host() == Some(host) {
             self.dialog = Dialog::None;
         }
         self.windows.panels.remove(&host);
