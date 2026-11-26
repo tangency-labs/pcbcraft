@@ -5049,6 +5049,7 @@ impl Session {
     }
 
     /// Add one wire and undo step after validating both terminals against the current project.
+    /// The wire takes a route clear of other nets' pins and wires, or the edit is refused.
     fn connect_pins(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -5077,11 +5078,12 @@ impl Session {
         if project.wires.len() >= MAX_WIRES {
             return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_WIRES} wires")));
         }
+        let bends = project.pin_route(terminals)?;
         let mut project = project.clone();
         Arc::make_mut(&mut project.sheet_mut().wires).push(Wire {
             ordinal: self.next_object_id()?,
             endpoints: terminals.map(WireEndpoint::Terminal),
-            bends: None,
+            bends,
         });
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;

@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use crate::{
     CommandError, MAX_OBJECT_ID, Project, Session,
     schematic::{
-        MAX_CENTER_NM, Point, Wire, WireEndpoint,
-        wiring::{MAX_WIRES, parse_id},
+        GRID_NM, MAX_CENTER_NM, Point, Terminal, Wire, WireEndpoint,
+        wiring::{MAX_WIRES, orthogonal_path, parse_id},
     },
 };
 
@@ -249,6 +249,66 @@ pub fn wire_path(wire: &Wire, from: Point, to: Point) -> Vec<Point> {
     } else {
         let middle = (from.x_nm + to.x_nm) / 2;
         vec![from, Point { x_nm: middle, y_nm: from.y_nm }, Point { x_nm: middle, y_nm: to.y_nm }, to]
+    }
+}
+
+/// Grid channels tried on each side of a pin-to-pin route's midpoint before it is refused.
+const DETOUR_STEPS: i64 = 64;
+
+impl Project {
+    /// Choose the bends of a new wire between two terminals, ordered as its endpoints. The
+    /// derived route is kept (`None`) when it touches no pin, label or wire of another net;
+    /// otherwise the shortest clear one- or two-bend detour on the grid is returned. Healing
+    /// joins collinear runs, so a route along another net's wire would later short the nets;
+    /// when no detour within the bound is clear, the connection is refused instead.
+    pub(crate) fn pin_route(&self, terminals: [Terminal; 2]) -> Result<Option<Vec<Point>>, CommandError> {
+        let [Some(a), Some(b)] = terminals.map(|terminal| self.terminal_position(terminal)) else {
+            return Err(CommandError::NotFound("terminal does not exist".into()));
+        };
+        let ends = terminals.map(WireEndpoint::Terminal);
+        let connectivity = self.connectivity();
+        let own: BTreeSet<_> = ends.iter().filter_map(|end| connectivity.net_index_for_endpoint(*end)).collect();
+        let foreign = |end: WireEndpoint| !ends.contains(&end) && connectivity.net_index_for_endpoint(end).is_none_or(|net| !own.contains(&net));
+        // Contacts already at either end exist before this wire; only the route can add new ones.
+        let points: Vec<_> = self
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
+            .chain(self.hierarchy_endpoints())
+            .filter(|(end, at)| foreign(*end) && *at != a && *at != b)
+            .map(|(_, at)| at)
+            .collect();
+        let routes: Vec<_> = self.wires.iter().filter(|wire| foreign(wire.endpoints[0])).map(|wire| self.wire_path(wire)).collect();
+        let clear = |path: &[Point]| {
+            points.iter().all(|at| !path_contains_point(path, *at))
+                && routes.iter().all(|route| {
+                    route.iter().filter(|at| **at != a && **at != b).all(|at| !path_contains_point(path, *at))
+                        && path.get(1..path.len().saturating_sub(1)).unwrap_or_default().iter().all(|at| !path_contains_point(route, *at))
+                        && path.windows(2).all(|leg| route.windows(2).all(|other| heal::overlap(leg, other).is_none()))
+                })
+        };
+        if clear(&wire_path(&Wire { ordinal: 0, endpoints: ends, bends: None }, a, b)) {
+            return Ok(None);
+        }
+        let snap = |value: i64| value.div_euclid(GRID_NM) * GRID_NM;
+        let (x, y) = (snap((a.x_nm + b.x_nm) / 2), snap((a.y_nm + b.y_nm) / 2));
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let mut detours = vec![vec![point(b.x_nm, a.y_nm)], vec![point(a.x_nm, b.y_nm)]];
+        for step in (-DETOUR_STEPS..=DETOUR_STEPS).map(|k| k * GRID_NM) {
+            detours.push(vec![point(x + step, a.y_nm), point(x + step, b.y_nm)]);
+            detours.push(vec![point(a.x_nm, y + step), point(b.x_nm, y + step)]);
+        }
+        let mut detours: Vec<_> = detours
+            .into_iter()
+            .filter(|bends| bends.iter().all(valid_point))
+            .map(|bends| orthogonal_path(std::iter::once(a).chain(bends).chain(std::iter::once(b)), true))
+            // A detour that doubles back on itself is a retrace, never a clear route.
+            .filter(|path| path.len() > 2 && path.windows(3).all(|run| (run[0].x_nm == run[1].x_nm) != (run[1].x_nm == run[2].x_nm)))
+            .collect();
+        detours.sort_by_key(|path| path.windows(2).map(|leg| (leg[0].x_nm - leg[1].x_nm).abs() + (leg[0].y_nm - leg[1].y_nm).abs()).sum::<i64>());
+        detours.into_iter().find(|path| clear(path)).map(|path| Some(path[1..path.len() - 1].to_vec())).ok_or_else(|| {
+            CommandError::Unavailable("every route between these pins touches another net's pin or wire; draw it with bends instead".into())
+        })
     }
 }
 
@@ -554,6 +614,54 @@ mod tests {
         draw(&mut session, pin.clone(), other.clone(), json!([]));
         let before = session.inspect();
         assert!(session.apply(crate::CONNECT_PINS, &json!({"from":other,"to":pin,"expected_revision":session.revision()})).is_err());
+        assert_eq!(session.inspect(), before);
+    }
+
+    /// Place a connector turned half a turn beside a resistor, as in a supply input.
+    fn connector_and_resistor() -> Session {
+        let mut session = empty();
+        session.apply(PLACE_SYMBOL, &json!({"definition":"connector","x_nm":0,"y_nm":0,"rotation":180,"expected_revision":1})).unwrap();
+        session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":16 * GRID_NM,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        session
+    }
+
+    /// Join one pin of each placed symbol at the current revision.
+    fn connect(session: &mut Session, from: (&str, &str), to: (&str, &str)) -> Result<(), CommandError> {
+        let ends = json!({"from":{"symbol":from.0,"terminal":from.1},"to":{"symbol":to.0,"terminal":to.1},"expected_revision":session.revision()});
+        session.apply(crate::CONNECT_PINS, &ends).map(|_| ())
+    }
+
+    /// A pin-to-pin wire never runs over another net's pin or along its wire, so an edit that
+    /// later heals the touched routes cannot merge the two nets.
+    #[test]
+    fn connected_pins_keep_other_nets_apart() {
+        let mut session = connector_and_resistor();
+        connect(&mut session, ("symbol-2", "1"), ("symbol-3", "1")).unwrap();
+        connect(&mut session, ("symbol-2", "2"), ("symbol-3", "2")).unwrap();
+        let project = session.snapshot().unwrap();
+        for wire in project.wires() {
+            let path = project.wire_path(wire);
+            for symbol in project.symbols.iter() {
+                for (pin, at) in symbol.terminals().into_iter().zip(symbol.pins()) {
+                    assert!(wire.terminals().contains(&pin) || !path_contains_point(&path, at), "{} runs over {pin:?}", wire.id());
+                }
+            }
+        }
+        session
+            .apply(crate::MOVE_SYMBOL, &json!({"symbol":"symbol-3","x_nm":16 * GRID_NM,"y_nm":8 * GRID_NM,"expected_revision":session.revision()}))
+            .unwrap();
+        let nets = &session.project().unwrap().connectivity().nets;
+        assert_eq!(nets.len(), 2, "{nets:?}");
+    }
+
+    /// A pin whose every way out runs along another net's wire is refused without an edit.
+    #[test]
+    fn a_pin_boxed_in_by_another_net_is_refused() {
+        let mut session = connector_and_resistor();
+        draw(&mut session, point(11, 0), point(13, 0), json!([]));
+        draw(&mut session, point(12, -1), point(12, 1), json!([]));
+        let before = session.inspect();
+        assert!(matches!(connect(&mut session, ("symbol-3", "1"), ("symbol-2", "1")), Err(CommandError::Unavailable(_))));
         assert_eq!(session.inspect(), before);
     }
 

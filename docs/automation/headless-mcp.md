@@ -239,7 +239,10 @@ filesystem permissions. It does not grant read-only access to a live editor:
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current
-project revision with the two endpoints. Project inspection returns the wires,
+project revision with the two endpoints. The wire never touches a pin, label or
+wire of another net: when the direct route would, it takes the shortest clear
+route with one or two bends on the grid, and when none exists the command is
+refused with `unavailable`; draw that wire with `bends` instead. Project inspection returns the wires,
 connected terminal groups and unconnected pins. `schematic.draw_wire` accepts
 terminal references, `{"junction":"junction-N"}` references from inspection, or
 new free points as `{"x_nm":0,"y_nm":0}`, plus an ordered `bends` array and
