@@ -1,0 +1,49 @@
+# SolidCraft's crates/ui-kit at e2b7beba91e590270217b99c1b5f89f81bc3a476 with three fixes awaiting
+# review upstream; see PATCH.md. This standalone manifest writes out the values the original takes
+# from SolidCraft's workspace (version, edition, lints and dependency versions). Its SolidCraft
+# dependencies come from the same revision, so the build has one copy of each.
+[package]
+name = "solidcraft-ui-kit"
+description = "The UI kit and its components: tokenised egui controls, panels, menus and the ribbon, app bar, history bar, navigation bar, view compass, window chrome and theme files, drawn from plain data"
+version = "0.49.1"
+edition = "2024"
+rust-version = "1.95"
+license-file = "LICENSE"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[features]
+# The kit's test fixtures (its test context and catalog, headless frames, the CPU rasteriser, the
+# gallery and theme-file fixtures) for a host's own tests of the kit with its data.
+test-support = ["dep:image"]
+
+[dependencies]
+solidcraft-icon-svg = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-ui-text = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-color = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-viewport-egui = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+solidcraft-viewport-gpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "e2b7beba91e590270217b99c1b5f89f81bc3a476" }
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+web-time = "1"
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+image = { version = "0.25", default-features = false, features = ["png", "hdr"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Text fields' context menu reads the system clipboard.
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+
+[dev-dependencies]
+egui = { version = "0.37", features = ["default_fonts", "lock_nesting_report"] }
+image = { version = "0.25", default-features = false, features = ["png", "hdr"] }
+syn = { version = "2", features = ["full", "visit"] }

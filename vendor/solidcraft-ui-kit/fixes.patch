@@ -1,0 +1,199 @@
+diff --git a/src/browser_tests.rs b/src/browser_tests.rs
+index 1d0e72de..74805938 100644
+--- a/src/browser_tests.rs
++++ b/src/browser_tests.rs
+@@ -741,3 +741,38 @@ fn the_gestures_of_a_presentation_not_drawn_end_from_the_context() {
+     assert!(rig.ctx.dragged_id().is_none());
+     assert!(end_gestures(&rig.ctx, &mut rig.state.borrow_mut(), Source { scope: 7, presentation: 0 }).is_empty(), "once");
+ }
++
++/// A trailing badge follows its row's name and stays clear of the count, also when the name is
++/// cut off to fit (#22361): the badge used to land on the count.
++#[test]
++fn a_badge_after_a_cut_off_name_stays_clear_of_the_count() {
++    let ctx = egui::Context::default();
++    for (label, cut) in [("Power", false), ("Basic components and connectors", true)] {
++        solidcraft_ui_registry::clear_handles();
++        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 100.0))), ..Default::default() };
++        let out = crate::test_support::raw_frame(&ctx, input, |ui| {
++            ui.set_width(170.0);
++            tree_row(ui, ui.scope_id().with(label), &Row { label, name: true, compact: true, count: "48", badges: &["lock"], ..Default::default() });
++        });
++        let count = out
++            .shapes
++            .iter()
++            .find_map(|clipped| match &clipped.shape {
++                egui::Shape::Text(text) if text.galley.text() == "48" => Some(clipped.shape.visual_bounding_rect()),
++                _ => None,
++            })
++            .expect("the count is drawn");
++        let name = out
++            .shapes
++            .iter()
++            .find_map(|clipped| match &clipped.shape {
++                egui::Shape::Text(text) if text.galley.text() != "48" => Some((text.galley.elided, clipped.shape.visual_bounding_rect())),
++                _ => None,
++            })
++            .expect("the name is drawn");
++        let badge = solidcraft_ui_registry::rect_of(&format!("row_badge:lock:{label}")).expect("the badge is drawn");
++        assert_eq!(name.0, cut, "{label}: the name is cut off only when it does not fit");
++        assert!(badge.left() >= name.1.right(), "{label}: badge {badge:?} overlaps the name {:?}", name.1);
++        assert!(badge.right() <= count.left(), "{label}: badge {badge:?} overlaps the count {count:?}");
++    }
++}
+diff --git a/src/tree.rs b/src/tree.rs
+index 29d3b46c..5e75834b 100644
+--- a/src/tree.rs
++++ b/src/tree.rs
+@@ -428,11 +428,11 @@ pub fn tree_row(ui: &mut egui::Ui, id: egui::Id, row: &Row) -> RowResp {
+     };
+     let label_display = row_text(row.label, row.name);
+     let font = if row.selected { crate::type_face::semibold(t.font_label) } else { FontId::proportional(t.font_label) };
+-    // The label stops before the badges and the card's edge; a longer name ends in an ellipsis
+-    // and its full text is in the tooltip.
++    // The label stops before the badges, which follow it, and the count, status and card edge
++    // after them; a longer name ends in an ellipsis and its full text is in the tooltip (#22361).
+     let badges_width = row.badges.len() as f32 * 15.0;
+     let end = if (row.compact || eye_end) && row.eye.is_some() { eye_r.left() - t.space_4 } else { action_left };
+-    let mut right = end - badges_width;
++    let mut right = end;
+     if let Some(status) = row.status {
+         right -= t.space_16;
+         let sr = Rect::from_center_size(pos2(right + t.space_8, cy), vec2(t.space_14, t.space_14));
+@@ -464,7 +464,7 @@ pub fn tree_row(ui: &mut egui::Ui, id: egui::Id, row: &Row) -> RowResp {
+         let galley = ui.painter().layout_job(job);
+         ui.painter().with_clip_rect(ui.clip_rect().intersect(r)).galley(pos2(x, r.top() + ROW_H), galley, t.text_dim);
+     }
+-    let room = (right - name_action_width - x).max(0.0);
++    let room = (right - badges_width - name_action_width - x).max(0.0);
+     out.label_rect = Some(Rect::from_min_max(pos2(x, r.top() + 1.0), pos2(x + room, cy + row_height / 2.0 - 1.0)));
+     let emphasis = row.emphasis.clone().filter(|span| label_display == row.label && label_display.get(span.clone()).is_some());
+     let mut job = match emphasis {
+@@ -498,6 +498,7 @@ pub fn tree_row(ui: &mut egui::Ui, id: egui::Id, row: &Row) -> RowResp {
+     for b in row.badges {
+         let br = Rect::from_center_size(pos2(bx + 6.0, cy), vec2(t.space_12, t.space_12));
+         badge(ui.painter(), br, b, t.text_dim);
++        solidcraft_ui_registry::publish_rect(&format!("row_badge:{b}:{handle}"), br);
+         bx += 15.0;
+     }
+     // The name's action button sits right after the label; a press on it is not a press on the row.
+diff --git a/src/table.rs b/src/table.rs
+index 27f9b97a..892c74bf 100644
+--- a/src/table.rs
++++ b/src/table.rs
+@@ -272,7 +272,8 @@ fn column_widths(ui: &Ui, columns: &[Column<'_>], available: f32) -> Vec<f32> {
+         })
+         .collect();
+     let fixed: f32 = columns.iter().zip(&widths).filter(|(c, _)| !c.shares()).map(|(_, w)| *w).sum();
+-    let mut remaining = (available - fixed - t.space_8 * (columns.len().saturating_sub(1) + 2) as f32 - t.space_4 * 2.0).max(0.0);
++    let gaps = t.space_8 * (columns.len().saturating_sub(1) + 2) as f32 + t.space_4 * 2.0;
++    let mut remaining = (available - fixed - gaps).max(0.0);
+     let mut sharing: Vec<_> = columns.iter().map(|c| c.shares() && dimension(c.width) > 0.0).collect();
+     // Freeze columns at their control minimum before sharing the remaining width. The bounded
+     // passes also keep a hostile design with many columns from creating an unbounded loop.
+@@ -300,13 +301,19 @@ fn column_widths(ui: &Ui, columns: &[Column<'_>], available: f32) -> Vec<f32> {
+         }
+     }
+     // Round cumulative column edges, not each width independently: independent rounding
+-    // can add a pixel to an otherwise exactly fitting grid and create a scrollbar.
++    // can add a pixel to an otherwise exactly fitting grid and create a scrollbar. The gaps need
++    // not be whole pixels (8 points is 7.5 px at 0.9375), so a fitting grid's last edge could
++    // round half a pixel past `available`; it then ends exactly where the gaps leave off (#22382).
+     let ppp = ui.ctx().pixels_per_point().max(0.5);
++    let last = widths.len().saturating_sub(1);
+     let mut edge = 0.0;
+     let mut rounded_edge = 0.0;
+-    for width in &mut widths {
++    for (index, width) in widths.iter_mut().enumerate() {
+         edge += *width;
+-        let next = (edge * ppp).round() / ppp;
++        let mut next = (edge * ppp).round() / ppp;
++        if index == last && next + gaps > available && edge + gaps <= available + 0.01 {
++            next = available - gaps;
++        }
+         *width = next - rounded_edge;
+         rounded_edge = next;
+     }
+diff --git a/src/table_tests.rs b/src/table_tests.rs
+index e9a9236e..a833d9e6 100644
+--- a/src/table_tests.rs
++++ b/src/table_tests.rs
+@@ -342,8 +342,9 @@ fn cell_selection_leaves_buttons_and_editors_in_charge_of_their_clicks() {
+ 
+ #[test]
+ fn fitting_flex_tables_have_no_horizontal_scrollbar_at_card_widths_and_pixel_scales() {
+-    for ppp in [1.0, 1.25, 2.0] {
+-        for width in [260.0, 319.0, 320.0, 499.0, 500.3, 748.0, 749.0, 762.0] {
++    // At 0.9375 the 8-point gaps are 7.5 px, so the columns' share can end on a half pixel (#22382).
++    for ppp in [0.9375, 1.0, 1.25, 1.75, 2.0] {
++        for width in [260.0, 319.0, 320.0, 499.0, 500.3, 720.0, 748.0, 749.0, 762.0] {
+             let ctx = crate::test_support::context();
+             ctx.set_pixels_per_point(ppp);
+             for _ in 0..3 {
+@@ -376,7 +377,7 @@ fn fitting_flex_tables_have_no_horizontal_scrollbar_at_card_widths_and_pixel_sca
+             }
+             let viewport = registry::rect_of("dialog:table:fit:viewport").unwrap();
+             let content = registry::count_of("dialog:table:fit:content_width").unwrap() as f32;
+-            assert!(content <= viewport.width().ceil(), "{width} at {ppp}: content {content}, viewport {viewport:?}");
++            assert!(content <= viewport.width() + 0.01, "{width} at {ppp}: content {content}, viewport {viewport:?}");
+             let row = registry::rect_of("dialog:table:fit:row").unwrap();
+             let first = registry::rect_of("dialog:table:fit:row:cell:Name").unwrap();
+             let last = registry::rect_of("dialog:table:fit:row:cell:Value").unwrap();
+diff --git a/src/actions.rs b/src/actions.rs
+index f3dedc47..6deedbf6 100644
+--- a/src/actions.rs
++++ b/src/actions.rs
+@@ -126,7 +126,11 @@ fn styled_button(ui: &Ui, label: egui::WidgetText, tone: ButtonTone) -> egui::Bu
+         let state = response.as_ref().map(Response::widget_state).unwrap_or_default();
+         appearance.stroke.width = ui.style().visuals.widgets.state(state).bg_stroke.width;
+     }
+-    egui::Button::new(label.color(appearance.ink)).fill(appearance.fill).stroke(appearance.stroke)
++    let button = egui::Button::new(label.color(appearance.ink));
++    // An explicit fill and stroke replace the style's frame, also the empty one that
++    // `frame(false)` asks for, so a ghost button at rest gets neither (#22395).
++    let resting = response.as_ref().is_none_or(|r| !(r.hovered() || r.is_pointer_button_down_on() || r.has_focus()));
++    if matches!(tone, ButtonTone::Ghost) && resting { button } else { button.fill(appearance.fill).stroke(appearance.stroke) }
+ }
+ 
+ /// Icon action inside an existing rectangle. Tokens: `form_icon_inset, text, text_dim; icon palette`.
+diff --git a/src/actions_tests.rs b/src/actions_tests.rs
+index 4202ad2d..178d5da0 100644
+--- a/src/actions_tests.rs
++++ b/src/actions_tests.rs
+@@ -217,3 +217,36 @@ fn positioned_shared_buttons_center_text_and_respect_disabled_clicks_in_both_the
+     }
+     solidcraft_theme::set_dark(previous);
+ }
++
++/// A ghost button has no frame until the pointer is over it: its explicit fill and stroke used to
++/// override `frame(false)` and draw a bordered box at rest (#22395).
++#[test]
++fn a_ghost_button_has_no_frame_at_rest_and_highlights_on_hover() {
++    use egui::{Event, Pos2, RawInput, Rect, Shape, vec2};
++    let ctx = crate::test_support::context();
++    solidcraft_theme::apply(&ctx);
++    let rect = Rect::from_min_size(egui::pos2(40.0, 40.0), vec2(24.0, 24.0));
++    let frames = |events: Vec<Event>| {
++        let mut output =
++            ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 120.0))), events, ..Default::default() }, |ui| {
++                button_at(ui, "ghost", rect, "…", Button::Ghost);
++            });
++        output.textures_delta.clear();
++        output
++            .shapes
++            .iter()
++            .filter(|clipped| match &clipped.shape {
++                Shape::Rect(frame) => frame.rect.intersects(rect) && (frame.fill.a() > 0 || frame.stroke.width > 0.0 && frame.stroke.color.a() > 0),
++                _ => false,
++            })
++            .count()
++    };
++    for _ in 0..2 {
++        assert_eq!(frames(vec![Event::PointerMoved(egui::pos2(180.0, 100.0))]), 0, "a ghost button at rest draws no frame");
++    }
++    let mut hovered = 0;
++    for _ in 0..2 {
++        hovered = frames(vec![Event::PointerMoved(rect.center())]);
++    }
++    assert!(hovered > 0, "a hovered ghost button still highlights");
++}

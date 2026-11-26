@@ -1,7 +1,7 @@
 # Shared Craft UI migration
 
-The current pin is SolidCraft **0.41.0**, revision
-`73bdb6cdd39efc3899fb54e7217289a630a89efe`, under @travle1's November 13, 2026
+The current pin is SolidCraft **0.49.1**, revision
+`e2b7beba91e590270217b99c1b5f89f81bc3a476`, under @travle1's November 25, 2026
 update authorization. The UI kit, look, theme, registry, text and renderer/window
 patches move together. The original migration below records the earlier pin;
 current compatibility notes follow at the end.
@@ -605,3 +605,32 @@ app for double-click maximization. PCBcraft retains
 separate foreground hit regions for its title/brand/gap placement and native controls
 above modals; its existing native-grab recovery still covers consumed drag releases.
 No toolkit version or dependency changes are required.
+
+## November 25 update to 0.49.1
+
+The pin moves from 0.41.0 to SolidCraft main at 0.49.1, together with the
+viewport, render, GPU, geometry and solidcore crates from the same revision.
+SolidCraft now vendors egui 0.37 with its own fixes, and its egui-wgpu and
+toolkit build against that copy, so the workspace patches `ecolor`, `egui`,
+`emath`, `epaint` and `epaint_default_fonts` to the same revision. The local
+eframe and egui-winit patches stay; egui-winit names SolidCraft's new
+`ViewportBuilder::native_owner` field the way SolidCraft's copy does.
+
+The adapters keep their existing behaviour through the API changes:
+
+- The Part document tab strip sets the kit's new multi-view fields (views,
+  layouts, switcher, tear-off) off, so part documents stay plain tabs.
+- `panel_host_sash` takes a separate drawn rectangle, a `SashAxis` and a keyboard
+  flag. The adapters draw the grab area, map their horizontal/vertical flag to
+  the axis, and stay Tab stops as before.
+- The ribbon's new `planned` flag is off, and the 3D compass passes no Turn
+  Around label, so it shows no Turn Around chip.
+- The 3D render frame fills the renderer's new fields with their neutral values:
+  no section planes or hatching, no hovered or moving bodies, and the still-picture
+  edge width.
+- The planar adapter passes its kernel's zone tolerance to the kernel's
+  `check_regions`, and the board mesh reports the tessellator's new vertex-limit
+  error.
+
+The earlier local `solidcore-ops` STEP composition backport is removed: the
+pinned revision includes the upstream fix (SolidCraft #17776).

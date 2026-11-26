@@ -1992,6 +1992,8 @@ pub fn create_winit_window_attributes(egui_ctx: &egui::Context, viewport_builder
         minimize_button,
         maximize_button,
         window_level,
+        // SolidCraft's egui: applied by the WGPU backend when it creates an owned window.
+        native_owner: _,
 
         // macOS:
         fullsize_content_view: _fullsize_content_view,

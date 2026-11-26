@@ -26,6 +26,7 @@ pub fn compass(ui: &mut Ui, rect: Rect, axes: [[f64; 3]; 3], drag: &mut Drag) ->
             orbiting: orbit.orbiting,
             snap_hint: false,
             home_label: "Isometric view".into(),
+            turn_around_label: None,
         },
     );
     (action, orbit.step)
