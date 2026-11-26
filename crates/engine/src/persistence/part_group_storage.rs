@@ -98,7 +98,8 @@ impl CompactMemberships {
     }
 
     /// Refuse malformed dictionaries, repeated or unordered rows/references, unused dictionary
-    /// entries and excess expansion before installing any decoded memberships.
+    /// entries and excess expansion before installing any decoded memberships. The expanded list
+    /// is transient and holds at most `MAX_MEMBERSHIPS` (2,097,152) 24-byte entries, about 48 MiB.
     pub(super) fn expand(self) -> Result<Vec<Membership>, String> {
         if self.groups.is_empty()
             || self.groups.len() > MAX_GROUPS
