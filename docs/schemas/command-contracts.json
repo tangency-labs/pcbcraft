@@ -3582,7 +3582,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -4570,7 +4570,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -4695,7 +4695,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -6022,7 +6022,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },

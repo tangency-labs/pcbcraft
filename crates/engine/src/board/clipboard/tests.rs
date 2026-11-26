@@ -446,6 +446,20 @@ fn malformed_board_payloads_are_rejected_before_insertion() {
     assert!(BoardSelection::parse(&json!({"tracks":[Uuid::nil(),Uuid::nil()]})).is_none());
 }
 
+/// A board selection accepts footprint lists above the former 4,096 bound up to the symbol
+/// limit, which also bounds a board's footprints, refuses one more, and publishes that bound.
+#[test]
+fn board_selection_footprints_follow_the_symbol_limit() {
+    let max = crate::schematic::MAX_SYMBOLS;
+    let footprints = |count: usize| json!({"footprints":(1..=count).map(|id| format!("footprint-{id}")).collect::<Vec<_>>()});
+    for count in [4097, max] {
+        assert_eq!(BoardSelection::parse(&footprints(count)).map(|selection| selection.footprints.len()), Some(count));
+    }
+    assert!(BoardSelection::parse(&footprints(max + 1)).is_none());
+    let schema = crate::ParamKind::BoardSelection.schema();
+    assert_eq!(schema["properties"]["footprints"]["maxItems"].as_u64(), Some(max as u64));
+}
+
 /// Mixed deletion retains the established ability to remove pending physical remnants, even
 /// when a logical component no longer exists and therefore cannot be exported as a circuit copy.
 #[test]
