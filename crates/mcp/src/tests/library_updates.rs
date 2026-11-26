@@ -5,13 +5,15 @@ use crate::{
     live::{Editor, call_editor},
 };
 use pcbcraft_engine::{
-    ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_RESISTOR, PLACE_SYMBOL, Session, SessionScope,
+    APPLY_FOOTPRINT_REVISION, ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_RESISTOR, PLACE_SYMBOL, Session, SessionScope,
     authoring::{
         Item, Kind, Primitive,
         publishing::{new_library, prepare},
     },
     error_codes::ErrorCode,
-    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, LOAD, PREVIEW_ADOPTION, PREVIEW_FOOTPRINT_REVISION, WHERE_USED, symbol_digest},
+    library::sources::{
+        APPLY_ADOPTION, AVAILABLE_REVISIONS, Documents, LOAD, PREVIEW_ADOPTION, PREVIEW_FOOTPRINT_REVISION, WHERE_USED, symbol_digest,
+    },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -139,16 +141,9 @@ fn read_only_headless_where_used_keeps_project_and_history() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
-/// The catalog exposes the preview, and live and headless clients receive the same geometry
-/// rather than a revision-only response when they suppress ordinary project inspection.
-/// The same successful result is available through the normal read-only headless MCP tool.
-#[test]
-fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
-    let mut server = server();
-    let described = body(&call(&mut server, "describe_command", json!({"command":PREVIEW_FOOTPRINT_REVISION})));
-    assert_eq!(described["id"], PREVIEW_FOOTPRINT_REVISION);
-    assert_eq!(described["params"]["required"], json!(["board", "part_instance"]));
-
+/// Open the same synthetic routed-pad update in both ordinary MCP backends, and return the
+/// library documents so another backend can load the same source.
+fn footprint_revision_backends() -> (Headless, OpenEditor, Arc<pcbcraft_engine::Project>, Value, Documents) {
     let manifest = new_library("pad-query", "Pad query", "MIT OR Apache-2.0").unwrap();
     let symbol = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
     let first = prepare(Arc::new(Item::new(Kind::Footprint).unwrap()), &manifest, 0, None, false).unwrap();
@@ -189,9 +184,21 @@ fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     let mut editor = OpenEditor { session: Session::default(), blocked: false };
     editor.session.open_snapshot(snapshot.clone());
     call_editor(&mut editor, &json!({"method":"engine.execute","params":load})).unwrap();
-    let before = editor.session.inspect();
     let query =
         json!({"command":PREVIEW_FOOTPRINT_REVISION,"params":{"board":snapshot.board_target().unwrap().board,"part_instance":part},"inspect":false});
+    (headless, editor, snapshot, query, documents)
+}
+
+/// The catalog exposes the preview, and live and headless clients retain geometry with inspect:false.
+/// The same successful result is available through the normal read-only headless MCP tool.
+#[test]
+fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
+    let mut server = server();
+    let described = body(&call(&mut server, "describe_command", json!({"command":PREVIEW_FOOTPRINT_REVISION})));
+    assert_eq!(described["id"], PREVIEW_FOOTPRINT_REVISION);
+    assert_eq!(described["params"]["required"], json!(["board", "part_instance"]));
+    let (mut headless, mut editor, snapshot, query, documents) = footprint_revision_backends();
+    let before = editor.session.inspect();
     let headless_report = headless.call("engine.execute", query.clone()).unwrap();
     let live_report = call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap();
     assert_eq!(headless_report, live_report);
@@ -215,6 +222,35 @@ fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     assert_eq!(headless_error.code(), ErrorCode::NotFound.as_str());
     assert_eq!(live_error, headless_error);
     assert_eq!(editor.session.inspect(), before);
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+}
+
+/// Map-gated acceptance has the normal mutation reply, failure and undo across backends.
+#[test]
+fn footprint_revision_apply_has_live_and_headless_edit_parity() {
+    let (mut headless, mut editor, snapshot, query, _) = footprint_revision_backends();
+    let report = headless.call("engine.execute", query.clone()).unwrap();
+    let mut request = json!({"command":APPLY_FOOTPRINT_REVISION,"params":query["params"],"inspect":false});
+    request["params"]["acceptance"] = report["acceptance"].clone();
+    request["params"]["expected_revision"] = report["revision"].clone();
+    let bad_headless = headless.call("engine.execute", request.clone()).unwrap_err();
+    let bad_live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap_err();
+    assert_eq!(bad_live, bad_headless);
+    assert_eq!(bad_live.code(), ErrorCode::InvalidParams.as_str());
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    request["params"]["mapping"] = json!({"1":"1","2":"2"});
+    editor.blocked = true;
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap_err().message().contains("dialog"));
+    editor.blocked = false;
+    let applied = headless.call("engine.execute", request.clone()).unwrap();
+    assert_eq!(call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap(), applied);
+    assert_eq!(applied["revision"], report["revision"].as_u64().unwrap() + 1);
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), editor.session.inspect());
+    assert!(!Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    let undo = json!({"command":"edit.undo","params":{},"inspect":false});
+    headless.call("engine.execute", undo.clone()).unwrap();
+    call_editor(&mut editor, &json!({"method":"engine.execute","params":undo})).unwrap();
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap(), editor.session.inspect());
     assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
 }
 

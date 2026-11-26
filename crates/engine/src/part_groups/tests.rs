@@ -195,7 +195,14 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
                     assert_eq!(value["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
                 }
                 let downgraded = edited(&docs, ENTRY_POINT, |project| project["format"] = json!("pcbcraft-project/24"));
-                refused_on_read(&downgraded, if board { "unsupported instances format" } else { "require project format 39" });
+                if board {
+                    refused_on_read(&downgraded, "unsupported instances format");
+                } else {
+                    assert_eq!(
+                        decode_documents(&downgraded).unwrap_err(),
+                        "compact_part_group_memberships is not allowed by this instance encoding."
+                    );
+                }
                 for remove in [true, false] {
                     let malformed = edited(&docs, home, |value| {
                         let scope = if board { value } else { &mut value["schematic_instances"] };
@@ -209,10 +216,13 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
                         assert!(decode_documents(&malformed).unwrap().part_group_memberships().is_empty());
                         if board {
                             let legacy = edited(&malformed, home, |value| value["format"] = json!("pcbcraft-instances/7"));
-                            refused_on_read(&legacy, "require project format 39");
+                            assert_eq!(decode_documents(&legacy).unwrap_err(), "Missing required compact_part_group_memberships.");
                         }
                     } else {
-                        refused_on_read(&malformed, "exactly one membership encoding");
+                        assert_eq!(
+                            decode_documents(&malformed).unwrap_err(),
+                            "part_group_memberships and compact_part_group_memberships cannot both be present."
+                        );
                     }
                 }
                 if board {
@@ -305,7 +315,7 @@ fn malformed_and_downgraded_documents_are_refused() {
             }),
         ];
         let mut reasons = vec![
-            "requires project format 24",
+            "part_groups not allowed in pcbcraft-project/23.",
             "Empty part-group catalogs must be omitted",
             "invalid type: null, expected struct Catalog",
             "Unsupported part-group format",

@@ -520,6 +520,9 @@ impl Encoder {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
         }
+        if project.net_registry.has_authored_intent() {
+            return Err("Authored electrical intent requires split documents or a packed archive.".into());
+        }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());
         }

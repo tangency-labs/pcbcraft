@@ -195,6 +195,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
+                        | pcbcraft_engine::nets::intent::INSPECT
                         | pcbcraft_engine::nets::INSPECT_APPEARANCE
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::board::route::PLAN_ROUTE
@@ -205,6 +206,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::annotation::PREVIEW
+                        | pcbcraft_engine::sheet_split::PREVIEW
                         | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
                         | pcbcraft_engine::PREVIEW_BOARD_SETUP
                         | pcbcraft_engine::INSPECT_LAYER_GROUPS

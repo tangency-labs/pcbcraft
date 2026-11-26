@@ -408,6 +408,10 @@ impl Board {
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
     }
+    #[cfg(test)]
+    pub(crate) fn footprints_mut(&mut self) -> &mut [Footprint] {
+        &mut self.footprints
+    }
     /// Find an authored placement by its stable ID without resolving pads or connectivity.
     fn placement(&self, id: u64) -> Option<&Footprint> {
         let index = self
@@ -443,6 +447,45 @@ impl Board {
             return false;
         };
         crate::library::parts::mapping::validate(mapping, &footprint.unconnected_pads, symbol, definition).is_ok()
+    }
+    /// Replace only the pinned package and pad correspondence of one existing placement.
+    pub(crate) fn replace_reviewed_footprint(
+        &mut self,
+        assignment: assignment::Assignment,
+        definition: Arc<definition::FootprintDefinition>,
+    ) -> Result<(), String> {
+        let id = assignment.component;
+        let index = *self.by_component.get(&id).ok_or("Missing placed footprint.")?;
+        let old = &self.footprints[index];
+        if definition.key() != assignment.key() {
+            return Err("Footprint definition differs from its reviewed assignment.".into());
+        }
+        // A pad number is not proof of equivalent probe access in a different package.
+        if !old.test_points.is_empty() && old.key() != Some(definition.key()) {
+            return Err("Clear this footprint's pad test-point marks before applying a different revision.".into());
+        }
+        if self.definitions.get(&definition.key()).is_some_and(|pinned| pinned != &definition) {
+            return Err("Footprint content conflicts with the project's pinned revision.".into());
+        }
+        let next = Footprint {
+            library: Some(assignment.library.clone()),
+            definition: assignment.definition.clone(),
+            definition_revision: assignment.definition_revision,
+            mapping: Some(assignment.mapping.clone()),
+            unconnected_pads: assignment.unconnected_pads.clone(),
+            pin_1_pad: 0,
+            ..old.clone()
+        };
+        if !next.valid() {
+            return Err("Replacement footprint is outside supported bounds.".into());
+        }
+        if let Some(baseline) = &mut self.baseline {
+            Arc::make_mut(baseline).replace_reviewed_package(old, &assignment)?;
+        }
+        self.footprints[index] = next;
+        self.definitions.insert(definition.key(), definition);
+        self.assignments.insert(id, assignment);
+        Ok(())
     }
     /// Append a placement after identity, mapping shape and definition resolution succeed.
     pub(crate) fn append(&mut self, footprint: Footprint) -> Result<(), &'static str> {
