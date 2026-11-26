@@ -811,6 +811,7 @@ impl EditorViews {
         PaintHighlight::Owned(self.selection_highlight(id, session))
     }
 
+    /// Restrict ordinary cross-probe highlights to objects present in the target view's snapshot.
     fn selection_highlight(&self, id: ViewId, session: &Session) -> Selection {
         let Some((_, mut selection)) = self.schematic_probe(id, session) else {
             return Selection::default();
