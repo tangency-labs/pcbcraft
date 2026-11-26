@@ -909,3 +909,6 @@ mod courtyard;
 
 mod job;
 pub use job::{CheckJob, CheckProgress, CheckSource};
+
+pub mod dirty;
+pub use dirty::{ChangeKind, DirtyRegion, EditDelta, ObjectChange, RegionFootprint};
