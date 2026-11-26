@@ -68,7 +68,7 @@ the longer-term direction, including familiar KiCad controls and links with Soli
 
 ## Get started
 
-Use **Rust 1.95 or later**. From the repository root, build the desktop app and
+Use **Rust 1.99 or later**. From the repository root, build the desktop app and
 its companion CLI, then launch the editor:
 
 ```sh

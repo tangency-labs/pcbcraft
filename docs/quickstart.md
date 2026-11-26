@@ -17,7 +17,7 @@ locks remain the supported way to lock and unlock objects interactively.
 
 ## Build and open an example
 
-With Git and Rust 1.95 or later installed, clone a checkout you can edit:
+With Git and Rust 1.99 or later installed, clone a checkout you can edit:
 
 ```sh
 git clone https://github.com/tangency-labs/pcbcraft.git

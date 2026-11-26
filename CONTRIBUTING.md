@@ -15,7 +15,7 @@ design plans and verification history.
 
 ## Build and find your way around
 
-Use Rust 1.95 or later with Cargo, rustfmt and Clippy, a platform linker and a
+Use Rust 1.99 or later with Cargo, rustfmt and Clippy, a platform linker and a
 graphical session for the desktop app. These commands run from the repository
 root unless noted:
 
