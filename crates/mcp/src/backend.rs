@@ -177,6 +177,14 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
     serve_session(session, method, params, COMMAND_API_VERSION)
 }
 
+/// Whether `inspect: false` still returns this command's own data because the engine admits
+/// it to read-only sessions, so a new query is covered once it is reviewed for that scope.
+/// The two preview cancellations are read commands that answer with the project inspection,
+/// so they keep the revision-only reply.
+fn read_command_keeps_result(id: &str) -> bool {
+    pcbcraft_engine::is_read_command(id) && !matches!(id, pcbcraft_engine::CANCEL_UPDATE | pcbcraft_engine::CANCEL_BOARD_SETUP_PREVIEW)
+}
+
 /// Dispatch with the serving backend's version before invoking engine handlers.
 /// Symbol-field previews return the engine result even when inspection is disabled.
 fn serve_session(session: &mut Session, method: &str, params: &Value, api_version: u32) -> Result<Value, Failure> {
@@ -192,6 +200,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
             }
             if params["inspect"].as_bool() == Some(false)
                 && !(id == pcbcraft_engine::SET_SYMBOL_FIELDS && params["params"]["dry_run"].as_bool() == Some(true))
+                && !read_command_keeps_result(id)
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES

@@ -56,7 +56,7 @@ pub use board::track::{
     UNROUTE_CONNECTION,
 };
 pub use board::via_nets::SET_VIA_NET;
-pub use session_scope::SessionScope;
+pub use session_scope::{SessionScope, is_read_command};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
