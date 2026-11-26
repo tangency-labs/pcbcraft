@@ -284,6 +284,98 @@ fn class_assignments_share_live_headless_targets_queries_and_rejection() {
     );
 }
 
+/// Headless and live dispatch discover the same authored commands. Readback survives
+/// `inspect: false`; wrong API pins and stale writes return coded failures without mutation.
+#[test]
+fn authored_electrical_intent_uses_the_shared_mcp_session() {
+    use pcbcraft_engine::{command_api::COMMAND_API_VERSION, error_codes::ErrorCode, net_classes, nets::intent};
+    let mut setup = circuit(2);
+    apply(&mut setup, net_classes::CREATE, json!({"name":"Supply","rules":{}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"net_class","project":project.id(),"class":project.net_classes().definitions[0].id});
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    let mut live = OpenEditor { session, blocked: false };
+    for id in [intent::SET, intent::INSPECT] {
+        let catalogs = [headless.call("engine.commands", json!({})).unwrap(), call_editor(&mut live, &json!({"method":"engine.commands"})).unwrap()];
+        assert!(catalogs.iter().all(|catalog| catalog.as_array().unwrap().iter().any(|command| command["id"] == id)));
+    }
+    let voltage = json!({"magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+    let edit = json!({"command":intent::SET,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,
+        "expected_revision":live.session.revision(),"target":target,"intent":{"working_voltage":voltage}}});
+    let initial = live.session.snapshot().unwrap();
+    let mut wrong_pin = edit.clone();
+    wrong_pin["version"] = json!(COMMAND_API_VERSION + 1);
+    let rejected = call_editor(&mut live, &json!({"method":"engine.execute","params":wrong_pin})).unwrap_err();
+    assert_eq!(rejected.code(), ErrorCode::VersionMismatch.as_str());
+    assert_eq!(headless.call("engine.execute", wrong_pin).unwrap_err(), rejected);
+    assert!(Arc::ptr_eq(&initial, &live.session.snapshot().unwrap()));
+    let edited = call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap();
+    assert_eq!(headless.call("engine.execute", edit.clone()).unwrap(), edited);
+    let snapshot = live.session.snapshot().unwrap();
+    let refusal = call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap_err();
+    assert_eq!(refusal.code(), ErrorCode::StaleRevision.as_str());
+    assert_eq!(refusal.details()["current_revision"], edited["revision"]);
+    assert_eq!(headless.call("engine.execute", edit).unwrap_err(), refusal);
+    assert!(Arc::ptr_eq(&snapshot, &live.session.snapshot().unwrap()));
+    let query = json!({"command":intent::INSPECT,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,"target":target}});
+    let read = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(headless.call("engine.execute", query.clone()).unwrap(), read);
+    assert_eq!(read["intent"]["working_voltage"], voltage);
+    assert_eq!(read["requirement"]["verification"], "unverified");
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    let undone = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(undone["intent"]["working_voltage"], Value::Null);
+}
+
+/// Wire appearance uses the same catalog, scoped targets, revision checks and blocked-editor
+/// refusal as other net edits; both hosts see the same read payload and one undoable change.
+#[test]
+fn net_appearance_shares_live_headless_commands_and_rejects_stale_requests() {
+    let mut setup = circuit(2);
+    apply(&mut setup, nets::PROMOTE, json!({"anchor":{"symbol":"symbol-2","terminal":"1"}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"derived","anchor":project.inspect_net_registry().unwrap()["nets"][0]["anchor"]});
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project.clone());
+    let mut live = OpenEditor { session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    for id in [nets::SET_APPEARANCE, nets::INSPECT_APPEARANCE] {
+        assert!(catalog.as_array().unwrap().iter().any(|command| command["id"] == id));
+    }
+    let query = json!({"command":nets::INSPECT_APPEARANCE,"inspect":false,"params":{"target":target}});
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query.clone()})).unwrap();
+    assert_eq!(report, headless.call("engine.execute", query.clone()).unwrap());
+    assert_eq!(report["appearance"], Value::Null);
+    assert!(report.get("project").is_none());
+
+    let request = json!({"command":nets::SET_APPEARANCE,"inspect":false,"params":{
+        "target":target,"appearance":{"color":[200,10,30],"width_cp":300},"expected_revision":live.session.revision()}});
+    live.blocked = true;
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&project, &live.session.snapshot().unwrap()));
+    live.blocked = false;
+    let result = call_editor(&mut live, &json!({"method":"engine.execute","params":request.clone()})).unwrap();
+    assert_eq!(result, headless.call("engine.execute", request.clone()).unwrap());
+    let changed = live.session.snapshot().unwrap();
+    assert!(headless.call("engine.execute", request.clone()).is_err());
+    assert!(call_editor(&mut live, &json!({"method":"engine.execute","params":request})).is_err());
+    assert!(Arc::ptr_eq(&changed, &live.session.snapshot().unwrap()));
+    let report = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(report["appearance"]["color"], json!([200, 10, 30]));
+    assert_eq!(
+        report,
+        headless.call("engine.execute", json!({"command":nets::INSPECT_APPEARANCE,"inspect":false,"params":{"target":target}})).unwrap()
+    );
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    assert_eq!(
+        pcbcraft_engine::persistence::encode_documents(live.session.snapshot().unwrap()).unwrap(),
+        pcbcraft_engine::persistence::encode_documents(project).unwrap()
+    );
+}
+
 /// Read-only discovery supplies typed derived anchors before any persistent ID exists. Both
 /// hosts then promote and bind in one transaction, without a separate promotion history step.
 #[test]
@@ -520,4 +612,59 @@ fn via_net_assignment_is_shared_by_live_and_headless_clients() {
         };
         assert!(stale.is_err());
     }
+}
+
+/// The wire keeps every member of an electrical intent edit: a repeated member, at the top of the
+/// intent or inside a voltage, is refused as one tool error, alone or in a batch, before
+/// normalization can keep only its last copy. The declaration and revision stay unchanged, and a
+/// single null still clears.
+#[test]
+fn electrical_intent_wire_refuses_repeated_members() {
+    use pcbcraft_engine::{net_classes, nets::intent};
+    let mut setup = circuit(2);
+    apply(&mut setup, net_classes::CREATE, json!({"name":"Supply","rules":{}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"net_class","project":project.id(),"class":project.net_classes().definitions[0].id});
+    let mut opened = Session::default();
+    opened.open_snapshot(project.clone());
+    let mut revision = opened.revision();
+    let mut server = crate::Server::new(Box::new(Headless::with_project(project)));
+    let reply = |server: &mut crate::Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let call = |command: &str, params: Value| {
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{"command":command,"inspect":false,"params":params}}})
+            .to_string()
+    };
+    let set = |revision: u64, voltage: Value| {
+        call(intent::SET, json!({"version":1,"expected_revision":revision,"target":target,"intent":{"working_voltage":voltage}}))
+    };
+    let body = |reply: &Value| serde_json::from_str::<Value>(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let inspect = call(intent::INSPECT, json!({"version":1,"target":target}));
+    let voltage = json!({"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+
+    let edited = reply(&mut server, &set(revision, voltage.clone()));
+    assert_ne!(edited["result"]["isError"], true, "{edited}");
+    revision = serde_json::from_value(body(&edited)["revision"].clone()).unwrap();
+    let declared = body(&reply(&mut server, &inspect));
+    assert_eq!(declared["intent"]["working_voltage"], voltage);
+
+    let clear = set(revision, Value::Null);
+    let replaced = clear.replacen("\"intent\":{", &format!("\"intent\":{{\"working_voltage\":{voltage},"), 1);
+    let nested = set(revision, voltage.clone()).replacen("\"basis\":\"dc\"", "\"basis\":\"peak_ac\",\"basis\":\"dc\"", 1);
+    for duplicate in [replaced, nested] {
+        assert_ne!(duplicate, clear);
+        let refused = reply(&mut server, &duplicate);
+        assert_eq!(refused["id"], 1);
+        assert!(refused.get("error").is_none(), "{refused}");
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert_eq!(refused["result"]["content"][0]["text"], "Duplicate member in the electrical intent request.");
+        assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+        let batch = reply(&mut server, &format!(r#"[{duplicate},{{"jsonrpc":"2.0","id":2,"method":"ping"}}]"#));
+        assert_eq!(batch, json!([refused,{"jsonrpc":"2.0","id":2,"result":{}}]));
+        assert_eq!(body(&reply(&mut server, &inspect)), declared);
+    }
+
+    let cleared = reply(&mut server, &clear);
+    assert_ne!(cleared["result"]["isError"], true, "{cleared}");
+    assert_eq!(body(&cleared)["revision"], json!(revision + 1), "the refusals published nothing");
+    assert_eq!(body(&reply(&mut server, &inspect))["intent"]["working_voltage"], Value::Null);
 }

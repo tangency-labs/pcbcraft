@@ -2,7 +2,7 @@
 use crate::{
     board_appearance::{Appearance, CopperFocus, RouteContact},
     board_drawing::Command,
-    canvas_camera::Camera,
+    canvas_camera::{Camera, pointer_release},
     editor_view::ViewInput,
 };
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
@@ -99,13 +99,15 @@ struct MoveDraft {
     drag: bool,
 }
 
-/// D: one segment follows the pointer while segments touching its ends on the same layer
-/// stretch to stay attached, until a click commits the new ends.
+/// A keyboard or held-pointer segment drag owns the captured policy and proposed ends.
 #[derive(Clone, Debug)]
 struct SegmentDrag {
     source: ViewInput,
     layer: Option<String>,
     track: Uuid,
+    mode: Mode,
+    held: bool,
+    previewed: bool,
     anchor: Point,
     offset: (i64, i64),
     ends: Vec<(Uuid, Point, Point)>,
@@ -248,7 +250,7 @@ impl State {
     /// Change this view's routing policy before fixing vertices. Existing plans and prepared
     /// candidates are revoked together; a fixed prefix cannot silently change policy.
     pub(super) fn select_mode(&mut self, mode: Mode) -> bool {
-        if self.draft.as_ref().is_some_and(|draft| draft.points.len() > 1) {
+        if !self.can_change_policy() {
             return false;
         }
         self.mode = mode;
@@ -263,7 +265,7 @@ impl State {
     }
     /// Revoke speculative work when the upcoming gesture's same-net policy changes.
     pub(super) fn select_same_net_merge(&mut self, merge: bool) -> bool {
-        if self.draft.as_ref().is_some_and(|draft| draft.points.len() > 1) {
+        if !self.can_change_policy() {
             return false;
         }
         self.merge_same_net = merge;
@@ -275,6 +277,31 @@ impl State {
             draft.via_moves.clear();
         }
         true
+    }
+    /// The current policy of this pane, independent of board document history.
+    pub(super) fn policy(&self) -> (Mode, bool) {
+        (self.mode, self.merge_same_net)
+    }
+
+    /// Existing board objects blocking the active Highlight route or segment drag.
+    pub(super) fn routing_collisions(&self) -> Option<&BTreeSet<String>> {
+        if self.draft.as_ref().is_some_and(|draft| draft.mode == Mode::Highlight) {
+            self.planning
+                .collisions()
+                .or_else(|| (self.planning.validation_current() && !self.preparation.collisions.is_empty()).then_some(&self.preparation.collisions))
+        } else if self.segment.as_ref().is_some_and(|drag| drag.mode == Mode::Highlight) && !self.preparation.collisions.is_empty() {
+            Some(&self.preparation.collisions)
+        } else {
+            None
+        }
+    }
+    /// A held gesture, fixed prefix or latched publication keeps its captured policy.
+    pub(super) fn can_change_policy(&self) -> bool {
+        self.segment.is_none()
+            && self.moving.is_none()
+            && !self.preparation.committing()
+            && !self.planning.committing()
+            && self.draft.as_ref().is_none_or(|draft| draft.points.len() <= 1)
     }
     /// The visible gesture owns both its replacement tracks and moved via centers. A final
     /// route keeps its captured displacements until its single copper edit is published.
@@ -295,6 +322,11 @@ impl State {
     pub(super) fn displacement_preview(&self) -> usize {
         let (tracks, vias) = self.displacements();
         tracks.len() + vias.len()
+    }
+    /// A held drag is ready to release once a frame has displayed the validated candidate.
+    #[cfg(feature = "performance-harness")]
+    pub(super) fn held_drag_previewed(&self) -> bool {
+        self.segment.as_ref().is_some_and(|drag| drag.held && drag.previewed)
     }
     /// Retain an explicit ribbon width across pickups until board/default-rule replacement.
     pub(super) fn select_width(&mut self, width: i64) {
@@ -854,6 +886,7 @@ enum RouteAction {
     Via,
     Posture,
     Cancel,
+    Highlight,
     Walkaround,
     Shove,
     ShoveVias,
@@ -881,6 +914,9 @@ fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool, mode: Mode, merge_s
     }
     menu::separator(ui);
     let can_change = draft.is_none_or(|draft| draft.points.len() == 1);
+    if MenuItem::new("Highlight collisions").choice(mode == Mode::Highlight).enabled(can_change).show(ui) {
+        return Some(RouteAction::Highlight);
+    }
     if MenuItem::new("Walk around obstacles").choice(mode == Mode::Walkaround).enabled(can_change).show(ui) {
         return Some(RouteAction::Walkaround);
     }
@@ -890,7 +926,7 @@ fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool, mode: Mode, merge_s
     if MenuItem::new("Shove tracks and vias").choice(mode == Mode::ShoveVias).enabled(can_change).show(ui) {
         return Some(RouteAction::ShoveVias);
     }
-    if mode != Mode::Walkaround && MenuItem::new("Merge same-net copper").toggle(merge_same_net).enabled(can_change).show(ui) {
+    if mode.shoves() && MenuItem::new("Merge same-net copper").toggle(merge_same_net).enabled(can_change).show(ui) {
         return Some(RouteAction::ToggleMerge);
     }
     menu::separator(ui);
@@ -967,7 +1003,7 @@ pub(super) fn interact(
         if finish || response.double_clicked() {
             state.planning.finish_pending_vertex();
         }
-        if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if crate::board_canvas::secondary_pressed_here(response) {
             state.escape();
         }
         out.consumed = true;
@@ -985,7 +1021,7 @@ pub(super) fn interact(
         state.moving = None;
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
-    if !state.tool && state.busy() && ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if !state.tool && state.busy() && crate::board_canvas::secondary_pressed_here(response) {
         state.preparation.cancel();
         if state.moving.take().is_none() && state.segment.take().is_none() {
             state.via_tool = false;
@@ -1048,6 +1084,7 @@ pub(super) fn interact(
         })
         .and_then(|menu| menu.inner);
         if let Some(mode) = match action {
+            Some(RouteAction::Highlight) => Some(Mode::Highlight),
             Some(RouteAction::Walkaround) => Some(Mode::Walkaround),
             Some(RouteAction::Shove) => Some(Mode::Shove),
             Some(RouteAction::ShoveVias) => Some(Mode::ShoveVias),
@@ -1111,7 +1148,7 @@ pub(super) fn interact(
                 }
             }
             if let Some(draft) = &mut state.draft {
-                draft.shove_prefix_dirty = draft.mode != Mode::Walkaround && draft.points.len() >= 2;
+                draft.shove_prefix_dirty = draft.mode.shoves() && draft.points.len() >= 2;
             }
         }
         if (via || via_side.is_some() || action == Some(RouteAction::Via))
@@ -1259,27 +1296,38 @@ pub(super) fn interact(
             return out;
         }
     }
-    if drag_segment
-        && state.moving.is_none()
-        && state.segment.is_none()
-        && let Some(pointer) = pointer.filter(|_| !over_pad)
-        && let Some(track) = copper_at(pointer, camera, rect, view, hidden, Kinds { vias: false, ..kinds }, active)
-    {
+    let held_pick = if state.moving.is_none() && state.segment.is_none() && response.drag_started_by(PointerButton::Primary) && !over_pad {
+        ui.input(|input| input.pointer.press_origin())
+            .and_then(|origin| copper_at(origin, camera, rect, view, hidden, kinds, active).map(|id| (origin, id)))
+    } else {
+        None
+    };
+    let track_pick = if drag_segment && state.moving.is_none() && state.segment.is_none() {
+        pointer
+            .filter(|_| !over_pad)
+            .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden, Kinds { vias: false, ..kinds }, active).map(|id| (pointer, id)))
+    } else {
+        held_pick
+            .filter(|(_, id)| (state.selected.len() < 2 || !state.selected.contains(id)) && tracks.binary_search_by_key(id, |track| track.id).is_ok())
+    };
+    if let Some((origin, track)) = track_pick {
         state.selected = BTreeSet::from([track]);
         state.segment = Some(SegmentDrag {
             source,
             layer: active.map(str::to_owned),
             track,
-            anchor: camera.snap(pointer, rect),
+            mode: state.mode,
+            held: !drag_segment,
+            previewed: false,
+            anchor: camera.snap(origin, rect),
             offset: (0, 0),
             ends: Vec::new(),
         });
-        out.consumed = true;
-        return out;
     }
     if let Some(segment) = &mut state.segment {
         out.consumed = true;
-        let offset = pointer.map_or(segment.offset, |pointer| {
+        let release = if segment.held { pointer_release(response, PointerButton::Primary) } else { None };
+        let offset = release.or(pointer).map_or(segment.offset, |pointer| {
             let at = camera.snap(pointer, rect);
             (at.x_nm - segment.anchor.x_nm, at.y_nm - segment.anchor.y_nm)
         });
@@ -1287,17 +1335,30 @@ pub(super) fn interact(
         if changed {
             segment.offset = offset;
             segment.ends = dragged_ends(view, segment.track, offset);
+            segment.previewed = false;
         }
-        let commit = response.clicked();
-        if commit || changed && state.mode != Mode::Walkaround {
+        let released = release.is_some();
+        let lost_pointer = segment.held && !released && !ui.input(|input| input.pointer.primary_down());
+        let release_over_canvas = release.is_some_and(|position| {
+            let ctx = &response.ctx;
+            let global = ctx.layer_transform_to_global(response.layer_id).map_or(position, |transform| transform * position);
+            response.interact_rect.contains(position) && ctx.layer_id_at(global) == Some(response.layer_id)
+        });
+        if lost_pointer || released && (!release_over_canvas || !segment.previewed || !state.preparation.ready()) {
+            if release_over_canvas && !segment.ends.is_empty() {
+                out.error = Some(state.preparation.refusal().unwrap_or("Hold the drag until its preview is validated.").into());
+            }
+            state.segment = None;
+            state.preparation.cancel();
+            return out;
+        }
+        let commit = if segment.held { released } else { response.clicked() };
+        if commit || changed {
             if segment.ends.is_empty() {
                 state.preparation.cancel();
             } else {
                 let tracks: Vec<_> = segment.ends.iter().map(|(id, start, end)| json!({"track":id,"start":start,"end":end})).collect();
-                let mut params = json!({"board":view.target.board,"tracks":tracks,"expected_revision":segment.source.revision});
-                if state.mode != Mode::Walkaround {
-                    params["mode"] = json!(state.mode);
-                }
+                let params = json!({"board":view.target.board,"tracks":tracks,"mode":segment.mode,"expected_revision":segment.source.revision});
                 let edit = Command::new(segment.source, pcbcraft_engine::RESHAPE_TRACKS, params);
                 if commit {
                     state.committed_ends = std::mem::take(&mut segment.ends);
@@ -1310,6 +1371,9 @@ pub(super) fn interact(
             if commit {
                 state.segment = None;
             }
+        } else if state.preparation.ready() {
+            // Copper painting follows interaction in this frame.
+            segment.previewed = true;
         }
         return out;
     }
@@ -1324,12 +1388,7 @@ pub(super) fn interact(
         });
         state.moving = Some(MoveDraft { source, anchor, offset: (0, 0), drag: false });
     }
-    if state.moving.is_none()
-        && response.drag_started_by(PointerButton::Primary)
-        && let Some(origin) = ui.input(|input| input.pointer.press_origin())
-        && !over_pad
-        && let Some(id) = copper_at(origin, camera, rect, view, hidden, kinds, active)
-    {
+    if let Some((origin, id)) = held_pick.filter(|_| state.moving.is_none()) {
         if !state.selected.contains(&id) {
             state.selected = BTreeSet::from([id]);
         }
@@ -1451,10 +1510,8 @@ pub(super) fn paint(
             continue;
         }
         let selected = state.selected.contains(&track.id);
-        let (start, end) = reshaped
-            .clone()
-            .find(|(id, _, _)| *id == track.id)
-            .map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (start, end));
+        let reshaped_track = reshaped.clone().find(|(id, _, _)| *id == track.id);
+        let (start, end) = reshaped_track.map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (start, end));
         let ends = [camera.screen(start, rect), camera.screen(end, rect)];
         let width = width_px(camera, rect, track.width_nm);
         labels.cover_track(ends, width);
@@ -1495,12 +1552,15 @@ pub(super) fn paint(
         let selected = state.selected.contains(&item.id);
         let displaced = centers.get(&item.id);
         let center = displaced.copied().unwrap_or_else(|| moved(item.at, selected));
-        labels.cover_disc(camera.screen(center, rect), width_px(camera, rect, item.diameter_nm) / 2.);
+        let screen = camera.screen(center, rect);
+        let radius = width_px(camera, rect, item.diameter_nm) / 2.;
+        let drill = width_px(camera, rect, item.drill_nm) / 2.;
+        labels.cover_disc(screen, radius);
         pcbcraft_chrome::board::via(
             &painter,
-            camera.screen(center, rect),
-            width_px(camera, rect, item.diameter_nm) / 2.,
-            width_px(camera, rect, item.drill_nm) / 2.,
+            screen,
+            radius,
+            drill,
             selected,
             displaced.is_some(),
             focus.map(|focus| focus.contains_copper(&item.id)),
@@ -1511,6 +1571,30 @@ pub(super) fn paint(
         }
     }
     labels
+}
+
+/// Paint fixed blockers over the proposal so even a coincident route cannot cover the highlight.
+pub(super) fn paint_collisions(painter: &egui::Painter, rect: Rect, camera: &Camera, view: BoardView<'_>, state: &State, hidden: &BTreeSet<String>) {
+    let Some(collisions) = state.routing_collisions() else { return };
+    let (tracks, vias) = (view.tracks(), view.vias());
+    let color = pcbcraft_chrome::Tokens::get().route_collision;
+    for id in collisions.iter().filter_map(|address| Uuid::try_parse(address).ok()) {
+        if let Ok(index) = tracks.binary_search_by_key(&id, |track| track.id) {
+            let track = &tracks[index];
+            if !hidden.contains(&track.layer.to_string()) {
+                let ends = [camera.screen(track.start, rect), camera.screen(track.end, rect)];
+                pcbcraft_chrome::board::track(painter, ends, width_px(camera, rect, track.width_nm), color, false, false);
+            }
+        } else if let Ok(index) = vias.binary_search_by_key(&id, |via| via.id) {
+            let via = &vias[index];
+            pcbcraft_chrome::board::collision_via(
+                painter,
+                camera.screen(via.at, rect),
+                width_px(camera, rect, via.diameter_nm) / 2.,
+                width_px(camera, rect, via.drill_nm) / 2.,
+            );
+        }
+    }
 }
 
 /// Resolve requests before copper painting, keeping displaced originals and replacement

@@ -1,4 +1,5 @@
 //! Native library-item documents own validation and history independently of projects.
+pub mod ball_grid;
 #[cfg(test)]
 mod basics_tests;
 pub mod courtyard;
@@ -12,6 +13,7 @@ use crate::{
     library,
     schematic::{ElectricalType, Point, Shape, SymbolDefinition, TextAlign},
 };
+pub use ball_grid::{JEDEC_SKIP_LETTERS, generate_identifiers, natural_cmp, natural_sort, row_label};
 pub use operations::next_number;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -19,6 +21,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 /// Maximum editor document size, including metadata and stable primitive identities.
 pub const MAX_BYTES: usize = 1 << 20;
+const MAX_SYMBOL_OBJECTS: usize = 512;
+/// Maximum primitives in one footprint drawing; no document kind accepts more, so it also bounds object-ID lists.
+pub const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWORK + 256;
+const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_SYMBOL_OBJECTS);
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
@@ -257,7 +263,7 @@ fn unique_objects<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<B
             let mut objects = BTreeMap::new();
             while let Some(key) = map.next_key::<String>()? {
                 let id = key.parse::<u64>().map_err(A::Error::custom)?;
-                if id == 0 || id.to_string() != key || objects.len() >= 512 || objects.contains_key(&id) {
+                if id == 0 || id.to_string() != key || objects.len() >= MAX_FOOTPRINT_OBJECTS || objects.contains_key(&id) {
                     return Err(A::Error::custom("Duplicate, noncanonical or excessive primitive ID."));
                 }
                 objects.insert(id, map.next_value()?);
@@ -293,6 +299,42 @@ fn unique_units<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTr
         }
     }
     deserializer.deserialize_map(Units)
+}
+
+/// Default JEDEC skip-letter flag for ball-grid array numbering.
+fn default_true() -> bool {
+    true
+}
+
+/// Numbering policy for electrical primitives created by [`Action::Array`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArrayNumbering {
+    /// Increment trailing digits while keeping any existing prefix (`next_number`).
+    Sequential,
+    /// Ball-grid array numbering: row letters (`A..Z`, then `AA..`) and 1-based column numbers.
+    BallGrid {
+        /// Omit JEDEC skip letters (`I`, `O`, `Q`, `S`, `X`, `Z`) from row labels.
+        #[serde(default = "default_true")]
+        skip_jedec: bool,
+    },
+}
+
+/// Readable summary of one authoring transaction, returned for both dry-run previews and applied edits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeRecord {
+    pub operation: String,
+    pub dry_run: bool,
+    pub changed: bool,
+    pub summary: String,
+    pub before_revision: u64,
+    pub after_revision: u64,
+    pub before_object_count: usize,
+    pub after_object_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_pads: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renamed_pads: Vec<String>,
 }
 
 /// Validated transactions shared by forms, canvas tools and live MCP.
@@ -342,6 +384,8 @@ pub enum Action {
         rows: u16,
         column_step: Point,
         row_step: Point,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        numbering: Option<ArrayNumbering>,
     },
     Metadata {
         name: String,
@@ -642,7 +686,7 @@ impl Item {
     pub fn native(&self) -> Result<Value, String> {
         self.native_mode(false)
     }
-    /// Include inactive drawings when choosing the lazy editor and symbol formats.
+    /// Check whether the draft requires the alternate-function editor format, including inactive units.
     fn has_alternate_functions(&self) -> bool {
         self.objects
             .values()
@@ -650,7 +694,8 @@ impl Item {
             .any(|p| matches!(p, Primitive::Pin { alternates, .. } if !alternates.is_empty()))
     }
 
-    /// Derive draft/native data through one validator path, preserving unsupported-kind rejection.
+    /// Validate draft and native definitions through the same path. Newly authored symbols
+    /// and footprints use their current native formats regardless of optional records.
     fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
         if self.kind == Kind::Symbol {
@@ -669,7 +714,10 @@ impl Item {
                 for object in objects.values() {
                     drawing.extend(match object {
                         Primitive::Pin { number, name, electrical_type, alternates, at: point, appearance } => {
-                            let mut terminal = json!({"id":number,"name":name,"electrical_type":electrical_type});
+                            let mut terminal = json!({"id":number,"electrical_type":electrical_type});
+                            if let Some(name) = name {
+                                terminal["name"] = json!(name);
+                            }
                             if !alternates.is_empty() {
                                 terminal["alternates"] = json!(alternates);
                             }
@@ -701,7 +749,7 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":if self.format == PIN_FUNCTION_FORMAT { library::SYMBOL_FORMAT_V5 } else if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":library::SYMBOL_FORMAT_V5,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -735,7 +783,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty(), &pads).into(),
+                format: footprint::CURRENT_FORMAT.into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -759,6 +807,13 @@ impl Item {
         }
     }
 
+    /// Maximum primitives permitted in the active drawing for this document kind.
+    pub(super) fn max_objects(&self) -> usize {
+        match self.kind {
+            Kind::Symbol => MAX_SYMBOL_OBJECTS,
+            Kind::Footprint => MAX_FOOTPRINT_OBJECTS,
+        }
+    }
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
@@ -776,8 +831,8 @@ impl Item {
             || self.other_units.len() >= 32
             || unique.len() != all_objects.len()
             || all_objects.iter().any(|(id, _)| **id == 0 || **id > self.allocation.object)
-            || self.other_units.values().any(|objects| objects.len() > 512)
-            || self.objects.len() > 512
+            || self.other_units.values().any(|objects| objects.len() > MAX_SYMBOL_OBJECTS)
+            || self.objects.len() > self.max_objects()
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
             || self.revision > self.allocation.revision
@@ -825,7 +880,7 @@ impl Item {
         Ok(bytes)
     }
 
-    /// Export the existing standalone native schema. Editor identities, primitive IDs and
+    /// Export a new standalone native definition. Editor identities, primitive IDs and
     /// symbol provenance remain in the editable item; export never confirms an editor save.
     pub fn export_native(&self) -> Result<Value, String> {
         self.encode()?;
@@ -897,27 +952,94 @@ impl Session {
         self.saved = Some(snapshot);
     }
 
+    /// Validate and preview one transaction without mutating data, revision, history or allocation counters.
+    pub fn preview(&self, expected_revision: u64, action: Action) -> Result<ChangeRecord, String> {
+        self.plan(expected_revision, action, true).map(|(_, record)| record)
+    }
+
+    /// Apply one transaction and return its readable change record.
+    /// Rejections preserve data, history and allocation counters.
+    pub fn execute_change(&mut self, expected_revision: u64, action: Action) -> Result<ChangeRecord, String> {
+        let (planned, record) = self.plan(expected_revision, action, false)?;
+        match planned {
+            Planned::NoChange => return Ok(record),
+            Planned::Undo(previous, revision) => {
+                self.undo.pop();
+                self.redo.push(std::mem::replace(&mut self.item, previous));
+                self.revision = revision;
+            }
+            Planned::Redo(next, revision) => {
+                self.redo.pop();
+                self.undo.push(std::mem::replace(&mut self.item, next));
+                self.revision = revision;
+            }
+            Planned::Edit { next, next_id, next_content_revision, revision } => {
+                self.undo.push(std::mem::replace(&mut self.item, next));
+                self.redo.clear();
+                if self.undo.len() > HISTORY {
+                    self.undo.remove(0);
+                }
+                self.next_id = next_id;
+                self.next_content_revision = next_content_revision;
+                self.revision = revision;
+            }
+        }
+        Ok(record)
+    }
+
     /// Apply one transaction. Rejections preserve data, history and allocation counters.
     pub fn execute(&mut self, expected_revision: u64, action: Action) -> Result<u64, String> {
+        self.execute_change(expected_revision, action).map(|record| record.after_revision)
+    }
+
+    /// Validate a candidate transaction against the current snapshot and build its change record.
+    fn plan(&self, expected_revision: u64, action: Action, dry_run: bool) -> Result<(Planned, ChangeRecord), String> {
         if expected_revision != self.revision {
             return Err("Library document changed; inspect it before editing.".into());
         }
+        let operation = action_name(&action).to_owned();
         let revision = self.revision.checked_add(1).ok_or("Runtime revision limit reached.")?;
         let allocation = Allocation { object: self.next_id - 1, revision: self.next_content_revision - 1 };
+        let before_count = self.item.objects.len();
         match action {
             Action::Undo => {
                 let previous = restored(self.undo.last().ok_or("Nothing to undo.")?, allocation)?;
-                self.undo.pop();
-                self.redo.push(std::mem::replace(&mut self.item, previous));
+                let after_count = previous.objects.len();
+                let record = ChangeRecord {
+                    operation,
+                    dry_run,
+                    changed: true,
+                    summary: format!("Undo to revision {revision}: {before_count} -> {after_count} primitives."),
+                    before_revision: self.revision,
+                    after_revision: revision,
+                    before_object_count: before_count,
+                    after_object_count: after_count,
+                    added_pads: Vec::new(),
+                    renamed_pads: Vec::new(),
+                };
+                Ok((Planned::Undo(previous, revision), record))
             }
             Action::Redo => {
                 let next = restored(self.redo.last().ok_or("Nothing to redo.")?, allocation)?;
-                self.redo.pop();
-                self.undo.push(std::mem::replace(&mut self.item, next));
+                let after_count = next.objects.len();
+                let record = ChangeRecord {
+                    operation,
+                    dry_run,
+                    changed: true,
+                    summary: format!("Redo to revision {revision}: {before_count} -> {after_count} primitives."),
+                    before_revision: self.revision,
+                    after_revision: revision,
+                    before_object_count: before_count,
+                    after_object_count: after_count,
+                    added_pads: Vec::new(),
+                    renamed_pads: Vec::new(),
+                };
+                Ok((Planned::Redo(next, revision), record))
             }
             action => {
                 let mut next = (*self.item).clone();
                 let mut cursor = self.next_id;
+                let mut ball_grid_spec: Option<(u16, u16)> = None;
                 match action {
                     Action::SelectUnit { unit } => {
                         let objects = next.other_units.remove(&unit).ok_or("Unknown symbol unit.")?;
@@ -945,7 +1067,8 @@ impl Session {
                         *slot = primitive;
                     }
                     Action::ReplaceMany { primitives } => {
-                        if primitives.is_empty() || primitives.len() > 512 || primitives.keys().any(|id| !next.objects.contains_key(id)) {
+                        let limit = next.max_objects();
+                        if primitives.is_empty() || primitives.len() > limit || primitives.keys().any(|id| !next.objects.contains_key(id)) {
                             return Err("Unknown or empty primitive replacement batch.".into());
                         }
                         next.objects.extend(primitives);
@@ -972,27 +1095,38 @@ impl Session {
                         operations::paste(&mut next, &originals, offset, &mut cursor)?;
                     }
                     Action::Paste { primitives, offset } => operations::paste(&mut next, &primitives, offset, &mut cursor)?,
-                    Action::Array { objects, columns, rows, column_step, row_step } => {
-                        let originals = operations::selected(&next, &objects)?;
-                        let count = usize::from(columns) * usize::from(rows);
-                        if columns == 0
-                            || rows == 0
-                            || count > 512
-                            || next.objects.len().saturating_add(count.saturating_sub(1).saturating_mul(originals.len())) > 512
-                        {
-                            return Err("Array exceeds the definition's 512 primitive limit.".into());
-                        }
-                        for row in 0..rows {
-                            for column in 0..columns {
-                                if row == 0 && column == 0 {
-                                    continue;
+                    Action::Array { objects, columns, rows, column_step, row_step, numbering } => {
+                        if let Some(ArrayNumbering::BallGrid { skip_jedec }) = numbering {
+                            operations::ball_grid_array(
+                                &mut next,
+                                &objects,
+                                operations::BallGridSpec { columns, rows, column_step, row_step, skip_jedec },
+                                &mut cursor,
+                            )?;
+                            ball_grid_spec = Some((rows, columns));
+                        } else {
+                            let originals = operations::selected(&next, &objects)?;
+                            let limit = next.max_objects();
+                            let count = usize::from(columns) * usize::from(rows);
+                            if columns == 0
+                                || rows == 0
+                                || count > limit
+                                || next.objects.len().saturating_add(count.saturating_sub(1).saturating_mul(originals.len())) > limit
+                            {
+                                return Err(format!("Array exceeds the definition's {limit} primitive limit."));
+                            }
+                            for row in 0..rows {
+                                for column in 0..columns {
+                                    if row == 0 && column == 0 {
+                                        continue;
+                                    }
+                                    let axis = |a: i64, b: i64| {
+                                        i64::try_from(i128::from(a) * i128::from(column) + i128::from(b) * i128::from(row))
+                                            .map_err(|_| "Array offset overflow.")
+                                    };
+                                    let offset = Point { x_nm: axis(column_step.x_nm, row_step.x_nm)?, y_nm: axis(column_step.y_nm, row_step.y_nm)? };
+                                    operations::paste(&mut next, &originals, offset, &mut cursor)?;
                                 }
-                                let axis = |a: i64, b: i64| {
-                                    i64::try_from(i128::from(a) * i128::from(column) + i128::from(b) * i128::from(row))
-                                        .map_err(|_| "Array offset overflow.")
-                                };
-                                let offset = Point { x_nm: axis(column_step.x_nm, row_step.x_nm)?, y_nm: axis(column_step.y_nm, row_step.y_nm)? };
-                                operations::paste(&mut next, &originals, offset, &mut cursor)?;
                             }
                         }
                     }
@@ -1042,7 +1176,19 @@ impl Session {
                     next.format = next.footprint_format().into();
                 }
                 if next == *self.item {
-                    return Ok(self.revision);
+                    let record = ChangeRecord {
+                        operation,
+                        dry_run,
+                        changed: false,
+                        summary: "No changes.".into(),
+                        before_revision: self.revision,
+                        after_revision: self.revision,
+                        before_object_count: before_count,
+                        after_object_count: before_count,
+                        added_pads: Vec::new(),
+                        renamed_pads: Vec::new(),
+                    };
+                    return Ok((Planned::NoChange, record));
                 }
                 let metadata: BTreeMap<_, _> = next
                     .objects
@@ -1098,22 +1244,100 @@ impl Session {
                     }
                 }
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
-                let next_id = cursor;
-                self.undo.push(std::mem::replace(&mut self.item, Arc::new(next)));
-                self.redo.clear();
-                if self.undo.len() > HISTORY {
-                    self.undo.remove(0);
-                }
-                self.next_id = next_id;
-                self.next_content_revision = next_content_revision;
+                let record = summarize_change(&self.item, &next, operation, dry_run, self.revision, revision, ball_grid_spec);
+                Ok((Planned::Edit { next: Arc::new(next), next_id: cursor, next_content_revision, revision }, record))
             }
         }
-        self.revision = revision;
-        Ok(revision)
     }
     /// Report document and primitive identities used by the GUI and live tools.
     pub fn inspect(&self) -> Value {
         json!({"revision":self.revision,"dirty":self.dirty(),"published":self.published,"publication_dirty":self.publication_dirty(),"saved_content_revision":self.saved.as_ref().map(|item|item.revision),"can_undo":!self.undo.is_empty(),"can_redo":!self.redo.is_empty(),"item":self.item.as_ref()})
+    }
+}
+
+/// Validated state transition ready to commit or discard after a dry-run preview.
+enum Planned {
+    NoChange,
+    Undo(Arc<Item>, u64),
+    Redo(Arc<Item>, u64),
+    Edit { next: Arc<Item>, next_id: u64, next_content_revision: u32, revision: u64 },
+}
+
+/// Stable snake-case operation name matching the serialized [`Action`] tag.
+fn action_name(action: &Action) -> &'static str {
+    match action {
+        Action::SelectUnit { .. } => "select_unit",
+        Action::AddUnit { .. } => "add_unit",
+        Action::Insert { .. } => "insert",
+        Action::Replace { .. } => "replace",
+        Action::ReplaceMany { .. } => "replace_many",
+        Action::RemapPins { .. } => "remap_pins",
+        Action::Delete { .. } => "delete",
+        Action::Transform { .. } => "transform",
+        Action::Duplicate { .. } => "duplicate",
+        Action::Paste { .. } => "paste",
+        Action::Array { .. } => "array",
+        Action::Metadata { .. } => "metadata",
+        Action::GenerateCourtyard { .. } => "generate_courtyard",
+        Action::Undo => "undo",
+        Action::Redo => "redo",
+    }
+}
+
+/// Build a readable summary of the pad and primitive differences between `before` and `after`.
+fn summarize_change(
+    before: &Item,
+    after: &Item,
+    operation: String,
+    dry_run: bool,
+    before_revision: u64,
+    after_revision: u64,
+    ball_grid_spec: Option<(u16, u16)>,
+) -> ChangeRecord {
+    let mut added_pads = Vec::new();
+    let mut renamed: Vec<(String, String)> = Vec::new();
+    for (id, primitive) in &after.objects {
+        if let Primitive::Pad { pad } = primitive {
+            match before.objects.get(id) {
+                None => added_pads.push(pad.number.clone()),
+                Some(Primitive::Pad { pad: old }) if old.number != pad.number => {
+                    renamed.push((old.number.clone(), pad.number.clone()));
+                }
+                _ => {}
+            }
+        }
+    }
+    ball_grid::natural_sort(&mut added_pads);
+    renamed.sort_by(|a, b| ball_grid::natural_cmp(&a.1, &b.1));
+    let renamed_pads: Vec<String> = renamed.into_iter().map(|(old, new)| format!("{old} -> {new}")).collect();
+    let summary = if let Some((rows, columns)) = ball_grid_spec {
+        let mut all_pads: Vec<&str> =
+            after.objects.values().filter_map(|p| if let Primitive::Pad { pad } = p { Some(pad.number.as_str()) } else { None }).collect();
+        all_pads.sort_by(|a, b| ball_grid::natural_cmp(a, b));
+        let span = match (all_pads.first(), all_pads.last()) {
+            (Some(first), Some(last)) => format!(" ({first}..{last})"),
+            _ => String::new(),
+        };
+        format!(
+            "Ball-grid array {rows}x{columns}: {} pads{span}, {} added, {} renamed.",
+            usize::from(rows) * usize::from(columns),
+            added_pads.len(),
+            renamed_pads.len(),
+        )
+    } else {
+        format!("{operation}: {} -> {} primitives.", before.objects.len(), after.objects.len())
+    };
+    ChangeRecord {
+        operation,
+        dry_run,
+        changed: true,
+        summary,
+        before_revision,
+        after_revision,
+        before_object_count: before.objects.len(),
+        after_object_count: after.objects.len(),
+        added_pads,
+        renamed_pads,
     }
 }
 

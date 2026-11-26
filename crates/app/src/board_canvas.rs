@@ -162,6 +162,7 @@ impl FootprintCache {
 /// ordinary source, enabled-input and focus checks while crossing pad copper.
 /// Eligible pad presses take priority over owner/track picks, and idle Shift+Space cycles
 /// through the visible selectable items at the pointer.
+/// `navigation_enabled` grants pan and zoom alone, so an unfocused pane follows the pointer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -173,6 +174,7 @@ pub(super) fn show(
     filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
     owner_enabled: bool,
+    navigation_enabled: bool,
     navigation: Navigation,
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
@@ -199,11 +201,11 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     let enabled = owner_enabled && !egui::Popup::is_any_open(ui.ctx());
     let route_menu_open = state.tracks.tool && response.context_menu_opened();
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if secondary_pressed_here(&response) {
         state.context_menu_allowed = idle;
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
-    camera.navigate_board(&response, rect, project, enabled, navigation);
+    camera.navigate_board(&response, rect, project, navigation_enabled && !egui::Popup::is_any_open(ui.ctx()), navigation);
     let placement_enabled = enabled;
     let enabled = enabled && state.placement.is_none();
     // The view-only ruler owns its clicks, so nothing else selects or edits while it is armed.
@@ -468,7 +470,7 @@ pub(super) fn show(
     let rotation = camera.model_rotation(std::mem::take(&mut state.rotate_requested));
     let rotating = rotation != 0;
     let flipping = std::mem::take(&mut state.flip_requested);
-    let cancelled = enabled && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
+    let cancelled = enabled && secondary_pressed_here(&response);
     if cancelled {
         state.draft = None;
     }
@@ -683,7 +685,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
-    let (mut openings, mut slots) = (Vec::new(), Vec::new());
+    let (mut openings, mut slots, mut collision_pads) = (Vec::new(), Vec::new(), Vec::new());
     let marquee = state.box_drag.as_ref().and_then(|drag| {
         let release = pointer_release(&response, drag.button);
         let pointer = rect.clamp(release.or_else(|| ui.input(|i| i.pointer.interact_pos()))?);
@@ -746,6 +748,15 @@ pub(super) fn show(
                 } else if let Some(focus) = focus {
                     let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
                     pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                }
+            }
+        }
+        if let Some(collisions) = state.tracks.routing_collisions() {
+            for pad in &mut pads {
+                if pad.copper.is_some() && collisions.contains(&format!("{}:{}", footprint.id, pad.number)) {
+                    let color = pcbcraft_chrome::Tokens::get().route_collision;
+                    pad.color = Some(color);
+                    collision_pads.push(egui::Shape::closed_line(board::pad_contour(pad), egui::Stroke::new(1.5, color)));
                 }
             }
         }
@@ -817,6 +828,10 @@ pub(super) fn show(
     }
     if route.consumed {
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
+    }
+    crate::board_tracks::paint_collisions(&p, rect, camera, project, &state.tracks, &state.hidden_layers);
+    if !collision_pads.is_empty() {
+        p.extend(collision_pads);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if footprints.is_empty()
@@ -938,9 +953,7 @@ fn place_group(
         state.placement = Some(placement);
         return None;
     }
-    if ui.input(|i| {
-        i.pointer.button_pressed(PointerButton::Secondary) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
-    }) {
+    if secondary_pressed_here(response) || ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
         return None;
     }
     if !enabled {
@@ -1179,6 +1192,27 @@ fn reference_bounds(
     })
 }
 
+/// A secondary press on this canvas cancels its gesture. A press over another pane, such as a
+/// right-drag pan there, or on a floating card or window above the canvas leaves this canvas's
+/// tools and gestures running. Each press is judged where it happened, not where the pointer
+/// moved to later in the same frame.
+pub(super) fn secondary_pressed_here(response: &Response) -> bool {
+    let presses: Vec<Pos2> = response.ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+            .collect()
+    });
+    presses.into_iter().any(|pos| {
+        response.rect.contains(pos)
+            && response.ctx.layer_id_at(pos).is_none_or(|layer| layer == response.layer_id || layer.order == egui::Order::Background)
+    })
+}
+
 /// Project a local reference displacement into the editor-only label's screen coordinates.
 fn reference_shift(footprint: &FootprintView<'_>, camera: &Camera, rect: Rect) -> Vec2 {
     let local = footprint.reference_offset;
@@ -1201,7 +1235,7 @@ fn move_reference(
 ) -> (bool, Option<ReferenceDrag>) {
     let rect = response.rect;
     let mut draft = if let Some(draft) = state.reference_drag.take() {
-        if Some(draft.source) != source || response.ctx.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if Some(draft.source) != source || secondary_pressed_here(response) {
             return (true, None);
         }
         draft
@@ -1749,6 +1783,7 @@ mod tests {
                     Default::default(),
                     &appearance,
                     preview,
+                    preview,
                     Navigation::default(),
                     0,
                     pcbcraft_chrome::grid::Style::Off,
@@ -1832,6 +1867,7 @@ mod tests {
                     &BTreeSet::new(),
                     Default::default(),
                     &appearance,
+                    preview,
                     preview,
                     Navigation::default(),
                     0,

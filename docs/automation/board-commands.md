@@ -71,6 +71,24 @@ offline save/reopen and Undo/Redo. Undo shares immutable payloads. Profiles chan
 no board geometry or fabrication output. No placement exporter, import/export
 wrapper or profile-management UI is provided here.
 
+## Test-point marks
+
+Use `pcb.set_test_point` with the board UUID and `expected_revision` from
+inspection. Set `target` to `{"kind":"pad","footprint":"footprint-7","pad":"1"}`
+or `{"kind":"via","via":"<via-uuid>"}` using IDs from that board. Set `purpose`
+to `assembly` or `fabrication` and `sides` to `top`, `bottom`, `both`, or `null`
+to clear that purpose. A pad or via can carry both purposes. The face is relative
+to the board, not the footprint's orientation.
+
+Each change is one undo step, and repeating the same mark does not advance the
+revision. A marked pad must be a real land, not a legacy placeholder. Like other
+`pcb.*` edits, `pcb.set_test_point` is currently refused on boards with stored
+circular copper (`arcs`) or stored straight via teardrops (`teardrops`). Inspection
+includes `test_point` on marked pads and vias, and native save/reopen preserves
+it. To relocate a marked object, use Move, not Cut. This records intent only: it does not check probe access
+or generate a fixture report. [Native storage](../formats/native-project-storage.md#test-point-records)
+describes the saved records and compatibility.
+
 ## Saved board defaults
 
 `pcb.set_rules` requires an explicit `board`, `expected_revision` and complete
@@ -135,3 +153,19 @@ Standalone via net intent uses `pcb.add_via` with optional `target`, or
 `pcb.set_via_net` with `vias` and either `target` or `automatic: true`. Both share
 revision-checked GUI transactions. See [via net assignments](../pcb/via-net-assignments.md)
 for target qualification, inspection and unresolved-state behavior.
+
+## Route planning and connected drags
+
+`pcb.plan_route` reads the current board and returns points, a planning outcome,
+and any proposed copper displacements. In `highlight` mode it tests the preferred
+path and returns blocked geometry for display. `shove` can move eligible tracks,
+and `shove_vias` can move eligible through vias with their attached track ends.
+Submit a reached plan's `replacements` and `via_moves` with the route and its
+captured revision.
+
+`pcb.reshape_tracks` accepts the same explicit modes and `expected_revision` for
+up to 256 directly dragged segments. Highlight validates the requested geometry,
+Walkaround can add detour legs, and Shove can also move eligible neighboring copper.
+When a board has an authored zone, `pcb.plan_route` keeps vias fixed and
+`pcb.reshape_tracks` refuses policy-driven drags. See the
+[route planning and drag contract](../pcb/route-planning.md#through-vias-and-connected-segment-drags).

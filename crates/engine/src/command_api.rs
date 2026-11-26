@@ -20,7 +20,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 /// The command API compatibility version. Raise it only by an explicit decision that a published
-/// change breaks existing callers; it never falls.
+/// change breaks existing callers; backward-compatible catalog additions change
+/// [`catalog_revision`] instead, and the version never falls.
 pub const COMMAND_API_VERSION: u32 = 1;
 
 /// The optional protocol features this build offers, so a client can check before relying on
@@ -751,7 +752,8 @@ fn validate_snapshot(snapshot: &Value, label: &str) -> Result<u32, String> {
 /// separately so changes to different parameters can merge within the same command.
 pub fn snapshot_section(described: &[Value]) -> String {
     let entries: BTreeMap<&str, Value> = described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command))).collect();
-    serde_json::to_string_pretty(&entries).expect("command contracts are JSON values").replace('\n', "\n  ")
+    let snapshot = Value::Object(entries.into_iter().map(|(id, contract)| (id.to_owned(), contract)).collect());
+    format!("{snapshot:#}").replace('\n', "\n  ")
 }
 
 #[cfg(test)]

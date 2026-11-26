@@ -61,6 +61,7 @@ enum Action {
     HierarchicalLabel,
     Text,
     NewSheet,
+    MoveToNewSheet,
     Subsheet,
     Wire,
     NoConnect,
@@ -194,12 +195,14 @@ const LIBRARIES: &[Group] = &[
         title: "Library sources",
         tools: &[
             tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
-            tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
+            tool(Action::Updates, "Updates", Icon::Sync, "Review newer library revisions of placed parts", ""),
         ],
         extras: &[],
     },
 ];
-const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: &[] }];
+const SHEET_EXTRAS: &[ToolSpec] =
+    &[tool(Action::MoveToNewSheet, "Move to New Sheet…", Icon::Sheet, "Move the selected symbols and net labels to a new child sheet", "")];
+const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: SHEET_EXTRAS }];
 
 impl Action {
     /// Keep future controls visible on wide ribbons but out of compact promoted rows.
@@ -213,11 +216,13 @@ impl Action {
                 | Self::Label
                 | Self::Symbol
                 | Self::Sources
+                | Self::Updates
                 | Self::OpenLibraryItem
                 | Self::ResumeLibraryEditors
                 | Self::EditDefinitionCopy
                 | Self::HierarchicalLabel
                 | Self::NewSheet
+                | Self::MoveToNewSheet
                 | Self::Subsheet
                 | Self::Wire
                 | Self::Move
@@ -252,6 +257,7 @@ impl Action {
             }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
+            Self::Updates => project,
             Self::Rules => project && app.views.active.input(&app.session).is_some(),
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
@@ -274,6 +280,11 @@ impl Action {
                     }
             }
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
+            Self::MoveToNewSheet => {
+                schematic
+                    && app.views.active.schematic.tool.is_none()
+                    && (!app.views.active.schematic.selection.symbols.is_empty() || !app.views.active.schematic.selection.net_labels.is_empty())
+            }
             Self::Move | Self::Rotate => {
                 schematic
                     && app.views.active.schematic.tool.is_none()
@@ -363,6 +374,7 @@ impl PcbApp {
             Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
             Action::Sources => self.open_library_workspace(ctx),
+            Action::Updates => self.open_library_updates(ctx),
             Action::Rules => self.begin_rules(),
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
@@ -379,6 +391,7 @@ impl PcbApp {
             Action::Label => self.begin_net_label(pcbcraft_engine::net_labels::Style::Local),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
+            Action::MoveToNewSheet => self.begin_split_sheet(),
             Action::NewSheet => {
                 self.begin_sheet_edit(self.views.active.id(), pcbcraft_engine::sheets::CREATE_SHEET, None);
                 if matches!(self.dialog, Dialog::Sheet(_)) {

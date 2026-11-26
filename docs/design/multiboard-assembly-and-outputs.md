@@ -130,8 +130,10 @@ by implementing another board folder.
 ## Associated files and generated outputs
 
 Authored board data, associated documents and generated results need different
-save behavior. Board settings and export recipes are authored design inputs.
-Drawings, notes and other imported documents are associated files. CAM, drill,
+save behavior. Board settings and [output recipes](../formats/native-project-storage.md#authored-output-recipes)
+are authored design inputs. The current recipe command stores one board's
+configuration; it does not generate any of the synchronized results described
+below. Drawings, notes and other imported documents are associated files. CAM, drill,
 placement, BOM, schematic PDF and report files are export results tied to a
 particular design state and configuration. Neither normal saving nor an unrelated
 board edit should overwrite or delete associated files or old export runs.

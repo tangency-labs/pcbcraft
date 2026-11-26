@@ -280,6 +280,35 @@ here, it does not gate CI. The first iteration checks clearance pairs against th
 exhaustive reference, so envelope-size runs take much longer than the timed
 boundaries alone.
 
+### Local regression gate
+
+`scripts/check-performance-regression.py` compares two matched
+`pcbcraft-performance-budgets/1` reports on Linux, Windows or macOS and fails
+when any action's nearest-rank p95 regresses by more than 20 % (configurable with
+`--max-regression-pct`):
+
+```sh
+python3 -B scripts/check-performance-regression.py /tmp/budgets-before.json /tmp/budgets-after.json
+```
+
+The script validates every raw sample and recomputes each action's quantiles and
+verdict from `metrics`, and refuses confounded environment, artifact, project,
+iteration or geometry mismatches. A metric may hold more samples than there are
+iterations: routing input pools every reversing route pointer move of an
+iteration into one aggregate metric. An action unmeasured in both reports (for
+example routing input on a trace that never reverses a route) is not compared and
+is listed as such in the report and in `--json` output (`not_compared`). An
+action measured in only one report, or with different sample counts, makes the
+reports incomparable, and so does a pair with no action measured in both. A
+change of exactly the threshold passes; the comparison ignores floating-point
+excess below 1e-9 percentage points. It exits `0` when every compared action
+stays at or below the threshold, `1` when any action regresses (naming each
+regressed action in the report and in `--json` output), and `2` on invalid or
+incomparable reports. Shared-runner CI still collects no performance
+samples and enforces no wall-clock threshold; running this gate in three-platform
+CI (Linux, Windows and macOS) on dedicated hardware is a maintainer decision
+tracked under #237.
+
 ## Property-edit service-time diagnostic
 
 `property_edit_perf` in `pcbcraft-engine` measures synchronous shared property
@@ -671,3 +700,10 @@ new joint fixture, run `board_perf shove_joint_fixture SHOVE_FIXTURE GENERATOR_R
 once and retain the resulting native project bytes for later comparisons.
 The [#248 evidence](../../tools/performance/baselines/issue248/README.md) includes
 both saved inputs, raw reports, build hashes and the geometry and history checks.
+
+`board_perf held_drag_fixture JOINT_FIXTURE OUTPUT` reuses the #248 joint board
+with the versioned `held-track-drag-preview-cancel-commit-v1` trace. Run it with
+`board_perf_window` or the browser's rendered replay. The trace holds a segment,
+waits for the displayed validated shove, cancels once, then releases and verifies
+one edit. The final check compares the moved joint and displaced rail against the
+source, checks clearance, and exercises exact Undo/Redo and native reopen.

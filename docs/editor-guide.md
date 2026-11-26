@@ -6,6 +6,11 @@ covers the desktop and browser controls in more detail; the
 
 ## Home and recent projects
 
+Choose **Close Project** from the **File** menu, the Home rail, or the project
+row's context menu in the Browser to unload the project and return to Home.
+For unsaved changes, the desktop offers **Save**, **Don't Save**, and
+**Cancel**. On the web, download a copy first if you want to keep your changes.
+
 The app starts on **Home**, with compact **New Schematic**, **New PCB** and
 **Open Project** cards. New PCB opens an empty Untitled project in PCB layout;
 New Schematic opens its schematic. Both use the usual unsaved-changes prompt
@@ -1013,6 +1018,14 @@ including changes carried by a footprint move or alignment. Unlock it first.
 Copy/duplicate/paste retain locks on the new objects; Cut refuses protected
 objects. Undo/redo and native saves preserve lock state.
 
+Repeated edits can leave a straight run split into several segments, or one
+segment stacked on another. Select the segments and choose **Layout → Modify →
+Merge Tracks**, or use the `pcb.merge_tracks` command through live commands or
+MCP; both join the selected segments that lie on one line with the same layer and
+width into one segment per run, in one undo step. Two segments join only at an
+end where no other track ends and no via or pad touches, so junctions and
+connections stay where they are; locked segments are left alone.
+
 The **Tracks** and **Vias**
 selection filters turn picking of each off, by click, drag, U or box, and drop that kind
 from the current selection. Tracks stay on their layer, so a back-side track does
@@ -1063,6 +1076,13 @@ Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
 **File → Save As…** offers **Project folder…** and **Packed project (.pc)…**.
 Commit the folder to Git; use the archive to share the complete project.
+To archive an open working folder to a compressed `.pc`, use
+**File → Archive Project Folder…**. Choose a path outside the working folder.
+PCBcraft saves and verifies the archive, switches to it, and keeps the original
+folder by default. Select **Move original folder to Trash** if you want to retire
+the folder after archiving. If the folder is in a Git working tree, contains other
+files, or has changed on disk, PCBcraft saves the archive and explains why it
+kept the original folder.
 Ordinary hand-zipped project folders open too, including those without a manifest.
 The browser uploads and downloads current `.pc` archives. Version 0.1.0 breaks
 older project layouts; see the [release notes](../CHANGELOG.md).

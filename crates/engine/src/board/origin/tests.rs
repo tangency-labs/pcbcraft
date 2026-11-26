@@ -188,8 +188,7 @@ fn setting_the_origin_is_addressed_atomic_and_undoable() {
     crate::assert_same_content(&original, &s.snapshot().unwrap());
 }
 
-/// Format 21 is written only while an origin is saved, carries rules and every earlier field,
-/// reopens to the same bytes, and removing the origin restores the earlier encoding.
+/// Origins and rules round-trip together, and clearing both restores the original bytes.
 #[test]
 fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     let mut s = board();
@@ -200,14 +199,14 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/21");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     assert!(saved["rules"].is_object() && saved["vias"].is_array() && saved["tracks"].is_array());
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(encode_documents(reopened).unwrap(), documents);
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    for (from, to) in [("pcbcraft-board/21", "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
+    for (from, to) in [(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
         let mut altered = documents.clone();
         altered.insert(path.clone(), text.replacen(from, to, 1).into_bytes());
         assert!(decode_documents(&altered).is_err(), "{to}");
@@ -223,11 +222,9 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     assert!(decode_documents(&missing).is_err(), "format 21 requires an origin");
 }
 
-/// Format 23 carries the stack fields together with a placement origin: a board with an origin,
-/// a copper role and a finished thickness saves as format 23, reopens with every value and
-/// re-encodes to the same bytes, and header 21, which accepts the origin, refuses the stack
-/// fields (header 20 requires zones, covered separately by the setup tests). Removing the origin
-/// keeps format 23; removing the stack fields instead falls back to format 21.
+/// A placement origin, copper role and finished thickness reopen with every value and
+/// re-encode to the same bytes. Historical format 21 accepts the origin and rejects the stack
+/// fields. Removing either optional record keeps the current write format.
 #[test]
 fn stack_format_carries_the_placement_origin() {
     let mut s = board();
@@ -241,7 +238,7 @@ fn stack_format_carries_the_placement_origin() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
@@ -252,7 +249,7 @@ fn stack_format_carries_the_placement_origin() {
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
     let mut altered = documents.clone();
-    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    altered.insert(path.clone(), text.replacen(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/21", 1).into_bytes());
     match decode_documents(&altered) {
         Ok(_) => panic!("format 21 opened the stack fields"),
         Err(error) => assert!(error.contains("require board format 23"), "{error}"),
@@ -263,10 +260,10 @@ fn stack_format_carries_the_placement_origin() {
         serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
     };
     set(&mut s, Value::Null).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/23");
+    assert_eq!(format(&s), crate::persistence::CURRENT_BOARD_FORMAT);
     set(&mut s, json!({"kind":"board_zero"})).unwrap();
     s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/21");
+    assert_eq!(format(&s), crate::persistence::CURRENT_BOARD_FORMAT);
 }
 
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.

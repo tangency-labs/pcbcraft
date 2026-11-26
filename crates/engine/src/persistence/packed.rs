@@ -39,6 +39,8 @@ pub struct PackedProject {
     pub documents: Documents,
     /// Whether the archive needs a current manifest on export (missing or explicitly converted).
     pub needs_manifest: bool,
+    /// Whether all project entries in the input archive used Deflate.
+    pub deflated: bool,
 }
 
 /// Encode a portable container v3 with a fixed `project.json` entry point.
@@ -48,7 +50,17 @@ pub fn encode_packed(project: Arc<Project>) -> Result<Vec<u8>, String> {
 
 /// Package already validated split documents without changing their text formatting.
 pub fn encode_packed_documents(documents: Documents) -> Result<Vec<u8>, String> {
-    let mut encoder = PackedEncoder::new(documents)?;
+    encode_with_method(documents, CompressionMethod::Stored)
+}
+
+/// Package the same native documents using Deflate for a desktop archive.
+pub fn encode_deflated_packed_documents(documents: Documents) -> Result<Vec<u8>, String> {
+    encode_with_method(documents, CompressionMethod::Deflated)
+}
+
+/// Drive the bounded encoder to completion with the chosen ZIP method.
+fn encode_with_method(documents: Documents, method: CompressionMethod) -> Result<Vec<u8>, String> {
+    let mut encoder = PackedEncoder::with_method(documents, method)?;
     loop {
         if let Some(bytes) = encoder.step()? {
             return Ok(bytes);
@@ -66,14 +78,20 @@ pub struct PackedEncoder {
     hash: Sha256,
     writer: Option<ZipWriter<Cursor<Vec<u8>>>>,
     finished: bool,
+    method: CompressionMethod,
 }
 
 impl PackedEncoder {
     /// Retain encoded documents after checking count, path and size limits.
     pub fn new(documents: Documents) -> Result<Self, String> {
+        Self::with_method(documents, CompressionMethod::Stored)
+    }
+
+    /// Check the document set before initializing a Store or Deflate encoder.
+    fn with_method(documents: Documents, method: CompressionMethod) -> Result<Self, String> {
         super::documents::check_documents(&documents)?;
         let paths = documents.keys().cloned().collect();
-        Ok(Self { documents, paths, parts: Vec::new(), index: 0, offset: 0, hash: Sha256::new(), writer: None, finished: false })
+        Ok(Self { documents, paths, parts: Vec::new(), index: 0, offset: 0, hash: Sha256::new(), writer: None, finished: false, method })
     }
 
     /// Hash or copy one chunk, emitting a deterministic manifest and fixed ZIP metadata.
@@ -96,7 +114,7 @@ impl PackedEncoder {
                 return Err("project manifest exceeds its size limit".to_owned());
             }
             let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-            writer.start_file(MANIFEST, options()).map_err(error)?;
+            writer.start_file(MANIFEST, options(self.method)).map_err(error)?;
             writer.write_all(&manifest).map_err(error)?;
             self.writer = Some(writer);
             self.index = 0;
@@ -107,7 +125,7 @@ impl PackedEncoder {
         let end = (self.offset + CHUNK).min(bytes.len());
         if let Some(writer) = &mut self.writer {
             if self.offset == 0 {
-                writer.start_file(path, options()).map_err(error)?;
+                writer.start_file(path, options(self.method)).map_err(error)?;
             }
             writer.write_all(&bytes[self.offset..end]).map_err(error)?;
         } else {
@@ -131,12 +149,12 @@ impl PackedEncoder {
 
 /// Fixed entry metadata makes archives reproducible without affecting working-folder diffs.
 /// Every entry records Unix as its creator with mode 0644, on every platform.
-fn options() -> SimpleFileOptions {
+fn options(method: CompressionMethod) -> SimpleFileOptions {
     SimpleFileOptions::default()
         // Left unset, the zip crate records MS-DOS on Windows builds and Unix elsewhere, which
         // changes the bytes and makes readers derive a mode from DOS attributes instead.
         .system(zip::System::Unix)
-        .compression_method(CompressionMethod::Stored)
+        .compression_method(method)
         .last_modified_time(zip::DateTime::default())
         .unix_permissions(0o644)
 }
@@ -171,6 +189,7 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
     let mut entries = Documents::new();
     let mut directories = Vec::new();
     let mut total = 0;
+    let mut deflated = true;
     for index in 0..zip.len() {
         let entry = zip.by_index(index).map_err(error)?;
         check_local_header(bytes, usize::try_from(entry.header_start()).map_err(error)?)?;
@@ -201,6 +220,7 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
             directories.push(name);
             continue;
         }
+        deflated &= entry.compression() == CompressionMethod::Deflated;
         let limit = if path.ends_with(MANIFEST) { MANIFEST_LIMIT } else { MAX_DOCUMENT_BYTES };
         let size = entry.size();
         if size > limit as u64 || total + size > (MAX_DOCUMENTS_BYTES + MANIFEST_LIMIT) as u64 {
@@ -281,7 +301,7 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
     let documents = if legacy { super::convert_legacy_documents(documents)? } else { super::migrate_power_markers(documents)? };
     let migrated = documents != original_documents;
     let project = decode_documents(&documents)?;
-    Ok(PackedProject { project, documents, needs_manifest: migrated || legacy || manifest.is_none() })
+    Ok(PackedProject { project, documents, needs_manifest: migrated || legacy || manifest.is_none(), deflated })
 }
 
 /// Recognize Apple's reserved sidecar directory at the archive root or inside its wrapper.

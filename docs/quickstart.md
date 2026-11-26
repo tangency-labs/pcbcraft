@@ -51,8 +51,8 @@ the board in `instances.json` or in `project.json` for a schematic-only project.
 First Save adds these [occurrence records](formats/sheet-occurrence-storage.md) to older
 board-folder projects while preserving their existing board paths.
 Named nets and explicitly promoted nets use a [sparse persistent registry](formats/net-registry-storage.md)
-in those same instance homes. Its first record selects project/17, with
-instances/2 for a board; opening or inspecting an older project does not promote nets.
+in those same instance homes. Opening or inspecting an older project leaves its
+net identities unchanged.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
@@ -255,9 +255,13 @@ the active layer. Copper shapes are conductive linework; technical-layer graphic
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
 For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
-The route preview walks around fixed copper, keeping its starting net through
-vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
-blocked or incomplete searches keep the last legal preview and refuse that target.
+The router defaults to Walkaround and keeps its starting net through vertices
+and vias. Open **Layout → Route → Router Settings** to choose Walkaround, Shove,
+or Highlight collisions for new routes, **D**, and held drags on a single track.
+The settings card can float or dock through its **⋯** menu while you work. In
+Highlight collisions, existing blockers turn green and placement waits for a
+clear path. Release a held drag on the validated preview to commit one undoable
+edit. [Router policies and limitations](pcb/route-planning.md#track-shove)
 
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
@@ -628,6 +632,9 @@ opens a sparse definition: check a dimension to give the class an opinion, or le
 it unchecked to inherit defaults. Save class commits one undoable edit. Classes
 can be authored in a schematic-only project; they do not create a board.
 
+To declare a net's or class's working voltage, use the **Working voltage** page in
+**Analyze → Rules** or the [electrical intent commands](formats/electrical-intent.md).
+
 Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
 Properties, or use the **Effective net rules** page in Rules to search for a current net.
 Check the classes to assign and choose **Assign classes**. The page shows effective
@@ -782,8 +789,11 @@ for the result contract. For one placed instance, pass the reported `board`
 and `part_instance` to `library.preview_footprint_revision`. The
 [pad preview](libraries/native-library-sources.md#preview-footprint-pad-changes) shows what
 would change and which straight track ends or through vias would lose contact;
-standalone circular track ends are not checked. Nothing is applied; pad map
-resolution and adoption remain future work.
+standalone circular track ends are not checked. Nothing changes until you
+[apply the reviewed revision](libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
+with `pcb.apply_footprint_revision`. Pass the successful unfiltered preview's
+board, instance, revision and acceptance digest plus a complete terminal map.
+Tracks and vias stay in place, so run the board design checks after adoption.
 
 To find where an exact revision is used in the open project, select that item in
 Parts Library and click **Where used** in Preview. From MCP, pass its exact

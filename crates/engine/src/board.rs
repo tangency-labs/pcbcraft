@@ -35,6 +35,7 @@ pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+pub mod output_recipe;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
@@ -46,6 +47,7 @@ mod side_tests;
 pub mod silkscreen;
 pub mod slot;
 pub mod teardrop;
+pub mod test_points;
 pub mod track;
 pub(crate) mod transform;
 pub mod update;
@@ -121,6 +123,9 @@ pub(crate) struct Footprint {
     pub(crate) reference_offset: Option<Point>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "reference::present")]
     pub(crate) reference_text: Option<reference::Text>,
+    /// Authored marks keyed by physical pad number, persisted only by the board document.
+    #[serde(skip)]
+    pub(crate) test_points: BTreeMap<String, test_points::Flags>,
 }
 
 /// Maximum displacement of a footprint reference along either local axis, in nanometers.
@@ -161,6 +166,7 @@ impl Footprint {
             locked: false,
             reference_offset: None,
             reference_text: None,
+            test_points: BTreeMap::new(),
         }
     }
     /// Validate placement vocabulary, bounded origin and whole-degree orientation; the board
@@ -295,6 +301,9 @@ impl Footprint {
                 let terminal = pins.get(pad.as_str()).and_then(|pin| terminals.get(*pin)).copied();
                 let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
                     "terminal":terminal.map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                if let Some(flags) = self.test_points.get(pad.as_str()) {
+                    record["test_point"] = json!(flags);
+                }
                 if unconnected.contains(pad.as_str()) {
                     record["unconnected"] = json!(true);
                 }
@@ -377,7 +386,7 @@ pub(crate) struct Board {
     pub(crate) placement_origin: Option<origin::Origin>,
     /// Explicit pinned assembly output profile revisions, sorted by profile identity.
     pub(crate) assembly_profiles: Vec<assembly_profile::Adoption>,
-    /// Copper segments in stable ID order; empty boards keep their earlier saved format.
+    /// Copper segments in stable ID order; an empty array is omitted on save.
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
     pub(crate) vias: Vec<track::Via>,
@@ -393,6 +402,10 @@ impl Board {
     /// Return placement records in stable ID order for independently diffable saves.
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
+    }
+    #[cfg(test)]
+    pub(crate) fn footprints_mut(&mut self) -> &mut [Footprint] {
+        &mut self.footprints
     }
     /// Find an authored placement by its stable ID without resolving pads or connectivity.
     fn placement(&self, id: u64) -> Option<&Footprint> {
@@ -429,6 +442,45 @@ impl Board {
             return false;
         };
         crate::library::parts::mapping::validate(mapping, &footprint.unconnected_pads, symbol, definition).is_ok()
+    }
+    /// Replace only the pinned package and pad correspondence of one existing placement.
+    pub(crate) fn replace_reviewed_footprint(
+        &mut self,
+        assignment: assignment::Assignment,
+        definition: Arc<definition::FootprintDefinition>,
+    ) -> Result<(), String> {
+        let id = assignment.component;
+        let index = *self.by_component.get(&id).ok_or("Missing placed footprint.")?;
+        let old = &self.footprints[index];
+        if definition.key() != assignment.key() {
+            return Err("Footprint definition differs from its reviewed assignment.".into());
+        }
+        // A pad number is not proof of equivalent probe access in a different package.
+        if !old.test_points.is_empty() && old.key() != Some(definition.key()) {
+            return Err("Clear this footprint's pad test-point marks before applying a different revision.".into());
+        }
+        if self.definitions.get(&definition.key()).is_some_and(|pinned| pinned != &definition) {
+            return Err("Footprint content conflicts with the project's pinned revision.".into());
+        }
+        let next = Footprint {
+            library: Some(assignment.library.clone()),
+            definition: assignment.definition.clone(),
+            definition_revision: assignment.definition_revision,
+            mapping: Some(assignment.mapping.clone()),
+            unconnected_pads: assignment.unconnected_pads.clone(),
+            pin_1_pad: 0,
+            ..old.clone()
+        };
+        if !next.valid() {
+            return Err("Replacement footprint is outside supported bounds.".into());
+        }
+        if let Some(baseline) = &mut self.baseline {
+            Arc::make_mut(baseline).replace_reviewed_package(old, &assignment)?;
+        }
+        self.footprints[index] = next;
+        self.definitions.insert(definition.key(), definition);
+        self.assignments.insert(id, assignment);
+        Ok(())
     }
     /// Append a placement after identity, mapping shape and definition resolution succeed.
     pub(crate) fn append(&mut self, footprint: Footprint) -> Result<(), &'static str> {
@@ -508,6 +560,7 @@ impl Board {
 
     /// Distinguish physically eligible desired intent from accepted packages;
     /// excluded live choices remain authored without requiring a physical update.
+    #[cfg(test)]
     pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
         self.baseline.as_ref().is_some_and(|baseline| {
             self.assignments

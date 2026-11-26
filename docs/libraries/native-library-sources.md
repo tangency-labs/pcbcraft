@@ -139,8 +139,11 @@ Opening a project never searches or refreshes a library to replace its geometry.
 `library.available_revisions` takes no parameters and requires an open project.
 It compares existing part instances with native revisions already loaded in the
 session, without refreshing sources or accessing the network. It works through
-the shared engine command, including live and headless MCP with `inspect: false`;
-there is no dedicated update-list GUI in this command.
+the shared engine command, including live and headless MCP with `inspect: false`.
+In the desktop app, Parts Library's **Review library updates** (also
+**Libraries → Updates** on the ribbon) lists the instances this query reports
+with a supported update; see
+[adopt non-geometric revisions](#adopt-non-geometric-revisions).
 
 The result contains `project` (UUID), runtime `revision`, `catalog_generation`,
 `board` (UUID or null), `instances` and `outdated_instances`. Each instance row
@@ -175,8 +178,8 @@ An unresolvable latest part is `Unresolved` even when it equals or is older than
 the project pin, unless an immutable-address conflict takes precedence.
 A valid newer revision means available, **not compatible or adopted**. Geometry,
 pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
-The pad preview below is read-only. Compatibility decisions, pad map resolution
-and revision-checked adoption remain separate work.
+The pad preview below is read-only. It does not resolve the terminal map or
+apply a revision.
 
 ## Preview footprint pad changes
 
@@ -218,6 +221,72 @@ try an exact string pad number in `pad`. If that pad also exceeds the limit,
 inspect its copper in the board editor; the query cannot split one pad's list.
 The query does not move copper or alter pins, saved bytes, project revision or
 Undo/Redo.
+
+## Apply a reviewed footprint revision
+
+A successful unfiltered `library.preview_footprint_revision` returns `acceptance`,
+`current_mapping`, `current_unconnected_pads`, and the `candidate_package` for an
+owning native part (`null` for a standalone footprint). Filtering by `pad`
+returns `acceptance: null` because the other changes were not reviewed. If the
+unfiltered preview exceeds the loose-end limit, it returns an error with no
+acceptance digest. Separate pad previews cannot authorize Apply.
+
+Use `pcb.apply_footprint_revision` with the preview's `board`, `part_instance`,
+`acceptance`, and `revision` as `expected_revision`. Supply a complete `mapping`
+from every symbol terminal to one pad ID or an array of pad IDs. Every candidate
+pad must appear once, either in that map or in `unconnected_pads`. If a revision
+adds pad `9`, the old map alone no longer works. For example, use
+`{"1":"1","2":["2","9"]}` if pads `2` and `9` belong to terminal `2`, or list
+`9` in `unconnected_pads` if it is intentionally not connected. Removed pad IDs
+cannot stay in the map. For a native part the submitted map must match the
+candidate package declaration. Changes to the symbol, category or fixed values,
+other package variants, and existing manufacturer selections require separate
+review and are refused by this command.
+
+After a project edit or source reload, preview again. A locked footprint or
+one with a different pending package choice cannot be changed here. Apply pins
+the exact new package for this one instance, retains its placement and leaves
+tracks and vias where they are. Clear any pad test-point marks on this footprint
+before applying; the reviewed pad map does not establish probe access on the new
+package. On a board with an accepted baseline, a terminal
+that gains an extra pad still needs those pads connected, even if it is unwired
+in the schematic. Apply updates that connection without accepting pending
+schematic changes. Desktop live Apply checks save limits on a worker and refuses
+an obsolete request before editing. Run the board design checks after applying;
+this command does not repair routing. One Undo restores the prior package and
+mapping. Neither preview nor Apply writes to a library source.
+
+## Adopt non-geometric revisions
+
+With a project open, choose **Review library updates** in Parts Library, or
+**Updates** on the ribbon's Libraries tab, which opens the same review. Select
+instances, choose **Preview selected updates**, and read the exact before and
+after fields. **Apply reviewed updates** uses the same command and Undo history
+as the schematic editor. **Undo adoption** reverses the change directly from
+its result while the adoption is the next Undo step; after a later local edit,
+such as a color change, undo that edit first. A project or source change clears the current review or result;
+open the review again to see the current state. A pending library folder
+operation temporarily prevents review and adoption in the desktop and live
+MCP editor; the pane then shows that refusal in place of the review button.
+Previews are read-only and also run in read-only headless sessions.
+
+`library.preview_adoption` reviews the latest loaded symbol or generic-part root
+for the chosen `instances` (a nonempty list of distinct `component-N` IDs).
+Use the `expected_revision` from project inspection. The result lists the exact
+old and new pins, candidate digest and changed text per instance without making
+an edit. Pass the returned `preview` fingerprint with the same parameters to
+`library.apply_adoption`. It refuses a different change set and otherwise makes
+one revision-checked edit with one Undo step. Both return the change record to
+live and headless MCP even with `inspect: false`.
+
+For plain symbols, this slice allows a new name or default value while preserving
+all placed values, geometry and electrical behavior. Generic-part updates allow
+a new name with identical selected dependencies and requirements. Explicit
+manufacturer selections still pin the old generic part revision: use a separate
+review for those. Standalone footprint updates, changed symbols' drawings or pins,
+and changed package maps are not adopted by these commands. A conflict, unresolved
+candidate or ineligible selection refuses the entire batch; there is no fallback
+to a different revision.
 
 ## Find where a revision is used
 
@@ -459,14 +528,11 @@ HTTP(S) URL requirement and the rule that a loaded record never fetches a link.
 Draft edits check those bounds before they are accepted; publication checks the
 declared envelope and resolves the exact dependencies.
 
-The first description, keyword or link selects the `pcbcraft-part/5` envelope
-for the draft. Removing the last metadata field downgrades a rated draft to
-`pcbcraft-part/4` and an unrated one to `pcbcraft-part/2`; adding metadata to a
-retained format-1 draft upgrades it. Publication reselects and validates the
-envelope. Because the full definition is pinned with the part, editing its
-metadata changes the dependency digest and invalidates a placement captured
-against the earlier content. Descriptive metadata adds no electrical
-requirement: schematic placement still needs an exact symbol.
+The editor prepares new generic part revisions in `pcbcraft-part/6`, whether
+or not they carry device ratings or descriptive metadata. Clearing an optional
+field keeps the format current. An edited definition has a different dependency
+digest, so placement captured against the earlier content must be refreshed.
+Schematic placement still requires an exact symbol.
 
 The fixed footer has the primary **Publish…** action and publication/destination
 state. It opens the destination form; choose a writable library, or use **New

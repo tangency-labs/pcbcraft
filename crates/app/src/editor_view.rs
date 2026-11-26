@@ -123,6 +123,10 @@ pub(super) struct ViewState {
     filters_collapsed: bool,
     #[serde(default = "filters_open_default")]
     filters_open: bool,
+    #[serde(default)]
+    router_settings_open: bool,
+    #[serde(default)]
+    router_settings_collapsed: bool,
     #[serde(default = "crate::workspace_panels::saved_defaults")]
     panels: crate::workspace_panels::SavedPanels,
 }
@@ -211,6 +215,8 @@ pub(super) struct BoardState {
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
+    pub(super) router_settings_open: bool,
+    pub(super) router_settings_collapsed: bool,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
     /// The view-only ruler and whether its tool is armed.
@@ -377,13 +383,15 @@ pub(super) struct EditorView {
     inspection_layers: std::collections::BTreeSet<String>,
     pub(super) filters_collapsed: bool,
     pub(super) filters_open: bool,
-    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
+    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; crate::workspace_panels::PANEL_COUNT],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
     /// Library browsing is a view-local service presentation, never a project target.
     pub(super) library: Option<crate::library_workspace::State>,
     /// The review pane owns a read-only archive and an independent camera.
     pub(super) manufacturing: Option<crate::manufacturing::State>,
+    /// Project-scoped read-only 3D inspection.
+    pub(super) render: Option<crate::render_workspace::State>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -406,7 +414,7 @@ impl Default for EditorView {
 impl EditorView {
     /// Service and definition panes own no project edit authority.
     pub(super) fn auxiliary(&self) -> bool {
-        self.definition.is_some() || self.library.is_some() || self.manufacturing.is_some()
+        self.definition.is_some() || self.library.is_some() || self.manufacturing.is_some() || self.render.is_some()
     }
 
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
@@ -535,6 +543,8 @@ impl EditorView {
             filters: self.filters,
             filters_collapsed: self.filters_collapsed,
             filters_open: self.filters_open,
+            router_settings_open: self.board.router_settings_open,
+            router_settings_collapsed: self.board.router_settings_collapsed,
             panels: crate::workspace_panels::SavedPanels::capture(&self.panels),
         }
     }
@@ -567,6 +577,8 @@ impl EditorView {
         view.filters = state.filters;
         view.filters_collapsed = state.filters_collapsed;
         view.filters_open = state.filters_open;
+        view.board.router_settings_open = state.router_settings_open;
+        view.board.router_settings_collapsed = state.router_settings_collapsed;
         view.panels = state.panels.restore();
         view
     }
@@ -602,6 +614,7 @@ impl EditorView {
             definition: None,
             library: None,
             manufacturing: None,
+            render: None,
             camera,
             parked_camera,
             schematic: SchematicState::default(),
@@ -630,6 +643,7 @@ impl EditorView {
             definition: self.definition,
             library: self.library.clone(),
             manufacturing: self.manufacturing.as_mut().map(crate::manufacturing::State::fork),
+            render: self.render.as_ref().map(crate::render_workspace::State::fork),
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -638,6 +652,8 @@ impl EditorView {
                 layers_collapsed: self.board.layers_collapsed,
                 browser_collapsed: self.board.browser_collapsed,
                 properties_collapsed: self.board.properties_collapsed,
+                router_settings_open: self.board.router_settings_open,
+                router_settings_collapsed: self.board.router_settings_collapsed,
                 hidden_layers: self.board.hidden_layers.clone(),
                 layer_defaults_applied: self.board.layer_defaults_applied,
                 active_layer: self.board.active_layer.clone(),
@@ -663,7 +679,8 @@ impl EditorView {
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
         let library = self.library.take().is_some();
         let manufacturing = self.manufacturing.take().is_some();
-        if self.definition.take().is_some() || library || manufacturing {
+        let render = self.render.take().is_some();
+        if self.definition.take().is_some() || library || manufacturing || render {
             self.release_input();
             self.inspection.clear();
         }
@@ -733,7 +750,7 @@ impl EditorView {
     /// Permit layout controls for definition and unavailable views without granting project edit
     /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
-        if self.library.is_some() || self.manufacturing.is_some() {
+        if self.library.is_some() || self.manufacturing.is_some() || self.render.is_some() {
             return Some(ViewInput { view: self.id, target: None, definition: None, input_epoch: self.input_epoch, revision: 0 });
         }
         if let Some(document) = self.definition {
