@@ -110,15 +110,15 @@ fn chooses_typed_function_without_changing_connectivity() {
 }
 
 /// Extend the fixture with independent, uniquely placed parts without replaying thousands of edits.
-/// Rows past the first half go below the origin, so the symbol limit fits within the sheet bounds
-/// and the first part stays alone at the origin.
+/// Rows from the 65th on continue at negative y, so the symbol limit fits within the sheet bounds,
+/// smaller fixtures keep their positions and the first part stays alone at the origin.
 fn extend_fixture(project: &mut Project, count: usize) {
     let part = project.components().next().unwrap().clone();
     let symbol = project.symbols()[0].clone();
     let rows = count.div_ceil(64) as i64;
     for i in 1..count {
         let row = (i / 64) as i64;
-        let row = if row < rows.div_ceil(2) { row } else { row - rows };
+        let row = if row < 64 { row } else { row - rows };
         let mut extra = part.clone();
         extra.ordinal = 2 * i as u64 + 1;
         extra.reference_number = i + 1;
