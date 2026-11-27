@@ -1145,7 +1145,7 @@ struct ParsedTable {
 }
 
 /// Parse RFC 4180 delimited records with `""` escape handling and 1-based line tracking.
-/// Completely blank lines are skipped so trailing newlines never emit phantom error rows.
+/// Blank lines are skipped, but an explicitly quoted empty field still forms a record.
 fn parse_records(text: &str, separator: u8) -> ParsedTable {
     let bytes = text.as_bytes();
     let mut records = Vec::new();
@@ -1197,7 +1197,6 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
         }
 
         if byte == b'\r' || byte == b'\n' {
-            quote_closed = false;
             if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
                 index += 2;
             } else {
@@ -1205,11 +1204,12 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
             }
             fields.push(String::from_utf8_lossy(&field).into_owned());
             field.clear();
-            if fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
+            if quote_closed || fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
                 records.push(ParsedRecord { line_number: record_start_line, fields: std::mem::take(&mut fields) });
             } else {
                 fields.clear();
             }
+            quote_closed = false;
             line_number = line_number.saturating_add(1);
             record_start_line = line_number;
             if records.len() > MAX_ROWS {
@@ -1228,9 +1228,9 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
         index += 1;
     }
 
-    if !truncated && (!field.is_empty() || !fields.is_empty()) {
+    if !truncated && (quote_closed || !field.is_empty() || !fields.is_empty()) {
         fields.push(String::from_utf8_lossy(&field).into_owned());
-        if fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
+        if quote_closed || fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
             records.push(ParsedRecord { line_number: record_start_line, fields });
         }
     }
@@ -1622,12 +1622,12 @@ mod tests {
         assert_eq!(explicit["rows"][0]["number"], "1");
     }
 
-    /// Delimiter-only records reach row validation (mid-table and at EOF); physically blank lines stay skipped.
+    /// Explicitly empty records reach row validation (mid-table and at EOF); physically blank lines stay skipped.
     #[test]
     fn delimiter_only_records_report_missing_pin_number_and_blank_lines_stay_skipped() {
         let missing_number_at = |text: &str, delimiter: Delimiter| {
             let result = preview(text, delimiter, true, None);
-            assert!(!result.can_accept(), "delimiter-only record must block staging: {text:?}");
+            assert!(!result.can_accept(), "explicitly empty record must block staging: {text:?}");
             result
                 .findings
                 .iter()
@@ -1639,6 +1639,9 @@ mod tests {
         assert_eq!(missing_number_at("Number,Name,Type\n1,VCC,power_in\n,,", Delimiter::Comma), vec![(Some(2), Some(3))]);
         assert_eq!(missing_number_at("Number;Name;Type\n1;VCC;power_in\n ; ;\n", Delimiter::Semicolon), vec![(Some(2), Some(3))]);
         assert_eq!(missing_number_at("Number\tName\tType\n1\tVCC\tpower_in\n\t\t\n2\tGND\tpower_in\n", Delimiter::Tab), vec![(Some(2), Some(3))]);
+
+        assert_eq!(missing_number_at("Number\n1\n\"\"\n\n2", Delimiter::Auto), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number\n1\n2\n\"\"", Delimiter::Auto), vec![(Some(3), Some(4))]);
 
         let blank_lines = preview("Number,Name,Type\n\n1,VCC,power_in\r\n   \r\n\n", Delimiter::Comma, true, None);
         assert!(blank_lines.can_accept());
