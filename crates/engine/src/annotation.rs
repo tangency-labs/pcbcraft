@@ -11,8 +11,12 @@ use serde_json::{Value, json};
 /// Preview schematic reference designators without publishing any edit.
 pub const PREVIEW: &str = "annotate.preview";
 
+mod apply;
+pub use apply::APPLY;
+pub(crate) use apply::ReviewedPreview;
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// One representative unit for the shared designator of a part instance.
 struct Target<'a> {
@@ -24,6 +28,8 @@ struct Target<'a> {
 
 #[derive(Serialize)]
 struct Row<'a> {
+    #[serde(skip)]
+    ordinal: u64,
     part_instance: String,
     symbol: String,
     sheet: Uuid,
@@ -120,6 +126,7 @@ fn plan<'a>(targets: &[Target<'a>], parts: impl Iterator<Item = &'a PartInstance
             }
         }
         rows.push(Row {
+            ordinal: part.ordinal,
             part_instance: part.id(),
             symbol: target.unit.id(),
             sheet: target.sheet,
@@ -133,14 +140,23 @@ fn plan<'a>(targets: &[Target<'a>], parts: impl Iterator<Item = &'a PartInstance
     Preview { rows, errors }
 }
 
+/// Produce the same proposal from a resolved scope for both review and publication.
+fn draft(project: &Project, scope: Option<SheetTarget>) -> Preview<'_> {
+    plan(&targets(project, scope), project.components.values())
+}
+
 impl Session {
     /// Resolve the catalog-validated sheet scope and return proposals at the current revision.
-    /// Omitted scope means the whole project, regardless of the active sheet. No preview is cached.
-    /// The returned revision is preview-only and grants no Apply authority.
-    pub(super) fn preview_annotation(&self, params: &Value) -> Result<Value, CommandError> {
-        let project = self.open_project()?;
+    /// Omitted scope means the whole project, regardless of the active sheet. The returned
+    /// revision is preview-only and grants no Apply authority. Only the separate session-local
+    /// token authorizes Apply; replacing it does not touch the authored snapshot or history.
+    pub(super) fn preview_annotation(&mut self, params: &Value) -> Result<Value, CommandError> {
+        let project = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let scope = params.get("sheet").and_then(Value::as_str).map(|sheet| project.resolve_sheet(Some(sheet))).transpose()?;
-        let targets = targets(project, scope);
-        Ok(json!({"revision":self.revision(), "annotation_preview":plan(&targets, project.components.values())}))
+        let revision = self.revision();
+        let token = crate::fresh_id()?;
+        let reply = json!({"revision":revision, "token":token, "annotation_preview":draft(&project, scope)});
+        self.annotation_preview = Some(ReviewedPreview { token, revision, scope, project });
+        Ok(reply)
     }
 }

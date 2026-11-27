@@ -1,6 +1,20 @@
 {
   "command_api_version": 1,
   "commands": {
+    "annotate.apply": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      }
+    },
     "annotate.preview": {
       "params": {
         "additionalProperties": false,

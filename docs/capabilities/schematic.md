@@ -101,12 +101,13 @@
 
 ### Available
 
-- [Read-only `annotate.preview`](../schematic/annotation.md) in the engine and live/headless MCP, with sheet or
-  project scope, lock-aware gap filling for placeholders and duplicate diagnostics.
+- [`annotate.preview` and `annotate.apply`](../schematic/annotation.md) in the engine and live/headless MCP, with
+  sheet or project scope, lock-aware gap filling for placeholders, duplicate diagnostics, stale-token refusal and
+  one-step undo.
 
 ### Remaining scope
 
-- Applying proposals, duplicate repair, full renumbering and a graphical review control remain in
+- Duplicate repair, full renumbering and a graphical review control remain in
   [#45](https://github.com/tangency-labs/pcbcraft/issues/45).
 
 ## Sheet split
