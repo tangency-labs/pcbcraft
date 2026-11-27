@@ -54,6 +54,8 @@ const LIBRARY_PREFIX: &str = "kicad-";
 const SOURCE: &str = "kicad-import";
 /// The report line for a paper the sheet can't take where the file puts it.
 const PAPER_REPLACED: &str = "paper sizes other than A4 to A1 replaced by the smallest that holds the drawing";
+/// The report line for a drawing that reaches past the paper the import could give it.
+const PAPER_SHORT: &str = "drawings larger than any paper the sheet can take, left reaching past the paper";
 
 /// What an import left out or changed, by description, with how often.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -703,21 +705,35 @@ impl Builder {
     /// measures every position from, so the drawing sits on the paper as in the file. Without a
     /// paper the sheet can take there (a size other than A4 to A1, which would reach past the
     /// schematic's range), the smallest paper around the drawing is used, reported when the file
-    /// named one.
+    /// named one. When that paper's corner lies outside what `sheet.set_page` takes, the new
+    /// sheet's paper stays, so the paper never refuses a file; a drawing the paper doesn't hold
+    /// is reported instead.
     fn page(&mut self, paper: Option<&pcbcraft_kicad::schematic::Paper>, report: &mut Report) -> Result<(), CommandError> {
         let project = self.project()?;
         let origin = crate::schematic::Point { x_nm: 0, y_nm: 0 };
         let orientation = |portrait: bool| if portrait { Orientation::Portrait } else { Orientation::Landscape };
-        let kept = paper.and_then(|p| Page::new(Paper::parse(&p.name.to_ascii_lowercase())?, orientation(p.portrait), origin).ok());
-        let page = match kept {
-            Some(page) => page,
+        let page = match paper.and_then(|p| Page::new(Paper::parse(&p.name.to_ascii_lowercase())?, orientation(p.portrait), origin).ok()) {
+            Some(page) => Some(page),
             None => {
-                if paper.is_some() {
+                let bounds = project.drawing_bounds();
+                let around = Some(Page::around(bounds)).filter(|page| crate::wire::valid_point(&page.at()));
+                let holds = match (around.or(project.page()), bounds) {
+                    (_, None) => true,
+                    (Some(page), Some([min, max])) => {
+                        let [low, high] = page.corners();
+                        low.x_nm <= min.x_nm && low.y_nm <= min.y_nm && max.x_nm <= high.x_nm && max.y_nm <= high.y_nm
+                    }
+                    (None, Some(_)) => false,
+                };
+                if !holds {
+                    report.note(PAPER_SHORT);
+                } else if paper.is_some() {
                     report.note(PAPER_REPLACED);
                 }
-                Page::around(project.drawing_bounds())
+                around
             }
         };
+        let Some(page) = page else { return Ok(()) };
         let params = json!({"sheet": project.sheet_target().id(), "paper": page.paper().as_str(), "orientation": page.orientation().as_str(), "at": page.at()});
         self.apply(SET_PAGE, params, "setting the paper")
     }

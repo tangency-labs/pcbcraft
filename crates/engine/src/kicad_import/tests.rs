@@ -1154,3 +1154,20 @@ fn the_files_paper_is_kept_or_replaced_and_reported() {
         assert!(on_paper(&imported.project), "{paper}");
     }
 }
+
+#[test]
+fn a_drawing_no_paper_can_hold_near_the_range_edge_still_imports() {
+    // The smallest paper around this drawing would start past the range a page corner may take.
+    let imported = import(&file(&place("T:R", "R1", -952.5, 50.8, 0, "")), "Edge").unwrap();
+    let report: Vec<_> = imported.report.notes().collect();
+    assert!(report.contains(&(PAPER_SHORT, 1)), "{report:?}");
+}
+
+#[test]
+fn a_drawing_wider_than_every_paper_is_not_reported_as_held() {
+    let items = format!("(paper \"USLetter\") {} {}", place("T:R", "R1", -762.0, 50.8, 0, ""), place("T:R", "R2", 762.0, 50.8, 0, ""));
+    let imported = import(&file(&items), "Wide").unwrap();
+    let report: Vec<_> = imported.report.notes().collect();
+    assert!(!on_paper(&imported.project), "{:?}", imported.project.page());
+    assert_eq!(report.iter().filter(|(what, _)| what.contains("paper")).collect::<Vec<_>>(), [&(PAPER_SHORT, 1)], "{report:?}");
+}
