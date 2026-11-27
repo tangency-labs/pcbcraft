@@ -54,8 +54,9 @@ impl Session {
 /// not write files, and netlist comparison only reads the text it is given. Annotation
 /// preview keeps its proposal and Apply token only in the session; sheet split preview
 /// caches no proposal. Applying annotation, splitting a sheet, loading/removing library
-/// sources, and Cut are not reads.
-fn is_read_command(id: &str) -> bool {
+/// sources, and Cut are not reads. MCP also returns these commands' own replies when a
+/// caller suppresses inspection.
+pub fn is_read_command(id: &str) -> bool {
     matches!(
         id,
         no_connect::CHECK

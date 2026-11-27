@@ -1563,6 +1563,30 @@ fn execute_can_return_only_the_new_revision() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({})))["project"]["name"], "Lean");
 }
 
+/// Catalog, template and parameter queries answer with their own data when inspection is
+/// suppressed, exactly as they do with the default inspection. Cancelling a board-update
+/// preview is also a read command, but it still answers with only the revision.
+#[test]
+fn queries_keep_their_results_when_inspection_is_suppressed() {
+    let mut server = server();
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true},"inspect":false})));
+    for (command, params) in [
+        ("library.list_sources", json!({})),
+        ("library.search", json!({"kind":"footprint","query":"sot23"})),
+        ("template.list", json!({})),
+        ("parameter.list", json!({"scope":"project"})),
+        ("parameter.resolve", json!({"text":"Sheet ${#}"})),
+    ] {
+        let inspected = body(&call(&mut server, "execute", json!({"command":command,"params":params})));
+        let lean = body(&call(&mut server, "execute", json!({"command":command,"params":params,"inspect":false})));
+        assert_eq!(lean, inspected, "{command} lost its result with inspect:false");
+    }
+    let preview = body(&call(&mut server, "execute", json!({"command":"pcb.preview_update","params":{"expected_revision":1}})));
+    let token = preview["board_update_preview"]["plan_token"].clone();
+    let cancelled = body(&call(&mut server, "execute", json!({"command":"pcb.cancel_update","params":{"plan_token":token},"inspect":false})));
+    assert_eq!(cancelled, json!({"revision":1}));
+}
+
 /// Cross-probing follows the saved pin mapping in either direction.
 #[test]
 fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {

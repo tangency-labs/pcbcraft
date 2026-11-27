@@ -218,7 +218,8 @@ at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to omit inspection and return the revision for ordinary edits.
-Commands that return their own data, such as exports, clipboard queries and
+Commands that return their own data, such as exports, clipboard queries, library
+search and source lists, template and parameter queries and
 [schematic annotation preview](../schematic/annotation.md), retain that data.
 `schematic.set_symbol_fields` with `dry_run: true` still returns the full
 preview, including the changed native documents. Use `annotate.preview` as the
