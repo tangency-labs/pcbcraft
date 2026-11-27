@@ -278,7 +278,7 @@ another command.
 ## Net wire appearance
 
 `nets.inspect_appearance` reports a logical net’s effective schematic wire
-override and identity status. `nets.set_appearance` takes `expected_revision`,
+override and identity status. It is a query, so a `--read-only` session can run it. `nets.set_appearance` takes `expected_revision`,
 a net `target` and an `appearance` patch. Send an RGB `color` array or a
 `width_cp` integer from 50 to 800 hundredths of a point to set those channels.
 Use a nonempty `clear` array naming `color` or `width_cp` to remove individual

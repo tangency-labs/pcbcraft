@@ -53,8 +53,8 @@ impl Session {
 /// returns data without setting a system clipboard. Export/publication preparation does
 /// not write files, and netlist comparison only reads the text it is given. Annotation
 /// preview keeps its proposal and Apply token only in the session; sheet split preview
-/// caches no proposal. Applying annotation, splitting a sheet, loading/removing library
-/// sources, and Cut are not reads.
+/// caches no proposal. Zone fill inspection starts no pour. Applying annotation, splitting
+/// a sheet, loading/removing library sources, pouring or removing zone fill, and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -79,6 +79,7 @@ fn is_read_command(id: &str) -> bool {
             | PREVIEW_ASSEMBLY_PROFILE
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
+            | board::fill::INSPECT_FILL
             | CHECK_DESIGN
             | CHECK_ASSEMBLY
             | EXPORT_FABRICATION
@@ -87,6 +88,7 @@ fn is_read_command(id: &str) -> bool {
             | nets::INSPECT_CLASSES
             | nets::intent::INSPECT
             | nets::SHEET_OVERVIEW
+            | nets::INSPECT_APPEARANCE
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | sources::LIST

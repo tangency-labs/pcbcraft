@@ -102,6 +102,10 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         .id;
     editor.apply(net_classes::CREATE, &json!({"name":"Review class","rules":{},"expected_revision":editor.revision()})).unwrap();
     let class = editor.project().unwrap().net_classes().definitions[0].id;
+    // A named net gives the appearance query a current derived target.
+    editor
+        .apply(crate::net_labels::ADD, &json!({"name":"REVIEW","style":"global","x_nm":-90_000_000,"y_nm":0,"expected_revision":editor.revision()}))
+        .unwrap();
     editor.apply(ADD_DRAWING, &json!({"layer":edge,"points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":20_000_000},{"x_nm":-20_000_000,"y_nm":20_000_000}],"closed":true,"expected_revision":editor.revision()})).unwrap();
     let project = editor.snapshot().unwrap();
     let board = project.board_target().unwrap().board;
@@ -122,12 +126,13 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
     let layer = setup.layers().iter().find(|layer| layer.purpose == board::setup::LayerPurpose::Copper).unwrap().id;
     let where_used = symbol_where_used(&project);
     let netlist_text = control.execute(netlist::EXPORT_NETLIST, &json!({})).unwrap()["netlist"]["files"][0]["contents"].clone();
+    let net = json!({"kind":"derived","anchor":project.inspect_net_registry().unwrap()["nets"][0]["anchor"]});
 
     for command in catalog() {
         let id = command.id;
         // These are independent expectations, not derived from the production access policy.
         let params = match id {
-            netlist::EXPORT_BOARD_NETLIST | CHECK_ASSEMBLY => json!({"board":board}),
+            netlist::EXPORT_BOARD_NETLIST | CHECK_ASSEMBLY | board::fill::INSPECT_FILL => json!({"board":board}),
             netlist::COMPARE_NETLIST => json!({"netlist":netlist_text}),
             no_connect::CHECK
             | sheets::page::LIST_TEMPLATES
@@ -173,6 +178,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             board::class_rules::ROUTE_RULES => json!({"at":{"x_nm":0,"y_nm":0},"layer":layer}),
             board::route::PLAN_ROUTE => json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":1_000_000,"y_nm":0},"layer":layer}),
             net_classes::RESOLVE => json!({"classes":[]}),
+            nets::INSPECT_APPEARANCE => json!({"target":net}),
             nets::intent::INSPECT => json!({"version":1,"target":{"kind":"net_class","project":project.id(),"class":class}}),
             sources::SEARCH => json!({"query":"resistor"}),
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
