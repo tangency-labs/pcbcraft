@@ -19,6 +19,7 @@ pub mod hierarchy;
 #[cfg(test)]
 mod identity_tests;
 pub mod instances;
+pub mod kicad_import;
 pub mod library;
 pub mod library_graphics;
 mod named_catalog;
@@ -47,6 +48,7 @@ pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
+pub use board::orientation::CHECK_ASSEMBLY;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::output_recipe::SET_OUTPUT_RECIPE;
 pub use board::rules::SET_RULES;
@@ -56,7 +58,7 @@ pub use board::track::{
     UNROUTE_CONNECTION,
 };
 pub use board::via_nets::SET_VIA_NET;
-pub use session_scope::SessionScope;
+pub use session_scope::{SessionScope, is_read_command};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -106,6 +108,8 @@ enum ParamKind {
     ExternalText,
     /// A netlist document's text, bounded before it is parsed.
     NetlistText,
+    /// A KiCad schematic file's text, bounded so every transport can carry it.
+    KicadSchematicText,
     ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
@@ -249,6 +253,12 @@ enum ParamKind {
     RouteBudget,
     /// A bounded text whose references are resolved.
     ParameterText,
+    /// Bounded CSV/TSV pin-table text for preview.
+    PinTableText,
+    /// Delimiter spelling for pin-table parsing.
+    PinTableDelimiter,
+    /// Optional column-index mapping for pin-table preview.
+    PinTableMapping,
 }
 
 impl ParamKind {
@@ -267,6 +277,8 @@ impl ParamKind {
             Self::NetlistText => {
                 json!({"type":"string","maxLength":netlist::compare::MAX_TEXT_BYTES,"description":"Netlist JSON text, at most 8 MiB when encoded as UTF-8."})
             }
+            Self::KicadSchematicText => json!({"type":"string","maxLength":kicad_import::MAX_TEXT_BYTES,
+                "description":"A .kicad_sch file's text, at most 8 MiB when encoded as UTF-8."}),
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
@@ -312,6 +324,9 @@ impl ParamKind {
             }
             Self::PinRemaps => authoring::remap::schema(),
             Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
+            Self::PinTableText => json!({"type":"string","maxLength":authoring::pin_table::MAX_BYTES}),
+            Self::PinTableDelimiter => authoring::pin_table::delimiter_schema(),
+            Self::PinTableMapping => authoring::pin_table::mapping_schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -509,6 +524,8 @@ impl ParamKind {
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
             Self::NetlistText if value.as_str().is_some_and(|s| s.len() <= netlist::compare::MAX_TEXT_BYTES) => Ok(()),
             Self::NetlistText => Err("must be UTF-8 text of at most 8 MiB"),
+            Self::KicadSchematicText if value.as_str().is_some_and(|s| s.len() <= kicad_import::MAX_TEXT_BYTES) => Ok(()),
+            Self::KicadSchematicText => Err("must be UTF-8 text of at most 8 MiB"),
             Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
@@ -619,6 +636,11 @@ impl ParamKind {
                 .parse(value)
                 .map(|_| ())
                 .map_err(|_| "must be a canonical decimal string from 1 through 4294967295"),
+            Self::PinTableText if value.as_str().is_some_and(|text| text.len() <= authoring::pin_table::MAX_BYTES) => Ok(()),
+            Self::PinTableText => Err("must be UTF-8 text of at most 262144 bytes"),
+            Self::PinTableDelimiter if value.as_str().and_then(authoring::pin_table::Delimiter::parse).is_some() => Ok(()),
+            Self::PinTableDelimiter => Err("must be auto, comma, tab or semicolon"),
+            Self::PinTableMapping => authoring::pin_table::validate_mapping_value(value).map(|_| ()),
             Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
@@ -1229,13 +1251,14 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::movement::MOVE_ITEMS,
         title: "Move PCB items",
-        summary: "Translate an explicit mixed board selection and attached pad ends in one atomic edit.",
+        summary: "Translate a mixed board selection atomically, optionally preserving direct pad, track and via contacts.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
             Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" },
             Param { name: "dx_nm", required: true, kind: ParamKind::Displacement, summary: "Horizontal displacement in nanometers" },
             Param { name: "dy_nm", required: true, kind: ParamKind::Displacement, summary: "Vertical displacement in nanometers" },
+            board::movement::PRESERVE_CONTACTS,
         ],
     },
     Command {
@@ -1458,6 +1481,15 @@ const CATALOG: &[Command] = &[
                 required: false,
                 summary: "Explicitly create the first PCB along with this project; defaults to schematic-only.",
             },
+        ],
+    },
+    Command {
+        id: kicad_import::IMPORT,
+        title: "Import KiCad Schematic",
+        summary: "Replace the open project with one converted from a self-contained KiCad 6-10 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable. Headless sessions only.",
+        params: &[
+            NEW_NAME,
+            Param { name: "text", kind: ParamKind::KicadSchematicText, required: true, summary: "The schematic file's UTF-8 text, at most 8 MiB" },
         ],
     },
     Command {
@@ -2197,6 +2229,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[11],
     library::sources::COMMANDS[12],
     library::sources::COMMANDS[13],
+    library::sources::COMMANDS[14],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2743,6 +2776,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: CHECK_ASSEMBLY,
+        title: "Check Assembly Orientation",
+        summary: "Warn about each polarized package on the board that shows no pin 1 or polarity mark and states no zero orientation. Edits nothing; execute returns the findings.",
+        params: &[BOARD],
+    },
+    Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
         summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and Excellon plated and, when present, non-plated drill files. Edits nothing; execute returns every file's name and text.",
@@ -2964,6 +3003,17 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: nets::SHEET_OVERVIEW,
+        title: "Inter-Sheet Net Overview",
+        summary: "List each net that reaches more than one sheet, with its pages and how it reaches each one: global label, power symbol, hierarchical label, sheet pin or shared part terminal. Edits nothing.",
+        params: &[Param {
+            name: "sheet",
+            kind: ParamKind::SheetId,
+            required: false,
+            summary: "Optional sheet UUID; list only nets that reach this sheet",
+        }],
+    },
+    Command {
         id: nets::SET_APPEARANCE,
         title: "Set Net Appearance",
         summary: "Set one net's schematic wire color and drawn stroke width with stable identity, promotion, revision check and one undo step. Connectivity and PCB rules are unchanged.",
@@ -3062,6 +3112,21 @@ const CATALOG: &[Command] = &[
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
+
+/// Whether `id` replaces the open project with another one, as New Project and imports do.
+/// Hosts protect unsaved work and ask for approval before such commands. The KiCad import is
+/// also [`headless_only`], so open editors refuse it before reaching those checks.
+pub fn replaces_project(id: &str) -> bool {
+    matches!(id, "project.new" | kicad_import::IMPORT)
+}
+
+/// Whether `id` runs only in a session of its own (headless MCP, the command line), never in an
+/// open editor. Such a command can run for seconds and replaces the project, so in an editor it
+/// would block the window and could still replace the project after its request expired. Live
+/// hosts leave it out of their catalogs and refuse it before any work.
+pub fn headless_only(id: &str) -> bool {
+    id == kicad_import::IMPORT
+}
 
 /// Every command there is.
 pub fn catalog() -> &'static [Command] {
@@ -3762,8 +3827,10 @@ impl Session {
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION
-            | library::sources::PREVIEW_PIN_REMAP => true,
+            | library::sources::PREVIEW_PIN_REMAP
+            | library::sources::PREVIEW_PIN_TABLE => true,
             "project.new" => true,
+            kicad_import::IMPORT => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
             net_labels::ADD
@@ -3803,6 +3870,7 @@ impl Session {
             | nets::INSPECT_CLASSES
             | nets::intent::SET
             | nets::intent::INSPECT
+            | nets::SHEET_OVERVIEW
             | nets::SET_APPEARANCE
             | nets::SET_PROPERTIES
             | nets::INSPECT_APPEARANCE
@@ -3860,6 +3928,7 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | CHECK_ASSEMBLY
             | REFILL_ZONES
             | UNFILL_ZONES
             | board::fill::INSPECT_FILL
@@ -4067,6 +4136,11 @@ impl Session {
             }
             return Ok(result);
         }
+        if id == kicad_import::IMPORT {
+            let report = self.import_kicad(params)?;
+            self.report_committed(id, params);
+            return Ok(json!({"revision": self.revision, "report": report.to_json()}));
+        }
         if id == COMPLETE_PACKAGES {
             return self.complete_packages(params);
         }
@@ -4099,6 +4173,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if id == nets::SHEET_OVERVIEW {
+            self.validate_project_command(id, params)?;
+            return self.sheet_overview_query(params);
+        }
         if id == nets::INSPECT_APPEARANCE {
             self.validate_project_command(id, params)?;
             return self.inspect_net_appearance(params);
@@ -4110,6 +4188,10 @@ impl Session {
         if id == board::route::PLAN_ROUTE {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
+        }
+        if id == CHECK_ASSEMBLY {
+            self.validate_project_command(id, params)?;
+            return self.assembly_check(params);
         }
         if id == UNFILL_ZONES {
             return self.unfill_zones(params);
@@ -4203,15 +4285,29 @@ impl Session {
         Ok(revision)
     }
 
-    /// Tell the edit observer that `command` with `params` produced the current project.
+    /// Replace the open project with one imported from the KiCad schematic text in `params`, as
+    /// one undoable change. A refused or unreadable file leaves the session unchanged.
+    fn import_kicad(&mut self, params: &Value) -> Result<kicad_import::Report, CommandError> {
+        self.validate_project_command(kicad_import::IMPORT, params)?;
+        let name = if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() };
+        let text = params["text"].as_str().ok_or_else(|| CommandError::InvalidParams("`text` must be a string".into()))?;
+        let imported = kicad_import::import(text, &name)?;
+        self.change(Project::clone(&imported.project))?;
+        Ok(imported.report)
+    }
+
+    /// Tell the edit observer that `command` with `params` produced the current project. An
+    /// import's source text is reported as its SHA-256 and length: the resulting project already
+    /// carries everything a journal needs, and the file itself stays out of recovery records.
     pub(crate) fn report_committed(&self, command: &str, params: &Value) {
         if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
-            observer.committed(edits::CommittedEdit {
-                command: command.to_owned(),
-                params: params.clone(),
-                revision: self.revision,
-                project: project.clone(),
-            });
+            let mut params = params.clone();
+            if command == kicad_import::IMPORT
+                && let Some(text) = params.get("text").and_then(Value::as_str).map(str::to_owned)
+            {
+                params["text"] = json!({"sha256": format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes())), "bytes": text.len()});
+            }
+            observer.committed(edits::CommittedEdit { command: command.to_owned(), params, revision: self.revision, project: project.clone() });
         }
     }
 
@@ -4249,12 +4345,14 @@ impl Session {
 
     /// Check catalog parameters, board identity and availability without generating query data
     /// or changing the session. Layer-group inspection and output-recipe edits read or store only
-    /// metadata, so they can run regardless of copper geometry. State-specific setup diagnostics
-    /// remain with handlers.
+    /// metadata, and the assembly check does not interpret stored copper arcs or teardrops (it
+    /// reads package definitions with their orientation statements, the board's silkscreen
+    /// settings, and placements with their references and positions), so they can run regardless
+    /// of copper geometry. State-specific setup diagnostics remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | SET_OUTPUT_RECIPE);
+        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | SET_OUTPUT_RECIPE | CHECK_ASSEMBLY);
         if check_copper_geometry
             && id != board::arc::SET_ARCS
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
@@ -4303,6 +4401,7 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | CHECK_ASSEMBLY
                 | REFILL_ZONES
                 | UNFILL_ZONES
                 | board::fill::INSPECT_FILL
@@ -4365,6 +4464,7 @@ impl Session {
                 | nets::INSPECT_CLASSES
                 | nets::intent::SET
                 | nets::intent::INSPECT
+                | nets::SHEET_OVERVIEW
                 | nets::SET_APPEARANCE
                 | nets::SET_PROPERTIES
                 | nets::INSPECT_APPEARANCE
@@ -4440,6 +4540,7 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.validate_project_command(id, params)?;
         match id {
+            kicad_import::IMPORT => self.import_kicad(params).map(|_| ())?,
             "project.new" => {
                 self.change(Project {
                     name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
@@ -4500,6 +4601,9 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            nets::SHEET_OVERVIEW => {
+                self.sheet_overview_query(params)?;
             }
             nets::SET_APPEARANCE => self.set_net_appearance(params)?,
             nets::SET_PROPERTIES => self.set_net_properties(params)?,
@@ -4668,6 +4772,9 @@ impl Session {
             }
             board::route::PLAN_ROUTE => {
                 self.route_plan_query(params)?;
+            }
+            CHECK_ASSEMBLY => {
+                self.assembly_check(params)?;
             }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;

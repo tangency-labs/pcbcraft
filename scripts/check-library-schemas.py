@@ -32,6 +32,7 @@ FORMATS = {
     "pcbcraft-footprint/4": "urn:pcbcraft:schema:footprint:4",
     "pcbcraft-footprint/5": "urn:pcbcraft:schema:footprint:5",
     "pcbcraft-footprint/6": "urn:pcbcraft:schema:footprint:6",
+    "pcbcraft-footprint/7": "urn:pcbcraft:schema:footprint:7",
     "pcbcraft-category/1": "urn:pcbcraft:schema:category:1",
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",

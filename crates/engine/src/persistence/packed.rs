@@ -175,6 +175,16 @@ pub fn decode_legacy_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     decode_layout(bytes, "pcbcraft-container/2", "project.pc")
 }
 
+/// Check a manifest's container format before its fields are read. A format from a newer
+/// release is refused by name; any other format than `format` is refused as unsupported.
+fn check_manifest_format(header: &serde_json::Value, format: &str) -> Result<(), String> {
+    super::documents::refuse_newer_format(MANIFEST, header["format"].as_str().unwrap_or_default(), FORMAT)?;
+    if header["format"].as_str() != Some(format) {
+        return Err(format!("manifest.json: unsupported container format {}; expected {format}", header["format"]));
+    }
+    Ok(())
+}
+
 /// Share ZIP bounds, safe-path and integrity validation across explicit layout boundaries.
 fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<PackedProject, String> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
@@ -237,10 +247,7 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
     // Establish the container boundary before root discovery: neither an old entry point nor
     // a missing new entry point may disguise a present unsupported or malformed manifest.
     if let Some(manifest) = entries.get(MANIFEST) {
-        let header: serde_json::Value = serde_json::from_slice(manifest).map_err(error)?;
-        if header["format"].as_str() != Some(format) {
-            return Err(format!("manifest.json: unsupported container format {}; expected {format}", header["format"]));
-        }
+        check_manifest_format(&serde_json::from_slice(manifest).map_err(error)?, format)?;
     }
     // Any manifest prevents metadata filtering, including malformed or misplaced manifests.
     // Filter before root discovery so Apple's sidecar tree cannot masquerade as a second root.
@@ -275,10 +282,11 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
     }
     let manifest = documents.remove(MANIFEST);
     if let Some(bytes) = &manifest {
+        // A manifest under one top-level folder reaches this point without the early check.
+        let header: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| format!("manifest.json: {e}"))?;
+        check_manifest_format(&header, format)?;
+        // Decode the original bytes so duplicate fields still fail typed validation.
         let manifest: Manifest = serde_json::from_slice(bytes).map_err(|e| format!("manifest.json: {e}"))?;
-        if manifest.format != format {
-            return Err(format!("manifest.json: unsupported container format {}", manifest.format));
-        }
         if !manifest.assets.is_empty() {
             return Err("manifest.json: bundled assets are not yet supported".to_owned());
         }

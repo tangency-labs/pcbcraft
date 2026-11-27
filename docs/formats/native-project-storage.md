@@ -597,7 +597,7 @@ advance the footprint format.
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/10` | Sheet UUID, hierarchy, named anchors, unit placements, junctions and wires, with optional appearance, intent and page records. Versions /1–/9 remain readable. See [current sheet records](#current-sheet-records). |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/59` (also reads `/1`–`/26`, `/34`, `/35`, `/37`, `/41`, `/42` and `/43`) | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; version 42 consolidates the vocabulary with optional records; version 43 adds optional test-point marks; version 59 adds the explicit zone island-removal policy |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
-| `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](../libraries/footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
+| `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](../libraries/footprint-schema.md#compatibility-and-versioning) | One pinned physical footprint definition with copper lands, finished openings, provenance and any authored assembly orientation statement |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
@@ -1653,6 +1653,13 @@ converter below creates a separate copy of the immediately previous split layout
 
 The oldest readable split project entry-point format is `pcbcraft-project/5`,
 in project folders and `.pc` packages. `pcbcraft-cli --help` reports this limit.
+
+A project saved by a newer PCBCraft is refused by name before any other check.
+When the entry point, instance, sheet or board document, a pinned symbol or
+footprint copy, or a packed manifest carries a format number above the newest
+this build reads, Open reports `<path>: saved by a newer PCBCraft in format
+<format>; this version reads formats up to <newest>.` and leaves the project files unchanged.
+Retired or skipped older numbers keep their own refusal.
 
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions

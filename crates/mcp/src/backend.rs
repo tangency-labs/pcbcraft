@@ -170,11 +170,19 @@ impl Backend for Headless {
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
 /// because a bare session has no window to act on. Clipboard/export queries, provisional
-/// property and annotation previews, and connection unroute retain their result data even
-/// when project inspection is suppressed.
+/// property and annotation previews, connection unroute and the KiCad import's report retain
+/// their result data even when project inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     serve_session(session, method, params, COMMAND_API_VERSION)
+}
+
+/// Whether `inspect: false` still returns this command's own data because the engine admits
+/// it to read-only sessions, so a new query is covered once it is reviewed for that scope.
+/// The two preview cancellations are read commands that answer with the project inspection,
+/// so they keep the revision-only reply.
+fn read_command_keeps_result(id: &str) -> bool {
+    pcbcraft_engine::is_read_command(id) && !matches!(id, pcbcraft_engine::CANCEL_UPDATE | pcbcraft_engine::CANCEL_BOARD_SETUP_PREVIEW)
 }
 
 /// Dispatch with the serving backend's version before invoking engine handlers.
@@ -192,10 +200,12 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
             }
             if params["inspect"].as_bool() == Some(false)
                 && !(id == pcbcraft_engine::SET_SYMBOL_FIELDS && params["params"]["dry_run"].as_bool() == Some(true))
+                && !read_command_keeps_result(id)
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
                         | pcbcraft_engine::nets::intent::INSPECT
+                        | pcbcraft_engine::nets::SHEET_OVERVIEW
                         | pcbcraft_engine::nets::INSPECT_APPEARANCE
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::board::route::PLAN_ROUTE
@@ -214,6 +224,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::pin_functions::SET
                         | pcbcraft_engine::CHECK_DESIGN
+                        | pcbcraft_engine::CHECK_ASSEMBLY
                         | pcbcraft_engine::REFILL_ZONES
                         | pcbcraft_engine::UNFILL_ZONES
                         | pcbcraft_engine::board::fill::INSPECT_FILL
@@ -240,6 +251,8 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                         | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+                        | pcbcraft_engine::library::sources::PREVIEW_PIN_TABLE
+                        | pcbcraft_engine::kicad_import::IMPORT
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)

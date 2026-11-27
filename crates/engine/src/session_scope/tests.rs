@@ -127,7 +127,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         let id = command.id;
         // These are independent expectations, not derived from the production access policy.
         let params = match id {
-            netlist::EXPORT_BOARD_NETLIST => json!({"board":board}),
+            netlist::EXPORT_BOARD_NETLIST | CHECK_ASSEMBLY => json!({"board":board}),
             netlist::COMPARE_NETLIST => json!({"netlist":netlist_text}),
             no_connect::CHECK
             | sheets::page::LIST_TEMPLATES
@@ -135,6 +135,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             | CHECK_DESIGN
             | net_classes::INSPECT
             | nets::INSPECT_CLASSES
+            | nets::SHEET_OVERVIEW
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | INSPECT_LAYER_GROUPS
@@ -177,6 +178,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
             sources::PREVIEW_PIN_REMAP => json!({"item":remap_item,"pins":[{"unit":"main","object":"1","number":"7"}]}),
+            sources::PREVIEW_PIN_TABLE => json!({"text":"Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n"}),
             sources::WHERE_USED => where_used.clone(),
             sources::PREVIEW_FOOTPRINT_REVISION => {
                 // A read: this fixture has no library placement, so both hosts must give the same
@@ -242,6 +244,13 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             assert_eq!(actual["changes"][0]["after"], "7");
             assert_eq!(actual["saved"], false);
             assert_eq!(actual["placed_instances_changed"], false);
+        }
+        if id == sources::PREVIEW_PIN_TABLE {
+            assert_eq!(actual["rows"].as_array().map(Vec::len), Some(1));
+            assert_eq!(actual["findings"], json!([]));
+            assert_eq!(actual["can_accept"], true);
+            assert_eq!(actual["created"], false);
+            assert_eq!(actual["saved"], false);
         }
         if id == sources::WHERE_USED {
             assert_eq!(actual["instances"].as_array().map(Vec::len), Some(1));

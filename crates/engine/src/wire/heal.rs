@@ -837,7 +837,8 @@ impl Project {
     /// Preview one symbol's move and optional orientation together. Rotation is in quarter
     /// turns (0..=3); mirroring reflects left-to-right before that rotation. None preserves
     /// either value. Disconnection leaves old routes in place. Invalid bounds, orientation or
-    /// contacts fail atomically, and an unchanged pose is a no-op.
+    /// contacts fail atomically, as does a move whose attached wires would follow their pins over
+    /// another net's label; an unchanged pose is a no-op.
     #[allow(clippy::too_many_arguments)]
     pub fn transformed_symbol(
         &self,
@@ -868,8 +869,9 @@ impl Project {
         }
         let mut edit = Edit::new(self, revision);
         edit.pose_symbol(index, to, rotation, mirrored)?;
-        let moved = edit.finish(auto_heal)?;
-        moved.healed(self, revision, auto_heal)
+        let moved = edit.finish(auto_heal)?.healed(self, revision, auto_heal)?;
+        moved.check_followed_wires(self, &BTreeSet::new())?;
+        Ok(moved)
     }
 }
 

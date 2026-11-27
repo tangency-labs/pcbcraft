@@ -12,6 +12,8 @@ pub mod display;
 mod graph;
 pub mod intent;
 mod numbering;
+mod overview;
+pub use overview::{CrossSheetNet, SHEET_OVERVIEW, SheetOverview, SheetOverviewBasis, SheetReach, Via};
 mod pairs;
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
 mod properties;

@@ -461,7 +461,9 @@ several items selected, for example by a box selection, **X**, **Y** and the
 ribbon buttons mirror the whole selection as one undo step about its center.
 The center is snapped so pins and wire corners stay on the grid; symbols
 mirror as above, wires and net labels are reflected, and wires to unselected
-parts stay on their pins. With a
+parts stay on their pins. A move, rotation or mirror that would run such a
+following wire through a net label or power symbol of another net is refused
+with a message instead of joining the two nets; reroute that wire first. With a
 symbol selected, **E** opens its expanded properties and **Delete** removes it
 with its wires. Right-click a symbol for the same actions, and press **Esc** to
 clear the selection.

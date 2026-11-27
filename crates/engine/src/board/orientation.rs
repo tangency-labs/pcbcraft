@@ -1,0 +1,470 @@
+//! Assembly orientation of footprint packages.
+//!
+//! IPC-7351 section 7.3.1 asks that orientation and polarity of a device be defined in the
+//! CAD data, and section 16 defines rotations from the library's zero component orientation.
+//! A package shows its orientation on the board when its copper is not symmetric under a
+//! quarter or half turn, or when its silkscreen or fabrication drawing marks the way round.
+//! [`orientation_marked`] decides that from geometry alone; the definition's optional
+//! `orientation` object states polarity and the zero orientation. A polarized package with
+//! neither gets one warning.
+use super::{
+    Footprint,
+    definition::{CopperBinding, FootprintDefinition, GraphicPurpose, Key, PadShape, RectPad},
+    fabrication::DEFAULT_SILK_NM,
+    silkscreen::{self, Settings},
+    view::BoardView,
+};
+use crate::{
+    CommandError, Session,
+    library_graphics::{Fill, Geometry},
+    schematic::{Point, TextAlign},
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+
+/// Report polarized packages whose placement orientation cannot be checked. Edits nothing.
+pub const CHECK_ASSEMBLY: &str = "pcb.check_assembly";
+/// Registered kind of the finding this check emits.
+pub const CHECK_KIND: &str = "assembly.orientation";
+/// Rule the finding is raised under.
+pub const RULE_ID: &str = "assembly.polarized_orientation";
+/// Where the rule comes from.
+pub const RULE_SOURCE: &str = "IPC-7351 section 7.3.1 (orientation and polarity defined in the CAD data, PDF page 43) \
+     and section 16 (zero component orientations, PDF page 66)";
+
+/// A point in doubled local coordinates, measured from the centroid of the pad centres.
+/// Doubling keeps a centroid that falls halfway between nanometres exact.
+type Doubled = (i128, i128);
+
+/// Turn a doubled point by `q` quarter turns, as the shared drawing transform does: one turn
+/// maps `(x, y)` to `(-y, x)` and adds 90 degrees to drawn angles.
+fn turn((x, y): Doubled, q: u8) -> Doubled {
+    match q % 4 {
+        0 => (x, y),
+        1 => (-y, x),
+        2 => (-x, -y),
+        _ => (y, -x),
+    }
+}
+
+/// Map local points into doubled coordinates about the pad-centre centroid.
+struct Frame {
+    pivot: Doubled,
+}
+
+impl Frame {
+    /// A rotation that maps a set of integer points onto itself fixes their centroid, and
+    /// twice that centroid is then an integer point. Return none when it is not, because no
+    /// such rotation can exist and the copper alone already shows the orientation.
+    fn new(definition: &FootprintDefinition) -> Option<Self> {
+        let n = i128::try_from(definition.pads.len()).ok().filter(|n| *n > 0)?;
+        let (sx, sy) = definition.pads.iter().fold((0i128, 0i128), |(x, y), pad| (x + i128::from(pad.center.x_nm), y + i128::from(pad.center.y_nm)));
+        ((2 * sx) % n == 0 && (2 * sy) % n == 0).then(|| Self { pivot: (2 * sx / n, 2 * sy / n) })
+    }
+
+    /// Return twice the point's offset from the pivot, so a half-nanometre centroid stays exact.
+    fn point(&self, x: i64, y: i64) -> Doubled {
+        (2 * i128::from(x) - self.pivot.0, 2 * i128::from(y) - self.pivot.1)
+    }
+
+    /// The same doubled offset as a board point, for the shared silkscreen clipping. Definition
+    /// offsets are bounded far below a quarter of the `i64` range, so the value always fits.
+    fn local(&self, point: Point) -> Point {
+        let (x, y) = self.point(point.x_nm, point.y_nm);
+        Point { x_nm: x as i64, y_nm: y as i64 }
+    }
+
+    /// The definition's lands scaled into the doubled frame, for clipping in that frame.
+    fn pads(&self, definition: &FootprintDefinition) -> Vec<RectPad> {
+        definition
+            .pads
+            .iter()
+            .map(|pad| RectPad { center: self.local(pad.center), width_nm: 2 * pad.width_nm, height_nm: 2 * pad.height_nm, ..pad.clone() })
+            .collect()
+    }
+}
+
+/// Clip silkscreen centerlines in the doubled frame exactly as the board does, with the
+/// clearance and the stroke that sets the clipping margin both doubled to match. Clipping
+/// about the pivot keeps a drawing that is symmetric on the board symmetric here. Return the
+/// visible nonzero segments, and whether clipping removed any part of the paths.
+fn clipped(paths: Vec<Vec<Point>>, pads: &[RectPad], style: Settings, stroke_nm: i64) -> (Vec<(Doubled, Doubled)>, bool) {
+    let whole: Vec<_> = paths.iter().flat_map(|path| path.windows(2).filter(|pair| pair[0] != pair[1]).map(<[Point]>::to_vec)).collect();
+    let style = Settings { stroke_width_nm: 2 * stroke_nm, pad_clearance_nm: 2 * style.pad_clearance_nm, ..style };
+    let visible = silkscreen::clipped(paths, pads, style);
+    let changed = visible != whole;
+    let doubled = |point: Point| (i128::from(point.x_nm), i128::from(point.y_nm));
+    (visible.into_iter().map(|pair| (doubled(pair[0]), doubled(pair[1]))).collect(), changed)
+}
+
+/// Put a rectangle's size and rotation in one form: width at most height, and the rotation
+/// reduced to the turns that leave such a rectangle unchanged.
+fn rectangle_form(width: i64, height: i64, rotation: u32) -> (i64, i64, u32) {
+    let (width, height, rotation) = if width > height { (height, width, rotation + 90) } else { (width, height, rotation) };
+    (width, height, rotation % if width == height { 90 } else { 180 })
+}
+
+/// A plated opening's finished width, length and axis in millidegrees modulo a half turn.
+type OpeningForm = (i64, i64, u32);
+
+/// One land, including the shape and orientation of its copper and any plated opening.
+type PadForm = (Doubled, u8, u8, Option<OpeningForm>, i64, (i64, i64, u32));
+
+/// Return every land of the definition turned by `q` quarter turns about the frame's pivot,
+/// sorted by form, with its pad number. Circles and equal-dimension ovals share a contour
+/// and ignore rotation; other shapes add the turn.
+fn pad_forms<'d>(definition: &'d FootprintDefinition, frame: &Frame, q: u8) -> Vec<(PadForm, &'d str)> {
+    let mut forms: Vec<_> = definition
+        .pads
+        .iter()
+        .map(|pad| {
+            const CIRCULAR: u8 = 2;
+            let shape = match pad.shape {
+                PadShape::Rectangle => 0,
+                PadShape::RoundedRectangle => 1,
+                PadShape::Circle => CIRCULAR,
+                PadShape::Oval if pad.width_nm == pad.height_nm => CIRCULAR,
+                PadShape::Oval => 3,
+            };
+            let copper = match pad.copper {
+                CopperBinding::ComponentSide => 0,
+                CopperBinding::AllCopper => 1,
+            };
+            let rotation = if shape == CIRCULAR { 0 } else { u32::from(pad.rotation) + 90 * u32::from(q) };
+            let opening = pad.plated_slot.map_or_else(
+                || pad.drill_nm.map(|diameter| (diameter, diameter, 0)),
+                |slot| {
+                    let (width, length, angle) = slot.dimensions();
+                    let axis = if width == length { 0 } else { (angle + 90_000 * u32::from(q)) % 180_000 };
+                    Some((width, length, axis))
+                },
+            );
+            let form = (
+                turn(frame.point(pad.center.x_nm, pad.center.y_nm), q),
+                shape,
+                copper,
+                opening,
+                pad.corner_radius_nm,
+                rectangle_form(pad.width_nm, pad.height_nm, rotation),
+            );
+            (form, pad.number.as_str())
+        })
+        .collect();
+    forms.sort();
+    forms
+}
+
+/// One piece of drawing, in a form that is equal exactly when two pieces are drawn alike: the
+/// same primitive, place and size. Its layer, stroke and fill are kept beside it as [`Ink`].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Mark {
+    Segment(Doubled, Doubled),
+    Rectangle(Doubled, (i64, i64, u32)),
+    Circle(Doubled, i64),
+    Arc(Doubled, i64, i32, i32),
+    Text(Doubled, String, i64, u32, u8),
+}
+
+/// A segment with its ends in a fixed order, so the same line drawn either way compares equal.
+fn segment(a: Doubled, b: Doubled) -> Mark {
+    if a <= b { Mark::Segment(a, b) } else { Mark::Segment(b, a) }
+}
+
+/// Append the nonzero segments of a polyline, including a closing edge when needed.
+/// Coincident endpoints draw no silkscreen ink and cannot mark an orientation.
+fn path(points: &[Doubled], closed: bool, marks: &mut Vec<Mark>) {
+    marks.extend(points.windows(2).filter(|pair| pair[0] != pair[1]).map(|pair| segment(pair[0], pair[1])));
+    if closed
+        && let [first, _, .., last] = points
+        && first != last
+    {
+        marks.push(segment(*last, *first));
+    }
+}
+
+/// Layer, stroke width and fill of a piece of drawing. The layer is 0 for silkscreen and 1 for
+/// fabrication, so a mark on one is never matched by the other. Centerline silkscreen paths
+/// carry the board's effective silkscreen stroke width so they compare equal to silkscreen
+/// artwork drawn at the same width. Legacy silkscreen rectangles use Gerber's fallback
+/// width; legacy fabrication rectangles still use zero.
+type Ink = (u8, i64, u8);
+
+/// The layer number of a drawing that can mark a part, or none for the courtyard, which bounds
+/// the part's space and says nothing about which way round it goes.
+fn marking_layer(purpose: GraphicPurpose) -> Option<u8> {
+    match purpose {
+        GraphicPurpose::Silkscreen => Some(0),
+        GraphicPurpose::Fabrication => Some(1),
+        GraphicPurpose::Courtyard => None,
+    }
+}
+
+/// Positive greatest common divisor of two integers, returning at least 1.
+fn gcd(mut a: i128, mut b: i128) -> i128 {
+    a = a.abs();
+    b = b.abs();
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a.max(1)
+}
+
+/// Canonical key for strokes sharing an ink style on the same infinite line:
+/// ink style, primitive direction `(ux, uy)` with `ux > 0` or `(ux, uy) == (0, 1)`,
+/// and signed offset `ux * y - uy * x`.
+type StrokeLine = (Ink, i128, i128, i128);
+
+/// Ordered endpoints of a collinear segment in doubled local coordinates.
+type Span = (Doubled, Doubled);
+
+/// Canonical key for strokes of `ink` on the infinite line through two distinct doubled points.
+fn line_key(ink: Ink, a: Doubled, b: Doubled) -> StrokeLine {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    let g = gcd(dx, dy);
+    let (ux, uy) = if dx < 0 || (dx == 0 && dy < 0) { (-dx / g, -dy / g) } else { (dx / g, dy / g) };
+    (ink, ux, uy, ux * a.1 - uy * a.0)
+}
+
+/// Normalize duplicate marks and overlapping or touching collinear strokes on the same layer
+/// with the same stroke width and fill, so equivalent drawings compare equal regardless of how
+/// strokes were split or repeated.
+fn normalize_marks(inked: Vec<(Ink, Mark)>) -> Vec<(Ink, Mark)> {
+    let mut lines: BTreeMap<StrokeLine, Vec<Span>> = BTreeMap::new();
+    let mut normalized = Vec::with_capacity(inked.len());
+    for (ink, mark) in inked {
+        match mark {
+            Mark::Segment(a, b) if a == b => {}
+            Mark::Segment(a, b) => {
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                lines.entry(line_key(ink, lo, hi)).or_default().push((lo, hi));
+            }
+            other => normalized.push((ink, other)),
+        }
+    }
+    for ((ink, ..), mut spans) in lines {
+        spans.sort_unstable();
+        let mut merged: Vec<Span> = Vec::new();
+        for (lo, hi) in spans {
+            if let Some((_, cur_hi)) = merged.last_mut()
+                && lo <= *cur_hi
+            {
+                if hi > *cur_hi {
+                    *cur_hi = hi;
+                }
+            } else {
+                merged.push((lo, hi));
+            }
+        }
+        normalized.extend(merged.into_iter().map(|(lo, hi)| (ink, Mark::Segment(lo, hi))));
+    }
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+/// Collect the silkscreen and fabrication drawing of a definition turned by `q` quarter turns,
+/// each piece with its ink. The assembly drawing comes from the fabrication layer, so a mark
+/// there counts as much as one in the silkscreen. Courtyards mark nothing. Silkscreen paths
+/// and artwork are taken as printed: the board's pad clearance clips them first, so a stroke
+/// that the board removes from the print cannot mark the part.
+fn marks(definition: &FootprintDefinition, frame: &Frame, q: u8, style: Settings) -> Vec<(Ink, Mark)> {
+    let at = |x: i64, y: i64| turn(frame.point(x, y), q);
+    let pads = frame.pads(definition);
+    let closed_path = |points: &[Point], closed: bool| {
+        let mut points: Vec<_> = points.iter().map(|point| frame.local(*point)).collect();
+        if closed && points.first() != points.last() {
+            points.push(points[0]);
+        }
+        points
+    };
+    let paths: Vec<_> = definition.silkscreen.iter().map(|silk| closed_path(&silk.points, silk.closed)).collect();
+    let (visible, _) = clipped(paths, &pads, style, style.stroke_width_nm);
+    let mut inked: Vec<_> = visible.into_iter().map(|(a, b)| ((0, style.stroke_width_nm, 0), segment(turn(a, q), turn(b, q)))).collect();
+    for rect in &definition.graphics {
+        let Some(layer) = marking_layer(rect.purpose) else { continue };
+        let mut marks = Vec::new();
+        let center = frame.point(rect.center.x_nm, rect.center.y_nm);
+        if rect.rotation % 90 == 0 {
+            let (w, h) = if rect.rotation % 180 == 90 { (rect.height_nm, rect.width_nm) } else { (rect.width_nm, rect.height_nm) };
+            let (w, h) = (i128::from(w), i128::from(h));
+            let corners: Vec<_> = [(-w, -h), (w, -h), (w, h), (-w, h)].into_iter().map(|(dx, dy)| turn((center.0 + dx, center.1 + dy), q)).collect();
+            path(&corners, true, &mut marks);
+        } else {
+            let form = rectangle_form(rect.width_nm, rect.height_nm, u32::from(rect.rotation) + 90 * u32::from(q));
+            marks.push(Mark::Rectangle(turn(center, q), form));
+        }
+        let stroke_nm = if rect.purpose == GraphicPurpose::Silkscreen { DEFAULT_SILK_NM } else { 0 };
+        inked.extend(marks.into_iter().map(|mark| ((layer, stroke_nm, 0), mark)));
+    }
+    let angle = |degrees: i32| (degrees + 90 * i32::from(q)).rem_euclid(360);
+    for artwork in &definition.artwork {
+        let Some(layer) = marking_layer(artwork.purpose) else { continue };
+        let mut marks = Vec::new();
+        let fill = match artwork.graphic.fill {
+            Fill::None => 0,
+            Fill::Solid => 1,
+            Fill::Background => 2,
+        };
+        if artwork.purpose == GraphicPurpose::Silkscreen {
+            let paths = artwork.graphic.paths().iter().map(|points| closed_path(points, artwork.graphic.closed())).collect();
+            // A clipped drawing is compared by its visible segments; whole ones keep their
+            // exact form below.
+            if let (visible, true) = clipped(paths, &pads, style, artwork.graphic.stroke_nm) {
+                let ink = (layer, artwork.graphic.stroke_nm, fill);
+                inked.extend(visible.into_iter().map(|(a, b)| (ink, segment(turn(a, q), turn(b, q)))));
+                continue;
+            }
+        }
+        match &artwork.graphic.geometry {
+            Geometry::Line { from, to } => marks.push(segment(at(from.x_nm, from.y_nm), at(to.x_nm, to.y_nm))),
+            Geometry::Rectangle { min, max } => {
+                let corners = [at(min.x_nm, min.y_nm), at(max.x_nm, min.y_nm), at(max.x_nm, max.y_nm), at(min.x_nm, max.y_nm)];
+                path(&corners, true, &mut marks);
+            }
+            Geometry::Polyline { points, closed } => {
+                let points: Vec<_> = points.iter().map(|p| at(p.x_nm, p.y_nm)).collect();
+                path(&points, *closed, &mut marks);
+            }
+            Geometry::Circle { center, radius_nm } => marks.push(Mark::Circle(at(center.x_nm, center.y_nm), *radius_nm)),
+            Geometry::Arc { center, radius_nm, start_degrees, sweep_degrees } => {
+                let (start, sweep) = (i32::from(*start_degrees), i32::from(*sweep_degrees));
+                let (start, sweep) = if sweep < 0 { (start + sweep, -sweep) } else { (start, sweep) };
+                marks.push(if sweep >= 360 {
+                    Mark::Circle(at(center.x_nm, center.y_nm), *radius_nm)
+                } else {
+                    Mark::Arc(at(center.x_nm, center.y_nm), *radius_nm, angle(start), sweep)
+                });
+            }
+            Geometry::Text { at: anchor, text, height_nm, rotation, align } => {
+                let align = match align {
+                    TextAlign::Start => 0,
+                    TextAlign::Middle => 1,
+                    TextAlign::End => 2,
+                };
+                let rotation = angle(i32::from(*rotation)).unsigned_abs();
+                marks.push(Mark::Text(at(anchor.x_nm, anchor.y_nm), text.clone(), *height_nm, rotation, align));
+            }
+        }
+        inked.extend(marks.into_iter().map(|mark| ((layer, artwork.graphic.stroke_nm, fill), mark)));
+    }
+    normalize_marks(inked)
+}
+
+/// Whether a placed part of this package shows which way round it goes.
+///
+/// The copper alone shows it unless a quarter, half or three-quarter turn about the centroid
+/// of the pad centres lands every pad on an identical pad and moves at least one pad onto a
+/// differently numbered one. For each such turn the silkscreen or the fabrication drawing must
+/// change under the same turn, as a cathode bar or a pin 1 dot does. Courtyards do not count.
+/// The test is exact: lengths stay integer nanometres.
+///
+/// Silkscreen counts as the board prints it with `silkscreen`, its effective settings: a
+/// stroke that pad clearance clips away does not mark the part.
+///
+/// A definition without pads shows nothing and is not marked.
+pub fn orientation_marked(definition: &FootprintDefinition, silkscreen: Settings) -> bool {
+    if definition.pads.is_empty() {
+        return false;
+    }
+    let Some(frame) = Frame::new(definition) else { return true };
+    let base = pad_forms(definition, &frame, 0);
+    let printed = marks(definition, &frame, 0, silkscreen);
+    (1..4).all(|q| {
+        let turned = pad_forms(definition, &frame, q);
+        if turned.iter().map(|(form, _)| form).ne(base.iter().map(|(form, _)| form)) || turned == base {
+            return true;
+        }
+        marks(definition, &frame, q, silkscreen) != printed
+    })
+}
+
+/// The first 128 bits of a SHA-256 digest of a canonical JSON value, as lowercase hex.
+fn digest(value: &Value) -> String {
+    Sha256::digest(value.to_string().as_bytes())[..16].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+impl BoardView<'_> {
+    /// Warnings for polarized packages placed on this board that neither show their
+    /// orientation (see [`orientation_marked`]) nor state a zero orientation. There is one
+    /// finding per package revision, naming every placement of it in board order; findings
+    /// come in package order. A package without an `orientation` statement, or one that is
+    /// not polarized, is not reported.
+    pub fn orientation_findings(self) -> Vec<Value> {
+        let project = self.project();
+        let silkscreen = self.silkscreen();
+        let mut packages: BTreeMap<Key, (&FootprintDefinition, Vec<&Footprint>)> = BTreeMap::new();
+        for placement in project.board.footprints() {
+            if let (Some(key), Some(definition)) = (placement.key(), project.board.definition_for(placement)) {
+                packages.entry(key).or_insert_with(|| (definition, Vec::new())).1.push(placement);
+            }
+        }
+        let mut findings = Vec::new();
+        for ((library, id, revision), (definition, placements)) in packages {
+            let Some(orientation) = definition.orientation.as_ref() else { continue };
+            if !orientation.polarized || orientation.zero.is_some() || orientation_marked(definition, silkscreen) {
+                continue;
+            }
+            // Only a reference is needed; do not resolve pad nets or render placement graphics.
+            let placed: Vec<_> = placements
+                .into_iter()
+                .filter_map(|p| {
+                    let reference =
+                        project.components.get(&p.component).map(|component| component.reference()).or_else(|| {
+                            project.board.baseline.as_ref()?.components.get(&p.component).map(|component| component.reference.as_str())
+                        })?;
+                    Some((p, format!("footprint-{}", p.id), reference))
+                })
+                .collect();
+            if placed.is_empty() {
+                continue;
+            }
+            let objects: Vec<_> =
+                placed.iter().map(|(_, id, reference)| json!({"id":id,"kind":"footprint","role":"placement","reference":reference})).collect();
+            let mut locations: Vec<_> = placed.iter().map(|(p, ..)| json!({"point":{"x_nm":p.x_nm,"y_nm":p.y_nm}})).collect();
+            let (xs, ys): (Vec<_>, Vec<_>) = placed.iter().map(|(p, ..)| (p.x_nm, p.y_nm)).unzip();
+            locations.push(
+                json!({"bounds":{"min":{"x_nm":xs.iter().min(),"y_nm":ys.iter().min()},"max":{"x_nm":xs.iter().max(),"y_nm":ys.iter().max()}}}),
+            );
+            let names: Vec<_> = placed.iter().map(|(_, _, reference)| *reference).collect();
+            let key = digest(&json!({"check_kind":CHECK_KIND,"rule_id":RULE_ID,"package":{"library":library,"id":id,"revision":revision}}));
+            let fingerprint = digest(&json!({"definition":definition,"placements":objects}));
+            findings.push(json!({
+                "key": key,
+                "fingerprint": fingerprint,
+                "check_kind": CHECK_KIND,
+                "rule_id": RULE_ID,
+                "rule_source": RULE_SOURCE,
+                "severity": "warning",
+                "objects": objects,
+                "package": {"library":library,"id":id,"revision":revision,"name":definition.name},
+                "locations": locations,
+                "message": format!(
+                    "Polarized package {} ({library}/{id} r{revision}) has no pin 1 or polarity mark in its copper, silkscreen or fabrication drawing \
+                     and states no zero orientation, so its placement rotation cannot be checked. Placed as {}.",
+                    definition.name,
+                    names.join(", ")
+                ),
+            }));
+        }
+        findings
+    }
+}
+
+impl Session {
+    /// Read-only assembly orientation report for one board, the only board when `board` is
+    /// omitted. Fails when no project is open or the board is unknown or unavailable. Changes
+    /// nothing.
+    pub(crate) fn assembly_check(&self, params: &Value) -> Result<Value, CommandError> {
+        let project = self.open_project()?;
+        let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
+        let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+        Ok(json!({"revision":self.revision(),"assembly_check":{"board":target,"findings":view.orientation_findings()}}))
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -89,9 +89,9 @@ whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
 a rewritten snapshot passes them. When the pull request’s target commit has a snapshot, CI on
 a pull request also compares that `command-contracts.json` with the pull
-request's checked-out merge result, with the same classifier (the `command_contracts_against_base`
-example of `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
-command_contracts_against_base -- BASE.json HEAD.json`): it fails when the
+request's checked-out merge result as part of the engine tests. The same
+classifier is available locally with `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`. The comparison fails when the
 classifier detects a breaking difference in either section without a raised
 `command_api_version`, or when the version falls. If the target commit has no
 snapshot, the workspace tests check the first snapshot against discovery
@@ -178,7 +178,7 @@ a malformed reply from another editor may omit the facts it describes.
 | --- | --- |
 | `unknown_command` | No command has the requested id. |
 | `invalid_params` | The parameters are a non-null scalar or array, name a parameter the command does not describe, leave out a required one, have the wrong type or range, or fail the command's own checks. |
-| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
+| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar; also a headless-only command sent to an open editor. |
 | `stale_revision` | The request was prepared against an earlier revision. `details.current_revision` gives the current one. For annotation, `details.part_instances` names affected parts; preview again instead of retrying a stale token. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
 | `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |

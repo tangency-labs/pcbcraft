@@ -1,0 +1,1670 @@
+//! Pin-table parsing, column mapping, per-row validation and layout preview for symbol authoring.
+//!
+//! This module owns the shared domain model used by both the Symbol Editor's pin-table preview
+//! dialog and the read-only `library.preview_pin_table` command. It never creates pins, mutates a
+//! symbol document or allocates undo history; staging a valid preview produces an [`ImportPlan`]
+//! for symbol generation in units and re-import difference, the next slices of #78.
+
+use crate::{
+    library::{MAX_DRAWING_NM, MAX_TERMINALS},
+    schematic::{ElectricalType, GRID_NM, PinNumber, PinOrientation},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Maximum UTF-8 byte length accepted for a pasted or loaded pin table.
+pub const MAX_BYTES: usize = 256 * 1024;
+/// Hard parse ceiling on logical data rows before terminal-count validation runs.
+pub const MAX_ROWS: usize = 4096;
+/// Maximum number of columns tracked in one table.
+pub const MAX_COLUMNS: usize = 64;
+/// Maximum distinct units supported by native multi-unit symbol definitions.
+pub const MAX_UNITS: usize = 32;
+/// Maximum character count of a terminal display name, matching native symbol validation.
+pub const MAX_PIN_NAME_CHARS: usize = 32;
+/// Standard schematic pin pitch (2.54 mm = 2 x 1.27 mm grid) used for body-size estimation.
+pub const PIN_PITCH_NM: i64 = GRID_NM * 2;
+/// Minimum symbol body span along either axis (10.16 mm = 4 pin pitches).
+pub const MIN_BODY_SPAN_NM: i64 = PIN_PITCH_NM * 4;
+/// Maximum symbol body span along either axis so leads still fit inside ±100 mm.
+pub const MAX_BODY_SPAN_NM: i64 = (MAX_DRAWING_NM - PIN_PITCH_NM) * 2;
+/// Maximum terminals one unit can hold on the native symbol grid (`library::MAX_TERMINALS` docs).
+pub const MAX_PINS_PER_UNIT: usize = 441;
+/// Default unit identifier when no unit column is mapped or a row leaves unit blank.
+pub const DEFAULT_UNIT: &str = "main";
+
+/// Field delimiter used to split a pin table into columns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delimiter {
+    #[default]
+    Auto,
+    Comma,
+    Tab,
+    Semicolon,
+}
+
+impl Delimiter {
+    /// All selectable delimiter modes in display order.
+    pub const ALL: [Self; 4] = [Self::Auto, Self::Comma, Self::Tab, Self::Semicolon];
+
+    /// Stable wire spelling used by command parameters and inspection.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Comma => "comma",
+            Self::Tab => "tab",
+            Self::Semicolon => "semicolon",
+        }
+    }
+
+    /// Human-readable label shown in the pin-table preview dialog.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Comma => "Comma (,)",
+            Self::Tab => "Tab",
+            Self::Semicolon => "Semicolon (;)",
+        }
+    }
+
+    /// Parse a wire delimiter spelling; unknown values return `None`.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "auto" => Some(Self::Auto),
+            "comma" => Some(Self::Comma),
+            "tab" => Some(Self::Tab),
+            "semicolon" => Some(Self::Semicolon),
+            _ => None,
+        }
+    }
+
+    /// Resolve the concrete separator byte for this mode, detecting from `text` when `Auto`.
+    pub fn resolve(self, text: &str) -> Self {
+        match self {
+            Self::Auto => detect_delimiter(text),
+            concrete => concrete,
+        }
+    }
+
+    /// Return the ASCII separator byte for a concrete delimiter mode.
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Auto | Self::Comma => b',',
+            Self::Tab => b'\t',
+            Self::Semicolon => b';',
+        }
+    }
+}
+
+/// Which edge of a symbol body a pin attaches to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PinSide {
+    #[default]
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl PinSide {
+    /// Stable wire spelling used in previews and staged plans.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+
+    /// Human-readable label shown in the preview table.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+        }
+    }
+
+    /// Parse a pin side case-insensitively from common spreadsheet spellings.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "left" | "l" => Some(Self::Left),
+            "right" | "r" => Some(Self::Right),
+            "top" | "t" | "up" => Some(Self::Top),
+            "bottom" | "bot" | "b" | "down" => Some(Self::Bottom),
+            _ => None,
+        }
+    }
+
+    /// Direction from the wire connection point into the symbol body for symbol generation.
+    pub const fn lead_orientation(self) -> PinOrientation {
+        match self {
+            Self::Left => PinOrientation::Right,
+            Self::Right => PinOrientation::Left,
+            Self::Top => PinOrientation::Down,
+            Self::Bottom => PinOrientation::Up,
+        }
+    }
+}
+
+/// Logical role that a source table column can be mapped to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnRole {
+    Number,
+    Name,
+    ElectricalType,
+    Unit,
+    Side,
+}
+
+impl ColumnRole {
+    /// Human-readable field label for the mapping form and error text.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Number => "Pin number",
+            Self::Name => "Pin name",
+            Self::ElectricalType => "Electrical type",
+            Self::Unit => "Unit",
+            Self::Side => "Side",
+        }
+    }
+}
+
+/// Zero-based column indices assigned to each logical pin field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnMapping {
+    pub number: Option<usize>,
+    pub name: Option<usize>,
+    pub electrical_type: Option<usize>,
+    pub unit: Option<usize>,
+    pub side: Option<usize>,
+}
+
+impl ColumnMapping {
+    /// Infer assignments from recognized header names, or use positional defaults for a headerless table.
+    /// A declared header with no recognized names leaves every column unmapped.
+    pub fn auto_detect(headers: &[String], column_count: usize, has_header: bool) -> Self {
+        if !has_header {
+            return Self::positional(column_count);
+        }
+        let mut mapping = Self::default();
+        for (index, header) in headers.iter().enumerate() {
+            let norm = normalize_header(header);
+            if mapping.number.is_none()
+                && matches!(norm.as_str(), "number" | "pin" | "pin number" | "pin no" | "pin num" | "designator" | "num" | "no" | "#" | "terminal")
+            {
+                mapping.number = Some(index);
+            } else if mapping.name.is_none()
+                && matches!(norm.as_str(), "name" | "pin name" | "signal" | "signal name" | "label" | "display name" | "function")
+            {
+                mapping.name = Some(index);
+            } else if mapping.electrical_type.is_none()
+                && matches!(
+                    norm.as_str(),
+                    "type" | "electrical type" | "electrical" | "elec" | "elec type" | "pin type" | "direction" | "dir" | "io" | "i/o"
+                )
+            {
+                mapping.electrical_type = Some(index);
+            } else if mapping.unit.is_none() && matches!(norm.as_str(), "unit" | "part" | "section" | "bank" | "subpart" | "group") {
+                mapping.unit = Some(index);
+            } else if mapping.side.is_none() && matches!(norm.as_str(), "side" | "edge" | "position" | "orientation" | "location") {
+                mapping.side = Some(index);
+            }
+        }
+        mapping.clamped(column_count)
+    }
+
+    /// Assign columns in canonical order: number, name, electrical type, unit, side.
+    pub fn positional(column_count: usize) -> Self {
+        Self {
+            number: (column_count > 0).then_some(0),
+            name: (column_count > 1).then_some(1),
+            electrical_type: (column_count > 2).then_some(2),
+            unit: (column_count > 3).then_some(3),
+            side: (column_count > 4).then_some(4),
+        }
+    }
+
+    /// Drop any column index outside `0..column_count` so edits to source text never index out of bounds.
+    pub fn clamped(self, column_count: usize) -> Self {
+        let keep = |col: Option<usize>| col.filter(|&index| index < column_count);
+        Self {
+            number: keep(self.number),
+            name: keep(self.name),
+            electrical_type: keep(self.electrical_type),
+            unit: keep(self.unit),
+            side: keep(self.side),
+        }
+    }
+}
+
+/// Classification of a validation finding reported by pin-table preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingKind {
+    EmptyTable,
+    InputTooLarge,
+    UnclosedQuote,
+    /// Non-whitespace data follows the closing quote of a quoted field (e.g. `"1"2`).
+    DataAfterClosingQuote,
+    /// Auto detection found a table that splits validly under two delimiters; choose one explicitly.
+    AmbiguousDelimiter,
+    UnrecognizedHeader,
+    MissingNumberColumn,
+    TooManyPins,
+    TooManyUnits,
+    UnitTooLarge,
+    UnitNameCollision,
+    MissingPinNumber,
+    InvalidPinNumber,
+    DuplicatePinNumber,
+    InvalidPinName,
+    UnknownElectricalType,
+    InvalidUnitName,
+    UnknownSide,
+}
+
+impl FindingKind {
+    /// Short scannable badge label for compact preview-table status cells.
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::EmptyTable => "Empty",
+            Self::InputTooLarge => "Too large",
+            Self::UnclosedQuote => "Quote error",
+            Self::DataAfterClosingQuote => "Quote error",
+            Self::AmbiguousDelimiter => "Ambiguous delimiter",
+            Self::UnrecognizedHeader => "Unrecognized header",
+            Self::MissingNumberColumn => "Unmapped number",
+            Self::TooManyPins => "Too many pins",
+            Self::TooManyUnits => "Too many units",
+            Self::UnitTooLarge => "Unit too large",
+            Self::UnitNameCollision => "Unit collision",
+            Self::MissingPinNumber => "Missing number",
+            Self::InvalidPinNumber => "Bad number",
+            Self::DuplicatePinNumber => "Duplicate",
+            Self::InvalidPinName => "Bad name",
+            Self::UnknownElectricalType => "Bad type",
+            Self::InvalidUnitName => "Bad unit",
+            Self::UnknownSide => "Bad side",
+        }
+    }
+}
+
+/// One validation finding tied to either the whole table or a specific data row and source line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Finding {
+    /// 1-based data row index, or `None` for table-level findings.
+    pub row: Option<usize>,
+    /// 1-based line number in the source text, when available.
+    pub line: Option<usize>,
+    /// Logical column that triggered the finding, when applicable.
+    pub column: Option<ColumnRole>,
+    pub kind: FindingKind,
+    pub message: String,
+}
+
+/// One parsed and validated row shown in the live preview table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewRow {
+    /// 1-based data row number (excluding any header row).
+    pub row_index: usize,
+    /// 1-based starting line number in the source text.
+    pub line_number: usize,
+    pub raw_number: String,
+    pub number: Option<String>,
+    /// Pin name preserved verbatim without splitting at `/`.
+    pub name: Option<String>,
+    pub raw_type: String,
+    pub electrical_type: Option<ElectricalType>,
+    pub raw_unit: String,
+    pub unit: String,
+    pub raw_side: String,
+    pub side: Option<PinSide>,
+    /// Indices into [`Preview::findings`] belonging to this row.
+    pub finding_indices: Vec<usize>,
+}
+
+impl PreviewRow {
+    /// Whether this row has zero validation findings.
+    pub fn is_valid(&self) -> bool {
+        self.finding_indices.is_empty()
+    }
+}
+
+/// Per-unit pin counts and grid-aligned body-size estimate for preview and for symbol generation in units.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitSummary {
+    pub unit: String,
+    pub pin_count: usize,
+    pub left: usize,
+    pub right: usize,
+    pub top: usize,
+    pub bottom: usize,
+    /// Minimum symbol body width on the 1.27 mm schematic grid to fit top and bottom pins.
+    pub estimated_width_nm: i64,
+    /// Minimum symbol body height on the 1.27 mm schematic grid to fit left and right pins.
+    pub estimated_height_nm: i64,
+}
+
+/// Complete read-only preview returned by [`preview`] and `library.preview_pin_table`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Preview {
+    pub delimiter: Delimiter,
+    pub has_header: bool,
+    pub headers: Vec<String>,
+    pub column_count: usize,
+    pub mapping: ColumnMapping,
+    pub rows: Vec<PreviewRow>,
+    pub findings: Vec<Finding>,
+    pub units: Vec<UnitSummary>,
+    pub valid_row_count: usize,
+}
+
+impl Preview {
+    /// Whether the table has at least one row and zero findings, permitting staging.
+    pub fn can_accept(&self) -> bool {
+        !self.rows.is_empty() && self.findings.is_empty()
+    }
+
+    /// Number of table-level findings not tied to a single row.
+    pub fn table_finding_count(&self) -> usize {
+        self.findings.iter().filter(|finding| finding.row.is_none()).count()
+    }
+
+    /// Number of parsed rows that carry at least one row-level finding.
+    pub fn rows_with_findings_count(&self) -> usize {
+        self.rows.iter().filter(|row| !row.is_valid()).count()
+    }
+
+    /// Build a validated, immutable [`ImportPlan`] bound to `base_revision` for downstream symbol
+    /// generation or diffing. Returns an error if any finding remains or no pins were parsed.
+    pub fn into_import_plan(&self, base_revision: u64) -> Result<ImportPlan, String> {
+        if !self.can_accept() {
+            return Err(if self.rows.is_empty() {
+                "Pin table has no rows to stage.".into()
+            } else {
+                let count = self.findings.len();
+                format!("Resolve {count} {} before staging the pin table.", plural(count, "finding", "findings"))
+            });
+        }
+        let mut pins = Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
+            let number = row.number.clone().ok_or("Missing validated pin number.")?;
+            let electrical_type = row.electrical_type.ok_or("Missing validated electrical type.")?;
+            let side = row.side.unwrap_or(PinSide::Left);
+            pins.push(PlannedPin { number, name: row.name.clone(), electrical_type, unit: row.unit.clone(), side });
+        }
+        Ok(ImportPlan { base_revision, pins, units: self.units.clone() })
+    }
+
+    /// Serialize the preview as the canonical JSON reply for `library.preview_pin_table`.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "delimiter": self.delimiter.as_str(),
+            "has_header": self.has_header,
+            "headers": self.headers,
+            "column_count": self.column_count,
+            "mapping": self.mapping,
+            "rows": self.rows,
+            "findings": self.findings,
+            "units": self.units,
+            "valid_row_count": self.valid_row_count,
+            "can_accept": self.can_accept(),
+            "created": false,
+            "saved": false,
+        })
+    }
+}
+
+/// One validated pin ready for symbol generation in units or re-import difference (next slices of #78).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedPin {
+    pub number: String,
+    pub name: Option<String>,
+    pub electrical_type: ElectricalType,
+    pub unit: String,
+    pub side: PinSide,
+}
+
+/// Validated, immutable hand-off produced when a user stages a clean pin-table preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportPlan {
+    /// Owning symbol document revision when the plan was staged, for staleness checks by the slices that consume it.
+    pub base_revision: u64,
+    pub pins: Vec<PlannedPin>,
+    pub units: Vec<UnitSummary>,
+}
+
+/// Match an electrical type string case-insensitively against the fixed spelling list.
+/// `I/O`, `IO` and `bidirectional` map to [`ElectricalType::Bidirectional`]. Unknown spellings
+/// return `None` so callers record a finding instead of guessing.
+pub fn parse_electrical_type(raw: &str) -> Option<ElectricalType> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "input" | "in" | "i" => Some(ElectricalType::Input),
+        "output" | "out" | "o" => Some(ElectricalType::Output),
+        "bidirectional" | "bidir" | "bi" | "i/o" | "io" | "inout" | "in/out" | "input/output" | "input-output" | "input_output" => {
+            Some(ElectricalType::Bidirectional)
+        }
+        "passive" | "pas" | "p" => Some(ElectricalType::Passive),
+        "power" | "pwr" | "power_in" | "power in" | "power-in" | "pwr_in" | "pwr in" | "power input" | "power_input" | "supply" => {
+            Some(ElectricalType::PowerIn)
+        }
+        "power_out" | "power out" | "power-out" | "pwr_out" | "pwr out" | "power output" | "power_output" => Some(ElectricalType::PowerOut),
+        "unspecified" | "unspec" | "unknown" | "?" => Some(ElectricalType::Unspecified),
+        "tri_state" | "tri-state" | "tristate" | "tri state" | "hi-z" | "hiz" | "high-z" | "high_z" | "high impedance" | "high-impedance"
+        | "high_impedance" | "3-state" | "3state" => Some(ElectricalType::TriState),
+        "open_collector" | "open collector" | "open-collector" | "oc" | "open_drain" | "open drain" | "open-drain" | "od" => {
+            Some(ElectricalType::OpenCollector)
+        }
+        "open_emitter" | "open emitter" | "open-emitter" | "oe" | "open_source" | "open source" | "open-source" | "os" => {
+            Some(ElectricalType::OpenEmitter)
+        }
+        "no_connect" | "no connect" | "no-connect" | "nc" | "dnc" | "not connected" | "not_connected" => Some(ElectricalType::NoConnect),
+        _ => None,
+    }
+}
+
+/// Human-readable display label for an [`ElectricalType`] in preview tables.
+pub const fn electrical_type_label(kind: ElectricalType) -> &'static str {
+    match kind {
+        ElectricalType::Passive => "Passive",
+        ElectricalType::Input => "Input",
+        ElectricalType::Output => "Output",
+        ElectricalType::Bidirectional => "Bidirectional",
+        ElectricalType::PowerIn => "Power in",
+        ElectricalType::PowerOut => "Power out",
+        ElectricalType::Unspecified => "Unspecified",
+        ElectricalType::TriState => "Tri-state",
+        ElectricalType::OpenCollector => "Open collector",
+        ElectricalType::OpenEmitter => "Open emitter",
+        ElectricalType::NoConnect => "No connect",
+    }
+}
+
+/// Parse and validate a CSV or TSV pin table without mutating any symbol or project state.
+/// In automatic mode, a nonempty table whose declared header has no known column names
+/// cannot be staged until the caller disables header handling or supplies an explicit mapping.
+/// Auto also cannot stage a table that another concrete delimiter reads as a different valid pin
+/// plan: the detected preview then carries a blocking [`FindingKind::AmbiguousDelimiter`].
+pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_override: Option<ColumnMapping>) -> Preview {
+    if delimiter != Delimiter::Auto {
+        return preview_resolved(text, delimiter, has_header, mapping_override);
+    }
+    let resolved = detect_delimiter(text);
+    let mut detected = preview_resolved(text, resolved, has_header, mapping_override);
+    let Ok(plan) = detected.into_import_plan(0) else {
+        return detected;
+    };
+    let rivals: Vec<&str> = [Delimiter::Tab, Delimiter::Comma, Delimiter::Semicolon]
+        .into_iter()
+        .filter(|&candidate| {
+            candidate != resolved
+                && preview_resolved(text, candidate, has_header, mapping_override).into_import_plan(0).is_ok_and(|other| other != plan)
+        })
+        .map(Delimiter::label)
+        .collect();
+    if !rivals.is_empty() {
+        detected.findings.push(Finding {
+            row: None,
+            line: None,
+            column: None,
+            kind: FindingKind::AmbiguousDelimiter,
+            message: format!(
+                "Auto-detected {} delimiter is ambiguous: {} also reads as a valid pin table with different pins. Choose the delimiter explicitly before staging.",
+                resolved.label(),
+                rivals.join(" and ")
+            ),
+        });
+    }
+    detected
+}
+
+/// [`preview`] with a concrete delimiter.
+fn preview_resolved(text: &str, resolved: Delimiter, has_header: bool, mapping_override: Option<ColumnMapping>) -> Preview {
+    if text.len() > MAX_BYTES {
+        return Preview {
+            delimiter: resolved,
+            has_header,
+            headers: Vec::new(),
+            column_count: 0,
+            mapping: ColumnMapping::default(),
+            rows: Vec::new(),
+            findings: vec![Finding {
+                row: None,
+                line: None,
+                column: None,
+                kind: FindingKind::InputTooLarge,
+                message: format!("Pin table exceeds the {} KiB limit ({} bytes).", MAX_BYTES / 1024, text.len()),
+            }],
+            units: Vec::new(),
+            valid_row_count: 0,
+        };
+    }
+
+    let cleaned = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let parsed = parse_records(cleaned, resolved.byte());
+    let mut findings = Vec::new();
+    if let Some(line) = parsed.unclosed_quote_line {
+        findings.push(Finding {
+            row: None,
+            line: Some(line),
+            column: None,
+            kind: FindingKind::UnclosedQuote,
+            message: format!("Line {line}: unclosed quoted field."),
+        });
+    }
+    if let Some(line) = parsed.data_after_quote_line {
+        findings.push(Finding {
+            row: None,
+            line: Some(line),
+            column: None,
+            kind: FindingKind::DataAfterClosingQuote,
+            message: format!("Line {line}: unexpected data after a closing quote."),
+        });
+    }
+
+    let column_count = parsed.records.iter().map(|record| record.fields.len()).max().unwrap_or(0).min(MAX_COLUMNS);
+    let (headers, data_records) = if has_header {
+        match parsed.records.split_first() {
+            Some((first, rest)) => (first.fields.iter().take(MAX_COLUMNS).map(|s| s.trim().to_owned()).collect(), rest),
+            None => (Vec::new(), [].as_slice()),
+        }
+    } else {
+        (Vec::new(), parsed.records.as_slice())
+    };
+
+    let mapping = match mapping_override {
+        Some(custom) => custom.clamped(column_count),
+        None => ColumnMapping::auto_detect(&headers, column_count, has_header),
+    };
+    let unrecognized_header = has_header && mapping_override.is_none() && mapping == ColumnMapping::default();
+    if unrecognized_header && let Some(first) = parsed.records.first() {
+        findings.push(Finding {
+            row: None,
+            line: Some(first.line_number),
+            column: None,
+            kind: FindingKind::UnrecognizedHeader,
+            message: "No pin-table column names were recognized in the first row. Turn off ‘First row is header’ if it contains a pin, or map columns manually to use it as a header.".into(),
+        });
+    }
+
+    if data_records.is_empty() {
+        if findings.is_empty() {
+            findings.push(Finding {
+                row: None,
+                line: None,
+                column: None,
+                kind: FindingKind::EmptyTable,
+                message: "Pin table has no data rows. Paste or load at least one pin.".into(),
+            });
+        }
+        return Preview {
+            delimiter: resolved,
+            has_header,
+            headers,
+            column_count,
+            mapping,
+            rows: Vec::new(),
+            findings,
+            units: Vec::new(),
+            valid_row_count: 0,
+        };
+    }
+
+    if mapping.number.is_none() && !unrecognized_header {
+        findings.push(Finding {
+            row: None,
+            line: None,
+            column: Some(ColumnRole::Number),
+            kind: FindingKind::MissingNumberColumn,
+            message: "Map a Pin number column before staging.".into(),
+        });
+    }
+
+    if parsed.truncated || data_records.len() > MAX_TERMINALS {
+        let count_text = if parsed.truncated { format!("more than {MAX_ROWS} rows") } else { format!("{} rows", data_records.len()) };
+        findings.push(Finding {
+            row: None,
+            line: None,
+            column: None,
+            kind: FindingKind::TooManyPins,
+            message: format!("Pin table has {count_text}; a symbol supports at most {MAX_TERMINALS} pins."),
+        });
+    }
+
+    #[derive(Default)]
+    struct SideCounts {
+        left: usize,
+        right: usize,
+        top: usize,
+        bottom: usize,
+    }
+
+    let mut seen_numbers: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unit_spellings: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    let mut unit_counts: BTreeMap<String, SideCounts> = BTreeMap::new();
+    let mut distinct_units: BTreeSet<String> = BTreeSet::new();
+    let mut rows = Vec::with_capacity(data_records.len().min(MAX_ROWS));
+
+    for (offset, record) in data_records.iter().take(MAX_ROWS).enumerate() {
+        let row_index = offset + 1;
+        let line_number = record.line_number;
+        let cell = |col: Option<usize>| -> &str { col.and_then(|index| record.fields.get(index)).map(|value| value.trim()).unwrap_or("") };
+        let mut row_findings = Vec::new();
+
+        // Pin number
+        let raw_number = cell(mapping.number).to_owned();
+        let number = if mapping.number.is_none() {
+            None
+        } else if raw_number.is_empty() {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Number),
+                kind: FindingKind::MissingPinNumber,
+                message: format!("Row {row_index} (line {line_number}): missing pin number."),
+            });
+            row_findings.push(idx);
+            None
+        } else if PinNumber::new(&raw_number).is_none() {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Number),
+                kind: FindingKind::InvalidPinNumber,
+                message: format!(
+                    "Row {row_index} (line {line_number}): pin number '{raw_number}' must be 1 to 8 ASCII letters, digits, '+', '-' or '_'."
+                ),
+            });
+            row_findings.push(idx);
+            None
+        } else if let Some(&first_row) = seen_numbers.get(&raw_number) {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Number),
+                kind: FindingKind::DuplicatePinNumber,
+                message: format!("Row {row_index} (line {line_number}): duplicate pin number '{raw_number}' (first seen on row {first_row})."),
+            });
+            row_findings.push(idx);
+            Some(raw_number.clone())
+        } else {
+            seen_numbers.insert(raw_number.clone(), row_index);
+            Some(raw_number.clone())
+        };
+
+        // Pin name (never split at '/'; native symbol validation counts characters, max 32)
+        let raw_name = cell(mapping.name);
+        let name = if raw_name.is_empty() {
+            None
+        } else if raw_name.chars().count() > MAX_PIN_NAME_CHARS || raw_name.chars().any(char::is_control) {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Name),
+                kind: FindingKind::InvalidPinName,
+                message: format!(
+                    "Row {row_index} (line {line_number}): pin name must be at most {MAX_PIN_NAME_CHARS} characters with no control characters."
+                ),
+            });
+            row_findings.push(idx);
+            None
+        } else {
+            Some(raw_name.to_owned())
+        };
+
+        // Electrical type (fixed case-insensitive spelling list; unmapped value is a finding)
+        let raw_type = cell(mapping.electrical_type).to_owned();
+        let electrical_type = if mapping.electrical_type.is_none() {
+            Some(ElectricalType::Unspecified)
+        } else if raw_type.is_empty() {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::ElectricalType),
+                kind: FindingKind::UnknownElectricalType,
+                message: format!(
+                    "Row {row_index} (line {line_number}): missing electrical type (expected e.g. input, output, I/O, passive, power_in)."
+                ),
+            });
+            row_findings.push(idx);
+            None
+        } else if let Some(parsed_type) = parse_electrical_type(&raw_type) {
+            Some(parsed_type)
+        } else {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::ElectricalType),
+                kind: FindingKind::UnknownElectricalType,
+                message: format!(
+                    "Row {row_index} (line {line_number}): unknown electrical type '{raw_type}' (expected e.g. input, output, I/O, passive, power_in)."
+                ),
+            });
+            row_findings.push(idx);
+            None
+        };
+
+        // Unit
+        let raw_unit = cell(mapping.unit).to_owned();
+        let unit = if raw_unit.is_empty() {
+            DEFAULT_UNIT.to_owned()
+        } else if let Some(normalized) = normalize_unit_id(&raw_unit) {
+            if let Some((first_spelling, first_row)) = unit_spellings.get(&normalized) {
+                if first_spelling != &raw_unit {
+                    let idx = findings.len();
+                    findings.push(Finding {
+                        row: Some(row_index),
+                        line: Some(line_number),
+                        column: Some(ColumnRole::Unit),
+                        kind: FindingKind::UnitNameCollision,
+                        message: format!(
+                            "Row {row_index} (line {line_number}): unit '{raw_unit}' normalizes to '{normalized}', colliding with '{first_spelling}' on row {first_row}."
+                        ),
+                    });
+                    row_findings.push(idx);
+                }
+            } else {
+                unit_spellings.insert(normalized.clone(), (raw_unit.clone(), row_index));
+            }
+            normalized
+        } else {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Unit),
+                kind: FindingKind::InvalidUnitName,
+                message: format!(
+                    "Row {row_index} (line {line_number}): unit '{raw_unit}' is not a valid unit ID (use 1 to 64 ASCII letters, digits or hyphens)."
+                ),
+            });
+            row_findings.push(idx);
+            DEFAULT_UNIT.to_owned()
+        };
+        distinct_units.insert(unit.clone());
+
+        // Side
+        let raw_side = cell(mapping.side).to_owned();
+        let side = if raw_side.is_empty() {
+            Some(PinSide::Left)
+        } else if let Some(parsed_side) = PinSide::parse(&raw_side) {
+            Some(parsed_side)
+        } else {
+            let idx = findings.len();
+            findings.push(Finding {
+                row: Some(row_index),
+                line: Some(line_number),
+                column: Some(ColumnRole::Side),
+                kind: FindingKind::UnknownSide,
+                message: format!("Row {row_index} (line {line_number}): unknown pin side '{raw_side}' (expected left, right, top or bottom)."),
+            });
+            row_findings.push(idx);
+            None
+        };
+
+        let counts = unit_counts.entry(unit.clone()).or_default();
+        match side.unwrap_or(PinSide::Left) {
+            PinSide::Left => counts.left = counts.left.saturating_add(1),
+            PinSide::Right => counts.right = counts.right.saturating_add(1),
+            PinSide::Top => counts.top = counts.top.saturating_add(1),
+            PinSide::Bottom => counts.bottom = counts.bottom.saturating_add(1),
+        }
+
+        rows.push(PreviewRow {
+            row_index,
+            line_number,
+            raw_number,
+            number,
+            name,
+            raw_type,
+            electrical_type,
+            raw_unit,
+            unit,
+            raw_side,
+            side,
+            finding_indices: row_findings,
+        });
+    }
+
+    if distinct_units.len() > MAX_UNITS {
+        findings.push(Finding {
+            row: None,
+            line: None,
+            column: Some(ColumnRole::Unit),
+            kind: FindingKind::TooManyUnits,
+            message: format!("Pin table defines {} units; a symbol supports at most {MAX_UNITS} units.", distinct_units.len()),
+        });
+    }
+
+    let units: Vec<UnitSummary> = unit_counts
+        .into_iter()
+        .map(|(unit, counts)| {
+            let pin_count = counts.left.saturating_add(counts.right).saturating_add(counts.top).saturating_add(counts.bottom);
+            let (estimated_width_nm, estimated_height_nm) = estimate_unit_body_nm(counts.left, counts.right, counts.top, counts.bottom);
+            UnitSummary {
+                unit,
+                pin_count,
+                left: counts.left,
+                right: counts.right,
+                top: counts.top,
+                bottom: counts.bottom,
+                estimated_width_nm,
+                estimated_height_nm,
+            }
+        })
+        .collect();
+
+    for unit in &units {
+        if unit.pin_count > MAX_PINS_PER_UNIT || unit.estimated_width_nm > MAX_BODY_SPAN_NM || unit.estimated_height_nm > MAX_BODY_SPAN_NM {
+            findings.push(Finding {
+                row: None,
+                line: None,
+                column: Some(ColumnRole::Unit),
+                kind: FindingKind::UnitTooLarge,
+                message: format!(
+                    "Unit '{}' ({} pins, {:.1} × {:.1} mm) exceeds the native ±100 mm symbol drawing bound (max {MAX_PINS_PER_UNIT} pins per unit, max {:.1} mm per side); split pins across multiple units or sides.",
+                    unit.unit,
+                    unit.pin_count,
+                    unit.estimated_width_nm as f64 / 1_000_000.0,
+                    unit.estimated_height_nm as f64 / 1_000_000.0,
+                    MAX_BODY_SPAN_NM as f64 / 1_000_000.0,
+                ),
+            });
+        }
+    }
+
+    let valid_row_count = rows.iter().filter(|row| row.is_valid()).count();
+
+    Preview { delimiter: resolved, has_header, headers, column_count, mapping, rows, findings, units, valid_row_count }
+}
+
+/// Compute the minimum grid-aligned body rectangle (width, height) in nanometres for one unit.
+/// Each side reserves one pin pitch per pin plus one pitch margin at both ends, clamped to
+/// [`MIN_BODY_SPAN_NM`] so small units stay readable on the 1.27 mm schematic grid.
+pub fn estimate_unit_body_nm(left: usize, right: usize, top: usize, bottom: usize) -> (i64, i64) {
+    let span = |max_pins: usize| -> i64 {
+        let slots = i64::try_from(max_pins).unwrap_or(i64::MAX).saturating_add(1);
+        slots.saturating_mul(PIN_PITCH_NM).max(MIN_BODY_SPAN_NM)
+    };
+    (span(top.max(bottom)), span(left.max(right)))
+}
+
+/// Choose singular or plural noun form for a count.
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 { singular } else { plural }
+}
+
+/// JSON Schema for the optional `delimiter` parameter of `library.preview_pin_table`.
+pub fn delimiter_schema() -> Value {
+    json!({"type": "string", "enum": ["auto", "comma", "tab", "semicolon"]})
+}
+
+/// JSON Schema for the optional `mapping` parameter of `library.preview_pin_table`.
+pub fn mapping_schema() -> Value {
+    let col = json!({"type": "integer", "minimum": 0, "maximum": MAX_COLUMNS - 1});
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "number": col,
+            "name": col,
+            "electrical_type": col,
+            "unit": col,
+            "side": col,
+        }
+    })
+}
+
+/// Validate a JSON `mapping` parameter value against [`ColumnMapping`] bounds. The value is a
+/// complete mapping that replaces header auto-detection, as the dialog's manual mapping does:
+/// omitted fields stay unmapped rather than falling back to the detected columns.
+pub fn validate_mapping_value(value: &Value) -> Result<ColumnMapping, &'static str> {
+    let Some(object) = value.as_object() else {
+        return Err("must be an object mapping pin fields to zero-based column indices");
+    };
+    let mut mapping = ColumnMapping::default();
+    for (key, raw) in object {
+        let Some(index) = raw.as_u64().and_then(|n| usize::try_from(n).ok()).filter(|&n| n < MAX_COLUMNS) else {
+            return Err("column index must be an integer from 0 to 63");
+        };
+        match key.as_str() {
+            "number" => mapping.number = Some(index),
+            "name" => mapping.name = Some(index),
+            "electrical_type" => mapping.electrical_type = Some(index),
+            "unit" => mapping.unit = Some(index),
+            "side" => mapping.side = Some(index),
+            _ => return Err("mapping keys must be number, name, electrical_type, unit or side"),
+        }
+    }
+    Ok(mapping)
+}
+
+/// Execute `library.preview_pin_table` from validated command parameters without mutating state.
+pub fn preview_from_params(params: &Value) -> Result<Value, String> {
+    let text = params.get("text").and_then(Value::as_str).ok_or("Pin table `text` is required.")?;
+    let delimiter = match params.get("delimiter").and_then(Value::as_str) {
+        Some(raw) => Delimiter::parse(raw).ok_or("Delimiter must be auto, comma, tab or semicolon.")?,
+        None => Delimiter::Auto,
+    };
+    let has_header = params.get("has_header").and_then(Value::as_bool).unwrap_or(true);
+    let mapping = match params.get("mapping") {
+        Some(value) if !value.is_null() => Some(validate_mapping_value(value).map_err(str::to_owned)?),
+        _ => None,
+    };
+    Ok(preview(text, delimiter, has_header, mapping).to_json())
+}
+
+/// Normalize a unit cell to a portable lowercase identifier matching native symbol rules, or
+/// return `None` if it contains disallowed punctuation or exceeds 64 bytes.
+fn normalize_unit_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(trimmed.len());
+    let mut prev_hyphen = false;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_hyphen = false;
+        } else if ch == '-' || ch == '_' || ch == ' ' {
+            if !out.is_empty() && !prev_hyphen {
+                out.push('-');
+                prev_hyphen = true;
+            }
+        } else {
+            return None;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    crate::board::definition::valid_id(&out).then_some(out)
+}
+
+/// Normalize a column header for case-insensitive matching against known pin field aliases.
+fn normalize_header(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut prev_space = false;
+    for ch in raw.trim().chars() {
+        if ch == '_' || ch == '-' || ch.is_whitespace() {
+            if !out.is_empty() && !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(ch.to_ascii_lowercase());
+            prev_space = false;
+        }
+    }
+    out.trim().to_owned()
+}
+
+/// Maximum number of non-blank logical records sampled by [`detect_delimiter`].
+const DETECT_SAMPLE_RECORDS: usize = 8;
+
+/// Candidate delimiters considered by automatic detection.
+const DETECT_CANDIDATES: [u8; 3] = *b"\t,;";
+
+/// Separator statistics for one candidate delimiter over the sampled logical records.
+struct SeparatorSample {
+    /// Unquoted separator bytes seen across the sampled records.
+    count: usize,
+    /// Sampled records with at least one non-whitespace character outside the separators.
+    records: usize,
+    /// Sampled records containing at least one unquoted separator.
+    records_with_separator: usize,
+}
+
+impl SeparatorSample {
+    /// Add one finished logical record. Records with no non-whitespace content (blank lines and
+    /// delimiter-only rows) do not vote.
+    fn finish_record(&mut self, has_content: bool, separators: usize) {
+        if has_content {
+            self.records = self.records.saturating_add(1);
+            self.count = self.count.saturating_add(separators);
+            if separators > 0 {
+                self.records_with_separator = self.records_with_separator.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Count unquoted `separator` characters over the first voting logical records of `text`.
+///
+/// Records follow [`parse_records`]: `""` inside quotes is an escaped quote, quoted CR/LF stay in
+/// the field, and an unquoted CR, LF or CRLF each end exactly one record. A quote opens a quoted
+/// field only when the field is still empty, and a field starts at the record start or after any
+/// candidate delimiter, so every candidate sees the same quoted regions. Content uses Unicode
+/// whitespace like the `trim` in `parse_records`. This is only a vote; [`preview`] separately
+/// rejects Auto when another delimiter yields a different valid pin plan.
+fn sample_separator(text: &str, separator: u8) -> SeparatorSample {
+    let mut sample = SeparatorSample { count: 0, records: 0, records_with_separator: 0 };
+    let mut chars = text.chars().peekable();
+    let mut in_quotes = false;
+    let mut field_empty = true;
+    let mut record_has_content = false;
+    let mut record_separators: usize = 0;
+
+    while sample.records < DETECT_SAMPLE_RECORDS
+        && let Some(ch) = chars.next()
+    {
+        if in_quotes {
+            if ch == '"' {
+                if chars.next_if_eq(&'"').is_some() {
+                    record_has_content = true;
+                    field_empty = false;
+                } else {
+                    in_quotes = false;
+                }
+                continue;
+            }
+            record_has_content |= !ch.is_whitespace();
+            field_empty = false;
+            continue;
+        }
+        if ch == '"' && field_empty {
+            in_quotes = true;
+            continue;
+        }
+        if ch == '\r' || ch == '\n' {
+            if ch == '\r' {
+                chars.next_if_eq(&'\n');
+            }
+            sample.finish_record(record_has_content, record_separators);
+            record_has_content = false;
+            record_separators = 0;
+            field_empty = true;
+            continue;
+        }
+        if let Ok(byte) = u8::try_from(ch)
+            && DETECT_CANDIDATES.contains(&byte)
+        {
+            if byte == separator {
+                record_separators = record_separators.saturating_add(1);
+            }
+            field_empty = true;
+            continue;
+        }
+        record_has_content |= !ch.is_whitespace();
+        field_empty = false;
+    }
+    if sample.records < DETECT_SAMPLE_RECORDS {
+        sample.finish_record(record_has_content, record_separators);
+    }
+    sample
+}
+
+/// Pick a delimiter from per-candidate samples: Tab whenever every voting record contains an
+/// unquoted tab (so TSV names with commas stay Tab) or tabs are at least as frequent as the others;
+/// otherwise Semicolon when it outnumbers commas, else Comma.
+fn choose_delimiter(tab: &SeparatorSample, comma: &SeparatorSample, semi: &SeparatorSample) -> Delimiter {
+    if (tab.records > 0 && tab.records_with_separator == tab.records) || (tab.count >= comma.count && tab.count >= semi.count && tab.count > 0) {
+        Delimiter::Tab
+    } else if semi.count > comma.count {
+        Delimiter::Semicolon
+    } else {
+        Delimiter::Comma
+    }
+}
+
+/// Vote for the most likely field delimiter from the first voting logical records of `text`
+/// (leading BOM ignored). Quoted fields that start after any candidate delimiter never vote, so a
+/// quoted CSV field holding tabs or a quoted TSV field holding commas does not sway the result.
+fn detect_delimiter(text: &str) -> Delimiter {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let [tab, comma, semi] = DETECT_CANDIDATES.map(|separator| sample_separator(text, separator));
+    choose_delimiter(&tab, &comma, &semi)
+}
+
+struct ParsedRecord {
+    line_number: usize,
+    fields: Vec<String>,
+}
+
+struct ParsedTable {
+    records: Vec<ParsedRecord>,
+    unclosed_quote_line: Option<usize>,
+    /// First line where non-whitespace data follows a quoted field's closing quote.
+    data_after_quote_line: Option<usize>,
+    truncated: bool,
+}
+
+/// Parse RFC 4180 delimited records with `""` escape handling and 1-based line tracking.
+/// Blank lines are skipped, but an explicitly quoted empty field still forms a record.
+fn parse_records(text: &str, separator: u8) -> ParsedTable {
+    let bytes = text.as_bytes();
+    let mut records = Vec::new();
+    let mut fields = Vec::new();
+    let mut field = Vec::new();
+    let mut in_quotes = false;
+    let mut quote_closed = false;
+    let mut data_after_quote_line = None;
+    let mut quote_start_line = 1usize;
+    let mut line_number = 1usize;
+    let mut record_start_line = 1usize;
+    let mut index = 0usize;
+    let mut truncated = false;
+
+    while let Some(&byte) = bytes.get(index) {
+        if in_quotes {
+            if byte == b'"' {
+                if bytes.get(index + 1) == Some(&b'"') {
+                    field.push(b'"');
+                    index += 2;
+                    continue;
+                }
+                in_quotes = false;
+                quote_closed = true;
+                index += 1;
+                continue;
+            }
+            if byte == b'\n' {
+                line_number = line_number.saturating_add(1);
+            }
+            field.push(byte);
+            index += 1;
+            continue;
+        }
+
+        if byte == b'"' && field.is_empty() {
+            in_quotes = true;
+            quote_start_line = line_number;
+            index += 1;
+            continue;
+        }
+
+        if byte == separator {
+            fields.push(String::from_utf8_lossy(&field).into_owned());
+            field.clear();
+            quote_closed = false;
+            index += 1;
+            continue;
+        }
+
+        if byte == b'\r' || byte == b'\n' {
+            if byte == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+                index += 2;
+            } else {
+                index += 1;
+            }
+            fields.push(String::from_utf8_lossy(&field).into_owned());
+            field.clear();
+            if quote_closed || fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
+                records.push(ParsedRecord { line_number: record_start_line, fields: std::mem::take(&mut fields) });
+            } else {
+                fields.clear();
+            }
+            quote_closed = false;
+            line_number = line_number.saturating_add(1);
+            record_start_line = line_number;
+            if records.len() > MAX_ROWS {
+                if bytes.get(index..).is_some_and(|rest| rest.iter().any(|b| !b.is_ascii_whitespace())) {
+                    truncated = true;
+                }
+                break;
+            }
+            continue;
+        }
+
+        if quote_closed && byte != b' ' && byte != b'\t' && data_after_quote_line.is_none() {
+            data_after_quote_line = Some(line_number);
+        }
+        field.push(byte);
+        index += 1;
+    }
+
+    if !truncated && (quote_closed || !field.is_empty() || !fields.is_empty()) {
+        fields.push(String::from_utf8_lossy(&field).into_owned());
+        if quote_closed || fields.len() > 1 || fields.iter().any(|cell| !cell.trim().is_empty()) {
+            records.push(ParsedRecord { line_number: record_start_line, fields });
+        }
+    }
+
+    ParsedTable { records, unclosed_quote_line: in_quotes.then_some(quote_start_line), data_after_quote_line, truncated }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Session, library::sources};
+
+    /// Done test: a synthetic 256-pin CSV with 2 duplicate pin numbers previews 256 rows and 2
+    /// findings through the shared engine command, and creates nothing.
+    #[test]
+    fn synthetic_256_pin_csv_with_two_duplicates_previews_256_rows_and_2_findings() {
+        let mut csv = String::from("Number,Name,Type,Unit,Side\n");
+        for i in 1..=256 {
+            let number = match i {
+                100 => 10,
+                200 => 20,
+                _ => i,
+            };
+            let unit = format!("bank-{}", ((i - 1) / 64) + 1);
+            let side = if i % 2 == 1 { "left" } else { "right" };
+            let etype = match i % 4 {
+                0 => "power_in",
+                1 => "input",
+                2 => "output",
+                _ => "I/O",
+            };
+            csv.push_str(&format!("{number},SIG_{i}/ALT_{i},{etype},{unit},{side}\n"));
+        }
+
+        let mut session = Session::default();
+        let before = session.inspect();
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": csv})).unwrap();
+
+        assert_eq!(session.inspect(), before);
+        assert_eq!(reply["rows"].as_array().unwrap().len(), 256);
+        assert_eq!(reply["findings"].as_array().unwrap().len(), 2);
+        assert_eq!(reply["valid_row_count"], 254);
+        assert_eq!(reply["can_accept"], false);
+        assert_eq!(reply["created"], false);
+        assert_eq!(reply["saved"], false);
+        assert_eq!(reply["units"].as_array().unwrap().len(), 4);
+        assert_eq!(reply["findings"][0]["kind"], "duplicate_pin_number");
+        assert_eq!(reply["findings"][0]["row"], 100);
+        assert_eq!(reply["findings"][1]["kind"], "duplicate_pin_number");
+        assert_eq!(reply["findings"][1]["row"], 200);
+        assert_eq!(reply["rows"][0]["name"], "SIG_1/ALT_1");
+        assert_eq!(reply["rows"][2]["electrical_type"], "bidirectional");
+    }
+
+    /// Electrical type spellings are matched case-insensitively and unmapped values produce
+    /// clear findings while blocking staging. Pin names containing `/` stay intact.
+    #[test]
+    fn electrical_type_matching_and_slash_pin_names() {
+        for spelling in ["I/O", "IO", "io", "Bidirectional", "bidir", "input-output", "IN/OUT"] {
+            assert_eq!(parse_electrical_type(spelling), Some(ElectricalType::Bidirectional), "{spelling}");
+        }
+        assert_eq!(parse_electrical_type("Open Drain"), Some(ElectricalType::OpenCollector));
+        assert_eq!(parse_electrical_type("Hi-Z"), Some(ElectricalType::TriState));
+        assert_eq!(parse_electrical_type("NC"), Some(ElectricalType::NoConnect));
+        assert_eq!(parse_electrical_type("analog_magic"), None);
+
+        let csv = "Pin,Signal,Electrical Type,Unit,Side\n1,SDA/GPIO2,I/O,main,left\n2,SCL/GPIO3,analog_magic,main,right\n";
+        let result = preview(csv, Delimiter::Auto, true, None);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0].name.as_deref(), Some("SDA/GPIO2"));
+        assert_eq!(result.rows[0].electrical_type, Some(ElectricalType::Bidirectional));
+        assert!(result.rows[0].is_valid());
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].kind, FindingKind::UnknownElectricalType);
+        assert!(result.findings[0].message.contains("analog_magic"));
+        assert!(!result.can_accept());
+        assert!(result.into_import_plan(0).is_err());
+    }
+
+    /// Delimiter detection samples the same logical records as `parse_records`: a mid-field quote
+    /// stays literal, a quoted CRLF stays inside its field, and CRLF, bare CR and LF each end one
+    /// record, so this TSV with comma-heavy names is still detected as Tab.
+    #[test]
+    fn tsv_auto_detect_quoted_newline_and_mixed_line_endings() {
+        let tsv = "Number\tName\tType\r\n1\tLCD 3.5\" panel\tpassive\r2\tVDD, core, rail\tpower_in\n3\t\"A, B, C, D, E,\r\nF, G\"\tpassive\r\n4\tGND\tpower_in\r";
+        assert_eq!(detect_delimiter(tsv), Delimiter::Tab);
+        let with_bom = format!("\u{feff}{tsv}");
+        assert_eq!(detect_delimiter(&with_bom), Delimiter::Tab);
+
+        let auto = preview(tsv, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Tab);
+        assert_eq!(auto.rows.len(), 4);
+        let numbers: Vec<_> = auto.rows.iter().map(|row| row.number.as_deref()).collect();
+        assert_eq!(numbers, [Some("1"), Some("2"), Some("3"), Some("4")]);
+        let lines: Vec<_> = auto.rows.iter().map(|row| row.line_number).collect();
+        assert_eq!(lines, [2, 3, 4, 6]);
+        assert_eq!(auto.rows[0].name.as_deref(), Some("LCD 3.5\" panel"));
+        assert_eq!(auto.rows[1].name.as_deref(), Some("VDD, core, rail"));
+        assert_eq!(auto.rows[2].name, None);
+        assert_eq!(auto.rows[2].electrical_type, Some(ElectricalType::Passive));
+        assert_eq!(auto.rows[3].electrical_type, Some(ElectricalType::PowerIn));
+        assert_eq!(auto.findings.len(), 1);
+        assert_eq!(auto.findings[0].kind, FindingKind::InvalidPinName);
+        assert_eq!(auto.findings[0].line, Some(4));
+    }
+
+    /// A valid CSV whose quoted fields hold tab-separated header words and data must never stage
+    /// the tab reading under Auto: whichever delimiter the vote picks, a competing valid plan from
+    /// another delimiter (pin 1 / PowerIn vs 99 / Passive) blocks Auto with an ambiguity finding
+    /// until the delimiter is chosen. Ordinary TSV and CSV controls stay accepted.
+    #[test]
+    fn auto_delimiter_matches_explicit_comma_and_blocks_quoted_tab_ambiguity() {
+        let csv = "Ignore,\"Notes\tNumber\tType\tTail\",Number,Type\nx,\"ignored\t99\tpassive\ty\",1,power_in\n";
+        assert_eq!(detect_delimiter(csv), Delimiter::Comma);
+
+        let explicit = preview(csv, Delimiter::Comma, true, None);
+        assert!(explicit.findings.is_empty(), "{:?}", explicit.findings);
+        assert_eq!((explicit.mapping.number, explicit.mapping.electrical_type), (Some(2), Some(3)));
+        let plan = explicit.into_import_plan(0).unwrap();
+        assert_eq!(plan.pins.len(), 1);
+        assert_eq!((plan.pins[0].number.as_str(), plan.pins[0].electrical_type), ("1", ElectricalType::PowerIn));
+
+        let auto = preview(csv, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Comma);
+        assert_eq!(auto.mapping, explicit.mapping);
+        assert_eq!(auto.rows.len(), 1);
+        assert_eq!(auto.rows[0].number.as_deref(), Some("1"));
+        assert_eq!(auto.rows[0].electrical_type, Some(ElectricalType::PowerIn));
+        let kinds: Vec<_> = auto.findings.iter().map(|finding| (finding.kind, finding.row)).collect();
+        assert_eq!(kinds, [(FindingKind::AmbiguousDelimiter, None)]);
+        assert_eq!(FindingKind::AmbiguousDelimiter.short_label(), "Ambiguous delimiter");
+        assert!(!auto.can_accept());
+        assert!(auto.into_import_plan(0).is_err());
+
+        let mut session = Session::default();
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": csv})).unwrap();
+        assert_eq!(reply["delimiter"], "comma");
+        assert_eq!(reply["can_accept"], false);
+        assert_eq!(reply["findings"][0]["kind"], "ambiguous_delimiter");
+        assert_eq!(reply["rows"][0]["number"], "1");
+        let chosen = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": csv, "delimiter": "comma"})).unwrap();
+        assert_eq!(chosen["can_accept"], true);
+        assert_eq!(chosen["rows"][0]["number"], "1");
+        assert_eq!(chosen["rows"][0]["electrical_type"], "power_in");
+
+        // Literal mid-field quotes put an unquoted tab in every record, so the vote itself picks
+        // Tab; the competing valid Comma plan must still block Auto instead of staging 99 / Passive.
+        let agreeing = "I\"g\tX\"z,\"Notes\tNumber\tType\tTail\",Number,Type\nx\"g\tX\"z,\"ignored\t99\tpassive\ty\",1,power_in\n";
+        assert_eq!(detect_delimiter(agreeing), Delimiter::Tab);
+        let pin_of = |delimiter: Delimiter| {
+            let plan = preview(agreeing, delimiter, true, None).into_import_plan(0).unwrap();
+            (plan.pins[0].number.clone(), plan.pins[0].electrical_type)
+        };
+        assert_eq!(pin_of(Delimiter::Comma), ("1".to_owned(), ElectricalType::PowerIn));
+        assert_eq!(pin_of(Delimiter::Tab), ("99".to_owned(), ElectricalType::Passive));
+        let auto = preview(agreeing, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Tab);
+        let kinds: Vec<_> = auto.findings.iter().map(|finding| finding.kind).collect();
+        assert_eq!(kinds, [FindingKind::AmbiguousDelimiter]);
+        assert!(auto.findings[0].message.contains("Comma (,)"), "{}", auto.findings[0].message);
+        assert!(!auto.can_accept());
+        assert!(auto.into_import_plan(0).is_err());
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": agreeing})).unwrap();
+        assert_eq!(reply["can_accept"], false);
+        assert_eq!(reply["findings"][0]["kind"], "ambiguous_delimiter");
+
+        // Ordinary tables stay accepted: TSV with quoted commas and an NBSP-only line, and CSV
+        // with tabs inside a quoted (unmapped) notes field.
+        let quoted_commas = "Number\tName\tType\n1\t\"A,B,C\"\tpassive\n\u{a0}\n2\tD\tpower_in\n";
+        assert_eq!(detect_delimiter(quoted_commas), Delimiter::Tab);
+        let quoted_tabs = preview("Number,Notes,Type\n1,\"x\ty\",passive\n2,z,power_in\n", Delimiter::Auto, true, None);
+        assert_eq!(quoted_tabs.delimiter, Delimiter::Comma);
+        assert!(quoted_tabs.can_accept(), "{:?}", quoted_tabs.findings);
+        let tsv = preview(quoted_commas, Delimiter::Auto, true, None);
+        assert!(tsv.can_accept(), "{:?}", tsv.findings);
+        assert_eq!(tsv.rows[0].name.as_deref(), Some("A,B,C"));
+    }
+
+    /// TSV input (including commas inside unquoted names), quoted fields, BOM and manual column
+    /// remapping produce exact rows and plans.
+    #[test]
+    fn tsv_auto_detect_quoted_fields_and_manual_column_mapping() {
+        let tsv = "\u{feff}Signal\tPin\tDir\tEdge\n\"TXD, \"\"alt\"\"\"\tA1\tOutput\tRight\nRXD, A, B, C\tA2\tInput\tLeft\n";
+        let auto = preview(tsv, Delimiter::Auto, true, None);
+        assert_eq!(auto.delimiter, Delimiter::Tab);
+        assert_eq!(auto.mapping.number, Some(1));
+        assert_eq!(auto.mapping.name, Some(0));
+        assert_eq!(auto.mapping.electrical_type, Some(2));
+        assert_eq!(auto.mapping.side, Some(3));
+        assert!(auto.can_accept());
+        assert_eq!(auto.rows[0].number.as_deref(), Some("A1"));
+        assert_eq!(auto.rows[0].name.as_deref(), Some("TXD, \"alt\""));
+        assert_eq!(auto.rows[0].side, Some(PinSide::Right));
+        assert_eq!(auto.rows[1].name.as_deref(), Some("RXD, A, B, C"));
+
+        // Overriding mapping to drop the number column produces MissingNumberColumn.
+        let no_num = preview(tsv, Delimiter::Tab, true, Some(ColumnMapping { number: None, ..auto.mapping }));
+        assert!(!no_num.can_accept());
+        assert_eq!(no_num.table_finding_count(), 1);
+        assert!(no_num.findings.iter().any(|finding| finding.kind == FindingKind::MissingNumberColumn));
+    }
+
+    /// Data after a closing quote is reported as malformed input and blocks staging instead of
+    /// being merged into the field (`"1"2` must never stage pin `12`). Valid quoted fields,
+    /// escaped quotes and whitespace before the delimiter stay accepted.
+    #[test]
+    fn data_after_closing_quote_is_reported_not_merged_into_pin_number() {
+        let malformed = preview("Number,Name\r\n\"1\"2,VCC\r\n", Delimiter::Comma, true, None);
+        let quote_findings: Vec<_> = malformed.findings.iter().filter(|finding| finding.kind == FindingKind::DataAfterClosingQuote).collect();
+        assert_eq!(quote_findings.len(), 1);
+        assert_eq!(quote_findings[0].row, None);
+        assert_eq!(quote_findings[0].line, Some(2));
+        assert_eq!(FindingKind::DataAfterClosingQuote.short_label(), "Quote error");
+        assert!(!malformed.can_accept());
+        assert!(malformed.into_import_plan(0).is_err());
+
+        let mut session = Session::default();
+        let reply = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "Number,Name\n1,\"VCC\" x\n"})).unwrap();
+        assert_eq!(reply["can_accept"], false);
+        assert!(reply["findings"].as_array().unwrap().iter().any(|finding| finding["kind"] == "data_after_closing_quote"));
+
+        let valid = preview("Number,Name\n\"12\",\"V\"\"CC\"\n\"13\" ,\"GND\"\t\n", Delimiter::Comma, true, None);
+        assert!(valid.findings.is_empty(), "{:?}", valid.findings);
+        assert!(valid.can_accept());
+        assert_eq!(valid.rows[0].number.as_deref(), Some("12"));
+        assert_eq!(valid.rows[0].name.as_deref(), Some("V\"CC"));
+        assert_eq!(valid.rows[1].number.as_deref(), Some("13"));
+        assert_eq!(valid.rows[1].name.as_deref(), Some("GND"));
+    }
+
+    /// Unit body geometry estimates stay aligned to the 1.27 mm schematic grid, enforce native
+    /// ±100 mm / 441-pin unit bounds, and record `base_revision` in the staged `ImportPlan`.
+    #[test]
+    fn unit_geometry_estimation_and_import_plan_seam() {
+        let mut csv = String::from("Number,Name,Type,Unit,Side\n");
+        for i in 1..=256 {
+            let unit = format!("Unit {}", ((i - 1) / 64) + 1);
+            let side = if i % 2 == 1 { "left" } else { "right" };
+            csv.push_str(&format!("{i},P{i},passive,{unit},{side}\n"));
+        }
+        let result = preview(&csv, Delimiter::Comma, true, None);
+        assert!(result.can_accept());
+        assert_eq!(result.units.len(), 4);
+        for unit in &result.units {
+            assert_eq!(unit.pin_count, 64);
+            assert_eq!(unit.left, 32);
+            assert_eq!(unit.right, 32);
+            assert_eq!(unit.estimated_width_nm, MIN_BODY_SPAN_NM);
+            assert_eq!(unit.estimated_height_nm, 33 * PIN_PITCH_NM);
+            assert_eq!(unit.estimated_width_nm % GRID_NM, 0);
+            assert_eq!(unit.estimated_height_nm % GRID_NM, 0);
+        }
+        let plan = result.into_import_plan(7).unwrap();
+        assert_eq!(plan.base_revision, 7);
+        assert_eq!(plan.pins.len(), 256);
+        assert_eq!(plan.units.len(), 4);
+        assert_eq!(plan.pins[0].unit, "unit-1");
+        assert_eq!(plan.pins[0].side.lead_orientation(), PinOrientation::Right);
+        assert_eq!(plan.pins[1].side.lead_orientation(), PinOrientation::Left);
+
+        // A single unit with 1024 pins on the Left side exceeds native ±100 mm drawing bounds and
+        // 441 pins per unit, so it must be refused with UnitTooLarge.
+        let mut single_unit = String::from("Number,Name,Type,Unit,Side\n");
+        for i in 1..=1024 {
+            single_unit.push_str(&format!("{i},P{i},passive,main,left\n"));
+        }
+        let oversized = preview(&single_unit, Delimiter::Comma, true, None);
+        assert!(!oversized.can_accept());
+        assert!(oversized.findings.iter().any(|finding| finding.kind == FindingKind::UnitTooLarge));
+    }
+
+    /// Validation catches empty tables, missing pin numbers, invalid pin names (counting Unicode
+    /// characters rather than bytes), unit spelling collisions, >1024 pins, >32 units, unclosed
+    /// quotes, oversized inputs, and command parameter validation errors.
+    #[test]
+    fn validation_catches_malformed_rows_and_limits() {
+        let empty = preview("   \n\n", Delimiter::Auto, true, None);
+        assert!(!empty.can_accept());
+        assert_eq!(empty.findings[0].kind, FindingKind::EmptyTable);
+
+        // 20 non-ASCII characters (40 UTF-8 bytes) is valid; 33 characters is refused.
+        let valid_utf8_name = "Ω".repeat(20);
+        let long_name = "A".repeat(33);
+        let rows = format!(
+            "Number,Name,Type,Unit,Side\n\
+             ,{valid_utf8_name},input,main,left\n\
+             2,{long_name},input,Bank 1,top\n\
+             3,OK,input,bank_1,bottom\n\
+             bad pin!,OK,input,bad/unit,diagonal\n"
+        );
+        let result = preview(&rows, Delimiter::Comma, true, None);
+        assert!(!result.can_accept());
+        let kinds: Vec<_> = result.findings.iter().map(|finding| finding.kind).collect();
+        assert!(kinds.contains(&FindingKind::MissingPinNumber));
+        assert!(kinds.contains(&FindingKind::InvalidPinName));
+        assert!(kinds.contains(&FindingKind::UnitNameCollision));
+        assert!(kinds.contains(&FindingKind::InvalidPinNumber));
+        assert!(kinds.contains(&FindingKind::InvalidUnitName));
+        assert!(kinds.contains(&FindingKind::UnknownSide));
+        assert_eq!(result.rows[0].name.as_deref(), Some(valid_utf8_name.as_str()));
+
+        let unclosed = "Number,Name\n1,\"unclosed\n";
+        let unclosed_preview = preview(unclosed, Delimiter::Comma, true, None);
+        assert!(unclosed_preview.findings.iter().any(|finding| finding.kind == FindingKind::UnclosedQuote));
+
+        let mut too_many_pins = String::from("Number,Name,Type\n");
+        for i in 1..=1025 {
+            too_many_pins.push_str(&format!("{i},P{i},passive\n"));
+        }
+        let pins_preview = preview(&too_many_pins, Delimiter::Comma, true, None);
+        assert!(pins_preview.findings.iter().any(|finding| finding.kind == FindingKind::TooManyPins));
+
+        let mut too_many_units = String::from("Number,Name,Type,Unit\n");
+        for i in 1..=33 {
+            too_many_units.push_str(&format!("{i},P{i},passive,u{i}\n"));
+        }
+        let units_preview = preview(&too_many_units, Delimiter::Comma, true, None);
+        assert!(units_preview.findings.iter().any(|finding| finding.kind == FindingKind::TooManyUnits));
+
+        let huge = "a".repeat(MAX_BYTES + 1);
+        let huge_preview = preview(&huge, Delimiter::Comma, true, None);
+        assert_eq!(huge_preview.findings.len(), 1);
+        assert_eq!(huge_preview.findings[0].kind, FindingKind::InputTooLarge);
+
+        // Command parameter handling: has_header: false, explicit mapping, bad delimiter, bad mapping.
+        let mut session = Session::default();
+        let custom = session
+            .execute(
+                sources::PREVIEW_PIN_TABLE,
+                &json!({
+                    "text": "VCC;1;power_in\nGND;2;power_in\n",
+                    "delimiter": "semicolon",
+                    "has_header": false,
+                    "mapping": {"name": 0, "number": 1, "electrical_type": 2}
+                }),
+            )
+            .unwrap();
+        assert_eq!(custom["can_accept"], true);
+        assert_eq!(custom["rows"][0]["number"], "1");
+        assert_eq!(custom["rows"][0]["name"], "VCC");
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "delimiter": "pipe"})).is_err());
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"unknown": 0}})).is_err());
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"number": 99}})).is_err());
+    }
+
+    #[test]
+    fn unrecognized_header_blocks_staging_until_header_intent_is_explicit() {
+        let text = "1,VCC,power_in\n2,GND,power_in";
+        let ambiguous = preview(text, Delimiter::Comma, true, None);
+        assert_eq!(ambiguous.mapping, ColumnMapping::default());
+        assert!(!ambiguous.can_accept());
+        assert!(ambiguous.into_import_plan(0).is_err());
+        assert_eq!(ambiguous.findings.len(), 1);
+        let finding = &ambiguous.findings[0];
+        assert_eq!((finding.kind, finding.row, finding.line), (FindingKind::UnrecognizedHeader, None, Some(1)));
+
+        let headerless = preview(text, Delimiter::Comma, false, None);
+        assert!(headerless.can_accept());
+        assert_eq!(headerless.rows.iter().map(|row| row.number.as_deref()).collect::<Vec<_>>(), [Some("1"), Some("2")]);
+
+        let custom_header = "ID,Title,Mode\n1,VCC,power_in\n2,GND,power_in";
+        let explicit = preview(custom_header, Delimiter::Comma, true, Some(ColumnMapping::positional(3)));
+        assert!(explicit.can_accept());
+        assert_eq!(explicit.rows.iter().map(|row| row.number.as_deref()).collect::<Vec<_>>(), [Some("1"), Some("2")]);
+    }
+
+    #[test]
+    fn command_reports_unrecognized_header_and_accepts_explicit_intent() {
+        let mut session = Session::default();
+        let text = "1,VCC,power_in\n2,GND,power_in";
+        let mut run = |params: Value| {
+            let reply = session.execute(sources::PREVIEW_PIN_TABLE, &params);
+            assert!(reply.is_ok(), "pin-table preview failed: {reply:?}");
+            reply.unwrap_or_default()
+        };
+        let ambiguous = run(json!({"text": text}));
+        assert_eq!(ambiguous["can_accept"], false);
+        assert_eq!(ambiguous["findings"][0]["kind"], "unrecognized_header");
+        assert_eq!(ambiguous["findings"][0]["row"], Value::Null);
+        assert_eq!(ambiguous["findings"][0]["line"], 1);
+
+        let headerless = run(json!({"text": text, "has_header": false}));
+        assert_eq!(headerless["can_accept"], true);
+        assert_eq!(headerless["rows"][0]["number"], "1");
+        assert_eq!(headerless["rows"][1]["number"], "2");
+
+        let explicit = run(json!({"text": "ID,Title,Mode\n1,VCC,power_in", "mapping": {"number": 0, "name": 1, "electrical_type": 2}}));
+        assert_eq!(explicit["can_accept"], true);
+        assert_eq!(explicit["rows"][0]["number"], "1");
+    }
+
+    /// Explicitly empty records reach row validation (mid-table and at EOF); physically blank lines stay skipped.
+    #[test]
+    fn delimiter_only_records_report_missing_pin_number_and_blank_lines_stay_skipped() {
+        let missing_number_at = |text: &str, delimiter: Delimiter| {
+            let result = preview(text, delimiter, true, None);
+            assert!(!result.can_accept(), "explicitly empty record must block staging: {text:?}");
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding.kind == FindingKind::MissingPinNumber)
+                .map(|finding| (finding.row, finding.line))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(missing_number_at("Number,Name,Type\r\n1,VCC,power_in\r\n,,\r\n", Delimiter::Comma), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number,Name,Type\n1,VCC,power_in\n,,", Delimiter::Comma), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number;Name;Type\n1;VCC;power_in\n ; ;\n", Delimiter::Semicolon), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number\tName\tType\n1\tVCC\tpower_in\n\t\t\n2\tGND\tpower_in\n", Delimiter::Tab), vec![(Some(2), Some(3))]);
+
+        assert_eq!(missing_number_at("Number\n1\n\"\"\n\n2", Delimiter::Auto), vec![(Some(2), Some(3))]);
+        assert_eq!(missing_number_at("Number\n1\n2\n\"\"", Delimiter::Auto), vec![(Some(3), Some(4))]);
+
+        let blank_lines = preview("Number,Name,Type\n\n1,VCC,power_in\r\n   \r\n\n", Delimiter::Comma, true, None);
+        assert!(blank_lines.can_accept());
+        assert!(blank_lines.findings.is_empty());
+        assert_eq!(blank_lines.rows.len(), 1);
+    }
+
+    /// A command mapping replaces the detected one; omitted and out-of-range indices stay unmapped.
+    #[test]
+    fn command_mapping_is_complete_and_omitted_fields_stay_unmapped() {
+        let mut session = Session::default();
+        let text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n";
+        let detected = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text})).unwrap();
+        assert_eq!(detected["mapping"], json!({"number": 0, "name": 1, "electrical_type": 2, "unit": 3, "side": 4}));
+        assert_eq!(detected["can_accept"], true);
+
+        let side_only = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text, "mapping": {"side": 4}})).unwrap();
+        assert_eq!(side_only["mapping"], json!({"number": null, "name": null, "electrical_type": null, "unit": null, "side": 4}));
+        assert_eq!(side_only["can_accept"], false);
+        assert!(side_only["findings"].as_array().unwrap().iter().any(|finding| finding["kind"] == "missing_number_column"));
+
+        let past_end = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text, "mapping": {"number": 0, "side": 9}})).unwrap();
+        assert_eq!(past_end["mapping"], json!({"number": 0, "name": null, "electrical_type": null, "unit": null, "side": null}));
+        assert_eq!(past_end["can_accept"], true);
+    }
+}

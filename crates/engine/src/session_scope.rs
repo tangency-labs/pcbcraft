@@ -1,9 +1,9 @@
 //! Runtime authority for command dispatch. Project snapshots do not carry permission to edit.
 
 use crate::{
-    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS, PREVIEW_ASSEMBLY_PROFILE,
-    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources, net_classes, netlist,
-    nets, no_connect, parameters, part_groups, sheet_split, sheets,
+    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_ASSEMBLY, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS,
+    PREVIEW_ASSEMBLY_PROFILE, PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources,
+    net_classes, netlist, nets, no_connect, parameters, part_groups, sheet_split, sheets,
 };
 
 /// Command access set by the host when a session is created.
@@ -54,8 +54,9 @@ impl Session {
 /// not write files, and netlist comparison only reads the text it is given. Annotation
 /// preview keeps its proposal and Apply token only in the session; sheet split preview
 /// caches no proposal. Applying annotation, splitting a sheet, loading/removing library
-/// sources, and Cut are not reads.
-fn is_read_command(id: &str) -> bool {
+/// sources, and Cut are not reads. MCP also returns these commands' own replies when a
+/// caller suppresses inspection.
+pub fn is_read_command(id: &str) -> bool {
     matches!(
         id,
         no_connect::CHECK
@@ -80,11 +81,13 @@ fn is_read_command(id: &str) -> bool {
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
             | CHECK_DESIGN
+            | CHECK_ASSEMBLY
             | EXPORT_FABRICATION
             | net_classes::INSPECT
             | net_classes::RESOLVE
             | nets::INSPECT_CLASSES
             | nets::intent::INSPECT
+            | nets::SHEET_OVERVIEW
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | sources::LIST
@@ -95,6 +98,7 @@ fn is_read_command(id: &str) -> bool {
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY
             | sources::PREVIEW_PIN_REMAP
+            | sources::PREVIEW_PIN_TABLE
             | sources::PREVIEW_FOOTPRINT_REVISION
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION

@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, OnceLock},
+};
 
 use serde_json::{Value, json};
 
@@ -190,6 +193,7 @@ pub struct Connectivity {
     junctions: Vec<Vec<u64>>,
     interfaces: Vec<Vec<WireEndpoint>>,
     by_terminal: BTreeMap<Terminal, usize>,
+    overview_interfaces: OnceLock<Arc<BTreeMap<WireEndpoint, usize>>>,
 }
 
 impl Connectivity {
@@ -300,7 +304,7 @@ impl Connectivity {
             interfaces.push(ports.into_iter().collect());
         }
         let names = vec![Vec::new(); nets.len()];
-        Self { nets, names, display_names: Vec::new(), junctions, interfaces, unconnected, by_terminal }
+        Self { nets, names, display_names: Vec::new(), junctions, interfaces, unconnected, by_terminal, overview_interfaces: OnceLock::new() }
     }
 }
 
@@ -373,6 +377,21 @@ impl Connectivity {
             _ => self.interfaces.iter().position(|group| group.contains(&endpoint)),
         }
     }
+    /// Look up the overview's terminals, labels and sheet pins. Build the interface index once
+    /// from the cached graph and share it between overview collection and anchor resolution.
+    pub(crate) fn overview_net_index(&self, endpoint: WireEndpoint) -> Option<usize> {
+        match endpoint {
+            WireEndpoint::Terminal(pin) => self.net_index_for(pin),
+            WireEndpoint::Junction(_) => None,
+            _ => self
+                .overview_interfaces
+                .get_or_init(|| {
+                    Arc::new(self.interfaces.iter().enumerate().flat_map(|(row, group)| group.iter().map(move |&end| (end, row))).collect())
+                })
+                .get(&endpoint)
+                .copied(),
+        }
+    }
     /// Derive deterministic names without storing a second persistent net identity.
     pub(crate) fn assign_names(&mut self, names: &BTreeMap<WireEndpoint, (u8, String)>) {
         for (index, ends) in self.interfaces.iter().enumerate() {
@@ -416,5 +435,6 @@ impl Connectivity {
         self.display_names = display_names;
         self.junctions = junctions;
         self.interfaces = interfaces;
+        self.overview_interfaces = OnceLock::new();
     }
 }

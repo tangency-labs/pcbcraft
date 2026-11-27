@@ -21,6 +21,7 @@ mod board_drc;
 mod board_fills;
 mod board_measure;
 mod board_move;
+mod board_nudge;
 mod board_outputs;
 mod board_panels;
 mod board_presets;
@@ -125,6 +126,7 @@ const ASSISTANT_SETTINGS_KEY: &str = "pcbcraft.assistant.settings";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+const COMMAND_SHIFT_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
 const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
 const COMMAND_O: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const COMMAND_S: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
@@ -286,6 +288,7 @@ enum Dialog {
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
     LibraryCourtyard(Box<library_editors::courtyard::CourtyardDraft>),
     LibraryPinRemap(Box<library_editors::remap::Draft>),
+    LibraryPinTable(Box<library_editors::pin_table::Draft>),
     LibraryPublish(library_editors::publishing::Draft),
     PartReference(Box<part_documents::picker::State>),
     NewLibrary(library_editors::publishing::NewLibrary),
@@ -570,6 +573,11 @@ impl PcbApp {
     /// desktop, a command that changes the session and ran for a long time requests a recovery
     /// snapshot on the next frame.
     fn run(&mut self, id: &str, params: &Value) {
+        self.run_project_command(id, params, None);
+    }
+
+    /// Share command errors, recovery and view synchronization with immediate canvas nudges.
+    fn run_project_command(&mut self, id: &str, params: &Value, nudge: Option<&mut Option<pcbcraft_engine::board::movement::NudgeBurst>>) {
         self.file_notice = None;
         let mut params = params.clone();
         if pcbcraft_engine::command(id).is_some_and(|c| c.params.iter().any(|p| p.name == "auto_heal"))
@@ -586,7 +594,12 @@ impl PcbApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let (started, revision) = (std::time::Instant::now(), self.session.revision());
-        self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
+        let result = if let Some(state) = nudge {
+            pcbcraft_engine::board::movement::NudgeBurst::step(state, &mut self.session, id, &params)
+        } else {
+            self.session.apply(id, &params)
+        };
+        self.message = result.err().map(|e| e.to_string());
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.revision() != revision {
             self.autosave.command_took(started.elapsed());
@@ -2441,11 +2454,13 @@ impl PcbApp {
                 self.begin_wire();
             }
         }
+        // Ctrl+Shift+Z also redoes. Read it before Undo: an unshifted pattern also matches a shifted key.
+        let redo = pressed(&COMMAND_SHIFT_Z);
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {
             self.run("edit.undo", &Value::Null);
             self.repaint_editors(ctx);
         }
-        if pressed(&COMMAND_Y) && self.session.available("edit.redo") {
+        if (redo || pressed(&COMMAND_Y)) && self.session.available("edit.redo") {
             self.run("edit.redo", &Value::Null);
             self.repaint_editors(ctx);
         }
@@ -2538,6 +2553,7 @@ impl PcbApp {
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::LibraryCourtyard(draft) => self.library_courtyard_dialog(ctx, draft),
             Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
+            Dialog::LibraryPinTable(draft) => self.library_pin_table_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
@@ -3042,6 +3058,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     }
     list.push(("Edit", "Undo", key(&COMMAND_Z)));
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
+    list.push(("Edit", "Redo", key(&COMMAND_SHIFT_Z)));
     list.push(("Edit", "Select all", key(&SELECT_ALL)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));
@@ -3076,6 +3093,9 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB Layout", "Move selected PCB group", "M".to_owned()));
+    list.push(("PCB Layout", "Nudge selection one grid step", "Arrows or Ctrl+Arrows".to_owned()));
+    list.push(("PCB Layout", "Nudge selection ten grid steps", "Shift+Arrows or Ctrl+Shift+Arrows".to_owned()));
+    list.push(("PCB Layout", "Nudge selection one tenth of a grid step", "Alt+Arrows".to_owned()));
     list.push(("PCB Layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB Layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB Layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));

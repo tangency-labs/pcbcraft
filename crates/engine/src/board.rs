@@ -33,6 +33,7 @@ std::thread_local! {
 }
 pub mod materials;
 pub mod movement;
+pub mod orientation;
 pub mod origin;
 pub mod outline;
 pub mod output_recipe;

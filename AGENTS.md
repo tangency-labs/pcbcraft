@@ -34,6 +34,18 @@ ones. If permissions prevent labeling, report the remaining triage work instead
 of claiming the issue is fully classified. This is an agent workflow requirement,
 not a GitHub restriction on contributors who cannot apply labels.
 
+The [triage workflow](.github/workflows/triage-labels.yml) can fill in missing
+labels when an issue or PR is opened or reopened. Use a recognizable title
+prefix when it fits the work, such as `[Bug]:`, `[Feature]:`, `docs:`, or
+`[Question]:`. Name the affected area in plain language when it helps describe
+the work. For example, `[Bug]: KiCad import drops schematic paper size` matches
+`bug`, `area: interchange`, and `area: schematic`.
+
+When a PR completes an issue in this repository, use a closing reference such as
+`Fixes #675` in the PR description. The workflow can inherit the issue's area
+labels and an unambiguous classification. Use a plain issue reference for partial
+work, and apply and verify the relevant labels yourself.
+
 ## License and sources: the rule that can't be undone
 
 The project is MIT OR Apache-2.0, so code can move freely between the Craft apps.

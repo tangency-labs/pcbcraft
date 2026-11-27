@@ -88,7 +88,7 @@ const MAX_SHAPES: usize = 256;
 /// Most points in one polyline.
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
-const MAX_DRAWING_NM: i64 = 100_000_000;
+pub(crate) const MAX_DRAWING_NM: i64 = 100_000_000;
 /// Most terminals in one symbol, and so in one part's terminal-to-pad map. A pin may sit on only
 /// 441 grid spots in one unit, so symbols this large divide their pins among units.
 pub(crate) const MAX_TERMINALS: usize = 1024;
