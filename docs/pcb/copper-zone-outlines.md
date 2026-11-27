@@ -161,7 +161,8 @@ clearance. Explicit stored null is not an alternate encoding.
 deleting zone records. `pcb.refill_zones` accepts an optional explicit `board` and replaces only derived
 fill. Headless execution completes synchronously; the live editor schedules work
 and returns its pending state. `pcb.inspect_zone_fill` reports pending, ready, unfilled or
-unavailable without starting work. A ready result lists, for each zone, its
+unavailable without starting work; it is a query, so a read-only
+[headless session](../automation/headless-mcp.md) can run it. A ready result lists, for each zone, its
 retained island count, `dropped` count and `removed` islands (`reason`,
 `area_nm2`, `bounds_nm` as minimum x, minimum y, maximum x, maximum y). Neither command dirties native files or adds
 a document undo entry.
