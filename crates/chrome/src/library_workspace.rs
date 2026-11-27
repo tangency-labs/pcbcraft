@@ -146,7 +146,7 @@ fn card(
                         *collapsed = !*collapsed;
                     }
                     let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_24, Tokens::get().space_24));
-                    let more = kit::button_at(ui, "library_browser_actions", rect, "…", kit::Button::Ghost).accessible_name("Browser tree actions");
+                    let more = kit::quiet_icon_button_at(ui, rect, "dots", "Browser tree actions");
                     egui::Popup::menu(&more).frame(crate::menu::frame()).show(|ui| {
                         for (label, choice) in [("Expand all", TreeAction::ExpandAll), ("Collapse all", TreeAction::CollapseAll)] {
                             if crate::MenuItem::new(label).show(ui) {
