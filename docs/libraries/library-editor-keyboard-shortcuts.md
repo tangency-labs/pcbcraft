@@ -60,7 +60,7 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 | **Ctrl+,** | Opens Preferences. Runs even while the Assistant owns input. |
 | **Ctrl+S** | Publishes the active document — opens the Publish dialog (desktop). In the browser build it triggers the save/export path instead. Modifier matching ignores extra Shift, so **Ctrl+Shift+S** reaches the same binding. |
 | **Ctrl+Z** | Undoes the active document's last committed edit — the library document's own history, not the project's. |
-| **Ctrl+Y** | Redoes the active document's edit. |
+| **Ctrl+Y** / **Ctrl+Shift+Z** | Redoes the active document's edit. |
 | **Ctrl+Q** | Closes the project — offers to review or discard unsaved library edits first (desktop only). |
 | **Ctrl+Shift+A** | Toggles the Assistant panel (desktop only). Unlike the other rows it is handled before the frame's `enabled` gate — it still fires while a file or publish operation is busy — but only in the main host, not in a detached library window, and only when no dialog is open and the Assistant is enabled. |
 
@@ -147,7 +147,7 @@ so canvas keys do not fire while a field is focused.
 | --- | --- | --- |
 | Ctrl+, | `PcbApp::library_frame` → `open_preferences` | — |
 | Ctrl+S | `library_frame` → `Intent::Publish` / `Intent::Save` → `begin_library_publish` / `library_editors.save` | — (`completed_save_releases_close_without_reusing_a_cancelled_decision` covers the save path, not the chord) |
-| Ctrl+Z / Ctrl+Y | `library_frame` → `Intent::Undo/Redo` → `Editors::edit(Action::Undo/Redo)` | `live_library_commands_share_the_gui_documents` (undo/redo via `app.library_edit`), `canvas_selection_move_and_cancel_use_library_history` (Undo Library Edit) |
+| Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z | `library_frame` → `Intent::Undo/Redo` → `Editors::edit(Action::Undo/Redo)` | `live_library_commands_share_the_gui_documents` (undo/redo via `app.library_edit`), `canvas_selection_move_and_cancel_use_library_history` (Undo Library Edit), `ctrl_shift_z_redoes_library_edits` (Ctrl+Shift+Z) |
 | Ctrl+Q | `library_frame` → `begin_project_close` | `native_library_close_preserves_unsaved_authoring` (close path) |
 | Ctrl+Shift+A | `library_frame` → `assistant_shortcuts` → `toggle_assistant` | `assistant.rs` toggle tests |
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |

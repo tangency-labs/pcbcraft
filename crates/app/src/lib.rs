@@ -125,6 +125,7 @@ const ASSISTANT_SETTINGS_KEY: &str = "pcbcraft.assistant.settings";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+const COMMAND_SHIFT_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
 const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
 const COMMAND_O: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const COMMAND_S: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
@@ -2441,11 +2442,13 @@ impl PcbApp {
                 self.begin_wire();
             }
         }
+        // Ctrl+Shift+Z also redoes. Read it before Undo: an unshifted pattern also matches a shifted key.
+        let redo = pressed(&COMMAND_SHIFT_Z);
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {
             self.run("edit.undo", &Value::Null);
             self.repaint_editors(ctx);
         }
-        if pressed(&COMMAND_Y) && self.session.available("edit.redo") {
+        if (redo || pressed(&COMMAND_Y)) && self.session.available("edit.redo") {
             self.run("edit.redo", &Value::Null);
             self.repaint_editors(ctx);
         }
@@ -3042,6 +3045,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     }
     list.push(("Edit", "Undo", key(&COMMAND_Z)));
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
+    list.push(("Edit", "Redo", key(&COMMAND_SHIFT_Z)));
     list.push(("Edit", "Select all", key(&SELECT_ALL)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));

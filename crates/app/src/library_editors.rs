@@ -836,10 +836,12 @@ impl PcbApp {
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_S)) {
                 intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
             }
+            // Ctrl+Shift+Z also redoes. Read it before Undo: an unshifted pattern also matches a shifted key.
+            let redo = ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_SHIFT_Z));
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
                 intents.borrow_mut().push(Intent::Undo);
             }
-            if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y)) {
+            if redo || ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y)) {
                 intents.borrow_mut().push(Intent::Redo);
             }
             if !IN_BROWSER && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Q)) {
