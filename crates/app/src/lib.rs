@@ -1045,12 +1045,17 @@ impl PcbApp {
         }
     }
 
+    /// Report the open project's name and save state for the shared app bar.
+    fn project_title(&self) -> Option<(String, bool)> {
+        self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)))
+    }
+
     /// Show the project's title and unsaved state beside the Home, file and history actions.
     /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
     /// Disabling application actions leaves the integrated native window controls available.
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
-        let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
+        let project = self.project_title();
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut picked = Utilities::default();
         let mut home = false;
@@ -2470,6 +2475,13 @@ impl PcbApp {
         if pressed(&SWITCH_UNITS) {
             self.preferences.units = self.preferences.units.toggled();
         }
+        self.project_file_shortcuts(ctx);
+    }
+
+    /// Handle desktop File menu shortcuts without granting project canvas or history shortcuts.
+    /// Callers check focus and modal input ownership before dispatching.
+    fn project_file_shortcuts(&mut self, ctx: &egui::Context) {
+        let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));
         if !IN_BROWSER {
             if !self.files.busy() {
                 if pressed(&COMMAND_O) {

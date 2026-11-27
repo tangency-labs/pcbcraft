@@ -2031,3 +2031,36 @@ fn library_delete_keys_see_the_select_tool_after_rotation() {
         }
     }
 }
+
+/// The definition name stays in the app bar and the Library menu exposes applicable actions.
+#[test]
+fn definition_menus_separate_file_operations_from_library_actions() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let mut app = PcbApp::default();
+        app.preferences.theme = if kind == Kind::Symbol { crate::ThemeChoice::Dark } else { crate::ThemeChoice::Light };
+        app.new_library_item(kind);
+        let id = app.library_editors.active.unwrap();
+        let title = app.library_editors.documents[&id].session.snapshot().name.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        h.run();
+        let file = h.get_by_label("File").rect();
+        assert!(
+            h.query_all_by_label(title.as_str()).any(|node| file.y_range().contains(node.rect().center().y)),
+            "the definition name belongs in the File menu's app bar row"
+        );
+        crate::tests::click(&mut h, "File");
+        h.get_by_label(if IN_BROWSER { "Download Library Item…" } else { "Save Library Copy…" });
+        assert!(h.query_by_label("Remap pins…").is_none());
+        h.key_press(egui::Key::Escape);
+        h.run();
+
+        h.get_by_role_and_label(egui::Role::Button, "Library").click();
+        h.run();
+        h.get_by_label("Publish…");
+        h.get_by_label("Edit copy");
+        assert!(h.query_by_label("Save Library Copy…").is_none());
+        for label in ["Preview pin table…", "Remap pins…"] {
+            assert_eq!(h.query_by_label(label).is_some(), kind == Kind::Symbol, "{label}");
+        }
+    }
+}

@@ -79,9 +79,10 @@ schematic bindings with their focus and selection conditions; the
 [board keyboard shortcuts](pcb/board-keyboard-shortcuts.md) page does the same for
 the PCB editor, whose keys deliberately reuse several letters differently. The
 [library editor keyboard shortcuts](libraries/library-editor-keyboard-shortcuts.md) page
-covers the Symbol Editor, Footprint Editor and Parts Library workspaces, which
-dispatch their own small set of chords rather than the project-workspace
-bindings.
+covers the Symbol Editor, Footprint Editor and Parts Library. Parts Library
+shows the open project name and uses the project File menu. The definition
+editors show the item name and keep file operations under File and authoring
+actions under Library.
 Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
 same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
 bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).

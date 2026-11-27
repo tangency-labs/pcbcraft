@@ -2264,3 +2264,55 @@ fn library_main_does_not_claim_detached_rule_pages() {
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// Check whether a viewport pass requested native focus for the main window.
+fn requests_root_focus(output: &egui::FullOutput) -> bool {
+    output.viewport_output.get(&ViewportId::ROOT).is_some_and(|root| root.commands.contains(&ViewportCommand::Focus))
+}
+
+/// Clicking Home in detached Parts Library requests focus where Home is displayed.
+#[test]
+fn detached_parts_home_focuses_main_window() {
+    let (mut h, peer) = multi_window();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_library_workspace(&ctx, pcbcraft_chrome::workspace::Placement::Window).unwrap();
+    focus(&mut h, &peer, true);
+    assert!(!h.state().home);
+
+    let pos = child_rect(&peer, "Home").center();
+    peer.borrow_mut().events.push(Event::PointerMoved(pos));
+    h.run();
+    let mut requested_focus = false;
+    for pressed in [true, false] {
+        peer.borrow_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+        requested_focus |= requests_root_focus(h.output()) || requests_root_focus(&peer.borrow().output);
+    }
+    assert!(h.state().home);
+    assert!(requested_focus, "Home opened without a focus request for the main window");
+}
+
+/// Save As from a detached Parts Library opens in the main host and requests focus there.
+#[test]
+fn detached_parts_save_as_focuses_project_dialog_owner() {
+    let (mut h, peer) = multi_window();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_library_workspace(&ctx, pcbcraft_chrome::workspace::Placement::Window).unwrap();
+    focus(&mut h, &peer, true);
+    peer.borrow_mut().events.push(Event::Key {
+        key: Key::S,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND.plus(Modifiers::SHIFT),
+    });
+    let mut requested_focus = false;
+    for _ in 0..4 {
+        h.step();
+        requested_focus |= requests_root_focus(h.output()) || requests_root_focus(&peer.borrow().output);
+    }
+    assert!(matches!(h.state().dialog, Dialog::SaveEncoding));
+    assert!(requested_focus, "Save As is open in the main window without a focus request");
+    h.step();
+    assert!(!requests_root_focus(h.output()) && !requests_root_focus(&peer.borrow().output), "an open dialog should not keep requesting focus");
+}
