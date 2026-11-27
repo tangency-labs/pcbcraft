@@ -80,12 +80,6 @@ pub(super) enum Tool {
         revision: u64,
     },
 }
-/// Which cancellable preview an input batch's last preview chord resolved to.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Preview {
-    Paste,
-    Duplicate,
-}
 /// Use the existing drawing-tool glyphs in Browser rows, without deriving identity from labels.
 pub(super) fn browser_icon(primitive: &Primitive) -> pcbcraft_chrome::workspace::ToolIcon {
     use pcbcraft_chrome::workspace::ToolIcon;
@@ -512,6 +506,35 @@ impl Document {
             self.error = Some(error);
         }
     }
+    /// Remove the selected courtyard vertex or delete the selection when no vertex is selected.
+    fn backspace_in_select(&mut self) {
+        // A selected vertex remains the target even when deletion is unavailable.
+        // Read the outline after this frame's edits: a midpoint click earlier in the
+        // same frame has already inserted the vertex that is now selected.
+        let current = self.session.snapshot();
+        if let Some((object, pts, _)) = self.selected_courtyard(&current)
+            && let Some(vertex) = self.selected_vertex
+            && let Some(primitive) = current.objects.get(&object)
+        {
+            if !self.show_courtyard {
+                self.error = Some("Show the Courtyard layer before removing a vertex.".into());
+            } else if self.pending() {
+                self.error = Some("Apply or reset the property fields before removing a vertex.".into());
+            } else {
+                match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
+                    .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
+                {
+                    Ok(()) => {
+                        let next_len = pts.len().saturating_sub(1);
+                        self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        } else {
+            self.delete();
+        }
+    }
     /// Cut stores the selection on the internal clipboard and removes it as one undoable edit.
     /// Pending fields refuse before changing the clipboard; an empty selection is a no-op.
     /// Deletion failures leave the copied selection available and are reported through `self.error`.
@@ -774,7 +797,11 @@ impl Document {
         // unfocused viewport carries no key intent the canvas may act on, so no handler —
         // including the destructive M/E/Delete/Enter keys and Escape — may read key_pressed.
         let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.focused);
-        if keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let escape_pressed = keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let selecting_before_escape = selecting_at_start && matches!(self.tool, Tool::Select);
+        // Cancel before pointer release can commit a drag. Keyboard actions below still
+        // see the tool that was active before Escape until they reach that key event.
+        if escape_pressed {
             self.tool = Tool::Select;
         }
         let mut preview = Vec::new();
@@ -1039,9 +1066,6 @@ impl Document {
             // key press only appears when another modifier bypasses that translation.
             // egui-winit emits Paste("") when the OS clipboard read is empty and
             // PasteImage when it holds only an image — both mean "paste intent" here.
-            // Paste and duplicate arm the same preview and resolve in event order, only
-            // while focused: a later Escape in the same batch cancels the chord, and a
-            // focus-loss batch must not arm a preview the reset just cleared.
             let copied = ui.input(|i| {
                 i.focused
                     && i.events.iter().any(|event| match event {
@@ -1058,64 +1082,48 @@ impl Document {
                         _ => false,
                     })
             });
-            let preview = ui.input(|i| {
-                if !i.focused {
-                    return None;
-                }
-                i.events.iter().fold(None, |preview, event| match event {
-                    egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(Preview::Paste),
-                    egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => None,
-                    egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Paste),
-                    egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Duplicate),
-                    _ => preview,
-                })
-            });
             if copied {
                 self.copy(ui.ctx());
             }
             if cut {
                 self.cut(ui.ctx());
             }
-            match preview {
-                Some(Preview::Paste) => self.paste(ui.ctx()),
-                Some(Preview::Duplicate) => self.duplicate(),
-                None => {}
-            }
-            // Tool letters and R's direction read the pressed event's own modifiers,
-            // like the command chords above: a command released before batch end
-            // cannot leak a chord into a tool start, and a shift released early
-            // cannot flip the rotation direction. Tool starts also resolve against a
-            // same-batch Escape in event order: a letter pressed before the Escape
-            // stays cancelled, and one pressed after it still arms.
-            let tool_key = |key: egui::Key, modifiers_ok: fn(&egui::Modifiers) -> bool| {
-                ui.input(|i| {
-                    if !i.focused {
-                        return false;
-                    }
-                    i.events.iter().fold(false, |armed, event| match event {
-                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => false,
-                        egui::Event::Key { key: letter, pressed: true, modifiers, .. } if *letter == key && modifiers_ok(modifiers) => true,
-                        _ => armed,
+            let keys = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::Key { key, pressed: true, modifiers, .. } => Some((*key, *modifiers)),
+                        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some((egui::Key::V, egui::Modifiers::COMMAND)),
+                        _ => None,
                     })
-                })
-            };
-            if tool_key(egui::Key::P, |modifiers| !modifiers.command) {
-                self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
-            }
-            if tool_key(egui::Key::L, |modifiers| !modifiers.command) {
-                self.start_tool(Place::Line);
-            }
-            if tool_key(egui::Key::T, |modifiers| !modifiers.command) {
-                self.start_tool(Place::Text);
-            }
-            if item.kind == Kind::Footprint && tool_key(egui::Key::C, |modifiers| modifiers.is_none()) {
-                self.start_tool(Place::Courtyard);
-                if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
-                    self.set_show_courtyard(true);
+                    .collect::<Vec<_>>()
+            });
+            let mut selecting = matches!(self.tool, Tool::Select) && (!escape_pressed || selecting_before_escape);
+            let mut backspace_allowed = selecting_at_start;
+            for (key, modifiers) in keys {
+                match key {
+                    egui::Key::Escape => {
+                        self.tool = Tool::Select;
+                        selecting = true;
+                        backspace_allowed = true;
+                    }
+                    egui::Key::P if !modifiers.command => self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad }),
+                    egui::Key::L if !modifiers.command => self.start_tool(Place::Line),
+                    egui::Key::T if !modifiers.command => self.start_tool(Place::Text),
+                    egui::Key::C if item.kind == Kind::Footprint && modifiers.is_none() => {
+                        self.start_tool(Place::Courtyard);
+                        if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
+                            self.set_show_courtyard(true);
+                        }
+                    }
+                    egui::Key::M => self.begin_move(),
+                    egui::Key::V if modifiers.command => self.paste(ui.ctx()),
+                    egui::Key::D if modifiers.command => self.duplicate(),
+                    egui::Key::Delete if selecting => self.delete(),
+                    egui::Key::Backspace if selecting && backspace_allowed && modifiers.is_none() => self.backspace_in_select(),
+                    _ => {}
                 }
-            }
-            if tool_key(egui::Key::M, |_| true) {
-                self.begin_move();
+                selecting &= matches!(self.tool, Tool::Select);
             }
             if let Some(shifted) = ui.input(|i| {
                 if !i.focused {
@@ -1130,47 +1138,6 @@ impl Document {
             }
             if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                 self.details_requested = true;
-            }
-            // Completing or cancelling another tool in this pass must not redirect its key
-            // events to the saved selection.
-            if selecting_at_start
-                && matches!(self.tool, Tool::Select)
-                && ui.input(|i| {
-                    i.focused
-                    && i.events.iter().any(
-                        |event| matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none()),
-                    )
-                })
-            {
-                // A selected vertex remains the target even when deletion is unavailable.
-                // Read the outline after this frame's edits: a midpoint click earlier in the
-                // same frame has already inserted the vertex that is now selected.
-                let current = self.session.snapshot();
-                if let Some((object, pts, _)) = self.selected_courtyard(&current)
-                    && let Some(vertex) = self.selected_vertex
-                    && let Some(primitive) = current.objects.get(&object)
-                {
-                    if !self.show_courtyard {
-                        self.error = Some("Show the Courtyard layer before removing a vertex.".into());
-                    } else if self.pending() {
-                        self.error = Some("Apply or reset the property fields before removing a vertex.".into());
-                    } else {
-                        match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
-                            .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
-                        {
-                            Ok(()) => {
-                                let next_len = pts.len().saturating_sub(1);
-                                self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
-                            }
-                            Err(error) => self.error = Some(error),
-                        }
-                    }
-                } else {
-                    self.delete();
-                }
-            }
-            if matches!(self.tool, Tool::Select) && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-                self.delete();
             }
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 match self.tool.clone() {

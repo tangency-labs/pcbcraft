@@ -52,7 +52,8 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
   inside the same input batch cancels it (events resolve in order). Tool-start
   keys (**P**/**L**/**T**, footprint **C**, **M**) resolve the same way:
   pressed before a same-batch Escape they stay cancelled, pressed after it
-  they still arm.
+  they still arm. **Delete** and **Backspace** check whether Select is active
+  when the key is pressed, even if a later Escape cancels another tool.
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
@@ -88,7 +89,7 @@ area, not covered by a panel or floating layer.
 | **M** | Starts a move: single selection → Move; multiple → MoveGroup anchored on the first object. Refuses with "Apply or reset the property fields before moving." while property input is unapplied. Fires regardless of held modifiers. |
 | **R** / **Shift+R** | Rotates a quarter turn, in opposite directions. Applies to the Move, MoveGroup or Paste preview when one is armed, to the Draw-tool placement prototype otherwise — or to the current selection when neither applies. |
 | **E** | Opens the selected object's details — only when exactly one object is selected. Fires regardless of held modifiers. |
-| **Delete** | Deletes the selected objects. Fires regardless of held modifiers. |
+| **Delete** | In Select, deletes the selected objects. Fires regardless of held modifiers. |
 | **Backspace** | In Select, deletes the selected objects in one undoable edit. If a courtyard vertex is explicitly selected, removes only that vertex and refuses if the layer is hidden, property edits are pending, or only 3 vertices remain. Requires window focus and no held modifiers. |
 | **Enter** | Commits the in-progress polyline or courtyard outline as a graphic object (closing a courtyard polygon and returning to Select); does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
@@ -158,7 +159,7 @@ so canvas keys do not fire while a field is focused.
 | M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path), `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss), `library_tool_keys_resolve_against_same_batch_escape` (Escape ordering) |
 | R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
 | E | `canvas` → `details_requested` (single selection) | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
-| Delete | `canvas` → `delete` → `Action::Delete` | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
+| Delete | `canvas` in Select → `delete` → `Action::Delete` | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss), `library_delete_keys_act_only_in_select_at_the_press` (event ordering) |
 | Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
 | C | `canvas` → `start_tool(Place::Courtyard)` + `set_show_courtyard(true)` (Footprint Editor, unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_c_shortcut_ignores_copy_chord_and_shift_c`, `library_tool_keys_resolve_against_same_batch_escape` (Escape ordering) |
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit), `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |

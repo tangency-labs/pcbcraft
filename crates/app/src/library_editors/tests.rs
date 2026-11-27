@@ -1887,3 +1887,59 @@ fn library_tool_keys_resolve_against_same_batch_escape() {
         }
     }
 }
+
+/// Deletion follows the tool at the press, even when Escape or a tool start shares its batch.
+#[test]
+fn library_delete_keys_act_only_in_select_at_the_press() {
+    use egui::Key::{Backspace, Delete, Escape, P};
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [Delete, Backspace] {
+            for (armed_before, batch, deleted, armed_after) in [
+                (false, vec![P, key, Escape], false, false),
+                (true, vec![key, Escape], false, false),
+                (true, vec![Escape, key], true, false),
+                (false, vec![key, P], true, true),
+            ] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let before = h.state().library_editors.documents[&id].session.snapshot();
+                assert!(!before.objects.is_empty());
+                let selection = before.objects.keys().copied().collect();
+                h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = selection;
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                if armed_before {
+                    h.key_press(P);
+                    h.run();
+                    assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { .. }));
+                }
+                let revision = h.state().library_editors.documents[&id].session.revision();
+                for key in &batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key: *key,
+                        physical_key: Some(*key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let document = &h.state().library_editors.documents[&id];
+                assert_eq!(matches!(document.tool, canvas::Tool::Draw { .. }), armed_after, "{kind:?} {batch:?}");
+                let after = document.session.snapshot();
+                if deleted {
+                    assert!(after.objects.is_empty(), "{kind:?} {batch:?}");
+                    assert_eq!(document.session.revision(), revision + 1);
+                } else {
+                    assert_eq!(after.as_ref(), before.as_ref(), "{kind:?} {batch:?}");
+                    assert_eq!(document.session.revision(), revision);
+                    assert_eq!(document.selection, before.objects.keys().copied().collect());
+                }
+            }
+        }
+    }
+}
