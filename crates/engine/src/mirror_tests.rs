@@ -366,3 +366,33 @@ fn group_mirror_captures_named_contacts_before_any_pose() {
     let after = session.snapshot().unwrap();
     assert_eq!(before.inspect_schematic()["netlist"], after.inspect_schematic()["netlist"]);
 }
+
+/// A selected bent route and its interior naming pin reflect together without splitting.
+#[test]
+fn group_mirror_reflects_bends_through_a_moving_power_contact() {
+    let (mut session, power, initial) = offset_power_fixture();
+    let mut spaced = (*initial).clone();
+    Arc::make_mut(&mut spaced.sheet_mut().symbols)[0].position.y_nm = -8 * GRID_NM;
+    session.open_snapshot(Arc::new(spaced));
+    apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":20 * GRID_NM,"y_nm":10 * GRID_NM}));
+    let first = session.project().unwrap().symbols()[0].id();
+    let last = session.project().unwrap().symbols()[2].id();
+    apply(&mut session, CONNECT_PINS, json!({"from":{"symbol":first,"terminal":"2"},"to":{"symbol":last,"terminal":"1"}}));
+    let grid = |x, y| Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM };
+    let mut authored = (*session.snapshot().unwrap()).clone();
+    Arc::make_mut(&mut authored.sheet_mut().wires)[0].bends = Some(vec![grid(10, -4), grid(-4, -4), grid(-4, 0), grid(4, 0), grid(4, 10)]);
+    session.open_snapshot(Arc::new(authored));
+
+    let before = session.snapshot().unwrap();
+    let wire = before.wires()[0].id();
+    let route = before.wire_path(&before.wires()[0]);
+    let items = json!({"symbols":[first,power,last],"wires":[wire]});
+    apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    let after = session.project().unwrap();
+    assert_eq!(after.wires().len(), 1);
+    assert_eq!(after.wires()[0].id(), wire);
+    assert_eq!(after.wire_path(&after.wires()[0]), route.iter().map(|p| Point { x_nm: 16 * GRID_NM - p.x_nm, y_nm: p.y_nm }).collect::<Vec<_>>(),);
+    assert_eq!(before.connectivity().nets, after.connectivity().nets);
+    apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    assert_eq!(session.project().unwrap().wire_path(&session.project().unwrap().wires()[0]), route);
+}

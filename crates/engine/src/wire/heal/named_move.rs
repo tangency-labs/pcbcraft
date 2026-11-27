@@ -9,14 +9,22 @@ impl Edit {
     /// Capture against the old geometry, so fixed pins and unsplit interiors remain connected.
     /// Refresh marker attachment restrictions for the returned pose before subsequent cleanup.
     pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8, mirrored: bool) -> Result<(), CommandError> {
-        let captured = self.capture_pose(index, to, rotation, mirrored, &BTreeSet::new())?;
+        let captured = self.capture_pose(index, to, rotation, mirrored, &BTreeSet::new(), &BTreeSet::new())?;
         self.place_pose(index, to, rotation, mirrored, captured)
     }
 
     /// Capture the exact contacts an offset naming terminal must keep when its symbol takes a
     /// pose, against the current geometry. Pins of the other `moving` symbols are not fixed:
     /// they take their own poses in the same rigid batch and stay in contact by geometry.
-    fn capture_pose(&mut self, index: usize, to: Point, rotation: u8, mirrored: bool, moving: &BTreeSet<u64>) -> Result<Captured, CommandError> {
+    fn capture_pose(
+        &mut self,
+        index: usize,
+        to: Point,
+        rotation: u8,
+        mirrored: bool,
+        moving: &BTreeSet<u64>,
+        reflected_routes: &BTreeSet<u64>,
+    ) -> Result<Captured, CommandError> {
         let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::NotFound("symbol does not exist".into()))?;
         let own = symbol.ordinal;
         let contact = self.project.power_terminals().find_map(|(end, _, from)| {
@@ -30,7 +38,7 @@ impl Edit {
         });
         let Some((end, from, target)) = contact else { return Ok(None) };
         self.remove_returned_legs(end, target)?;
-        let mut fixed = self.capture_named_contact(end, from)?;
+        let mut fixed = self.capture_named_contact_except(end, from, reflected_routes)?;
         fixed.retain(|other| !matches!(other, WireEndpoint::Terminal(pin) if pin.symbol != own && moving.contains(&pin.symbol)));
         Ok(Some((end, from, fixed)))
     }
@@ -88,6 +96,17 @@ impl Edit {
     /// Retain all exact authored wire contacts of a globally naming terminal. Fixed pins stay
     /// put and receive a connecting leg; wire interiors split using the shared bounded allocator.
     pub(super) fn capture_named_contact(&mut self, end: WireEndpoint, from: Point) -> Result<BTreeSet<WireEndpoint>, CommandError> {
+        self.capture_named_contact_except(end, from, &BTreeSet::new())
+    }
+
+    /// Capture stationary wire contacts. Routes reflecting together with the terminal keep
+    /// their exact contact without a split or a generated leg.
+    fn capture_named_contact_except(
+        &mut self,
+        end: WireEndpoint,
+        from: Point,
+        reflected_routes: &BTreeSet<u64>,
+    ) -> Result<BTreeSet<WireEndpoint>, CommandError> {
         let mut fixed: BTreeSet<_> = self
             .project
             .symbols()
@@ -99,7 +118,10 @@ impl Edit {
         let wires: Vec<_> = self.project.wires().to_vec();
         for wire in wires {
             self.compare()?;
-            if wire.endpoints().contains(&end) || !super::super::path_contains_point(&self.project.wire_path(&wire), from) {
+            if reflected_routes.contains(&wire.ordinal())
+                || wire.endpoints().contains(&end)
+                || !super::super::path_contains_point(&self.project.wire_path(&wire), from)
+            {
                 continue;
             }
             let contact = self.split(wire.ordinal(), from)?;
@@ -148,14 +170,19 @@ impl Project {
     /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
     /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically.
     pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, mirrored: bool, revision: u64) -> Result<Self, CommandError> {
-        self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision)
+        self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision, &BTreeSet::new())
     }
 
     /// Apply several current-sheet poses as one rigid batch with the same contact retention as
     /// [`Self::retained_symbol_pose`], cleaning up once after the last. Every contact is captured
     /// from the geometry before the first pose, so an earlier pose cannot move a pin into a later
     /// terminal's old contact point. Any invalid pose rejects all.
-    pub(crate) fn retained_symbol_poses(&self, poses: &[(usize, Point, u8, bool)], revision: u64) -> Result<Self, CommandError> {
+    pub(crate) fn retained_symbol_poses(
+        &self,
+        poses: &[(usize, Point, u8, bool)],
+        revision: u64,
+        reflected_routes: &BTreeSet<u64>,
+    ) -> Result<Self, CommandError> {
         let mut edit = Edit::new(self, revision);
         let moving: BTreeSet<_> = poses.iter().filter_map(|&(index, ..)| self.symbols().get(index).map(|symbol| symbol.ordinal)).collect();
         let mut captured = Vec::with_capacity(poses.len());
@@ -163,7 +190,7 @@ impl Project {
             if !valid_point(&to) || rotation > 3 {
                 return Err(CommandError::InvalidParams("invalid symbol pose".into()));
             }
-            captured.push(edit.capture_pose(index, to, rotation, mirrored, &moving)?);
+            captured.push(edit.capture_pose(index, to, rotation, mirrored, &moving, reflected_routes)?);
         }
         for (&(index, to, rotation, mirrored), captured) in poses.iter().zip(captured) {
             edit.place_pose(index, to, rotation, mirrored, captured)?;

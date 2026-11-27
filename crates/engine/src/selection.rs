@@ -338,7 +338,27 @@ impl Selection {
             }
         }
         // Symbols take the Mirror Symbol pose path, so offset naming terminals keep their contacts.
-        let base = project.retained_symbol_poses(&poses, revision)?;
+        let junctions = self.route_junctions(project);
+        // A bent route whose endpoints reflect with the group keeps its implicit contacts.
+        // Capturing those contacts would split the route before its bends can be reflected.
+        let reflected_routes = project
+            .wires()
+            .iter()
+            .filter(|wire| self.wires.contains(&wire.id()) && wire.bends().is_some())
+            .filter(|wire| {
+                wire.endpoints().into_iter().all(|end| {
+                    let moves = match end {
+                        WireEndpoint::Terminal(pin) => self.symbols.contains(&crate::schematic::symbol_id(pin.symbol)),
+                        WireEndpoint::NetLabel(id) => self.net_labels.contains(&format!("net-label-{id}")),
+                        WireEndpoint::Junction(id) => junctions.contains(&id),
+                        _ => false,
+                    };
+                    moves || project.endpoint_position(end).is_some_and(|at| reflect(at).ok() == Some(at))
+                })
+            })
+            .map(|wire| wire.ordinal())
+            .collect();
+        let base = project.retained_symbol_poses(&poses, revision, &reflected_routes)?;
         let mut next = base.clone();
         for label in Arc::make_mut(&mut next.sheet_mut().net_labels) {
             if self.net_labels.contains(&label.object_id()) {
