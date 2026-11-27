@@ -7,6 +7,10 @@ use pcbcraft_engine::{
     sheets::{CREATE_SHEET, DELETE_SHEET},
 };
 
+/// The confirmation limits footprint removal to parts that lose their last placed symbol.
+/// Accepted footprints for those parts stay for review in Update PCB.
+const DELETE_SHEET_NOTE: &str = "This removes the sheet’s symbols, wires and connections to parent pins. For parts that lose their last placed symbol, footprints are removed now or, if already accepted, when you apply Update PCB. Child sheets become top-level sheets. You can undo the deletion.";
+
 /// Start with one original resistor and the common Browser visible.
 fn sheet_harness(width: f32) -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
@@ -74,6 +78,7 @@ fn browser_sheet_lifecycle_and_local_canvas_selection() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         menu(&mut h, "Supply");
         click(&mut h, "Delete Sheet…");
+        h.get_by_label(DELETE_SHEET_NOTE);
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Delete Sheet").click();
         h.run();
         assert_eq!(h.state().session.project().unwrap().sheets().len(), 1);
