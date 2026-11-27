@@ -83,10 +83,13 @@ still require a separate run.
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping
 release and ordinary development profiles are unchanged. Platforms have separate
-cache keys, and only main saves caches. The Windows cache keeps dependencies
-under a new key. Its first build is cold, so the job has a 75-minute timeout.
-The Linux native job has 45 minutes to let cold tests finish and save their
-cache. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
+cache keys, and only main saves caches. Linux quick and native checks share a
+cache. The native, browser, and WASI jobs cache compiled dependencies and omit
+workspace crate outputs so more targets can fit in the repository's cache
+storage. The first run under a new key builds cold. The native job has 45
+minutes on Linux and 75 minutes on Windows to allow cold builds to finish
+and save a cache. The defaults are `ubuntu-latest`, `windows-latest` and
+`macos-latest`.
 `CI_RUNNER`, `CI_RUNNER_WINDOWS` and `CI_RUNNER_MACOS` select provisioned runners.
 Custom Windows builds must be x64 MSVC executables compatible with the presenting
 `windows-latest` desktop. `CI_BUILD_JOBS` defaults to four on Linux, and
