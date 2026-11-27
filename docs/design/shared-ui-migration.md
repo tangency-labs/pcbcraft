@@ -1,10 +1,14 @@
 # Shared Craft UI migration
 
-The current pin is SolidCraft **0.50.0**, revision
-`eeb366c2ff276987a15c043d63b9072b58274703`, under @travle1's November 26, 2026
-update authorization. The UI kit, look, theme, registry, text and renderer/window
-patches move together. The original migration below records the earlier pin;
-current compatibility notes follow at the end.
+The current pin is SolidCraft revision `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`
+(workspace version 0.50.0). The UI kit, look, theme, registry, text, renderer,
+window patches and kernel crates move together.
+
+This revision includes the [tree badge fix](https://github.com/tangency-labs/solidcraft/pull/22363)
+and the [fractional-scale table fix](https://github.com/tangency-labs/solidcraft/pull/22383)
+used by the Parts Library. The empty-state note also follows the snapped table header width. Part document tabs leave the new view-collapse handle
+empty and continue to show plain document tabs. The notes below
+record the earlier pins.
 
 ## Initial migration
 

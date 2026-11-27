@@ -24,7 +24,7 @@ of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
 
 They come from `https://github.com/tangency-labs/solidcraft.git` at
-`eeb366c2ff276987a15c043d63b9072b58274703`, the revision the workspace already
+`de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, the revision the workspace already
 pins for the Craft UI crates. `solidcore` is developed in that repository's
 `solidcore/` folder; `tangency-labs/solidcore` is a read-only mirror of it.
 Taking the crates from the mirror would put a second copy of the kernel in the

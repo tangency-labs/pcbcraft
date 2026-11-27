@@ -252,6 +252,7 @@ pub fn table(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], select: impl Fn
 }
 
 /// Reuse the selectable table while revealing a keyboard-selected row within its scroll area.
+/// The empty-state note fits within the header, which can still scroll in a narrow pane.
 /// Callers bound the supplied result set and retain data identities and selection policy.
 pub fn table_with_reveal(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], reveal: bool, mut select: impl FnMut(ItemAction)) {
     ui.spacing_mut().scroll.floating = false;
@@ -264,6 +265,10 @@ pub fn table_with_reveal(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], rev
     egui::ScrollArea::vertical().id_salt("library_table_vertical").auto_shrink([false, false]).show(ui, |ui| {
         kit::table_custom(ui, "library_items", &columns, "No matching items", |ui, table| {
             table.headers(ui, |_, _| false);
+            if rows.is_empty() {
+                // The kit's empty note fills the remaining width. Keep it within the snapped header width.
+                ui.set_max_width(ui.min_size().x);
+            }
             for (index, entry) in rows.iter().enumerate() {
                 let mut fold = false;
                 let response = table.row_visible(ui, &entry.key, entry.selected, entry.selected && reveal, |row| {
@@ -376,4 +381,84 @@ pub fn toolbar(ui: &mut Ui, query: &mut String, kind: &mut usize) {
 pub fn section(ui: &mut Ui, title: &str) {
     ui.add_space(Tokens::get().space_12);
     heading(ui, title);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Context, Pos2, RawInput, Shape};
+    use solidcraft_ui_registry as registry;
+
+    /// A read-only Browser row preserves its item count when the displayed name is elided.
+    #[test]
+    fn truncated_read_only_name_keeps_its_item_count_clear_of_the_lock() {
+        const NAME: &str = "Basic components and connectors";
+        let ctx = Context::default();
+        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 120.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.set_width(180.0);
+            tree(
+                ui,
+                ui.make_persistent_id("read_only_library"),
+                Node {
+                    label: NAME,
+                    depth: 0,
+                    fold: Some(false),
+                    selected: false,
+                    count: "48",
+                    readonly: true,
+                    problem: None,
+                    icon: crate::workspace::ToolIcon::Shared("library"),
+                    accessible: NAME,
+                },
+            );
+        });
+        output.textures_delta.clear();
+        let count = output
+            .shapes
+            .iter()
+            .find_map(|paint| match &paint.shape {
+                Shape::Text(text) if text.galley.text() == "48" => Some(paint.shape.visual_bounding_rect()),
+                _ => None,
+            })
+            .expect("the item count is painted");
+        let label = output
+            .shapes
+            .iter()
+            .find_map(|paint| match &paint.shape {
+                Shape::Text(text) if text.galley.elided => Some(paint.shape.visual_bounding_rect()),
+                _ => None,
+            })
+            .expect("the narrow row elides the library name");
+        let badge = registry::rect_of(&format!("row_badge:lock:{NAME}")).expect("the lock badge is painted");
+        assert!(label.right() <= badge.left());
+        assert!(badge.right() <= count.left());
+    }
+
+    /// A fitting empty Parts Library table stays inside its scroll viewport at fractional scale.
+    #[test]
+    fn empty_items_table_fits_the_viewport_at_fractional_scale() {
+        let mut mismatches = Vec::new();
+        for (width, should_scroll) in [(600, true)].into_iter().chain((850..=950).map(|width| (width, false))) {
+            let ctx = Context::default();
+            ctx.set_pixels_per_point(0.9375);
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1536.0, 864.0))), ..Default::default() };
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(input.clone(), |ui| {
+                    ui.set_width(width as f32);
+                    table(ui, &["Name", "Type", "Category", "Packages", "Orderable", "Rev"], &[], |_| {});
+                });
+                output.textures_delta.clear();
+            }
+            assert_eq!(ctx.pixels_per_point(), 0.9375);
+            let viewport = registry::rect_of("dialog:table:library_items:viewport").expect("the table reports its viewport");
+            let content = registry::count_of("dialog:table:library_items:content_width").expect("the table reports its content width");
+            // egui compares content against the ceiling of the viewport width when showing a non-floating scrollbar.
+            let scrolls = content > f64::from(viewport.width().ceil());
+            if scrolls != should_scroll {
+                mismatches.push((width, should_scroll, content, viewport.width()));
+            }
+        }
+        assert!(mismatches.is_empty(), "unexpected horizontal scrollbar behavior at {mismatches:?}");
+    }
 }
