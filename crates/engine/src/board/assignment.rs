@@ -3,7 +3,10 @@ use super::{Footprint, definition};
 use crate::{CommandError, Project, Session, schematic::Point};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    sync::Arc,
+};
 
 /// Pin a physical package and explicit logical mapping without creating a placement.
 pub const ASSIGN_FOOTPRINT: &str = "pcb.assign_footprint";
@@ -44,6 +47,20 @@ pub(crate) struct Assignment {
 }
 
 impl Assignment {
+    /// Copy a placed footprint's pinned package and pad map. Marker-only legacy placements
+    /// have neither, so they cannot supply a package assignment.
+    pub(crate) fn from_placement(footprint: &Footprint) -> Option<Self> {
+        let (Some(library), Some(mapping)) = (&footprint.library, &footprint.mapping) else { return None };
+        Some(Self {
+            component: footprint.component,
+            library: library.clone(),
+            definition: footprint.definition.clone(),
+            definition_revision: footprint.definition_revision,
+            mapping: mapping.clone(),
+            unconnected_pads: footprint.unconnected_pads.clone(),
+        })
+    }
+
     /// Address the exact pinned definition, never a current-library substitute.
     pub(crate) fn key(&self) -> definition::Key {
         (self.library.clone(), self.definition.clone(), self.definition_revision)
@@ -250,16 +267,11 @@ impl Project {
     /// their saved bytes. Marker-only legacy placements remain outside the physical catalog.
     pub fn footprint_assignments(&self) -> Vec<Value> {
         let mut assignments = self.package_assignments().clone();
-        for f in self.board.footprints() {
-            if let (Some(library), Some(mapping)) = (&f.library, &f.mapping) {
-                assignments.entry(f.component).or_insert_with(|| Assignment {
-                    unconnected_pads: f.unconnected_pads.clone(),
-                    component: f.component,
-                    library: library.clone(),
-                    definition: f.definition.clone(),
-                    definition_revision: f.definition_revision,
-                    mapping: mapping.clone(),
-                });
+        for footprint in self.board.footprints() {
+            if let Entry::Vacant(entry) = assignments.entry(footprint.component)
+                && let Some(assignment) = Assignment::from_placement(footprint)
+            {
+                entry.insert(assignment);
             }
         }
         assignments.values().map(|a| a.inspect(self)).collect()
