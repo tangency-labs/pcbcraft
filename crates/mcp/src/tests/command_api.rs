@@ -38,7 +38,7 @@ fn legacy_backend_refuses_pins_without_dispatching_and_still_executes_unpinned()
 #[test]
 fn a_version_two_api_refuses_mismatches_and_warns_on_deprecated_use() {
     let mut fixture = Server::new(Box::new(Headless::with_command_api(2, FIXTURE)));
-    let list = call(&mut fixture, "list_commands", json!({"filter": "project.new"}));
+    let list = call(&mut fixture, "list_commands", json!({"filter": "project.new", "detail": true}));
     assert_eq!(list["structuredContent"]["command_api_version"], 2);
     let command = body(&call(&mut fixture, "describe_command", json!({"command": "project.new"})));
     assert_eq!(body(&list), json!([command]));

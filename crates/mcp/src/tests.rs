@@ -1074,15 +1074,26 @@ fn list_commands_filters() {
 
 /// `list_commands` reports the command API version, the revision of the whole catalog (the same
 /// with or without a filter, and equal to `catalog_revision` of the unfiltered list) and the
-/// capabilities. `describe_command` and the catalog resource agree with the list, and the listed
-/// contracts match the committed snapshot.
+/// capabilities. `describe_command` and the catalog resource agree with the detailed list, the
+/// listed contracts match the committed snapshot, and the default list gives each command's id
+/// and first summary sentence only.
 #[test]
 fn discovery_reports_the_api_version_and_catalog_revision() {
     use pcbcraft_engine::command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision, check_snapshot};
     let mut s = server();
     body(&call(&mut s, "execute", json!({"command": "project.new"})));
-    let listed = call(&mut s, "list_commands", json!({}));
+    let listed = call(&mut s, "list_commands", json!({"detail": true}));
     let commands = body(&listed);
+    let compact = call(&mut s, "list_commands", json!({}));
+    assert_eq!(compact["structuredContent"], listed["structuredContent"]);
+    let compact = body(&compact);
+    assert_eq!(compact.as_array().unwrap().len(), commands.as_array().unwrap().len());
+    for (brief, full) in compact.as_array().unwrap().iter().zip(commands.as_array().unwrap()) {
+        let summary = brief["summary"].as_str().unwrap();
+        assert_eq!((&brief["id"], &brief["scope"]), (&full["id"], &full["scope"]));
+        assert!(brief.get("params").is_none() && brief.get("title").is_none(), "{brief}");
+        assert!(full["summary"].as_str().unwrap().starts_with(summary) && summary.ends_with('.') && !summary.contains(". "), "{brief}");
+    }
     let about: Value = serde_json::from_str(listed["content"][1]["text"].as_str().unwrap()).unwrap();
     assert_eq!(about, listed["structuredContent"]);
     let revision = catalog_revision(commands.as_array().unwrap());
@@ -1119,7 +1130,7 @@ fn net_appearance_commands_are_version_one_catalog_additions() {
 
     assert_eq!(COMMAND_API_VERSION, 1);
     let mut s = server();
-    let listed = call(&mut s, "list_commands", json!({}));
+    let listed = call(&mut s, "list_commands", json!({"detail": true}));
     assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
     let commands = body(&listed);
     let commands = commands.as_array().unwrap();
@@ -1149,7 +1160,7 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     let mut editor = Session::default();
     editor.apply("project.new", &json!({"name":"Review fixture"})).unwrap();
     let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
-    let listed = call(&mut s, "list_commands", json!({"filter":"project.rename"}));
+    let listed = call(&mut s, "list_commands", json!({"filter":"project.rename","detail":true}));
     assert_eq!(listed["structuredContent"]["scope"], "read_only");
     let described = call(&mut s, "describe_command", json!({"command":"project.rename"}));
     assert_eq!(body(&described), body(&listed)[0]);

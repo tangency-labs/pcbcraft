@@ -2,7 +2,12 @@
 
 ## Command API version
 
-`list_commands` keeps returning the command array as its first text part. A
+`list_commands` keeps returning the command array as its first text part. Each
+entry gives the command's `id`, the first sentence of its `summary` and, for a
+window command, its `scope`, which keeps the whole live catalog readable by
+agents whose clients move long tool results to a file. `describe_command`
+returns one command's full descriptor, with its title, summary and `params`
+schema; `list_commands` with `detail: true` lists full descriptors. A
 second text part, also given as the result's `structuredContent`, reads
 `{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:

@@ -35,8 +35,8 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "list_commands",
             "List commands",
-            "Every available command, with its summary and parameters. `filter` keeps those whose id or summary contains it. A second part gives the command API version, the catalog revision and the optional features this build offers.",
-            json!({"filter": {"type": "string"}}),
+            "Every available command's id and the first sentence of its summary. `describe_command` gives one command's full summary and parameters; set `detail` to true to list full descriptors instead. `filter` keeps those whose id or summary contains it. A second part gives the command API version, the catalog revision and the optional features this build offers.",
+            json!({"filter": {"type": "string"}, "detail": {"type": "boolean", "default": false}}),
             &[],
             Effect::ReadOnly,
         ),
@@ -132,6 +132,23 @@ fn listing(commands: &Value, all: &[Value], mut about: Value, scope: Option<Sess
     })
 }
 
+/// A command's descriptor without its parameters and title, and with only the first sentence of
+/// its summary; `describe_command` gives the rest. Full descriptors for the whole live catalog
+/// exceed what agents whose clients cannot open long tool results can read (#636).
+fn brief(command: &Value) -> Value {
+    let mut command = command.clone();
+    if let Some(fields) = command.as_object_mut() {
+        fields.remove("params");
+        fields.remove("title");
+        if let Some(Value::String(summary)) = fields.get_mut("summary")
+            && let Some(end) = summary.find(". ")
+        {
+            summary.truncate(end + 1);
+        }
+    }
+    command
+}
+
 /// A failed command is a tool result the agent can read, not a protocol error. The message
 /// stays the first text part as clients have always read it; the second part and the
 /// structured result carry the stable code and details.
@@ -193,7 +210,9 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
                         let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
                         field("id").contains(&filter) || field("summary").contains(&filter)
                     };
-                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all, metadata, backend.scope())
+                    let detail = args["detail"].as_bool().unwrap_or(false);
+                    let listed = all.iter().filter(keeps).map(|command| if detail { command.clone() } else { brief(command) }).collect();
+                    listing(&Value::Array(listed), &all, metadata, backend.scope())
                 }
                 Err(message) => failure(&message),
             };
