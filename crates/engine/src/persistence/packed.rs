@@ -285,7 +285,8 @@ fn decode_layout(bytes: &[u8], format: &str, entry_point: &str) -> Result<Packed
         // A manifest under one top-level folder reaches this point without the early check.
         let header: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| format!("manifest.json: {e}"))?;
         check_manifest_format(&header, format)?;
-        let manifest: Manifest = serde_json::from_value(header).map_err(|e| format!("manifest.json: {e}"))?;
+        // Decode the original bytes so duplicate fields still fail typed validation.
+        let manifest: Manifest = serde_json::from_slice(bytes).map_err(|e| format!("manifest.json: {e}"))?;
         if !manifest.assets.is_empty() {
             return Err("manifest.json: bundled assets are not yet supported".to_owned());
         }

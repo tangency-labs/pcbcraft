@@ -406,6 +406,15 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
             assert!(decode_packed(&zip_files(&bad, prefix, false)).is_err(), "manifest must reject {prefix}{path}");
         }
     }
+    let mut duplicate = d.clone();
+    let manifest = std::str::from_utf8(&d["manifest.json"]).unwrap();
+    let duplicate_fields = manifest.replacen("\"assets\":[]", "\"assets\":[],\"assets\":[]", 1);
+    assert_ne!(duplicate_fields, manifest);
+    duplicate.insert("manifest.json".to_owned(), duplicate_fields.into_bytes());
+    for prefix in ["", "wrapped/"] {
+        let error = decode_packed(&zip_files(&duplicate, prefix, false)).err().expect("duplicate fields must be refused");
+        assert!(error.contains("duplicate field `assets`"), "{prefix}manifest.json: {error}");
+    }
     let mut unsupported = d.clone();
     edit(&mut unsupported, "manifest.json", |value| {
         value["assets"] = json!([{"path":format!("assets/{}", "0".repeat(64)), "size_bytes":0, "sha256":"0".repeat(64)}]);
