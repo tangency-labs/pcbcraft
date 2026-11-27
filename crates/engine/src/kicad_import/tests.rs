@@ -1033,12 +1033,17 @@ fn a_local_power_symbol_imports_as_a_global_one_and_says_so() {
     assert!(!import(&text, "Divider").unwrap().report.notes().any(|(what, _)| what == note));
     // The fixture's netlist is KiCad's export of the `(power global)` file; in the review of
     // #503 KiCad 10.0.8 kept `(power local)` on GND and exported the same pins on it.
+    // Normalize the checkout's newlines before matching across fixture lines.
+    let text = text.replace("\r\n", "\n");
     let gnd = "(symbol \"power:GND\"\n\t\t\t(power global)";
     assert_eq!(text.matches(gnd).count(), 1);
-    let local = import(&text.replace(gnd, "(symbol \"power:GND\"\n\t\t\t(power local)"), "Divider").unwrap();
-    assert!(local.report.notes().any(|(what, n)| what == note && n == 1), "{:?}", local.report);
-    assert_eq!(partition(&local.project), kicad_partition(&xml));
-    assert_eq!(named_nets(&local.project), kicad_named_nets(&xml));
+    let local = text.replace(gnd, "(symbol \"power:GND\"\n\t\t\t(power local)");
+    for input in [&local, &local.replace('\n', "\r\n")] {
+        let imported = import(input, "Divider").unwrap();
+        assert!(imported.report.notes().any(|(what, n)| what == note && n == 1), "{:?}", imported.report);
+        assert_eq!(partition(&imported.project), kicad_partition(&xml));
+        assert_eq!(named_nets(&imported.project), kicad_named_nets(&xml));
+    }
 }
 
 #[test]
