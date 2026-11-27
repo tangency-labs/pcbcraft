@@ -1646,6 +1646,9 @@ archive unchanged. Reopen the downloaded file to use the saved copy.
 Standalone JSON/container-v1 projects remain unsupported. The optional explicit
 converter below creates a separate copy of the immediately previous split layout.
 
+The oldest readable split project entry-point format is `pcbcraft-project/5`,
+in project folders and `.pc` packages. `pcbcraft-cli --help` reports this limit.
+
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions
 remain supported under the new entry-point path; sheet, board and library

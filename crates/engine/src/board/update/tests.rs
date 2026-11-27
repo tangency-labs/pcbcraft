@@ -443,6 +443,42 @@ fn accepted_display_metadata_requires_its_version_and_a_nonempty_record() {
     }
 }
 
+/// A baseline saved before accepted display names shows a named net under its authored
+/// name, so reopening it proposes only nets whose shown name or membership would change.
+#[test]
+fn legacy_named_nets_without_display_names_are_not_proposed_again() {
+    let mut session = fixture();
+    for (from, to) in [("2", "1"), ("1", "2")] {
+        session
+            .apply(
+                CONNECT_PINS,
+                &json!({"from":{"symbol":"symbol-2","terminal":from},"to":{"symbol":"symbol-3","terminal":to},"expected_revision":session.revision()}),
+            )
+            .unwrap();
+    }
+    let project = session.project().unwrap();
+    let at = project.terminal_position(project.symbols[0].terminals()[0]).unwrap();
+    session
+        .apply(crate::net_labels::ADD, &json!({"name":"BUS","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":session.revision()}))
+        .unwrap();
+    let current = capture(session.project().unwrap(), 1);
+    let named: Vec<_> = current.nets.iter().filter(|net| !net.names.is_empty()).collect();
+    assert_eq!(named.len(), 1);
+    assert_eq!(named[0].display_name.as_deref(), Some("BUS"));
+    let mut record = serde_json::to_value(&current).unwrap();
+    record["format"] = json!(FORMAT);
+    for net in record["nets"].as_array_mut().unwrap() {
+        net.as_object_mut().unwrap().remove("display_name");
+    }
+    let legacy = Baseline::decode(&serde_json::to_vec(&record).unwrap()).unwrap();
+    let changes = preview(&legacy, &capture(session.project().unwrap(), 2)).unwrap();
+    let unnamed = legacy.nets.iter().position(|net| net.names.is_empty()).unwrap();
+    assert_ne!(legacy.net_name(unnamed).as_deref(), current.nets[unnamed].display_name.as_deref());
+    assert_eq!(changes.removed_nets, [legacy.nets[unnamed].clone()]);
+    assert_eq!(changes.added_nets, [current.nets[unnamed].clone()]);
+    assert!(changes.components.is_empty() && changes.blockers.is_empty());
+}
+
 /// Pad reduction must refuse removing a schematic-origin unnamed singleton while still
 /// retiring pad-only singletons and refusing unknown-origin singletons.
 #[test]

@@ -47,6 +47,7 @@ before treating an older plan as implemented behavior.
 | Explicit via nets | [Placement, Properties and storage](pcb/via-net-assignments.md) |
 | Remove one routed arm | [Unroute one connection](pcb/unroute.md#unroute-one-connection) |
 | Space footprints or protect placed copper | [Set-pitch distribution](pcb/set-pitch-distribution.md) · [PCB locks](pcb/locks.md) |
+| Align footprints to one that stays fixed | [Align to a reference footprint](pcb/align-to-reference-footprint.md) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](pcb/copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](pcb/board-rules.md) · [Materials and dielectric construction](pcb/board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](pcb/net-class-editor.md) |

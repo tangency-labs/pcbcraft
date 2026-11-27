@@ -49,22 +49,12 @@ pub(super) fn panel(ui: &mut egui::Ui, app: &mut PcbApp, state: &mut Option<Revi
     }) {
         *state = None;
     }
-    if let Some(reason) = app.library_sources.command_refusal(AVAILABLE_REVISIONS) {
-        if project.is_some() {
-            ui.label(reason);
-        }
+    // The ribbon's Project › Updates opens the review and names any refusal; the browser
+    // keeps the pane until then.
+    if app.library_sources.command_refusal(AVAILABLE_REVISIONS).is_some() {
         return state.is_some();
     }
     if state.is_none() {
-        if controls::enabled_button(ui, project.is_some(), "Review library updates").clicked() {
-            match discover(app) {
-                Ok(review) => {
-                    *state = Some(review);
-                    app.message = None;
-                }
-                Err(error) => app.message = Some(error),
-            }
-        }
         return false;
     }
     let mut close = false;

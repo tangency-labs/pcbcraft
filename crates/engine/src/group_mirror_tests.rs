@@ -187,3 +187,31 @@ fn a_selected_wire_between_fixed_ends_restores_after_two_mirrors() {
     }
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), documents);
 }
+
+/// Moving a label off a fixed pin would silently detach the pin from its named net.
+#[test]
+fn group_mirror_refuses_to_detach_a_label_from_an_unselected_pin() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    for at in [grid(0, 0), grid(20, 6)] {
+        apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    }
+    let pin = session.project().unwrap().symbols()[0].pins()[0];
+    apply(&mut session, net_labels::ADD, json!({"name":"SIG","style":"local","x_nm":pin.x_nm,"y_nm":pin.y_nm}));
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    assert!(before.wires().is_empty());
+    let result = session.apply(
+        MIRROR_ITEMS,
+        &json!({
+            "items":{"symbols":[before.symbols()[1].id()],"wires":[],"net_labels":[before.net_labels()[0].object_id()]},
+            "axis":"horizontal",
+            "expected_revision":revision
+        }),
+    );
+    assert!(matches!(result, Err(CommandError::InvalidParams(message)) if message.contains("unselected pin")));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+}

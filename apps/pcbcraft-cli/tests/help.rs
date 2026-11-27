@@ -14,8 +14,8 @@ fn text(bytes: &[u8]) -> &str {
 }
 
 /// Both help aliases print the usage they are listed in, to stdout, with a success status
-/// and nothing on stderr. Returning immediately means help starts no server, opens no
-/// project and waits on no input.
+/// and nothing on stderr. It states the oldest readable split entry point. Returning
+/// immediately means help starts no server, opens no project and waits on no input.
 #[test]
 fn help_aliases_print_usage_to_stdout_and_succeed() {
     for flag in ["--help", "-h"] {
@@ -25,6 +25,12 @@ fn help_aliases_print_usage_to_stdout_and_succeed() {
         let stdout = text(&output.stdout);
         assert!(stdout.starts_with("Usage: pcbcraft-cli"), "{flag}: {stdout}");
         assert!(stdout.contains("--help") && stdout.contains("-h"), "{flag}: {stdout}");
+        assert!(
+            stdout.trim_end().ends_with(
+                "The oldest split project entry-point format this build opens is pcbcraft-project/5, in project folders and .pc packages."
+            ),
+            "{flag}: {stdout}"
+        );
         assert!(output.stderr.is_empty(), "{flag}: {}", text(&output.stderr));
     }
 }

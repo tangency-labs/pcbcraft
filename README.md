@@ -115,7 +115,7 @@ cargo run --locked -p pcbcraft-cli -- mcp
 
 Native live MCP also supports [UI automation](docs/automation/ui-automation.md): locate named
 controls and send clicks, drags, keys, text and scrolling through ordinary editor
-input. Input currently targets the original native window and its split panes;
+input, in the main window, its split panes and detached editor windows;
 headless sessions operate separately from the open editor.
 
 The [AI and MCP guide](docs/mcp.md) covers agent setup, permissions, live

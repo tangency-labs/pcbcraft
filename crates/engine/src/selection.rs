@@ -305,12 +305,31 @@ impl Selection {
     /// routes whose ends both move with the group reflect their authored bends, and every other
     /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
     /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
-    /// Validation and contact checks finish before a candidate is returned; any invalid item rejects all.
+    /// Refuse to move a label off a directly contacted pin outside the selection.
     pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
         self.validate(project)?;
         self.validate_marker_owners(project)?;
         let doubled = self.doubled_pivot(project, axis)?;
         let reflect = |point: Point| reflected(point, axis, doubled);
+        let fixed_pins: BTreeSet<_> = if self.net_labels.is_empty() {
+            BTreeSet::new()
+        } else {
+            project
+                .symbols()
+                .iter()
+                .filter(|symbol| !self.symbols.contains(&symbol.id()))
+                .flat_map(|symbol| symbol.pins())
+                .map(|pin| (pin.x_nm, pin.y_nm))
+                .collect()
+        };
+        for label in project.net_labels().iter().filter(|label| self.net_labels.contains(&label.object_id())) {
+            if fixed_pins.contains(&(label.at.x_nm, label.at.y_nm)) && reflect(label.at)? != label.at {
+                return Err(CommandError::InvalidParams(format!(
+                    "Mirroring would disconnect label {} from an unselected pin. Select the symbol too.",
+                    label.name
+                )));
+            }
+        }
         let mut poses = Vec::new();
         for (index, symbol) in project.symbols().iter().enumerate() {
             if self.symbols.contains(&symbol.id()) {
