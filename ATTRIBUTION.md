@@ -1385,9 +1385,12 @@ egui-wgpu and winit patches now use SolidCraft 0.50.0 at
 `eeb366c2ff276987a15c043d63b9072b58274703`. SolidCraft vendors egui
 0.37 with its own fixes, and its egui-wgpu and toolkit build against that copy, so
 `ecolor`, `egui`, `emath`, `epaint` and `epaint_default_fonts` come from the same
-revision. The Brand and Interface licence bytes and retained SHA-256 are unchanged
-between the two revisions, and `deny.toml` keeps its exceptions limited to the
-three covered 0.50.0 packages.
+revision. The UI kit, look and theme retain the licence text recorded above.
+SolidCraft 0.50.0 extracts the icon parser into `solidcraft-icon-svg` under the
+same Brand and Interface Licence. Its
+[upstream licence text](https://github.com/tangency-labs/solidcraft/blob/eeb366c2ff276987a15c043d63b9072b58274703/crates/icon-svg/LICENSE)
+has SHA-256 `9de75c0d4a1dce95fd221514802f7d83ff9a19714ea0fb3ed732c84fee012298`.
+`deny.toml` records its own file hash and limits the exception to 0.50.0.
 
 `solidcraft-ui-text` and `solidcraft-ui-registry` retain MIT OR Apache-2.0.
 `crates/chrome/assets/shared-ui/en.json` retains the English entries referenced
