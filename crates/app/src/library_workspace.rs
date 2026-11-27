@@ -140,7 +140,7 @@ impl PcbApp {
         Ok(())
     }
     /// Share the project File menu and title while the catalog retains its own canvas input.
-    /// A new dialog hosted elsewhere asks its owner window to take focus.
+    /// Opening Home or a dialog in another window asks that window to take focus.
     pub(super) fn library_workspace_frame(&mut self, ui: &mut egui::Ui, integrated: bool) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let ctx = ui.ctx().clone();
@@ -150,8 +150,6 @@ impl PcbApp {
         if main {
             self.assistant_shortcuts(&ctx);
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = main;
         let had_dialog = !matches!(self.dialog, Dialog::None);
         let enabled = !had_dialog && !self.files.busy() && !self.project_action_pending();
         let project = self.project_title();
@@ -173,6 +171,9 @@ impl PcbApp {
         );
         if home {
             self.show_home();
+            if !main {
+                ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+            }
         }
         self.apply_utilities(&ctx, picked);
         if enabled && matches!(self.dialog, Dialog::None) && ctx.input(|input| input.focused) && !ctx.egui_wants_keyboard_input() {
