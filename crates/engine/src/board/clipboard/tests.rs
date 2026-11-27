@@ -194,6 +194,36 @@ fn unrelated_pending_board_updates_cannot_be_accepted_by_paste() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
+/// Board paste keeps the schematic's ordinary label contact semantics on an accepted board: a
+/// copied circuit whose pins land on two existing named nets joins them, as schematic paste does.
+#[test]
+fn duplicated_circuit_joining_existing_nets_is_accepted_like_schematic_paste() {
+    let mut s = fixture();
+    let text = BoardFragment::capture(s.project().unwrap(), &all(&s), false).unwrap().to_text().unwrap();
+    s.apply(PASTE, &paste_params(&s, &text)).unwrap();
+    let copies = &s.project().unwrap().symbols()[2..];
+    let (a, b) = (copies[0].pins()[1], copies[1].pins()[0]);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    for (name, at) in [("A", a), ("B", b)] {
+        s.apply(crate::net_labels::ADD, &json!({"name":name,"style":"local","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":s.revision()}))
+            .unwrap();
+    }
+    let review = s.execute(crate::PREVIEW_UPDATE, &json!({"expected_revision":s.revision()})).unwrap();
+    if let Some(token) = review["board_update_preview"]["plan_token"].as_str() {
+        s.apply(crate::APPLY_UPDATE, &json!({"plan_token":token,"expected_revision":s.revision()})).unwrap();
+    }
+    let before = s.snapshot().unwrap();
+    s.apply(PASTE, &paste_params(&s, &text)).unwrap();
+    let p = s.project().unwrap();
+    assert_eq!(p.board.footprints().len(), 4);
+    let accepted = p.board.baseline.as_ref().unwrap();
+    assert!(accepted.nets.iter().any(|n| n.names.contains(&"A".into()) && n.names.contains(&"B".into())), "{:?}", accepted.nets);
+    let current = super::super::update::Baseline::proposed(p, &super::super::update::Baseline::current_choices(p), accepted.source.clone()).unwrap();
+    assert!(super::super::update::preview(accepted, &current).unwrap().is_noop());
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+}
+
 /// Unknown targets/identities, stale revisions, reuse of placed objects and reference conflicts
 /// preserve the complete snapshot and history, including accepted capture identity.
 #[test]
