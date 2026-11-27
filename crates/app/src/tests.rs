@@ -19,6 +19,7 @@ mod board_drawing;
 mod board_fill;
 pub(crate) use board_fill::board as fill_harness;
 mod board_layers;
+mod board_nudge;
 mod board_properties;
 mod board_ratsnest;
 mod board_tracks;
@@ -50,6 +51,7 @@ mod optional_board;
 mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod redo_shortcut;
 mod ribbon;
 mod save_changes;
 mod selection_filters;

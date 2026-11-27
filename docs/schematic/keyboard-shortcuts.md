@@ -53,6 +53,7 @@ here.
 | Ctrl+Q | Quit | Desktop only; asks about unsaved changes |
 | Ctrl+Z | Undo | When the undo history has an entry |
 | Ctrl+Y | Redo | When the redo history has an entry |
+| Ctrl+Shift+Z | Redo | Same as Ctrl+Y; never undoes |
 | Ctrl+A | Select all | Idle focused canvas; selects supported items on the current sheet and respects Selection filters |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste | Canvas owns input; uses the OS clipboard, so fields keep normal editing |
 | Ctrl+Shift+V | Paste with options | Reference, named-net and original-position choices |
@@ -123,7 +124,7 @@ listed beside it.
 | Rows | Consumed by | Focused tests |
 | --- | --- | --- |
 | Project keys (Ctrl+N/O/S/Shift+S/,,/Q) | `PcbApp::shortcuts` → `new_project`, `open_project_file`, `save_project_file`, `open_preferences`, `request_project_close` | — |
-| Undo/Redo (Ctrl+Z/Y) | `PcbApp::shortcuts` → `session.available` + `run` on `edit.undo`/`edit.redo` | — |
+| Undo/Redo (Ctrl+Z/Y, Ctrl+Shift+Z) | `PcbApp::shortcuts` → `session.available` + `run` on `edit.undo`/`edit.redo` | `tests/redo_shortcut.rs` (`ctrl_shift_z_redoes_project_edits`) |
 | Clipboard (Ctrl+C/X/V/Shift+V, Ctrl+D) | `clipboard_shortcuts` → `copy_clipboard`, `request_clipboard`, `duplicate_clipboard` in [clipboard.rs](../../crates/app/src/clipboard.rs) | [clipboard/tests.rs](../../crates/app/src/clipboard/tests.rs): `copy_between_independent_instances_uses_system_clipboard_events` and `paste_options_and_duplicate_share_the_validated_path` cover OS events and handlers/options, rather than physical key chords |
 | Grid (N, Shift+N) | `PcbApp::shortcuts` → `cycle_grid` | `tests/grid_spacing.rs` (`grid_keys_step_through_the_presets`) |
 | Units (Ctrl+U) | `PcbApp::shortcuts` → `preferences.units.toggled` | `tests/display_units.rs` |

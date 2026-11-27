@@ -60,6 +60,10 @@
   diagnostics and same-board clipboard preservation.
 - Box, U and click select tracks and vias in lighter copper colors matching pads. Picking favors
   active-layer tracks, and Shift+Space cycles through overlapping visible objects.
+- [Arrow nudges](../pcb/board-keyboard-shortcuts.md#selection-and-editing-keys) use the
+  board grid, support fine/coarse steps and undo a held key as one action. They carry track
+  neighbors where possible and refuse to break direct pad, track or via contacts or move locked
+  objects. Connections made only through zone fills are left to refill and DRC.
 - M and group drags move the selected copper rigidly. The
   [dockable Router Settings](../pcb/route-planning.md#track-shove) apply Walkaround, Shove and
   Highlight collisions to new routes, D and held drags on a single track with its neighbors

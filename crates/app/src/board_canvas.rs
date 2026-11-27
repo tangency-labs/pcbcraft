@@ -1303,7 +1303,7 @@ fn preview_point(point: Point, origin: Point, rotation: u16, bottom: bool, draft
 /// Move a resolved offset between validated whole-degree poses (rotation, bottom). Equal poses
 /// preserve exact offsets. Same-side changes rotate by the angle difference; a side change
 /// reflects X then rotates by the angle sum, applying the engine's rounding only once.
-fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
+pub(super) fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
     if from == to {
         return (x, y);
     }

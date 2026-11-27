@@ -211,6 +211,7 @@ pub(super) struct BoardState {
     pub(super) footprints: crate::board_canvas::FootprintCache,
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) movement: crate::board_move::State,
+    pub(super) nudge: crate::board_nudge::State,
     pub(super) ratsnest_cache: Option<(ViewInput, Arc<pcbcraft_engine::board::ratsnest::Ratsnest>, Option<Arc<pcbcraft_engine::board::fill::Fill>>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
@@ -778,6 +779,7 @@ impl EditorView {
         self.schematic.clipboard = crate::clipboard::State::default();
         self.board.clipboard = crate::board_clipboard::State::default();
         self.board.movement.cancel();
+        self.board.nudge = Default::default();
         self.board.drawing.cancel();
         self.board.zones.cancel();
         self.board.tracks.cancel();
