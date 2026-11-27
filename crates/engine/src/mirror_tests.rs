@@ -390,6 +390,14 @@ fn group_mirror_reflects_bends_through_a_moving_power_contact() {
     let route = before.wire_path(&before.wires()[0]);
     let power_pin = before.symbols()[1].terminals()[0];
     assert_eq!(before.connectivity().net_for(power_pin).unwrap().len(), 3);
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let refused =
+        session.apply(MIRROR_ITEMS, &json!({"items":{"symbols":[first,last],"wires":[wire]},"axis":"horizontal","expected_revision":revision}));
+    assert!(matches!(refused, Err(CommandError::InvalidParams(message)) if message.contains("power pin")));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
     let items = json!({"symbols":[first,power,last],"wires":[wire]});
     apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
     let after = session.project().unwrap();

@@ -305,7 +305,7 @@ impl Selection {
     /// routes whose ends both move with the group reflect their authored bends, and every other
     /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
     /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
-    /// Refuse to move a label off a directly contacted pin outside the selection.
+    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection.
     pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
         self.validate(project)?;
         self.validate_marker_owners(project)?;
@@ -387,7 +387,38 @@ impl Selection {
             let bends = bends.iter().map(|&point| reflect(point)).collect::<Result<Vec<_>, _>>()?;
             Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(bends);
         }
-        next.healed(&base, revision, false)
+        let next = next.healed(&base, revision, false)?;
+        self.check_stationary_power_contacts(project, &next)?;
+        Ok(next)
+    }
+
+    /// Refuse a mirror that removes an unselected naming pin's direct contact with a selected wire.
+    fn check_stationary_power_contacts(&self, before: &Project, after: &Project) -> Result<(), CommandError> {
+        if self.wires.is_empty() {
+            return Ok(());
+        }
+        let pins: Vec<_> = before
+            .power_terminals()
+            .filter(|(end, _, _)| matches!(end, WireEndpoint::Terminal(pin) if !self.symbols.contains(&crate::schematic::symbol_id(pin.symbol))))
+            .collect();
+        if pins.is_empty() {
+            return Ok(());
+        }
+        for wire in before.wires().iter().filter(|wire| self.wires.contains(&wire.id())) {
+            let old_path = before.wire_path(wire);
+            let new_path =
+                after.wires().binary_search_by_key(&wire.ordinal(), |wire| wire.ordinal()).ok().map(|index| after.wire_path(&after.wires()[index]));
+            for (_, name, at) in &pins {
+                if crate::wire::path_contains_point(&old_path, *at)
+                    && new_path.as_ref().is_none_or(|path| !crate::wire::path_contains_point(path, *at))
+                {
+                    return Err(CommandError::InvalidParams(format!(
+                        "Mirroring would disconnect a selected wire from an unselected {name} power pin. Select the power symbol too."
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
