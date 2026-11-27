@@ -313,10 +313,15 @@ impl IntentV1 {
     /// split. A smaller one is a pending review and stays valid across reopening. A class owner
     /// has no lineage of its own.
     pub(crate) fn validate_split_baselines(&self, owner: Option<Uuid>, records: &[Record]) -> Result<(), String> {
+        self.validate_split_baselines_with(owner, |net| splits_in(records, net))
+    }
+
+    /// Share the baseline checks with incremental registry validation's indexed counts.
+    pub(super) fn validate_split_baselines_with(&self, owner: Option<Uuid>, mut splits: impl FnMut(Uuid) -> u32) -> Result<(), String> {
         let Some(voltage) = &self.voltage else { return Ok(()) };
-        let owner_splits = owner.map_or(0, |net| splits_in(records, net));
+        let owner_splits = owner.map_or(0, &mut splits);
         let reference_splits = match voltage.reference {
-            Reference::Net { net } => splits_in(records, net),
+            Reference::Net { net } => splits(net),
             Reference::Earth {} => 0,
         };
         if voltage.net_splits_seen > owner_splits || voltage.reference_splits_seen > reference_splits {

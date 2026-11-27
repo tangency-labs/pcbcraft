@@ -102,13 +102,19 @@ pub(crate) fn validate(project: &Project, arcs: &[ArcTrack]) -> Result<(), Strin
     }
     let mut ids: BTreeSet<_> = project.board.tracks.iter().map(|t| t.id).chain(project.board.vias.iter().map(|v| v.id)).collect();
     for arc in arcs {
-        arc.validate()?;
-        if !ids.insert(arc.id) {
-            return Err("duplicate arc, track or via identity".into());
-        }
-        if !project.board.setup.as_ref().is_some_and(|s| s.layers().iter().any(|l| l.id == arc.layer && l.purpose == LayerPurpose::Copper)) {
-            return Err("arcs need a copper layer of their board setup".into());
-        }
+        validate_row(project, arc, &mut ids)?;
+    }
+    Ok(())
+}
+
+/// Validate one arc against the already collected cross-copper identities.
+pub(crate) fn validate_row(project: &Project, arc: &ArcTrack, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    arc.validate()?;
+    if !ids.insert(arc.id) {
+        return Err("duplicate arc, track or via identity".into());
+    }
+    if !project.board.setup.as_ref().is_some_and(|s| s.layers().iter().any(|l| l.id == arc.layer && l.purpose == LayerPurpose::Copper)) {
+        return Err("arcs need a copper layer of their board setup".into());
     }
     Ok(())
 }

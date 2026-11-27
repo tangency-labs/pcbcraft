@@ -181,6 +181,11 @@ impl Memberships {
         self.by_part_instance.is_empty()
     }
 
+    /// The grouped row at a stable index for the incremental folder writer.
+    pub(crate) fn grouped_row(&self, index: usize) -> Option<(PartInstanceKey, &[Uuid])> {
+        self.by_part_instance.get(index).map(|(part_instance, groups)| (*part_instance, groups.as_ref()))
+    }
+
     /// Every grouped part instance, in key order.
     pub fn part_instances(&self) -> impl Iterator<Item = PartInstanceKey> + '_ {
         self.by_part_instance.iter().map(|(part_instance, _)| *part_instance)

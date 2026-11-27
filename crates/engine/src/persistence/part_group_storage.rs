@@ -2,10 +2,9 @@
 //! decoding restores the same part-instance keys and group UUIDs used by shared commands.
 use crate::{
     instances::Instances,
-    part_groups::{MAX_GROUPS, MAX_MEMBERSHIPS, Membership, Memberships, PartInstanceKey},
+    part_groups::{MAX_GROUPS, MAX_MEMBERSHIPS, Membership, PartInstanceKey},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// One sorted part-instance key and its sorted, nonempty dictionary references.
@@ -67,33 +66,33 @@ impl<'de> Deserialize<'de> for CompactMemberships {
     }
 }
 
+impl CompactPartInstance {
+    /// Encode one part instance against the sorted dictionary of actual membership UUIDs.
+    pub(super) fn from_groups(part_instance: PartInstanceKey, groups: &[Uuid], dictionary: &[Uuid]) -> Result<Self, String> {
+        let references = groups
+            .iter()
+            .map(|group| {
+                dictionary
+                    .binary_search(group)
+                    .ok()
+                    .and_then(|index| u8::try_from(index).ok())
+                    .ok_or_else(|| "Part-group dictionary reference is out of range.".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { part_instance, groups: references })
+    }
+}
+
 impl CompactMemberships {
-    /// Build a sorted dictionary from actual membership UUIDs, without using catalog positions.
-    pub(super) fn from_memberships(memberships: &Memberships) -> Result<Self, String> {
-        let groups: Vec<_> = memberships.iter().map(|record| record.group).collect::<BTreeSet<_>>().into_iter().collect();
+    /// Build the same representation used by the incremental writer for codec tests.
+    #[cfg(test)]
+    fn from_memberships(memberships: &crate::part_groups::Memberships) -> Result<Self, String> {
+        let groups: Vec<_> = memberships.iter().map(|record| record.group).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
         let part_instances = memberships
             .part_instances()
-            .map(|part_instance| {
-                let references = memberships
-                    .groups_of(part_instance)
-                    .iter()
-                    .map(|group| {
-                        groups
-                            .binary_search(group)
-                            .ok()
-                            .and_then(|index| u8::try_from(index).ok())
-                            .ok_or_else(|| "Part-group dictionary reference is out of range.".to_owned())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(CompactPartInstance { part_instance, groups: references })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+            .map(|part_instance| CompactPartInstance::from_groups(part_instance, memberships.groups_of(part_instance), &groups))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { groups, part_instances })
-    }
-
-    /// The UUID dictionary, written once before the incremental part-instance rows.
-    pub(super) fn groups(&self) -> &[Uuid] {
-        &self.groups
     }
 
     /// Refuse malformed dictionaries, repeated or unordered rows/references, unused dictionary
@@ -185,6 +184,7 @@ impl StoredInstances {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::part_groups::Memberships;
     use serde_json::{Value, json};
 
     /// Pure compression round trips preserve identities rather than dictionary positions.
@@ -196,7 +196,7 @@ mod tests {
             Membership { part_instance: 9, group: Uuid::from_u128(2) },
         ];
         let stored = CompactMemberships::from_memberships(&Memberships::from_records(&records)).unwrap();
-        assert_eq!(stored.groups(), &[Uuid::from_u128(1), Uuid::from_u128(2)]);
+        assert_eq!(stored.groups, [Uuid::from_u128(1), Uuid::from_u128(2)]);
         assert_eq!(
             serde_json::to_value(&stored).unwrap()["part_instances"],
             json!([

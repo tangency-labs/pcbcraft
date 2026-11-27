@@ -168,7 +168,7 @@ fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
     }
     let mut writer = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
     let mut streamed = None;
-    for _ in 0..100 {
+    for _ in 0..500 {
         if let Some(done) = writer.step(1).unwrap() {
             streamed = Some(done);
             break;

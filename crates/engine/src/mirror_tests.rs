@@ -297,6 +297,9 @@ fn reopened_project_removes_generated_named_contact_leg_after_mirror() {
     let sheet = std::str::from_utf8(&documents[&sheet_path]).unwrap();
     assert!(sheet.contains(crate::persistence::CURRENT_SHEET_FORMAT), "{sheet}");
     assert!(sheet.contains("\"generated_legs\": ["), "{sheet}");
+    let mut writer = crate::persistence::DocumentsEncoder::new(session.snapshot().unwrap());
+    let incremental = (0..256).find_map(|_| writer.step(1).unwrap()).expect("one-record polls finish the sheet");
+    assert_eq!(incremental, documents);
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     assert!(encode(session.snapshot().unwrap()).unwrap_err().contains("generated named-contact legs"));
 

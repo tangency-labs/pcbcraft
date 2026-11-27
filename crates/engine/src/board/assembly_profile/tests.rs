@@ -531,6 +531,33 @@ fn largest_allowed_profile_catalog_serializes_under_two_mebibytes() {
     assert_eq!(catalog.revisions.iter().map(|r| r.content.corrections.len()).sum::<usize>(), MAX_CORRECTIONS);
     let bytes = serde_json::to_vec_pretty(&catalog).unwrap().len();
     assert!(bytes < crate::persistence::MAX_DOCUMENT_BYTES / 8, "{bytes}");
+    let emitted_corrections = |writer: &CatalogEncoding| -> usize {
+        let completed: usize = catalog.revisions[..writer.revision].iter().map(|r| r.content.corrections.len()).sum();
+        completed + writer.correction.unwrap_or(0)
+    };
+    let mut writer = CatalogEncoding::default();
+    let mut compact = Vec::new();
+    let mut steps = 0;
+    let mut correction_steps = 0;
+    let mut prev_emitted = 0;
+    loop {
+        let done = writer.step(&mut compact, &catalog).unwrap();
+        let emitted = emitted_corrections(&writer);
+        assert!(emitted >= prev_emitted);
+        let delta = emitted - prev_emitted;
+        assert!(delta <= 1, "encoder step advanced by {delta} corrections");
+        correction_steps += delta;
+        prev_emitted = emitted;
+        if done {
+            break;
+        }
+        steps += 1;
+        assert!(steps <= MAX_CORRECTIONS + 2 * MAX_REVISIONS + 1);
+    }
+    assert_eq!(correction_steps, MAX_CORRECTIONS);
+    assert_eq!(prev_emitted, MAX_CORRECTIONS);
+    assert!(steps >= MAX_CORRECTIONS);
+    assert_eq!(compact, serde_json::to_vec(&catalog).unwrap());
     let mut extra = (*catalog.revisions[0]).clone();
     extra.content.revision -= 1;
     catalog.revisions.insert(0, Arc::new(extra));
