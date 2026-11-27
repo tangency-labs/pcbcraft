@@ -1156,11 +1156,26 @@ fn the_files_paper_is_kept_or_replaced_and_reported() {
 }
 
 #[test]
-fn a_drawing_no_paper_can_hold_near_the_range_edge_still_imports() {
-    // The smallest paper around this drawing would start past the range a page corner may take.
-    let imported = import(&file(&place("T:R", "R1", -952.5, 50.8, 0, "")), "Edge").unwrap();
-    let report: Vec<_> = imported.report.notes().collect();
-    assert!(report.contains(&(PAPER_SHORT, 1)), "{report:?}");
+fn fallback_paper_still_holds_small_drawings_near_the_range_edge() {
+    use crate::schematic::Point;
+
+    for (paper, at) in
+        [("", Point { x_nm: -952_500_000, y_nm: 50_800_000 }), ("(paper \"USLetter\")", Point { x_nm: 50_800_000, y_nm: -952_500_000 })]
+    {
+        let part = place("T:R", "R1", at.x_nm as f64 / 1_000_000., at.y_nm as f64 / 1_000_000., 0, "");
+        let imported = import(&file(&format!("{paper} {part}")), "Edge").unwrap();
+        let page = imported.project.page().unwrap();
+        assert_eq!(page.at().x_nm.min(page.at().y_nm), -MAX_CENTER_NM);
+        assert_eq!(page.paper(), Paper::A4);
+        assert_eq!(imported.project.symbols()[0].position, at);
+        assert!(on_paper(&imported.project));
+        let paper_reports: Vec<_> = imported.report.notes().filter(|(what, _)| what.contains("paper")).collect();
+        if paper.is_empty() {
+            assert!(paper_reports.is_empty(), "{paper_reports:?}");
+        } else {
+            assert_eq!(paper_reports, [(PAPER_REPLACED, 1)]);
+        }
+    }
 }
 
 #[test]

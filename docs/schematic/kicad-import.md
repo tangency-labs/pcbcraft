@@ -133,11 +133,12 @@ which use the native defaults; global label shapes; alternate (De Morgan) body
 styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not
 on a pin or wire end; and drawing details the native format holds differently.
-Other paper sizes (A5, US and user sizes, and A0, which would reach past the
-schematic's 1 m range from the file's origin) are replaced by the smallest paper
-that holds the drawing, reported; a file without a paper gets the same. A
-drawing that no paper holds, or whose paper would start past that range, keeps
-the largest paper or the new sheet's A4 and is reported as reaching past it.
+For other sizes, including A5, US and custom sizes, and A0, which extends past
+the schematic range when placed at the origin, the importer fits a replacement
+around the drawing and reports the substitution. Files without a paper size
+also get a fitted page. Near the coordinate limit, the importer shifts the
+replacement page’s corner into range and reports any drawing that still
+extends beyond the paper.
 Field values are kept up to 2,048 characters without control characters; a value
 changed to fit is reported. Curves are drawn
 as polylines, fills are kept only on convex outlines, and very long pin names are

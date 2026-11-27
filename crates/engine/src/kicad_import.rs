@@ -20,7 +20,7 @@ mod wiring;
 mod tests;
 
 use crate::library::sources::{Kind, LOAD};
-use crate::schematic::{Terminal, Wire, WireEndpoint, check_reference, check_value};
+use crate::schematic::{MAX_CENTER_NM, Terminal, Wire, WireEndpoint, check_reference, check_value};
 use crate::sheets::page::{Orientation, Page, Paper, SET_PAGE};
 use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session};
 use pcbcraft_kicad::Point;
@@ -55,7 +55,7 @@ const SOURCE: &str = "kicad-import";
 /// The report line for a paper the sheet can't take where the file puts it.
 const PAPER_REPLACED: &str = "paper sizes other than A4 to A1 replaced by the smallest that holds the drawing";
 /// The report line for a drawing that reaches past the paper the import could give it.
-const PAPER_SHORT: &str = "drawings larger than any paper the sheet can take, left reaching past the paper";
+const PAPER_SHORT: &str = "drawings reaching past the replacement paper";
 
 /// What an import left out or changed, by description, with how often.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -704,10 +704,9 @@ impl Builder {
     /// Give the sheet the file's paper with its top-left corner at the origin, where KiCad
     /// measures every position from, so the drawing sits on the paper as in the file. Without a
     /// paper the sheet can take there (a size other than A4 to A1, which would reach past the
-    /// schematic's range), the smallest paper around the drawing is used, reported when the file
-    /// named one. When that paper's corner lies outside what `sheet.set_page` takes, the new
-    /// sheet's paper stays, so the paper never refuses a file; a drawing the paper doesn't hold
-    /// is reported instead.
+    /// schematic's range), fit a paper around the drawing and report the replacement if the file
+    /// named one. Clamp the fallback corner to the range `sheet.set_page` accepts, then check if
+    /// the paper holds the drawing. Keep the new sheet's paper if the fallback cannot be applied.
     fn page(&mut self, paper: Option<&pcbcraft_kicad::schematic::Paper>, report: &mut Report) -> Result<(), CommandError> {
         let project = self.project()?;
         let origin = crate::schematic::Point { x_nm: 0, y_nm: 0 };
@@ -716,7 +715,13 @@ impl Builder {
             Some(page) => Some(page),
             None => {
                 let bounds = project.drawing_bounds();
-                let around = Some(Page::around(bounds)).filter(|page| crate::wire::valid_point(&page.at()));
+                let fitted = Page::around(bounds);
+                let at = fitted.at();
+                let corner = crate::schematic::Point {
+                    x_nm: at.x_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM),
+                    y_nm: at.y_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM),
+                };
+                let around = Page::new(fitted.paper(), fitted.orientation(), corner).ok();
                 let holds = match (around.or(project.page()), bounds) {
                     (_, None) => true,
                     (Some(page), Some([min, max])) => {
