@@ -1112,3 +1112,77 @@ fn a_jumper_refusal_names_a_few_pins_of_a_few_groups_whatever_their_size() {
     );
     assert!(message.len() < 400, "{message}");
 }
+
+/// Whether everything drawn on the imported sheet lies on its paper.
+fn on_paper(project: &Project) -> bool {
+    let (Some(page), Some([min, max])) = (project.page(), project.drawing_bounds()) else { return false };
+    let [low, high] = page.corners();
+    low.x_nm <= min.x_nm && low.y_nm <= min.y_nm && max.x_nm <= high.x_nm && max.y_nm <= high.y_nm
+}
+
+#[test]
+fn parts_keep_their_place_on_the_files_paper() {
+    // KiCad measures from the paper's top-left corner: four parts near the corners of an A4
+    // sheet and one at its centre.
+    let corners = [("R1", 25.4, 25.4), ("R2", 271.78, 25.4), ("R3", 25.4, 184.15), ("R4", 271.78, 184.15), ("R5", 148.59, 105.41)];
+    let items: String = corners.iter().map(|(r, x, y)| place("T:R", r, *x, *y, 0, "")).collect();
+    let project = import(&file(&format!("(paper \"A4\") {items}")), "Corners").unwrap().project;
+    let page = project.page().unwrap();
+    assert_eq!((page.paper(), page.orientation(), page.at().x_nm, page.at().y_nm), (Paper::A4, Orientation::Landscape, 0, 0));
+    assert!(on_paper(&project), "{:?} outside {:?}", project.drawing_bounds(), page.corners());
+}
+
+#[test]
+fn the_files_paper_is_kept_or_replaced_and_reported() {
+    let part = place("T:R", "R1", 50.8, 50.8, 0, "");
+    for (paper, size, orientation) in [
+        ("(paper \"A3\")", Paper::A3, Orientation::Landscape),
+        ("(paper \"A3\" portrait)", Paper::A3, Orientation::Portrait),
+        ("(paper \"A1\")", Paper::A1, Orientation::Landscape),
+    ] {
+        let imported = import(&file(&format!("{paper} {part}")), "Paper").unwrap();
+        let page = imported.project.page().unwrap();
+        assert_eq!((page.paper(), page.orientation(), page.at().x_nm, page.at().y_nm), (size, orientation, 0, 0), "{paper}");
+        assert!(imported.report.notes().all(|(what, _)| !what.contains("paper")), "{paper}: {:?}", imported.report);
+    }
+    // Sizes the native sheet doesn't have, and A0, which reaches past the schematic's range from
+    // the file's origin: the smallest paper around the drawing instead, reported.
+    for paper in ["(paper \"USLetter\")", "(paper \"A5\")", "(paper \"User\" 100 50)", "(paper \"A0\")"] {
+        let imported = import(&file(&format!("{paper} {part}")), "Paper").unwrap();
+        let report: Vec<_> = imported.report.notes().collect();
+        assert!(report.contains(&(PAPER_REPLACED, 1)), "{paper}: {report:?}");
+        assert!(on_paper(&imported.project), "{paper}");
+    }
+}
+
+#[test]
+fn fallback_paper_still_holds_small_drawings_near_the_range_edge() {
+    use crate::schematic::Point;
+
+    for (paper, at) in
+        [("", Point { x_nm: -952_500_000, y_nm: 50_800_000 }), ("(paper \"USLetter\")", Point { x_nm: 50_800_000, y_nm: -952_500_000 })]
+    {
+        let part = place("T:R", "R1", at.x_nm as f64 / 1_000_000., at.y_nm as f64 / 1_000_000., 0, "");
+        let imported = import(&file(&format!("{paper} {part}")), "Edge").unwrap();
+        let page = imported.project.page().unwrap();
+        assert_eq!(page.at().x_nm.min(page.at().y_nm), -MAX_CENTER_NM);
+        assert_eq!(page.paper(), Paper::A4);
+        assert_eq!(imported.project.symbols()[0].position, at);
+        assert!(on_paper(&imported.project));
+        let paper_reports: Vec<_> = imported.report.notes().filter(|(what, _)| what.contains("paper")).collect();
+        if paper.is_empty() {
+            assert!(paper_reports.is_empty(), "{paper_reports:?}");
+        } else {
+            assert_eq!(paper_reports, [(PAPER_REPLACED, 1)]);
+        }
+    }
+}
+
+#[test]
+fn a_drawing_wider_than_every_paper_is_not_reported_as_held() {
+    let items = format!("(paper \"USLetter\") {} {}", place("T:R", "R1", -762.0, 50.8, 0, ""), place("T:R", "R2", 762.0, 50.8, 0, ""));
+    let imported = import(&file(&items), "Wide").unwrap();
+    let report: Vec<_> = imported.report.notes().collect();
+    assert!(!on_paper(&imported.project), "{:?}", imported.project.page());
+    assert_eq!(report.iter().filter(|(what, _)| what.contains("paper")).collect::<Vec<_>>(), [&(PAPER_SHORT, 1)], "{report:?}");
+}

@@ -20,7 +20,8 @@ mod wiring;
 mod tests;
 
 use crate::library::sources::{Kind, LOAD};
-use crate::schematic::{Terminal, Wire, WireEndpoint, check_reference, check_value};
+use crate::schematic::{MAX_CENTER_NM, Terminal, Wire, WireEndpoint, check_reference, check_value};
+use crate::sheets::page::{Orientation, Page, Paper, SET_PAGE};
 use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session};
 use pcbcraft_kicad::Point;
 use pcbcraft_kicad::schematic::{LabelKind, Mirror, PlacedSymbol, Schematic};
@@ -51,6 +52,10 @@ pub const MAX_WIRE_PIECES: usize = 4000;
 const LIBRARY_PREFIX: &str = "kicad-";
 /// The scratch session's source registration.
 const SOURCE: &str = "kicad-import";
+/// The report line for a paper the sheet can't take where the file puts it.
+const PAPER_REPLACED: &str = "paper sizes other than A4 to A1 replaced by the smallest that holds the drawing";
+/// The report line for a drawing that reaches past the paper the import could give it.
+const PAPER_SHORT: &str = "drawings reaching past the replacement paper";
 
 /// What an import left out or changed, by description, with how often.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -312,6 +317,7 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     let mut builder = Builder::new(name, &converted)?;
     let placed = builder.place(&schematic, &converted, &pins, &poses, &mut report)?;
     builder.wire(&schematic, &segments, &placed, &converted, &pins, &mut report)?;
+    builder.page(schematic.paper.as_ref(), &mut report)?;
     let project = builder.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
     check_nets(&schematic, &segments, &placed, &converted, &project)?;
     Ok(Imported { project, report })
@@ -693,6 +699,48 @@ impl Builder {
         params["expected_revision"] = json!(self.session.revision());
         self.high = self.session.project().map_or(0, Project::highest_id);
         self.session.apply(id, &params).map(|_| ()).map_err(step(what))
+    }
+
+    /// Give the sheet the file's paper with its top-left corner at the origin, where KiCad
+    /// measures every position from, so the drawing sits on the paper as in the file. Without a
+    /// paper the sheet can take there (a size other than A4 to A1, which would reach past the
+    /// schematic's range), fit a paper around the drawing and report the replacement if the file
+    /// named one. Clamp the fallback corner to the range `sheet.set_page` accepts, then check if
+    /// the paper holds the drawing. Keep the new sheet's paper if the fallback cannot be applied.
+    fn page(&mut self, paper: Option<&pcbcraft_kicad::schematic::Paper>, report: &mut Report) -> Result<(), CommandError> {
+        let project = self.project()?;
+        let origin = crate::schematic::Point { x_nm: 0, y_nm: 0 };
+        let orientation = |portrait: bool| if portrait { Orientation::Portrait } else { Orientation::Landscape };
+        let page = match paper.and_then(|p| Page::new(Paper::parse(&p.name.to_ascii_lowercase())?, orientation(p.portrait), origin).ok()) {
+            Some(page) => Some(page),
+            None => {
+                let bounds = project.drawing_bounds();
+                let fitted = Page::around(bounds);
+                let at = fitted.at();
+                let corner = crate::schematic::Point {
+                    x_nm: at.x_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM),
+                    y_nm: at.y_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM),
+                };
+                let around = Page::new(fitted.paper(), fitted.orientation(), corner).ok();
+                let holds = match (around.or(project.page()), bounds) {
+                    (_, None) => true,
+                    (Some(page), Some([min, max])) => {
+                        let [low, high] = page.corners();
+                        low.x_nm <= min.x_nm && low.y_nm <= min.y_nm && max.x_nm <= high.x_nm && max.y_nm <= high.y_nm
+                    }
+                    (None, Some(_)) => false,
+                };
+                if !holds {
+                    report.note(PAPER_SHORT);
+                } else if paper.is_some() {
+                    report.note(PAPER_REPLACED);
+                }
+                around
+            }
+        };
+        let Some(page) = page else { return Ok(()) };
+        let params = json!({"sheet": project.sheet_target().id(), "paper": page.paper().as_str(), "orientation": page.orientation().as_str(), "at": page.at()});
+        self.apply(SET_PAGE, params, "setting the paper")
     }
 
     /// The open project; always present once [`Builder::new`] succeeded.
