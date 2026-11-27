@@ -17,6 +17,13 @@ Default frame's page number and total count the emitted occurrences in PDF order
 Addressed single-sheet export keeps the editor's Browser numbering. The active
 editor sheet does not affect the order or bytes.
 
+In a project PDF, click a sheet symbol to open its child page. Global labels
+and child-side hierarchical ports jump to the next other page carrying the
+same electrical net, wrapping from the last page back to the first. They use
+the resolved connectivity of the exported snapshot, not the printed label text.
+A net with no other page has no link. Link regions are clipped to the paper.
+Single-sheet export has no navigation annotations.
+
 The exporter associates pages with occurrences, not unique sheet definitions.
 PCBcraft's [current project model](../formats/sheet-occurrence-storage.md) still rejects
 repeated definitions; exporting a natively authored repeated sheet is a
@@ -37,5 +44,6 @@ Unicode for searching and copying. As on the canvas, a quarter-turned symbol's
 unmoved Reference and Value sit to the right of its body, not on its pin axis.
 The regular stroke face is already bundled
 with the engine; characters it cannot draw appear as `?` while retaining their
-original search text. Output uses fixed black ink. On-page navigation links,
-additional font faces, PDF/A, styles and variants are not implemented here.
+original search text. Output uses fixed black ink. Part-property links, net
+bookmarks, additional font faces, PDF/A, styles and variants are not
+implemented here.
