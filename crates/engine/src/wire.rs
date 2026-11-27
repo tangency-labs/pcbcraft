@@ -260,10 +260,27 @@ impl Project {
     /// derived route is kept (`None`) when it touches no pin, label or wire of another net;
     /// otherwise the shortest clear one- or two-bend detour on the grid is returned. Healing
     /// joins collinear runs, so a route along another net's wire would later short the nets;
-    /// when no detour within the bound is clear, the connection is refused instead.
+    /// when no detour within the bound is clear, the connection is refused instead. Only pins
+    /// and wires reaching into the box around both ends and every detour's bends are checked.
     pub(crate) fn pin_route(&self, terminals: [Terminal; 2]) -> Result<Option<Vec<Point>>, CommandError> {
         let [Some(a), Some(b)] = terminals.map(|terminal| self.terminal_position(terminal)) else {
             return Err(CommandError::NotFound("terminal does not exist".into()));
+        };
+        let snap = |value: i64| value.div_euclid(GRID_NM) * GRID_NM;
+        let (x, y) = (snap((a.x_nm + b.x_nm) / 2), snap((a.y_nm + b.y_nm) / 2));
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let mut detours = vec![vec![point(b.x_nm, a.y_nm)], vec![point(a.x_nm, b.y_nm)]];
+        for step in (-DETOUR_STEPS..=DETOUR_STEPS).map(|k| k * GRID_NM) {
+            detours.push(vec![point(x + step, a.y_nm), point(x + step, b.y_nm)]);
+            detours.push(vec![point(a.x_nm, y + step), point(b.x_nm, y + step)]);
+        }
+        // Every route tried, the derived one included, stays inside this box, so a pin or wire
+        // that does not reach into it cannot touch one and is left out of every check.
+        let reach = bounds([a, b].into_iter().chain(detours.iter().flatten().copied()));
+        let near = |at: &[Point]| {
+            bounds(at.iter().copied()).zip(reach).is_some_and(|((low, high), (min, max))| {
+                low.x_nm <= max.x_nm && high.x_nm >= min.x_nm && low.y_nm <= max.y_nm && high.y_nm >= min.y_nm
+            })
         };
         let ends = terminals.map(WireEndpoint::Terminal);
         let connectivity = self.connectivity();
@@ -275,10 +292,11 @@ impl Project {
             .iter()
             .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
             .chain(self.hierarchy_endpoints())
-            .filter(|(end, at)| foreign(*end) && *at != a && *at != b)
+            .filter(|(end, at)| near(&[*at]) && foreign(*end) && *at != a && *at != b)
             .map(|(_, at)| at)
             .collect();
-        let routes: Vec<_> = self.wires.iter().filter(|wire| foreign(wire.endpoints[0])).map(|wire| self.wire_path(wire)).collect();
+        let routes: Vec<_> =
+            self.wires.iter().filter(|wire| foreign(wire.endpoints[0])).map(|wire| self.wire_path(wire)).filter(|route| near(route)).collect();
         let clear = |path: &[Point]| {
             points.iter().all(|at| !path_contains_point(path, *at))
                 && routes.iter().all(|route| {
@@ -289,14 +307,6 @@ impl Project {
         };
         if clear(&wire_path(&Wire { ordinal: 0, endpoints: ends, bends: None }, a, b)) {
             return Ok(None);
-        }
-        let snap = |value: i64| value.div_euclid(GRID_NM) * GRID_NM;
-        let (x, y) = (snap((a.x_nm + b.x_nm) / 2), snap((a.y_nm + b.y_nm) / 2));
-        let point = |x_nm, y_nm| Point { x_nm, y_nm };
-        let mut detours = vec![vec![point(b.x_nm, a.y_nm)], vec![point(a.x_nm, b.y_nm)]];
-        for step in (-DETOUR_STEPS..=DETOUR_STEPS).map(|k| k * GRID_NM) {
-            detours.push(vec![point(x + step, a.y_nm), point(x + step, b.y_nm)]);
-            detours.push(vec![point(a.x_nm, y + step), point(b.x_nm, y + step)]);
         }
         let mut detours: Vec<_> = detours
             .into_iter()
@@ -310,6 +320,17 @@ impl Project {
             CommandError::Unavailable("every route between these pins touches another net's pin or wire; draw it with bends instead".into())
         })
     }
+}
+
+/// The smallest box holding every point, as its low and high corners; `None` without points.
+fn bounds(points: impl IntoIterator<Item = Point>) -> Option<(Point, Point)> {
+    points.into_iter().fold(None, |bounds, at| {
+        let (low, high) = bounds.unwrap_or((at, at));
+        Some((
+            Point { x_nm: low.x_nm.min(at.x_nm), y_nm: low.y_nm.min(at.y_nm) },
+            Point { x_nm: high.x_nm.max(at.x_nm), y_nm: high.y_nm.max(at.y_nm) },
+        ))
+    })
 }
 
 impl Session {
@@ -685,6 +706,18 @@ mod tests {
         let mut session = connector_and_resistor();
         draw(&mut session, point(11, 0), point(13, 0), json!([]));
         draw(&mut session, point(12, -1), point(12, 1), json!([]));
+        let before = session.inspect();
+        assert!(matches!(connect(&mut session, ("symbol-3", "1"), ("symbol-2", "1")), Err(CommandError::Unavailable(_))));
+        assert_eq!(session.inspect(), before);
+    }
+
+    /// A wire is checked along its whole length, so one whose ends lie far outside the box the
+    /// detours stay in still refuses every route that leaves a pin along it.
+    #[test]
+    fn a_wire_reaching_in_from_far_away_still_boxes_a_pin_in() {
+        let mut session = connector_and_resistor();
+        draw(&mut session, point(11, 0), point(13, 0), json!([]));
+        draw(&mut session, point(12, -200), point(12, 200), json!([]));
         let before = session.inspect();
         assert!(matches!(connect(&mut session, ("symbol-3", "1"), ("symbol-2", "1")), Err(CommandError::Unavailable(_))));
         assert_eq!(session.inspect(), before);
