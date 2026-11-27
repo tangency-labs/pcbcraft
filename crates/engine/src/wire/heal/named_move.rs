@@ -168,9 +168,12 @@ impl Edit {
 impl Project {
     /// Set a current-sheet pose while preserving naming-terminal contacts. Existing explicit
     /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
-    /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically.
+    /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically,
+    /// as does a pose whose attached wires would follow their pins over another net's label.
     pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, mirrored: bool, revision: u64) -> Result<Self, CommandError> {
-        self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision, &BTreeSet::new())
+        let next = self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision, &BTreeSet::new())?;
+        next.check_followed_wires(self, &BTreeSet::new())?;
+        Ok(next)
     }
 
     /// Apply several current-sheet poses as one rigid batch with the same contact retention as

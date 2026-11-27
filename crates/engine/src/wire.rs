@@ -322,6 +322,44 @@ impl Project {
     }
 }
 
+impl Project {
+    /// Refuse a candidate in which a wire that follows a moved pin now runs over a net label or
+    /// power pin of another net. Such a wire keeps its bends, or derives them from its ends, so
+    /// its end legs can sweep across a marker, and a marker on a wire joins the two nets. Wires
+    /// listed in `moved` move on purpose with a selection and are left to the user, as are
+    /// wires whose drawn route did not change and markers the old route already touched. Nets
+    /// are judged in `before`, the snapshot the edit started from.
+    pub(crate) fn check_followed_wires(&self, before: &Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
+        let nets = before.connectivity();
+        let markers: Vec<_> = self
+            .net_labels()
+            .iter()
+            .map(|label| (WireEndpoint::NetLabel(label.id), label.name.as_str(), label.at))
+            .chain(self.power_terminals())
+            .collect();
+        for wire in self.wires.iter().filter(|wire| !moved.contains(&wire.id())) {
+            let path = self.wire_path(wire);
+            let old = before
+                .wires
+                .binary_search_by_key(&wire.ordinal(), |wire| wire.ordinal())
+                .map(|index| before.wire_path(&before.wires[index]))
+                .unwrap_or_default();
+            if path == old {
+                continue;
+            }
+            let Some(net) = wire.endpoints().into_iter().find_map(|end| nets.net_index_for_endpoint(end)) else { continue };
+            if let Some((_, name, _)) = markers.iter().find(|(end, _, at)| {
+                path_contains_point(&path, *at) && !path_contains_point(&old, *at) && nets.net_index_for_endpoint(*end) != Some(net)
+            }) {
+                return Err(CommandError::InvalidParams(format!(
+                    "A wire that follows the moved pins would run through {name} and join two nets. Reroute the wire first."
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The smallest box holding every point, as its low and high corners; `None` without points.
 fn bounds(points: impl IntoIterator<Item = Point>) -> Option<(Point, Point)> {
     points.into_iter().fold(None, |bounds, at| {
