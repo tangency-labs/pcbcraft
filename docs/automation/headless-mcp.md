@@ -207,9 +207,11 @@ at `pcbcraft-cli mcp`. Pass
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to omit inspection and return the revision for ordinary edits.
 Commands that return their own data, such as exports, clipboard queries and
-[schematic annotation preview](../schematic/annotation.md), retain that data. In particular,
-`schematic.set_symbol_fields` with `dry_run: true` still returns the full preview,
-including the changed native documents. Use `inspect_project` to read
+[schematic annotation preview](../schematic/annotation.md), retain that data.
+`schematic.set_symbol_fields` with `dry_run: true` still returns the full
+preview, including the changed native documents. Use `annotate.preview` as the
+read-only dry run, then `annotate.apply` with its separate session-local token
+(not the numeric revision) to commit the reviewed renames. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](../formats/pin-pad-correspondence.md)
@@ -239,7 +241,10 @@ filesystem permissions. It does not grant read-only access to a live editor:
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current
-project revision with the two endpoints. Project inspection returns the wires,
+project revision with the two endpoints. The wire never touches a pin, label or
+wire of another net: when the direct route would, it takes the shortest clear
+route with one or two bends on the grid, and when none exists the command is
+refused with `unavailable`; draw that wire with `bends` instead. Project inspection returns the wires,
 connected terminal groups and unconnected pins. `schematic.draw_wire` accepts
 terminal references, `{"junction":"junction-N"}` references from inspection, or
 new free points as `{"x_nm":0,"y_nm":0}`, plus an ordered `bends` array and

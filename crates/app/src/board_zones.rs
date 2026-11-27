@@ -193,6 +193,7 @@ pub(super) fn properties(
         options.min_island_area_nm2 = value;
         changed = true;
     }
+    changed |= controls::checkbox(ui, &mut options.remove_unconnected_islands, "Remove unconnected islands").changed();
     changed.then(|| {
         let mut params = json!({"zone":zone.id,"layer":layer,"options":options});
         if let Some(choice) = net.parse::<usize>().ok().and_then(|index| choices.get(index)) {

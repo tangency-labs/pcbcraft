@@ -1106,9 +1106,13 @@ const AUTO_HEAL: Param = Param {
 
 /// Move a group of symbols and wire routes as one revision and undo step.
 pub const MOVE_ITEMS: &str = "schematic.move_items";
+/// Reflect a group about its grid-snapped center as one revision and undo step.
+pub const MIRROR_ITEMS: &str = "schematic.mirror_items";
 /// Delete a group and its incident connections as one revision and undo step.
 pub const DELETE_ITEMS: &str = "schematic.delete_items";
 const ITEMS: Param = Param { required: true, name: "items", summary: "Symbol and wire IDs from project inspection", kind: ParamKind::Selection };
+const MIRROR_AXIS: Param =
+    Param { required: true, name: "axis", summary: "horizontal flips left and right; vertical flips top and bottom", kind: ParamKind::MirrorAxis };
 
 const APPEARANCE: Param = Param {
     required: true,
@@ -1809,22 +1813,19 @@ const CATALOG: &[Command] = &[
         id: MIRROR_SYMBOL,
         title: "Mirror Symbol",
         summary: "Reflect a symbol about its center across the screen's horizontal or vertical axis, composing with its quarter-turn rotation. Attached wires follow its pins. Undoable.",
-        params: &[
-            SYMBOL,
-            Param {
-                required: true,
-                name: "axis",
-                summary: "horizontal flips left and right; vertical flips top and bottom",
-                kind: ParamKind::MirrorAxis,
-            },
-            EXPECTED_REVISION,
-        ],
+        params: &[SYMBOL, MIRROR_AXIS, EXPECTED_REVISION],
     },
     Command {
         id: DELETE_SYMBOL,
         title: "Delete Symbol",
         summary: "Remove a symbol, its incident wires and unused component. With an accepted baseline, retain its footprint pending review; otherwise remove it. Undoable.",
         params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: annotation::APPLY,
+        title: "Apply schematic annotation",
+        summary: "Apply the latest reviewed annotation in one undo step. Refuses a stale or replaced token.",
+        params: &[Param { required: true, name: "token", summary: "Token returned by annotate.preview in this session", kind: ParamKind::Text }],
     },
     Command {
         id: sheet_split::PREVIEW,
@@ -2080,6 +2081,12 @@ const CATALOG: &[Command] = &[
             EXPECTED_REVISION,
             AUTO_HEAL,
         ],
+    },
+    Command {
+        id: MIRROR_ITEMS,
+        title: "Mirror Selected Items",
+        summary: "Reflect symbols, named-net anchors and wire routes together across the screen's horizontal or vertical axis through the selection's center, snapped so grid points stay on the grid. Symbols compose the reflection with their rotation; attached wires follow their pins. One undoable edit.",
+        params: &[ITEMS, MIRROR_AXIS, EXPECTED_REVISION],
     },
     Command {
         id: DELETE_ITEMS,
@@ -2494,7 +2501,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align footprints by bounds, distribute by equal gaps with fixed outer bounds, or set an exact origin-to-origin pitch along X or Y. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
+        summary: "Align footprints by bounds, optionally to a fixed reference footprint; distribute by equal gaps with fixed outer bounds or by exact origin pitch. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
@@ -2505,6 +2512,12 @@ const CATALOG: &[Command] = &[
                 name: "pitch_nm",
                 summary: "Positive origin spacing for distribute_x or distribute_y (two or more footprints), starting at the smallest axis coordinate. Ties follow footprint request order. Omit for equal gaps by bounds (three or more).",
                 kind: ParamKind::FootprintPitch,
+            },
+            Param {
+                required: false,
+                name: "reference_footprint",
+                summary: "Fixed footprint ID for edge or center alignment only. A locked reference is allowed and is never moved, even if listed in footprints. Select at least one other footprint.",
+                kind: ParamKind::FootprintId,
             },
         ],
     },
@@ -3106,6 +3119,11 @@ pub enum CommandError {
     StaleRevision {
         current: u64,
     },
+    /// Annotation was reviewed at an older revision; include parts with changed designators, locks or placements.
+    StaleAnnotation {
+        current: u64,
+        part_instances: Vec<String>,
+    },
     /// An id names nothing in the project; some lookups report an id not of the expected form
     /// this way too.
     NotFound(String),
@@ -3131,7 +3149,7 @@ impl CommandError {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
             Self::InvalidParams(_) | Self::CopperCollision { .. } => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
-            Self::StaleRevision { .. } => ErrorCode::StaleRevision,
+            Self::StaleRevision { .. } | Self::StaleAnnotation { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
             Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
@@ -3146,6 +3164,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::StaleAnnotation { current, part_instances } => json!({"current_revision":current,"part_instances":part_instances}),
             Self::CopperCollision { blockers } => json!({"blockers": blockers}),
             _ => json!({}),
         }
@@ -3165,6 +3184,16 @@ impl std::fmt::Display for CommandError {
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
             ),
             Self::OutOfScope { command } => write!(f, "`{command}` cannot run in a read-only session"),
+            Self::StaleAnnotation { current, part_instances } => {
+                write!(f, "annotation preview is stale at revision {current}; preview again")?;
+                if !part_instances.is_empty() {
+                    write!(f, "; changed part instances: {}", part_instances.iter().take(8).map(String::as_str).collect::<Vec<_>>().join(", "))?;
+                    if part_instances.len() > 8 {
+                        write!(f, " and {} more", part_instances.len() - 8)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -3553,6 +3582,8 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// One runtime-only setup review, never retained by authored history snapshots.
     setup_preview: Option<board::setup::preview::CachedPreview>,
+    /// One runtime-only annotation review, retained across edits to diagnose stale proposals.
+    annotation_preview: Option<annotation::ReviewedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
     /// Told about each new history root and committed edit; never part of the project.
@@ -3575,6 +3606,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             setup_preview: None,
+            annotation_preview: None,
             defer_net_reconciliation: false,
             observer: None,
         }
@@ -3613,6 +3645,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.annotation_preview = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -3644,6 +3677,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.annotation_preview = None;
     }
 
     /// Adopt the name, storage layout and occurrence IDs of a completed save without an electrical
@@ -3825,6 +3859,7 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
+            | annotation::APPLY
             | sheet_split::PREVIEW
             | sheet_split::SPLIT
             | PLACE_FOOTPRINT
@@ -3887,6 +3922,7 @@ impl Session {
             | ATTACH_JUNCTION
             | HEAL_WIRES
             | MOVE_ITEMS
+            | MIRROR_ITEMS
             | clipboard::COPY
             | clipboard::CUT
             | clipboard::PASTE
@@ -4404,6 +4440,7 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
+                | annotation::APPLY
                 | sheet_split::PREVIEW
                 | sheet_split::SPLIT
                 | PLACE_FOOTPRINT
@@ -4435,6 +4472,7 @@ impl Session {
                 | ATTACH_JUNCTION
                 | HEAL_WIRES
                 | MOVE_ITEMS
+                | MIRROR_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
@@ -4454,36 +4492,39 @@ impl Session {
         self.validate_project_command(id, params)?;
         match id {
             kicad_import::IMPORT => self.import_kicad(params).map(|_| ())?,
-            "project.new" => self.change(Project {
-                name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
-                id: fresh_id()?,
-                numeric_id_high_water: Some(0),
-                sheets: Arc::new(vec![sheets::SchematicSheet {
-                    occurrence_id: Some(fresh_id()?),
-                    page: Some(sheets::page::Page::new_sheet()),
-                    ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
-                }]),
-                sheet_index: 0,
-                components: Arc::default(),
-                pin_functions: Arc::default(),
-                units: Arc::default(),
-                schematic_packages: Arc::default(),
-                board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
-                named_graph: Arc::default(),
-                board_graphics: Arc::default(),
-                board_fill: Arc::default(),
-                upgraded_from: None,
-                layout: Some(persistence::layout::Layout::default()),
-                circuit_use: Some(fresh_id()?),
-                net_registry: Arc::default(),
-                net_classes: Arc::default(),
-                parameters: Arc::default(),
-                assembly_profiles: Arc::default(),
-                output_recipes: Arc::default(),
-                part_groups: Arc::default(),
-                part_group_memberships: Arc::default(),
-                prefer_compact_part_groups: false,
-            })?,
+            "project.new" => {
+                self.change(Project {
+                    name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
+                    id: fresh_id()?,
+                    numeric_id_high_water: Some(0),
+                    sheets: Arc::new(vec![sheets::SchematicSheet {
+                        occurrence_id: Some(fresh_id()?),
+                        page: Some(sheets::page::Page::new_sheet()),
+                        ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
+                    }]),
+                    sheet_index: 0,
+                    components: Arc::default(),
+                    pin_functions: Arc::default(),
+                    units: Arc::default(),
+                    schematic_packages: Arc::default(),
+                    board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
+                    named_graph: Arc::default(),
+                    board_graphics: Arc::default(),
+                    board_fill: Arc::default(),
+                    upgraded_from: None,
+                    layout: Some(persistence::layout::Layout::default()),
+                    circuit_use: Some(fresh_id()?),
+                    net_registry: Arc::default(),
+                    net_classes: Arc::default(),
+                    parameters: Arc::default(),
+                    assembly_profiles: Arc::default(),
+                    output_recipes: Arc::default(),
+                    part_groups: Arc::default(),
+                    part_group_memberships: Arc::default(),
+                    prefer_compact_part_groups: false,
+                })?;
+                self.annotation_preview = None;
+            }
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
@@ -4615,6 +4656,7 @@ impl Session {
             clipboard::CUT => self.cut_schematic(params)?,
             clipboard::PASTE => self.paste_schematic(params)?,
             MOVE_ITEMS => self.move_items(params)?,
+            MIRROR_ITEMS => self.mirror_items(params)?,
             DELETE_ITEMS => self.delete_items(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
             MIRROR_SYMBOL => self.mirror_symbol(params)?,
@@ -4623,6 +4665,7 @@ impl Session {
             annotation::PREVIEW => {
                 self.preview_annotation(params)?;
             }
+            annotation::APPLY => self.apply_annotation(params)?,
             sheet_split::PREVIEW => {
                 self.preview_split(params)?;
             }
@@ -5101,6 +5144,7 @@ impl Session {
     }
 
     /// Add one wire and undo step after validating both terminals against the current project.
+    /// The wire takes a route clear of other nets' pins and wires, or the edit is refused.
     fn connect_pins(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -5129,11 +5173,12 @@ impl Session {
         if project.wires.len() >= MAX_WIRES {
             return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_WIRES} wires")));
         }
+        let bends = project.pin_route(terminals)?;
         let mut project = project.clone();
         Arc::make_mut(&mut project.sheet_mut().wires).push(Wire {
             ordinal: self.next_object_id()?,
             endpoints: terminals.map(WireEndpoint::Terminal),
-            bends: None,
+            bends,
         });
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;
@@ -5209,6 +5254,8 @@ impl Session {
         reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
     ) -> Result<(Project, u64), CommandError> {
         #[cfg(test)]
+        annotation::tests::count_work(|work| work.preparations += 1);
+        #[cfg(test)]
         pin_functions::FULL_PREPARATIONS.set(pin_functions::FULL_PREPARATIONS.get() + 1);
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !previous.is_some_and(|previous| previous.shares_part_instances(&project)) {
@@ -5256,6 +5303,8 @@ impl Session {
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
                         || old.components.iter().any(|(id, part)| {
+                            #[cfg(test)]
+                            annotation::tests::count_work(|work| work.presentation_parts += 1);
                             project
                                 .components
                                 .get(id)
@@ -5270,6 +5319,8 @@ impl Session {
         if presentation_changed || project.requires_project_graph() || previous.is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
+                #[cfg(test)]
+                annotation::tests::count_work(|work| work.invalidated_sheets += 1);
                 sheet.connectivity = Arc::default();
             }
         }
@@ -5944,6 +5995,8 @@ mod wiring_tests {
     }
 }
 
+#[cfg(test)]
+mod group_mirror_tests;
 #[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]

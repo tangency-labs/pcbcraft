@@ -3,7 +3,7 @@
 use crate::{
     CommandError, Project, Session,
     schematic::{
-        MAX_SYMBOLS, Point, WireEndpoint,
+        GRID_NM, MAX_SYMBOLS, MirrorAxis, Point, WireEndpoint,
         wiring::{MAX_WIRES, parse_id},
     },
 };
@@ -219,16 +219,7 @@ impl Selection {
             }
         }
         next.sheet_mut().connectivity = Arc::default();
-        let junctions: BTreeSet<_> = project
-            .wires()
-            .iter()
-            .filter(|wire| self.wires.contains(&wire.id()))
-            .flat_map(|wire| wire.endpoints())
-            .filter_map(|end| match end {
-                WireEndpoint::Junction(id) => Some(id),
-                _ => None,
-            })
-            .collect();
+        let junctions = self.route_junctions(project);
         for (id, point) in Arc::make_mut(&mut next.sheet_mut().junctions) {
             if junctions.contains(id) {
                 *point = translated(*point, delta)?;
@@ -267,12 +258,188 @@ impl Selection {
         let base = if disconnect { project.detached_selection(self, revision)? } else { project.clone() };
         self.moved(&base, delta)?.healed(&base, revision, auto_heal)
     }
+
+    /// Free points and shared junctions owned by the selected wire routes.
+    fn route_junctions(&self, project: &Project) -> BTreeSet<u64> {
+        project
+            .wires()
+            .iter()
+            .filter(|wire| self.wires.contains(&wire.id()))
+            .flat_map(|wire| wire.endpoints())
+            .filter_map(|end| match end {
+                WireEndpoint::Junction(id) => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Twice the group's center along the mirrored coordinate, rounded to a whole grid step with
+    /// ties to an even step. The center spans symbol origins, named-net anchors and selected wire
+    /// vertices, so one symbol keeps its origin as Mirror Symbol does. Doubling keeps an odd span
+    /// exact. A reflected group's doubled center lies as far past the pivot as the original lay
+    /// before it, so a tie on one side is a tie on the other and both round to the same even
+    /// step: a repeated mirror reuses the pivot even for half-grid positions.
+    fn doubled_pivot(&self, project: &Project, axis: MirrorAxis) -> Result<i64, CommandError> {
+        let coordinate = |point: Point| match axis {
+            MirrorAxis::Horizontal => point.x_nm,
+            MirrorAxis::Vertical => point.y_nm,
+        };
+        let symbols = project.symbols().iter().filter(|symbol| self.symbols.contains(&symbol.id())).map(|symbol| symbol.position);
+        let labels = project.net_labels().iter().filter(|label| self.net_labels.contains(&label.object_id())).map(|label| label.at);
+        let routes = project.wires().iter().filter(|wire| self.wires.contains(&wire.id())).flat_map(|wire| project.wire_path(wire));
+        let (low, high) = symbols
+            .chain(labels)
+            .chain(routes)
+            .map(coordinate)
+            .fold(None, |span: Option<(i64, i64)>, value| Some(span.map_or((value, value), |(low, high)| (low.min(value), high.max(value)))))
+            .ok_or_else(|| CommandError::InvalidParams("mirror needs a selected symbol, wire or named-net anchor".to_owned()))?;
+        let sum = low.checked_add(high).ok_or_else(|| CommandError::InvalidParams("mirror exceeds schematic coordinate bounds".to_owned()))?;
+        let (steps, rest) = (sum.div_euclid(GRID_NM), sum.rem_euclid(GRID_NM));
+        let steps = if 2 * rest > GRID_NM || (2 * rest == GRID_NM && steps % 2 != 0) { steps + 1 } else { steps };
+        steps.checked_mul(GRID_NM).ok_or_else(|| CommandError::InvalidParams("mirror exceeds schematic coordinate bounds".to_owned()))
+    }
+
+    /// Reflect the group across one screen axis about its grid-snapped center, so grid points
+    /// stay on the grid and the same mirror twice restores it. Symbols compose the reflection with
+    /// their pose as Mirror Symbol does, named-net anchors flip their text direction, selected
+    /// routes whose ends both move with the group reflect their authored bends, and every other
+    /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
+    /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
+    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection.
+    pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
+        self.validate(project)?;
+        self.validate_marker_owners(project)?;
+        let doubled = self.doubled_pivot(project, axis)?;
+        let reflect = |point: Point| reflected(point, axis, doubled);
+        let fixed_pins: BTreeSet<_> = if self.net_labels.is_empty() {
+            BTreeSet::new()
+        } else {
+            project
+                .symbols()
+                .iter()
+                .filter(|symbol| !self.symbols.contains(&symbol.id()))
+                .flat_map(|symbol| symbol.pins())
+                .map(|pin| (pin.x_nm, pin.y_nm))
+                .collect()
+        };
+        for label in project.net_labels().iter().filter(|label| self.net_labels.contains(&label.object_id())) {
+            if fixed_pins.contains(&(label.at.x_nm, label.at.y_nm)) && reflect(label.at)? != label.at {
+                return Err(CommandError::InvalidParams(format!(
+                    "Mirroring would disconnect label {} from an unselected pin. Select the symbol too.",
+                    label.name
+                )));
+            }
+        }
+        let mut poses = Vec::new();
+        for (index, symbol) in project.symbols().iter().enumerate() {
+            if self.symbols.contains(&symbol.id()) {
+                let (rotation, mirrored) = crate::schematic::mirror_pose(symbol.rotation, symbol.mirrored, axis);
+                poses.push((index, reflect(symbol.position)?, rotation, mirrored));
+            }
+        }
+        // Symbols take the Mirror Symbol pose path, so offset naming terminals keep their contacts.
+        let junctions = self.route_junctions(project);
+        // A bent route whose endpoints reflect with the group keeps its implicit contacts.
+        // Capturing those contacts would split the route before its bends can be reflected.
+        let reflected_routes = project
+            .wires()
+            .iter()
+            .filter(|wire| self.wires.contains(&wire.id()) && wire.bends().is_some())
+            .filter(|wire| {
+                wire.endpoints().into_iter().all(|end| {
+                    let moves = match end {
+                        WireEndpoint::Terminal(pin) => self.symbols.contains(&crate::schematic::symbol_id(pin.symbol)),
+                        WireEndpoint::NetLabel(id) => self.net_labels.contains(&format!("net-label-{id}")),
+                        WireEndpoint::Junction(id) => junctions.contains(&id),
+                        _ => false,
+                    };
+                    moves || project.endpoint_position(end).is_some_and(|at| reflect(at).ok() == Some(at))
+                })
+            })
+            .map(|wire| wire.ordinal())
+            .collect();
+        let base = project.retained_symbol_poses(&poses, revision, &reflected_routes)?;
+        let mut next = base.clone();
+        for label in Arc::make_mut(&mut next.sheet_mut().net_labels) {
+            if self.net_labels.contains(&label.object_id()) {
+                label.at = reflect(label.at)?;
+                label.rotation = match axis {
+                    MirrorAxis::Horizontal => (540 - label.rotation % 360) % 360,
+                    MirrorAxis::Vertical => (360 - label.rotation % 360) % 360,
+                };
+            }
+        }
+        let junctions = self.route_junctions(&base);
+        for (id, point) in Arc::make_mut(&mut next.sheet_mut().junctions) {
+            if junctions.contains(id) {
+                *point = reflect(*point)?;
+            }
+        }
+        next.sheet_mut().connectivity = Arc::default();
+        next.named_graph = Arc::default();
+        for (index, wire) in base.wires().iter().enumerate() {
+            // Routes without authored bends are derived from their ends, which already reflect.
+            let (true, Some(bends)) = (self.wires.contains(&wire.id()), wire.bends()) else { continue };
+            let mut ends = wire.endpoints().into_iter().map(|end| (project.endpoint_position(end), next.endpoint_position(end)));
+            if !ends.all(|(old, new)| old.zip(new).is_some_and(|(old, new)| reflect(old).is_ok_and(|old| old == new))) {
+                continue;
+            }
+            let bends = bends.iter().map(|&point| reflect(point)).collect::<Result<Vec<_>, _>>()?;
+            Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(bends);
+        }
+        let next = next.healed(&base, revision, false)?;
+        self.check_stationary_power_contacts(project, &next)?;
+        Ok(next)
+    }
+
+    /// Refuse a mirror that removes an unselected naming pin's direct contact with a selected wire.
+    fn check_stationary_power_contacts(&self, before: &Project, after: &Project) -> Result<(), CommandError> {
+        if self.wires.is_empty() {
+            return Ok(());
+        }
+        let pins: Vec<_> = before
+            .power_terminals()
+            .filter(|(end, _, _)| matches!(end, WireEndpoint::Terminal(pin) if !self.symbols.contains(&crate::schematic::symbol_id(pin.symbol))))
+            .collect();
+        if pins.is_empty() {
+            return Ok(());
+        }
+        for wire in before.wires().iter().filter(|wire| self.wires.contains(&wire.id())) {
+            let old_path = before.wire_path(wire);
+            let new_path =
+                after.wires().binary_search_by_key(&wire.ordinal(), |wire| wire.ordinal()).ok().map(|index| after.wire_path(&after.wires()[index]));
+            for (_, name, at) in &pins {
+                if crate::wire::path_contains_point(&old_path, *at)
+                    && new_path.as_ref().is_none_or(|path| !crate::wire::path_contains_point(path, *at))
+                {
+                    return Err(CommandError::InvalidParams(format!(
+                        "Mirroring would disconnect a selected wire from an unselected {name} power pin. Select the power symbol too."
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Translate with checked arithmetic and the same coordinate bounds as individual edits.
 fn translated(point: Point, delta: Point) -> Result<Point, CommandError> {
     let next = point.x_nm.checked_add(delta.x_nm).zip(point.y_nm.checked_add(delta.y_nm)).map(|(x_nm, y_nm)| Point { x_nm, y_nm });
     next.filter(crate::wire::valid_point).ok_or_else(|| CommandError::InvalidParams("move exceeds schematic coordinate bounds".to_owned()))
+}
+
+/// Reflect through a doubled pivot with checked arithmetic and the individual-edit bounds.
+fn reflected(point: Point, axis: MirrorAxis, doubled: i64) -> Result<Point, CommandError> {
+    let next = match axis {
+        MirrorAxis::Horizontal => doubled.checked_sub(point.x_nm).map(|x_nm| Point { x_nm, ..point }),
+        MirrorAxis::Vertical => doubled.checked_sub(point.y_nm).map(|y_nm| Point { y_nm, ..point }),
+    };
+    next.filter(crate::wire::valid_point).ok_or_else(|| CommandError::InvalidParams("mirror exceeds schematic coordinate bounds".to_owned()))
+}
+
+/// Whether a group candidate changed any authored schematic geometry.
+fn group_changed(project: &Project, next: &Project) -> bool {
+    next.symbols != project.symbols || next.wires != project.wires || next.junctions != project.junctions || next.net_labels != project.net_labels
 }
 
 impl Session {
@@ -285,11 +452,24 @@ impl Session {
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
         let next =
             items.transformed(project, delta, params["disconnect"].as_bool().unwrap_or(false), self.revision(), crate::wire::auto_heal(params))?;
-        if next.symbols != project.symbols
-            || next.wires != project.wires
-            || next.junctions != project.junctions
-            || next.net_labels != project.net_labels
-        {
+        if group_changed(project, &next) {
+            self.change(next)?;
+        }
+        Ok(())
+    }
+
+    /// Validate and publish one group reflection. A group that maps onto itself, such as a
+    /// lone straight wire across its own axis, publishes nothing.
+    pub(crate) fn mirror_items(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
+        let axis = params["axis"]
+            .as_str()
+            .and_then(MirrorAxis::parse)
+            .ok_or_else(|| CommandError::InvalidParams("mirror axis must be horizontal or vertical".into()))?;
+        let project = self.open_project()?;
+        let next = items.mirrored(project, axis, self.revision())?;
+        if group_changed(project, &next) {
             self.change(next)?;
         }
         Ok(())

@@ -434,8 +434,11 @@ fn gerber_x3_requires_setup_and_a_resolvable_origin() {
 
 /// Pending removals still flash while unique, even across sides; a reused live reference
 /// would link that retained placement to the wrong part, so fail the entire export (§§5.6.15–16).
+/// Validate references even if the live placement is marked do not populate.
 #[test]
 fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
+    use crate::schematic::fields::{Attributes, Metadata};
+
     let mut s = routed_fixture();
     let project = s.project().unwrap();
     let [first, second, ..] = &project.symbols[..] else { panic!("Expected at least two symbols") };
@@ -454,8 +457,74 @@ fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
     assert!(view(&s).footprint(&retained).unwrap().pending_removal);
     let layers = view(&s).gerber_part_layers().unwrap();
     assert!(layers.files[1].contents.contains("%TO.C,R1*%"));
-    s.apply(crate::SET_SYMBOL_FIELDS, &json!({"symbol":second,"reference":"R1","value":"R","expected_revision":s.revision()})).unwrap();
-    assert_eq!(view(&s).gerber_part_layers().unwrap_err(), format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}."));
+    let expected = format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}.");
+    for do_not_populate in [false, true] {
+        let metadata = Metadata { attributes: Attributes { do_not_populate, ..Attributes::default() }, ..Metadata::default() };
+        s.apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":second,"reference":"R1","value":"R","metadata":metadata,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        assert_eq!(view(&s).gerber_part_layers().unwrap_err(), expected);
+    }
+}
+
+/// Base population affects all X3 assembly objects, not bare-board fabrication. Main flashes
+/// with no adopted assembly profile match the generic placement-row coordinates on both sides
+/// at 1 nm (Gerber 2026.05 §4.2.2).
+#[test]
+fn gerber_x3_omits_dnp_and_uses_generic_placement_rows() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let mut s = aperture_fixture_at(&[(PadShape::Circle, 800_000, 800_000, 0); 2], 30, true, p(0, 0), p(31_000_001, -21_000_003), None, None);
+    let bottom_symbol = s.project().unwrap().symbols[0].id();
+    add_assembly_resistor(&mut s, 10_000_000, p(7_000_000, 9_000_000), 270);
+    let optional = add_assembly_resistor(&mut s, 20_000_000, p(12_000_000, 16_000_000), 90);
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"point","x_nm":8_000_000,"y_nm":10_000_001}}),
+    )
+    .unwrap();
+    let bare_board = view(&s).fabrication().unwrap();
+    let all_fitted = view(&s).gerber_part_layers().unwrap();
+    assert!(all_fitted.files[0].contents.contains("%TO.P,R3,1*%"));
+    assert!(all_fitted.files[0].contents.matches("%TO.C,R3*%").count() > 1, "The fitted part has outlines as well as the main flash.");
+    let set_dnp = |s: &mut Session, symbol: &str, reference: &str, do_not_populate| {
+        use crate::schematic::fields::{Attributes, Metadata};
+        let metadata = Metadata { attributes: Attributes { do_not_populate, ..Attributes::default() }, ..Metadata::default() };
+        s.apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":symbol,"reference":reference,"value":"R","metadata":metadata,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    };
+    set_dnp(&mut s, &optional, "R3", true);
+
+    let revision = s.revision();
+    let snapshot = s.snapshot().unwrap();
+    let board_view = view(&s);
+    let layers = board_view.gerber_part_layers().unwrap();
+    let [top, bottom] = layers.files.as_slice() else { panic!("Expected both sides with fitted parts") };
+    let expected = [(bottom, "R1", p(23_000_001, 31_000_004)), (top, "R2", p(-1_000_000, 1_000_001))];
+    for ((file, reference, at), id) in expected.into_iter().zip(board_view.footprint_ids()) {
+        let row = board_view.placement_row(&id, None).unwrap();
+        assert_eq!(row.at, at);
+        let mains: Vec<_> = file.contents.split("%TD*%\n").filter(|object| object.contains("%TO.C,") && object.ends_with("D03*\n")).collect();
+        let [main] = mains.as_slice() else { panic!("Expected one main flash per side") };
+        assert!(main.contains(&format!("%TO.C,{reference}*%\n")));
+        assert!(main.ends_with(&format!("X{}Y{}D03*\n", row.at.x_nm, row.at.y_nm)));
+        assert!(!file.contents.contains("%TO.C,R3*%"));
+        assert!(!file.contents.contains("%TO.P,R3,"));
+    }
+    assert_eq!(s.revision(), revision);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+
+    set_dnp(&mut s, &bottom_symbol, "R1", true);
+    assert_eq!(view(&s).gerber_part_layers().unwrap().files.as_slice(), std::slice::from_ref(top));
+    assert_eq!(view(&s).fabrication().unwrap(), bare_board);
+    set_dnp(&mut s, &bottom_symbol, "R1", false);
+    set_dnp(&mut s, &optional, "R3", false);
+    assert_eq!(view(&s).gerber_part_layers().unwrap(), all_fitted);
 }
 
 /// Test-only read-back of the emitted Gerber subset, independent of the writer's aperture key.
@@ -1095,7 +1164,12 @@ fn rounded_pad_macros_read_back_radius_and_orientation() {
                 let capture = s.export_fabrication_archive(&json!({})).unwrap();
                 assert_eq!(
                     returned["fabrication"],
-                    json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": embedded_manifest(&capture)})
+                    json!({
+                        "files": fabrication.files,
+                        "origin": fabrication.origin,
+                        "drill_chart": fabrication.drill_chart,
+                        "manifest": embedded_manifest(&capture),
+                    })
                 );
                 assert_eq!(s.revision(), revision);
                 assert_eq!(zip(&fabrication.files).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
@@ -2127,7 +2201,12 @@ fn aperture_exports_preserve_revision_storage_and_history() {
         .collect();
     assert_eq!(
         result["fabrication"],
-        json!({"files": direct.files, "origin": direct.origin, "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records}})
+        json!({
+            "files": direct.files,
+            "origin": direct.origin,
+            "drill_chart": direct.drill_chart,
+            "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records},
+        })
     );
     assert_eq!(s.revision(), revision);
     assert_eq!(s.apply(EXPORT_FABRICATION, &json!({})).unwrap(), revision);
@@ -2727,6 +2806,53 @@ fn plated_drill_rejects_a_diameter_that_rounds_to_zero() {
     assert_eq!(plated.tools[0].diameter_nm, 1_000);
     assert!(matches!(fixture(998).export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
         if message.contains("Plated drill diameter 499 nm") && message.contains("rounds to zero")));
+}
+
+/// The drill chart lists every tool each written drill file declares, with the size it writes
+/// and the number of hits an XNC reader counts under it, in the files' declaration order. A board
+/// without non-plated holes writes no non-plated file and gets no non-plated rows.
+#[test]
+fn drill_chart_counts_equal_the_drill_file_census() {
+    use crate::board::definition::CircularNpth;
+    let holes = [
+        CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: -4_000_000, y_nm: 6_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: 6_000_000, y_nm: -5_000_000 }, diameter_nm: 2_000_000 },
+    ];
+    let plated = [(DrillPlating::Plated, 1, 300_000, "0.300", 1), (DrillPlating::Plated, 2, 1_000_000, "1.000", 2)];
+    let non_plated = [(DrillPlating::NonPlated, 1, 2_000_000, "2.000", 1), (DrillPlating::NonPlated, 2, 3_200_000, "3.200", 2)];
+    let with_holes: Vec<_> = plated.iter().chain(&non_plated).copied().collect();
+    for (holes, expected, drill_files) in [(&holes[..], with_holes, 2), (&[][..], plated.to_vec(), 1)] {
+        let mut s = drill_fixture(holes);
+        let fabrication = view(&s).fabrication().unwrap();
+        let mut census = Vec::new();
+        let drills: Vec<_> = fabrication.files.iter().filter(|output| output.name.ends_with(".drl")).collect();
+        assert_eq!(drills.len(), drill_files);
+        for output in drills {
+            let plating = if output.name.ends_with("-NPTH.drl") { DrillPlating::NonPlated } else { DrillPlating::Plated };
+            let read = read_xnc(&output.contents).unwrap_or_else(|error| panic!("{}: {error}", output.name));
+            for (tool, size) in &read.tools {
+                census.push((plating, *tool as usize, size.clone(), read.hits.get(tool).copied().unwrap_or_default()));
+            }
+        }
+        let rows = &fabrication.drill_chart.rows;
+        let chart: Vec<_> = rows.iter().map(|row| (row.plating, row.tool, row.size_mm.clone(), row.count)).collect();
+        assert_eq!(chart, census, "chart rows equal each drill file's tools and hit counts");
+        let expected_rows: Vec<_> = expected
+            .iter()
+            .map(|&(plating, tool, diameter_nm, size, count)| DrillChartRow { plating, tool, diameter_nm, size_mm: size.into(), count })
+            .collect();
+        assert_eq!(rows, &expected_rows);
+        let revision = s.revision();
+        let reported = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+        assert_eq!(reported["fabrication"]["drill_chart"], json!({ "rows": rows }));
+        assert_eq!(s.revision(), revision, "reporting the chart edits nothing");
+    }
+    let reported = drill_fixture(&holes).execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(
+        reported["fabrication"]["drill_chart"]["rows"][2],
+        json!({"plating":"non_plated","tool":1,"diameter_nm":2_000_000,"size_mm":"2.000","count":1})
+    );
 }
 
 /// Read the JSON actually stored in a captured ZIP.

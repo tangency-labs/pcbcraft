@@ -100,12 +100,36 @@ pub(crate) fn require_unlocked_placements<'a>(
     }
 }
 
-/// Physical extent of pads, courtyards, fabrication graphics and non-plated holes.
-/// Round a half-nanometer hole radius outward to contain the entire opening.
-/// Silkscreen, including the reference text, is left out so labels never shift an alignment.
-/// Falls back to its origin when it has no geometry.
+/// Historical selection-only alignment and distribution envelope, using pad rectangle corners.
 fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
-    let points = footprint.pads.iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())).chain(
+    bounds_with_pad_points(footprint, footprint.pads.iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())))
+}
+
+/// The fixed-reference modes bound actual copper on both the anchor and the movers. Round
+/// outward to the enclosing nanometer; project the contour in placement-relative coordinates
+/// so an integer translation cannot change how a fractional core coordinate rounds.
+fn contour_bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
+    let origin = footprint.position;
+    let relative = |p: Point| Point { x_nm: p.x_nm - origin.x_nm, y_nm: p.y_nm - origin.y_nm };
+    let points = footprint.pads.iter().flat_map(|pad| {
+        let extrema = pad.copper.map(|corners| {
+            let contour = super::geometry::Contour::pad(relative(pad.center), corners.map(relative), pad.shape, pad.corner_radius_nm, pad.size_nm);
+            let [left, top, right, bottom] = contour.bounds();
+            [
+                Point { x_nm: origin.x_nm + left.floor() as i64, y_nm: origin.y_nm + top.floor() as i64 },
+                Point { x_nm: origin.x_nm + right.ceil() as i64, y_nm: origin.y_nm + bottom.ceil() as i64 },
+            ]
+        });
+        std::iter::once(pad.center).chain(extrema.into_iter().flatten())
+    });
+    bounds_with_pad_points(footprint, points)
+}
+
+/// Include courtyard and fabrication geometry and non-plated holes, but not silkscreen
+/// (including reference text). Round a half-nanometer hole radius outward to contain the
+/// entire opening. Fall back to the placement origin when nothing contributes points.
+fn bounds_with_pad_points(footprint: &super::view::FootprintView<'_>, pad_points: impl Iterator<Item = Point>) -> [i64; 4] {
+    let points = pad_points.chain(
         footprint
             .graphics
             .iter()
@@ -126,14 +150,14 @@ fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
 }
 
 /// Displacements that align or distribute `boxes` (min x, min y, max x, max y). Top is the
-/// smallest board Y. Centers align on the middle of the whole selection's bounds, rounding
-/// half-nanometer centers downward consistently across zero so repeating alignment is a no-op.
+/// smallest board Y. Use the reference bounds if given, otherwise use the selection's extent.
+/// Half-nanometer centers round downward consistently across zero so repetition is a no-op.
 /// Distribution requires at least three boxes, keeps the physical outermost items fixed and
 /// makes the gaps between neighbors' bounds equal to integer precision. An overlapping selection
 /// that cannot retain its outer anchors and original span in this order is refused.
-fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Result<Vec<(i64, i64)>, CommandError> {
-    let min = |i: usize| boxes.iter().map(|b| b[i]).min().unwrap_or(0);
-    let max = |i: usize| boxes.iter().map(|b| b[i]).max().unwrap_or(0);
+fn alignment(mode: AlignMode, boxes: &[[i64; 4]], reference: Option<[i64; 4]>) -> Result<Vec<(i64, i64)>, CommandError> {
+    let min = |i: usize| reference.map_or_else(|| boxes.iter().map(|b| b[i]).min().unwrap_or(0), |b| b[i]);
+    let max = |i: usize| reference.map_or_else(|| boxes.iter().map(|b| b[i]).max().unwrap_or(0), |b| b[i]);
     Ok(match mode {
         AlignMode::Left => boxes.iter().map(|b| (min(0) - b[0], 0)).collect(),
         AlignMode::Right => boxes.iter().map(|b| (max(2) - b[2], 0)).collect(),
@@ -275,8 +299,9 @@ impl Session {
 
     /// Align by bounds, distribute by bounds with fixed outer anchors, or distribute origins
     /// along one axis at a positive `pitch_nm` (two or more footprints). Track ends on moved
-    /// pads follow them. A selected locked placement, invalid input, an out-of-range result or
-    /// a new short leaves the board unchanged. An accepted request that moves nothing creates no edit.
+    /// pads follow them. An explicit reference footprint anchors edge or center alignment without
+    /// moving, regardless of its lock flag. A locked mover, invalid input, an out-of-range result
+    /// or a new short leaves the board unchanged. An accepted request that moves nothing creates no edit.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -292,7 +317,7 @@ impl Session {
 /// The caller must validate carried copper and contacts before adopting it.
 pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<Option<(Project, std::collections::BTreeSet<String>)>, CommandError> {
     let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
-    let ids: Vec<u64> = params["footprints"]
+    let mut ids: Vec<u64> = params["footprints"]
         .as_array()
         .into_iter()
         .flatten()
@@ -303,7 +328,25 @@ pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<O
     if pitch_nm.is_some() && !mode.distributes() {
         return Err(CommandError::InvalidParams("pitch_nm requires distribute_x or distribute_y".into()));
     }
-    let needed = if pitch_nm.is_some() { 2 } else { mode.minimum() };
+    let reference = params["reference_footprint"].as_str();
+    if let Some(reference) = reference {
+        if mode.distributes() {
+            return Err(CommandError::InvalidParams("reference_footprint is only for edge or center alignment".into()));
+        }
+        let reference = crate::schematic::wiring::parse_id(reference, "footprint-")
+            .ok_or_else(|| CommandError::InvalidParams("reference_footprint must be a footprint ID".into()))?;
+        ids.retain(|id| *id != reference);
+        if ids.is_empty() {
+            return Err(CommandError::InvalidParams("select at least one footprint other than the reference".into()));
+        }
+    }
+    let needed = if reference.is_some() {
+        1
+    } else if pitch_nm.is_some() {
+        2
+    } else {
+        mode.minimum()
+    };
     if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
         return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
     }
@@ -313,14 +356,21 @@ pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<O
     let deltas = if let Some(pitch_nm) = pitch_nm {
         pitch_distribution(&project.board, &ids, mode, pitch_nm)?
     } else {
-        let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let mut wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> = if let Some(reference) = reference {
+            wanted.insert(reference.to_owned());
+            view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), contour_bounds(&f))).collect()
+        } else {
+            view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect()
+        };
+        let reference =
+            reference.map(|id| found.remove(id).ok_or_else(|| CommandError::NotFound(format!("unknown reference footprint {id}")))).transpose()?;
         let boxes = ids
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
-        alignment(mode, &boxes)?
+        alignment(mode, &boxes, reference)?
     };
     if deltas.iter().all(|delta| *delta == (0, 0)) {
         return Ok(None);

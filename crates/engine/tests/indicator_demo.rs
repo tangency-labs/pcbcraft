@@ -144,7 +144,8 @@ fn demo_packages_have_pinned_geometry_and_correct_polarity_mapping() {
 }
 
 /// The demo is fully routed on both copper layers with valid via fanouts and a closed outline.
-/// Checking the saved example must report zero findings without changing bytes or undo state.
+/// Checking the saved example must report zero findings and no pending board update
+/// without changing bytes or undo state.
 #[test]
 fn complete_demo_has_no_unrouted_or_design_rule_findings() {
     let project = decode_packed(ARCHIVE).unwrap().project;
@@ -163,6 +164,8 @@ fn complete_demo_has_no_unrouted_or_design_rule_findings() {
     let revision = session.revision();
     let report = session.check_design(&json!({"board":target.board})).unwrap();
     assert_eq!(report["total"], 0, "{report}");
+    let (_, findings) = session.export_board_netlist(&json!({"board":target.board})).unwrap();
+    assert!(findings.is_empty(), "{findings:?}");
     assert_eq!(session.revision(), revision);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }

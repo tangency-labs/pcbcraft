@@ -95,6 +95,8 @@ const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
 const OPTIONAL_BOARD_PROJECT_FORMAT: &str = "pcbcraft-project/9";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
+/// The oldest entry-point format accepted by the split project reader. This is not the write format.
+pub const OLDEST_READABLE_PROJECT_FORMAT: &str = PREVIOUS_PROJECT_FORMAT;
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
@@ -109,9 +111,10 @@ const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 /// The format 42 vocabulary without test-point marks; still read, never written.
 const UNMARKED_BOARD_FORMAT: &str = "pcbcraft-board/42";
-/// Current board write format: the format 42 vocabulary plus optional test-point marks, with an
-/// optional setup and optional authored records.
-pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/43";
+/// The format 43 vocabulary adds optional test-point marks; still read, never written.
+const MARKED_BOARD_FORMAT: &str = "pcbcraft-board/43";
+/// Current board write format: the format 43 vocabulary plus the explicit zone island-removal policy.
+pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/59";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -386,7 +389,7 @@ struct BoardDocument {
     #[serde(default, deserialize_with = "present")]
     teardrops: Option<Vec<crate::board::teardrop::Record>>,
     #[serde(default, deserialize_with = "present")]
-    zones: Option<Vec<crate::board::zones::Zone>>,
+    zones: Option<Vec<Box<serde_json::value::RawValue>>>,
     #[serde(default, deserialize_with = "present")]
     rules: Option<crate::board::rules::Settings>,
     #[serde(default, deserialize_with = "present")]
@@ -1077,10 +1080,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
 
     // Current boards use one record vocabulary. The older headers still require or forbid
     // particular records, while all versions share the record and geometry validators.
-    let current = board.format == CURRENT_BOARD_FORMAT || board.format == UNMARKED_BOARD_FORMAT;
+    let has_island_policy = board.format == CURRENT_BOARD_FORMAT;
+    let supports_test_points = has_island_policy || board.format == MARKED_BOARD_FORMAT;
+    let current = supports_test_points || board.format == UNMARKED_BOARD_FORMAT;
     let grouped = board.format == GROUP_BOARD_FORMAT;
-    if (board.format != CURRENT_BOARD_FORMAT && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: test-point marks require format 43 and a nonempty array.".into());
+    if (!supports_test_points && board.test_points.is_some()) || board.test_points.as_ref().is_some_and(Vec::is_empty) {
+        return Err(format!("board.json: test-point marks require format 43 or {CURRENT_BOARD_FORMAT} and a nonempty array."));
     }
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (!current && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
@@ -1100,17 +1105,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
     if (assigned_vias && !has_assigned_vias) || (!extended_board_format && !reported && !assigned_vias && has_assigned_vias) {
-        return Err("board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41, 42 or 43; format 24 requires an assignment.".into());
+        return Err(format!(
+            "board.json: explicit via assignments require format 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 24 requires an assignment."
+        ));
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
     if (profiled && board.assembly_profiles.is_none())
         || (!extended_board_format && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
-        return Err(
-            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43. Format 22 requires at least one profile."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}. Format 22 requires at least one profile."
+        ));
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
         return Err("board.json: an empty assembly_profiles array is not allowed".into());
@@ -1120,10 +1126,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (originated && board.placement_origin.is_none())
         || (!extended_board_format && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
-        return Err(
-            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43, and format 21 requires a placement origin."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}, and format 21 requires a placement origin."
+        ));
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
@@ -1133,10 +1138,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         || (!extended_board_format && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err(
-            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41, 42 or 43 and a nonempty array; format 20 requires zones."
-                .into(),
-        );
+        return Err(format!(
+            "board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT} and a nonempty array; format 20 requires zones."
+        ));
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
@@ -1388,8 +1392,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (CURRENT_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
+        (CURRENT_BOARD_FORMAT | MARKED_BOARD_FORMAT | UNMARKED_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT | MARKED_BOARD_FORMAT | UNMARKED_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1456,11 +1460,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
     if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41, 42 or 43; format 25 requires at least one of them.".into());
+        return Err(format!(
+            "board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 25 requires at least one of them."
+        ));
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
     if (stacked && !stack_fields) || (!extended_board_format && !reported && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41, 42 or 43; format 23 requires at least one of them.".into());
+        return Err(format!(
+            "board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34, 35, 41, 42, 43 or {CURRENT_BOARD_FORMAT}; format 23 requires at least one of them."
+        ));
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -1697,12 +1705,33 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             class.authored_intent.validate_split_baselines(None, &project_data.net_registry.records)?;
         }
     }
-    let mut zones = board.zones.unwrap_or_default();
+    let mut zones = board.zones.unwrap_or_default().iter().map(|zone| decode_zone(zone, has_island_policy)).collect::<Result<Vec<_>, _>>()?;
     zones.sort_by_key(|zone| zone.id);
     Arc::make_mut(&mut project_data.board).zones = zones;
     crate::board::zones::validate(project_data).map_err(|e| format!("board.json: {e}"))?;
     validate_watermark(&project)?;
     Ok(project)
+}
+
+/// Check the stored field's presence before decoding the shared command/model record,
+/// whose default intentionally accepts omitted options from older boards and commands.
+fn decode_zone(raw: &serde_json::value::RawValue, has_island_policy: bool) -> Result<crate::board::zones::Zone, String> {
+    #[derive(Deserialize)]
+    struct ZonePolicy {
+        options: Policy,
+    }
+    #[derive(Deserialize)]
+    struct Policy {
+        #[serde(default, deserialize_with = "present")]
+        remove_unconnected_islands: Option<bool>,
+    }
+    let policy: ZonePolicy = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
+    if has_island_policy != policy.options.remove_unconnected_islands.is_some() {
+        return Err(format!(
+            "board.json: remove_unconnected_islands is required in {CURRENT_BOARD_FORMAT} zone options and forbidden in earlier formats"
+        ));
+    }
+    serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))
 }
 
 /// Version 2 retains its original field vocabulary; migration preserves labels and dimensions

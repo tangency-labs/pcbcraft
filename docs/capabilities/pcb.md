@@ -81,7 +81,8 @@
   appear in silkscreen output.
 - Properties accepts exact footprint X, Y, rotation and side. The Modify menu and
   `pcb.align_footprints` align or distribute footprints, with
-  [exact origin pitch](../pcb/set-pitch-distribution.md) available through MCP.
+  [exact origin pitch](../pcb/set-pitch-distribution.md) and
+  [fixed-reference alignment](../pcb/align-to-reference-footprint.md) available through MCP.
 - F, Modify › Flip or `pcb.set_footprint_transform` flips footprints onto back copper and technical
   layers. Board format 14 stores the side.
 - The view-only ruler (Inspect › Measure, Ctrl+Shift+M) snaps to pads, track ends and vias.
@@ -270,10 +271,13 @@ until acceptance. The [PCB ratsnest](../pcb/board-ratsnest.md) displays only acc
 logical connections, with per-view visibility, live MCP control and explicit
 unavailable endpoints. The Update PCB dialog reviews those typed changes from
 either workspace in a scrollable change report, with category filters, unfiltered
-warning/error totals and clipboard export. It resolves missing choices through the
-package chooser and, by default, hands
-accepted unplaced parts to a spaced cursor group for one-click placement, with
-quarter-turn rotation and cancellation. Package assignment refreshes the review
+warning/error totals and clipboard export. Activating a review message highlights
+its affected symbols and existing footprints without approving the update or
+selecting objects for editing. Current DRC rows highlight the owners of reported
+pads and footprints; findings without linked parts still center the PCB on the
+marker. The review resolves missing choices through the package chooser and, by
+default, hands accepted unplaced parts to a spaced cursor group for one-click
+placement, with quarter-turn rotation and cancellation. Package assignment refreshes the review
 directly; compatible pad numbers are preselected for named and unnamed terminals, with
 saved choices taking precedence over revision-qualified library defaults. Full change
 records remain available in the report, and a placement option can leave the

@@ -816,11 +816,26 @@ pub fn preview(accepted: &Baseline, proposed: &Baseline) -> Result<Preview, Stri
     for id in accepted.components.keys().filter(|id| !proposed.components.contains_key(id)) {
         changes.push(ComponentChange::Removed { component: *id });
     }
-    let before: BTreeSet<_> = accepted.nets.iter().collect();
-    let after: BTreeSet<_> = proposed.nets.iter().collect();
-    let removed_nets = accepted.nets.iter().filter(|net| !after.contains(net)).cloned().collect();
-    let added_nets = proposed.nets.iter().filter(|net| !before.contains(net)).cloned().collect();
+    let (before, after) = (shown_nets(accepted), shown_nets(proposed));
+    let (old, new): (BTreeSet<_>, BTreeSet<_>) = (before.iter().collect(), after.iter().collect());
+    let removed_nets = accepted.nets.iter().zip(&before).filter(|(_, shown)| !new.contains(shown)).map(|(net, _)| net.clone()).collect();
+    let added_nets = proposed.nets.iter().zip(&after).filter(|(_, shown)| !old.contains(shown)).map(|(net, _)| net.clone()).collect();
     Ok(Preview { components: changes, removed_nets, added_nets, blockers })
+}
+
+/// Net membership, authored names, origin and the name the board shows.
+type ShownNet<'a> = (&'a [TerminalKey], &'a [String], Option<NetOrigin>, Option<String>);
+
+/// One comparison key per net, in record order. A baseline saved before display names
+/// were stored shows its fallback name, so reopening it proposes no change that Apply
+/// would not make.
+fn shown_nets(baseline: &Baseline) -> Vec<ShownNet<'_>> {
+    baseline
+        .nets
+        .iter()
+        .enumerate()
+        .map(|(index, net)| (net.terminals.as_slice(), net.names.as_slice(), net.origin, baseline.net_name(index)))
+        .collect()
 }
 
 /// Build a complete physical candidate with its matching accepted baseline installed,

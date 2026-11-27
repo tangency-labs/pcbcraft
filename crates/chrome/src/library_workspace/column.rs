@@ -75,7 +75,8 @@ impl ColumnWidth {
             return self.width(default).clamp(sash.min, max);
         }
         let width = self.width(default).clamp(sash.min, max);
-        let response = solidcraft_ui_kit::panel_host_sash(ui, id, sash.bounds, sash.name, false, width);
+        let response =
+            solidcraft_ui_kit::panel_host_sash(ui, id, sash.bounds, sash.bounds, sash.name, solidcraft_ui_kit::SashAxis::Vertical, width, true);
         let sign = if sash.leading { -1.0 } else { 1.0 };
         if response.clicked() || response.drag_started() {
             response.request_focus();

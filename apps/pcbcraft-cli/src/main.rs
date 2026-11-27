@@ -2,7 +2,7 @@
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
-use pcbcraft_engine::SessionScope;
+use pcbcraft_engine::{SessionScope, persistence::OLDEST_READABLE_PROJECT_FORMAT};
 use pcbcraft_mcp::{
     Backend, Headless, Server,
     live::{Remote, TOKEN_ENV},
@@ -23,6 +23,13 @@ const USAGE: &str = "Usage: pcbcraft-cli mcp [--read-only] [--project FILE_OR_FO
                         Print this usage information.
        pcbcraft-cli --version";
 
+/// Include the oldest readable split format wherever usage is printed.
+fn usage() -> String {
+    format!(
+        "{USAGE}\n\nThe oldest split project entry-point format this build opens is {OLDEST_READABLE_PROJECT_FORMAT}, in project folders and .pc packages."
+    )
+}
+
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -37,18 +44,18 @@ fn main() -> ExitCode {
         [command, source, destination] if command == "import-kicad" => import_kicad(Path::new(source), Path::new(destination)),
         [command, flag, port, options @ ..] if command == "mcp" && flag == "--connect" => match connect_options(options) {
             Some((token_file, wait)) => connect_editor(port, token_file, wait).and_then(|backend| serve(Box::new(backend))),
-            None => Err(format!("unrecognized --connect options\n{USAGE}")),
+            None => Err(format!("unrecognized --connect options\n{}", usage())),
         },
         [command, options @ ..] if command == "mcp" => {
             let Some((scope, path)) = headless_options(options) else {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 return ExitCode::from(2);
             };
             let project = path.map(|path| load_project(path, scope)).transpose();
             project.and_then(|project| serve(Box::new(Headless::with_scope(scope, project))))
         }
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("{USAGE}");
+            println!("{}", usage());
             return ExitCode::SUCCESS;
         }
         [flag] if flag == "--version" => {
@@ -56,7 +63,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };

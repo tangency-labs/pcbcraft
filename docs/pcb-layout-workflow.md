@@ -103,6 +103,7 @@ use the open board geometry, including edits before Save.
 
 - <a name="unroute-one-connection"></a>[Unroute one connection](pcb/unroute.md)
 - <a name="set-pitch-distribution"></a>[Set-pitch distribution](pcb/set-pitch-distribution.md)
+- <a name="align-to-a-reference-footprint"></a>[Align to a reference footprint](pcb/align-to-reference-footprint.md)
 - <a name="placed-footprint-locks"></a>[Placed-footprint locks](pcb/locks.md#placed-footprint-locks) and
   <a name="fixed-tracks-and-vias"></a>[fixed tracks and vias](pcb/locks.md#fixed-tracks-and-vias)
 - <a name="fabrication-drill-files"></a>[Fabrication drill files](manufacturing/drill-files.md)
@@ -112,17 +113,18 @@ use the open board geometry, including edits before Save.
 | Slice | Stored formats | Stored |
 | --- | --- | --- |
 | 1. Footprint moves carry copper | none | — |
-| 2. Board rules (implemented) | board/43 | Board-scoped rule records |
+| 2. Board rules (implemented) | board/59 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | board/43 | Zone outlines; fills are not stored |
+| 4. Zones | board/59 | Zone outlines and connection-removal settings; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/43](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
-| Named layer groups | [board/43](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
+| Placed-footprint lock metadata | [board/59](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
+| Named layer groups | [board/59](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
 
-Current saves use one board header for every supported combination of records.
-Historical boards adopt that header on Save. Subsequent no-op saves preserve
-current bytes. See the [native board format](formats/native-project-storage.md#current-board-records).
+Current saves use board/59 even when no zone uses connection-based island
+removal. Board/43 and earlier supported boards load with the option off and
+adopt board/59 on Save. Subsequent no-op saves preserve current bytes. See the
+[native board format](formats/native-project-storage.md#current-board-records).
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](pcb/via-net-assignments.md) for automatic inheritance, physical

@@ -728,7 +728,7 @@ impl PcbApp {
             self.empty_board_pane(ui, id, enabled);
             return;
         }
-        let highlighted = self.views.board_highlight_for(id, &self.session);
+        let highlighted = self.views.board_paint_highlight(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
         if self.board_move_ready(ui.ctx(), id, enabled)
             && let Some(widget) = self.views.view(id).map(|v| v.widget_id())

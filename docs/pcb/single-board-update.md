@@ -78,6 +78,9 @@ history. This query returns its requested data even when MCP uses `inspect:false
 Ordinary project inspection includes a smaller cached-preview summary.
 `can_apply` means the blocker list is empty, including for a no-op; native views
 use `changes.is_noop()` separately when showing whether anything needs acceptance.
+Nets compare by membership, authored names, origin and the name the board shows.
+A baseline saved before `/4` shows each net under its smallest authored name, so a
+named net whose membership is unchanged is not proposed again after reopening.
 
 `pcb.apply_update` takes the same board, current `expected_revision` and the
 preview's `plan_token`. It revalidates the immutable input, constructs the complete
@@ -145,6 +148,18 @@ removal is not performed by calling initialization again. Ordinary explicit PCB
 footprint deletion remains available
 and undoable; accepted history and its package assets remain until reconciled.
 
+## Reveal parts from the review
+
+Activate a change message to highlight its affected symbols and existing
+footprints in open editors without selecting them for editing. Connection
+messages reveal the parts at their ends, not the net itself. A proposed
+addition has no board geometry before it is placed. Another schematic pane
+can reveal the owning sheet; the pane that opened the review stays on its
+original document. The frozen plan remains open and **Assign footprint**
+is still a separate action. If the design changes while the applied report
+is open, its rows can still be read, filtered and copied. Choose **Review
+again** before navigating from a report on the changed design.
+
 ## Physical membership and exclusion
 
 This single-board slice forwards all live components except those with
@@ -164,7 +179,7 @@ it later proposes an addition using that choice, which remains unplaced after Ap
 
 ## Persisted records
 
-[Board format 43](../formats/native-project-storage.md#current-board-records)
+The [current board format](../formats/native-project-storage.md#current-board-records)
 stores the optional accepted `baseline` alongside desired `assignments`.
 The desired mapping must cover the live component and exact pinned package.
 The baseline and placement keep the accepted package and mapping independently.
