@@ -431,3 +431,31 @@ fn compact_short_column_does_not_overlay_filters_and_drc() {
     h.run();
     assert!(h.state().views.active.board.drc.rect.is_positive(), "restoring room reveals the still-open DRC card");
 }
+
+/// Shared board cards take pointer input over the 3D pane without stealing its canvas clicks.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn board_cards_receive_pointer_input_beside_3d_render() {
+    let mut h = fixture(true);
+    let board = h.state().views.active.id();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_render(&ctx, pcbcraft_chrome::workspace::Placement::Beside).unwrap();
+    let render = h.state().views.active.id();
+    assert_ne!(board, render);
+    crate::render_workspace::wait_for_preview(&mut h);
+    h.state_mut().activate_editor(&ctx, board);
+    h.run();
+
+    let pane = h.state().views.hosts[&h.state().views.main].rects.iter().find(|(id, _)| *id == render).unwrap().1;
+    for label in ["Select tracks", "Collapse Properties"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(pane.contains_rect(rect), "{label} must remain at the shared window edge over the 3D pane");
+        click_canvas_at(&mut h, rect.center());
+        assert_eq!(h.state().views.active.id(), board, "{label} must retain board focus");
+    }
+    assert!(!h.state().views.active.filters.tracks);
+    assert!(h.state().views.active.board.properties_collapsed);
+
+    click_canvas_at(&mut h, pane.center());
+    assert_eq!(h.state().views.active.id(), render, "the unobstructed 3D canvas must still take focus");
+}

@@ -164,6 +164,7 @@ impl EditorViews {
                         None => None,
                     },
                     rects: Vec::new(),
+                    project_cards: Vec::new(),
                 },
             );
         }
@@ -1344,26 +1345,29 @@ impl PcbApp {
             (input.pointer.button_pressed(egui::PointerButton::Middle) || right) && !input.pointer.primary_pressed() && (right_pans || !right)
         });
         if let Some(pointer) = pressed
-            && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
-            && (self.views.view(*id).is_some_and(|view| view.auxiliary())
-                || !navigating && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
+            && let Some(host) = self.views.hosts.get(&self.views.host)
+            && let Some((id, _)) = host.rects.iter().find(|(_, rect)| rect.contains(pointer))
         {
+            let foreground = ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background);
+            let project_card = foreground && !self.views.active.auxiliary() && host.project_cards.iter().any(|rect| rect.contains(pointer));
+            if project_card || (foreground || navigating) && !self.views.view(*id).is_some_and(|view| view.auxiliary()) {
+                return;
+            }
             self.activate_editor(ctx, *id);
         }
     }
 
     /// Render split and detached panes with one document header each. A single main canvas
     /// uses an overlaid breadcrumb without tab clearance, except for the boardless introduction
-    /// that owns its context and scroll area. Workspace panels address the focused view;
-    /// Mixed layouts confine project panels to the focused project pane; each definition pane
-    /// owns its Browser and Properties inside its own rectangle.
+    /// that owns its context and scroll area. Shared project panels use the host edges and
+    /// address the focused view. Each definition pane owns its Browser and Properties.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
-        let has_library = self
+        let has_auxiliary = self
             .views
             .hosts
             .get(&self.views.host)
             .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.auxiliary())));
-        if self.session.project().is_none() && !has_library {
+        if self.session.project().is_none() && !has_auxiliary {
             self.canvas(ui);
             return;
         }
@@ -1379,7 +1383,7 @@ impl PcbApp {
         };
         let headers = panes.len() > 1 || (!crate::IN_BROWSER && self.views.host != self.views.main);
         self.editor_drag_targets(ui, &panes);
-        let panel_rects: Vec<_> = panes.iter().filter(|(id, _)| !has_library || *id == self.views.active.id()).map(|(_, rect)| *rect).collect();
+        let panel_rects: Vec<_> = panes.iter().filter(|(id, _)| !has_auxiliary || *id == self.views.active.id()).map(|(_, rect)| *rect).collect();
         let area = editor::panel_area(area, &panel_rects, headers, ui.spacing().item_spacing.y);
         let board_panel = board.then(|| self.board_panels(ui, area));
         let mut pick = if board || !project_focus { None } else { self.editor_panels(ui, area) };
@@ -1453,6 +1457,12 @@ impl PcbApp {
                 crate::board_drc::Action::None => {}
             }
             covered.push(self.views.active.board.drc.rect);
+        }
+        if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
+            host.project_cards.clear();
+            if project_focus {
+                host.project_cards.extend(covered.iter().copied().filter(Rect::is_positive));
+            }
         }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
