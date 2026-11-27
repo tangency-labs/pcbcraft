@@ -55,7 +55,8 @@ impl Session {
 /// preview keeps its proposal and Apply token only in the session; sheet split preview
 /// caches no proposal. Zone fill inspection starts no pour. Applying annotation, splitting
 /// a sheet, loading/removing library sources, pouring or removing zone fill, and Cut are not reads.
-fn is_read_command(id: &str) -> bool {
+/// MCP also returns these commands' own replies when a caller suppresses inspection.
+pub fn is_read_command(id: &str) -> bool {
     matches!(
         id,
         no_connect::CHECK

@@ -43,6 +43,8 @@ the Assistant owns input. Board-specific additions:
   **R**, **F**) need the pointer over the canvas. **U** can instead use selected
   copper, and **M**, **R**, **F** can act on a single selected footprint when
   the pointer is outside the canvas; the shared input gates still apply.
+- Arrow nudges require the pointer over the focused, idle board canvas. Text fields,
+  panel controls, dialogs and active tools retain their own keys.
 
 ## Application and edit keys
 
@@ -82,6 +84,9 @@ shared focus gates still apply.
 | Ctrl+A | Select all | Selects visible board items enabled by the selection filters; hidden-layer items are excluded. Suppressed while a tool or clipboard preview owns input |
 | Delete / Backspace | Delete selection | Removes the selection. Delete routes to the track, zone or drawing tool when it owns a selection. While routing or drawing a line outline, Backspace removes the last draft point |
 | M | Move | Hovered or single-selected footprint (or a selected reference designator): picks it up for click placement. A multi-item selection containing footprints, zones or drawings: picks the group up. A copper-only selection: the track module's own move. A selected item also responds when the pointer is elsewhere |
+| Arrows / Ctrl+Arrows | Nudge one grid step | Physical Ctrl is an alias on every platform. Moves footprints, tracks, vias, reference text and board selections in screen direction |
+| Shift+Arrows / Ctrl+Shift+Arrows | Nudge ten grid steps | Same canvas and selection rules |
+| Alt+Arrows | Nudge one tenth of a grid step | Rounds the displacement to the nearest whole nanometre; does not resnap an off-grid item |
 | R / Shift+R | Rotate 90° | Rotates the hovered or single-selected footprint, or the active move/placement preview, counterclockwise and clockwise. The board has no mirror keys |
 | F | Flip side | Moves the hovered or single-selected footprint (or move draft) to the opposite board side |
 | U | Select connected copper | Seeds from copper under the pointer, or selected copper when no copper is hovered, including when the pointer is outside the canvas; expands to the connected set allowed by visibility and selection filters |
@@ -89,6 +94,16 @@ shared focus gates still apply.
 | ` (backtick) | Highlight net | Highlights the net under the pointer, respecting copper-layer visibility; over empty space it clears the highlight |
 | Esc | Cancel | Order: a pending DRC job first, then movement, measure, tracks, zones, drawing, a move draft, reference drag, placement preview, box selection, then the selection itself; panels, popups and dialogs come earlier still |
 | Right-click | Cancel / menu | Cancels an in-progress gesture; on an idle canvas opens the clipboard context menu |
+
+Hold an arrow to repeat; all repeats up to key release or loss of focus undo
+and redo together. An empty selection creates no edit. If any selected member
+or an affected leg is locked, the whole step is refused. Track neighbors stretch
+or pivot as needed; if a fixed pad, via or other contact cannot stay attached,
+the step is refused rather than detaching copper. A selected track whose ends both
+meet the middle of unselected copper cannot move, so the whole step is refused,
+including any other selected objects. Only direct pad, track and via contacts are
+checked: zone fills are not, so a nudge can move a zone off a pad, or a pad off its
+zone. The next refill, the ratsnest and DRC show any connection lost that way.
 
 ## Keys while a board tool is running
 
@@ -117,6 +132,7 @@ it.
 | Ctrl+Shift+X | `PcbApp::shortcuts` → `start_via` (`board_workspace.rs`, `board_tracks.rs`) | `tests/board_tracks.rs` (`place_via_tool_drops_vias_until_escape`) |
 | Ctrl+Shift+M | `PcbApp::shortcuts` → `start_measure` (`board_workspace.rs`) | `tests/board_tracks.rs` (`measure_reports_the_distance_between_snapped_points`) |
 | M | `board.move_requested` → `board_move.rs` `MovePlan` for mixed groups, `board_canvas.rs` draft for a single footprint, `board_tracks.rs` `move_requested` for copper-only selections | `tests/board_tracks.rs` (`m_and_drag_move_selected_copper`), `tests/board_views.rs` (`pcb_reference_can_move_with_m_or_primary_drag`), `tests/board_zones.rs` (`selected_zone_moves_deletes_and_respects_filters`) |
+| Arrow nudges | `board_nudge.rs` → `pcb.move_items` with `preserve_contacts`, or the reference offset command | `tests/board_nudge.rs`; engine `board/movement/nudge/tests.rs` |
 | R, Shift+R | `board.rotate_requested` (90/270) → `board_canvas.rs` footprint draft/edit | `tests/board_tracks.rs` (`f_flips_footprints_between_sides` shares the draft path) |
 | F | `board.flip_requested` → `board_canvas.rs` `Draft.bottom` toggle | `tests/board_tracks.rs` (`f_flips_footprints_between_sides`) |
 | U | `tracks.connected_requested` → `board_tracks.rs` connected-copper selection | `tests/board_tracks.rs` (`u_selects_connected_copper`) |

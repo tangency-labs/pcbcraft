@@ -58,7 +58,7 @@ pub use board::track::{
     UNROUTE_CONNECTION,
 };
 pub use board::via_nets::SET_VIA_NET;
-pub use session_scope::SessionScope;
+pub use session_scope::{SessionScope, is_read_command};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -1251,13 +1251,14 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::movement::MOVE_ITEMS,
         title: "Move PCB items",
-        summary: "Translate an explicit mixed board selection and attached pad ends in one atomic edit.",
+        summary: "Translate a mixed board selection atomically, optionally preserving direct pad, track and via contacts.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
             Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" },
             Param { name: "dx_nm", required: true, kind: ParamKind::Displacement, summary: "Horizontal displacement in nanometers" },
             Param { name: "dy_nm", required: true, kind: ParamKind::Displacement, summary: "Vertical displacement in nanometers" },
+            board::movement::PRESERVE_CONTACTS,
         ],
     },
     Command {

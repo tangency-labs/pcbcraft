@@ -406,6 +406,15 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
             assert!(decode_packed(&zip_files(&bad, prefix, false)).is_err(), "manifest must reject {prefix}{path}");
         }
     }
+    let mut duplicate = d.clone();
+    let manifest = std::str::from_utf8(&d["manifest.json"]).unwrap();
+    let duplicate_fields = manifest.replacen("\"assets\":[]", "\"assets\":[],\"assets\":[]", 1);
+    assert_ne!(duplicate_fields, manifest);
+    duplicate.insert("manifest.json".to_owned(), duplicate_fields.into_bytes());
+    for prefix in ["", "wrapped/"] {
+        let error = decode_packed(&zip_files(&duplicate, prefix, false)).err().expect("duplicate fields must be refused");
+        assert!(error.contains("duplicate field `assets`"), "{prefix}manifest.json: {error}");
+    }
     let mut unsupported = d.clone();
     edit(&mut unsupported, "manifest.json", |value| {
         value["assets"] = json!([{"path":format!("assets/{}", "0".repeat(64)), "size_bytes":0, "sha256":"0".repeat(64)}]);
@@ -515,4 +524,91 @@ fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
     old.insert("project.json".to_owned(), old["project.pc"].clone());
     assert!(decode_legacy_packed(&zip_files(&old, "", false)).is_err());
     assert!(decode_legacy_packed(&encode_packed_documents(expected).unwrap()).is_err());
+}
+
+/// The refusal for a document written by a newer release, naming the found and newest formats.
+fn newer(path: &str, found: &str, newest: &str) -> String {
+    format!("{path}: saved by a newer PCBCraft in format {found}; this version reads formats up to {newest}.")
+}
+
+/// Each versioned document saved by a newer release is refused as newer before any field or
+/// cross-document check, through full decoding and the entry-point path helpers alike. The input
+/// is the production encoder's output with only the format number raised.
+#[test]
+fn newer_document_formats_are_refused_as_newer() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    apply(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    apply(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    let symbol = s.project().unwrap().symbols().last().unwrap().id();
+    apply(&mut s, PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0}));
+    let saved = documents(&s);
+    let newest = |path: &str| match path {
+        ENTRY_POINT => CURRENT_PROJECT_FORMAT,
+        path if path.ends_with("/instances.json") => CURRENT_INSTANCES_FORMAT,
+        path if path.ends_with("/board.json") => CURRENT_BOARD_FORMAT,
+        path if path.starts_with("sheets/") => CURRENT_SHEET_FORMAT,
+        path if path.starts_with("library/symbols/") => crate::library::SYMBOL_FORMAT_V5,
+        path if path.starts_with("library/footprints/") => crate::board::definition::CURRENT_FORMAT,
+        path => panic!("unexpected versioned document {path}"),
+    };
+    // Collect every refusal before comparing, so one run reports each document kind.
+    let (mut actual, mut expected, mut kinds) = (Vec::new(), Vec::new(), BTreeSet::new());
+    for path in saved.keys() {
+        let current = newest(path);
+        let found = format!("{}/99", current.split_once('/').unwrap().0);
+        let mut raised = saved.clone();
+        edit(&mut raised, path, |value| value["format"] = json!(found));
+        actual.push(decode_documents(&raised).unwrap_err());
+        expected.push(newer(path, &found, current));
+        if path == ENTRY_POINT {
+            let entry = &raised[ENTRY_POINT];
+            actual.push(project_board_path(entry).err().unwrap_or_default());
+            actual.push(project_layout_root(entry).err().unwrap_or_default());
+            actual.push(project_instances_path(entry).err().unwrap_or_default());
+            actual.push(project_registered_board_id(entry).err().unwrap_or_default());
+            expected.extend([newer(path, &found, current), newer(path, &found, current), newer(path, &found, current), newer(path, &found, current)]);
+        }
+        kinds.insert(current);
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(kinds.len(), 6, "{kinds:?}");
+
+    // A newer release that also adds fields is still named as newer, not as malformed.
+    let board = board_path(&saved);
+    let mut extended = saved.clone();
+    edit(&mut extended, &board, |value| {
+        value["format"] = json!("pcbcraft-board/99");
+        value["field_from_the_future"] = json!(true);
+    });
+    assert_eq!(decode_documents(&extended).unwrap_err(), newer(&board, "pcbcraft-board/99", CURRENT_BOARD_FORMAT));
+
+    // Retired or skipped older numbers keep their own refusal.
+    let mut skipped = saved.clone();
+    edit(&mut skipped, &board, |value| value["format"] = json!("pcbcraft-board/30"));
+    assert!(!decode_documents(&skipped).unwrap_err().contains("newer"));
+
+    // A packed project from a newer release names its container format the same way, whether
+    // its files sit at the archive root or under one top-level folder, and when the newer
+    // manifest also adds a field.
+    let packed = encode_packed_documents(saved.clone()).unwrap();
+    let mut zip = zip::ZipArchive::new(Cursor::new(&packed)).unwrap();
+    let mut text = String::new();
+    zip.by_name("manifest.json").unwrap().read_to_string(&mut text).unwrap();
+    let current: Value = serde_json::from_str(&text).unwrap();
+    let mut packed_refusals = (Vec::new(), Vec::new());
+    for prefix in ["", "bundle/"] {
+        for added_field in [false, true] {
+            let mut manifest = current.clone();
+            manifest["format"] = json!("pcbcraft-container/99");
+            if added_field {
+                manifest["field_from_the_future"] = json!(true);
+            }
+            let mut raised = saved.clone();
+            raised.insert("manifest.json".to_owned(), serde_json::to_vec(&manifest).unwrap());
+            packed_refusals.0.push(decode_packed(&zip_files(&raised, prefix, false)).err().unwrap_or_default());
+            packed_refusals.1.push(newer("manifest.json", "pcbcraft-container/99", "pcbcraft-container/3"));
+        }
+    }
+    assert_eq!(packed_refusals.0, packed_refusals.1);
 }

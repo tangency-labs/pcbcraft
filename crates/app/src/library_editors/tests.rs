@@ -1821,3 +1821,213 @@ fn unfocused_batches_ignore_library_canvas_keyboard_commands() {
         }
     }
 }
+
+/// Tool-start keys resolve against a same-batch Escape in event order: a press before
+/// Escape stays cancelled, a press after it still arms — the same ordered resolution
+/// the paste/duplicate preview chords use.
+#[test]
+fn library_tool_keys_resolve_against_same_batch_escape() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (batch, armed) in [
+            (vec![egui::Key::P, egui::Key::Escape], false),
+            (vec![egui::Key::Escape, egui::Key::P], true),
+            (vec![egui::Key::P, egui::Key::Escape, egui::Key::P], true),
+            (vec![egui::Key::L, egui::Key::Escape], false),
+            (vec![egui::Key::M, egui::Key::Escape], false),
+        ] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection =
+                h.state().library_editors.documents[&id].session.snapshot().objects.keys().copied().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            for key in &batch {
+                h.input_mut().events.push(egui::Event::Key {
+                    key: *key,
+                    physical_key: Some(*key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            h.run();
+            let tool = &h.state().library_editors.documents[&id].tool;
+            assert_eq!(matches!(tool, canvas::Tool::Select), !armed, "{kind:?} {batch:?}: tool={tool:?}");
+            assert_eq!(armed, matches!(tool, canvas::Tool::Draw { .. } | canvas::Tool::Move { .. } | canvas::Tool::MoveGroup { .. }));
+        }
+        // The footprint courtyard letter resolves the same way.
+        if kind == Kind::Footprint {
+            for (batch, armed) in [(vec![egui::Key::C, egui::Key::Escape], false), (vec![egui::Key::Escape, egui::Key::C], true)] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                for key in &batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key: *key,
+                        physical_key: Some(*key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let tool = &h.state().library_editors.documents[&id].tool;
+                assert_eq!(matches!(tool, canvas::Tool::Select), !armed, "{batch:?}: tool={tool:?}");
+                assert_eq!(armed, matches!(tool, canvas::Tool::Draw { kind: canvas::Place::Courtyard, .. }));
+            }
+        }
+    }
+}
+
+/// Deletion follows the tool at the press, even when Escape or a tool start shares its batch.
+#[test]
+fn library_delete_keys_act_only_in_select_at_the_press() {
+    use egui::Key::{Backspace, Delete, Escape, P};
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [Delete, Backspace] {
+            for (armed_before, batch, deleted, armed_after) in [
+                (false, vec![P, key, Escape], false, false),
+                (true, vec![key, Escape], false, false),
+                (true, vec![Escape, key], true, false),
+                (false, vec![key, P], true, true),
+            ] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let before = h.state().library_editors.documents[&id].session.snapshot();
+                assert!(!before.objects.is_empty());
+                let selection = before.objects.keys().copied().collect();
+                h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = selection;
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                if armed_before {
+                    h.key_press(P);
+                    h.run();
+                    assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { .. }));
+                }
+                let revision = h.state().library_editors.documents[&id].session.revision();
+                for key in &batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key: *key,
+                        physical_key: Some(*key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let document = &h.state().library_editors.documents[&id];
+                assert_eq!(matches!(document.tool, canvas::Tool::Draw { .. }), armed_after, "{kind:?} {batch:?}");
+                let after = document.session.snapshot();
+                if deleted {
+                    assert!(after.objects.is_empty(), "{kind:?} {batch:?}");
+                    assert_eq!(document.session.revision(), revision + 1);
+                } else {
+                    assert_eq!(after.as_ref(), before.as_ref(), "{kind:?} {batch:?}");
+                    assert_eq!(document.session.revision(), revision);
+                    assert_eq!(document.selection, before.objects.keys().copied().collect());
+                }
+            }
+        }
+    }
+}
+
+/// Rotation follows the tool at each press, including a preview armed in an earlier batch.
+#[test]
+fn library_rotation_uses_the_tool_active_at_the_press() {
+    use egui::Key::{Escape, M, P, R};
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (start, batch, edits) in [
+            (None, vec![P, R, Escape], 0),
+            (Some(P), vec![R, Escape], 0),
+            (Some(M), vec![R, Escape], 0),
+            (Some(P), vec![Escape, R], 1),
+            (Some(M), vec![Escape, R, R], 2),
+        ] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let object = *doc.session.snapshot().objects.keys().next().unwrap();
+            doc.select(Some(object)).unwrap();
+            let before = doc.session.snapshot();
+            let revision = doc.session.revision();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            if let Some(key) = start {
+                h.key_press(key);
+                h.run();
+                assert!(!matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+            }
+            for key in &batch {
+                h.input_mut().events.extend([true, false].map(|pressed| egui::Event::Key {
+                    key: *key,
+                    physical_key: Some(*key),
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }));
+            }
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(matches!(doc.tool, canvas::Tool::Select), "{kind:?} {start:?} {batch:?}");
+            assert_eq!(doc.session.revision(), revision + edits, "{kind:?} {start:?} {batch:?}");
+            assert_eq!(doc.session.snapshot().as_ref() == before.as_ref(), edits == 0, "{kind:?} {start:?} {batch:?}");
+        }
+    }
+}
+
+/// A rotation that commits the selection exits outline drawing before the next delete key.
+#[test]
+fn library_delete_keys_see_the_select_tool_after_rotation() {
+    use egui::Key::{Backspace, Delete, R};
+    use pcbcraft_engine::schematic::Point;
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [Delete, Backspace] {
+            for (batch, deleted) in [([R, key], true), ([key, R], false)] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+                let object = *doc.session.snapshot().objects.keys().next().unwrap();
+                doc.select(Some(object)).unwrap();
+                let revision = doc.session.revision();
+                doc.tool = canvas::Tool::Polyline { points: vec![Point { x_nm: 0, y_nm: 0 }], revision };
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                for key in batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let doc = &h.state().library_editors.documents[&id];
+                assert!(matches!(doc.tool, canvas::Tool::Select), "{kind:?} {batch:?}");
+                assert_eq!(doc.session.snapshot().objects.contains_key(&object), !deleted, "{kind:?} {batch:?}");
+                assert_eq!(doc.session.revision(), revision + if deleted { 2 } else { 1 }, "{kind:?} {batch:?}");
+            }
+        }
+    }
+}
