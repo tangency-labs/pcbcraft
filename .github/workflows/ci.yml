@@ -110,7 +110,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo check --locked --profile ci --workspace
 
-  native-tests:
+  linux-tests:
     needs: changes
     if: needs.changes.outputs.native == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -322,7 +322,7 @@ jobs:
   checks:
     # Report the selected stage honestly: passing quick feedback is green, not full qualification.
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, macos-tests, web, geometry-webassembly, licenses]
+    needs: [changes, documentation-links, library-schemas, quick-compile, linux-tests, windows-tests, windows-smoke, macos-tests, web, geometry-webassembly, licenses]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 65
     steps:
