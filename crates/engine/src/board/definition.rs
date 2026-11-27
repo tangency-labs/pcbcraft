@@ -10,11 +10,13 @@ pub(crate) const MAX_OFFSET_NM: i64 = 100_000_000;
 pub(crate) const MAX_PADS: usize = 1024;
 /// Most parameterized artwork objects in one footprint.
 pub(crate) const MAX_ARTWORK: usize = 256;
-const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
-const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
+pub(crate) const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
+pub(crate) const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
-/// Native format for all newly authored footprints, with any supported mix of holes.
-pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/6";
+/// Historical format for any supported mix of holes, without an orientation statement.
+pub(crate) const MIXED_HOLES_FORMAT: &str = "pcbcraft-footprint/6";
+/// Native format for all newly authored footprints: format 6 plus an optional orientation statement.
+pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/7";
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -205,6 +207,58 @@ pub struct FootprintDefinition {
     /// Optional local displacement of the default reference from the automatic anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
+    /// Optional assembly orientation statement. Only format 7 can carry it; historical formats
+    /// read without one keep their format and bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
+    pub orientation: Option<Orientation>,
+}
+
+/// How a package is meant to sit on the board for assembly. `polarized` says that turning the
+/// part by a half turn changes its function, `pin_1` names the pad an assembler aligns with the
+/// part's pin 1 mark, and `zero` states that the drawn rotation is the IPC-7351 zero component
+/// orientation (IPC-7351, section 16).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Orientation {
+    pub polarized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::reference::present")]
+    pub pin_1: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "zero_orientation")]
+    pub zero: Option<ZeroOrientation>,
+}
+
+/// Accept a present orientation only as a map. A derived struct alone also accepts positional
+/// arrays in JSON; the named-field footprint contract does not.
+fn orientation_object<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Orientation>, D::Error> {
+    struct Object;
+    impl<'de> serde::de::Visitor<'de> for Object {
+        type Value = Orientation;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an orientation object")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Orientation, M::Error> {
+            Orientation::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Object).map(Some)
+}
+
+/// The zero-orientation conventions a definition can state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ZeroOrientation {
+    #[serde(rename = "ipc-7351")]
+    Ipc7351,
+}
+
+/// Read the supported convention as a string, not as an externally tagged enum object.
+fn zero_orientation<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<ZeroOrientation>, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    match name.as_str() {
+        "ipc-7351" => Ok(Some(ZeroOrientation::Ipc7351)),
+        _ => Err(serde::de::Error::unknown_variant(&name, &["ipc-7351"])),
+    }
 }
 
 /// Validate portable identity segments before using them in a native relative filename.
@@ -325,11 +379,16 @@ impl FootprintDefinition {
         self.pads.iter().any(|pad| pad.plated_slot.is_some())
     }
 
-    /// Keep the historical feature requirements while allowing any supported mix in format 6.
-    /// Pad and hole dimensions are validated separately.
+    /// Keep the historical feature requirements while allowing any supported mix in formats 6
+    /// and 7. Only the current format 7 can carry an orientation statement, which stays
+    /// optional there. Pad and hole dimensions are validated separately.
     fn validate_format(&self) -> Result<(), String> {
         let matches_content = match self.format.as_str() {
             CURRENT_FORMAT => true,
+            LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | MIXED_HOLES_FORMAT if self.orientation.is_some() => {
+                return Err(format!("footprint format must be {CURRENT_FORMAT} for a definition with an orientation statement"));
+            }
+            MIXED_HOLES_FORMAT => true,
             LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             NPTH_FORMAT => !self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             SLOT_FORMAT => self.has_plated_slots(),
@@ -352,6 +411,8 @@ impl FootprintDefinition {
     }
     /// Check shared constraints before accepting either an editable draft or a published package.
     /// Exceeding the pad or artwork limit is refused with a message that names the limit and the count.
+    /// A format that does not match the authored features and a `pin_1` naming no pad are
+    /// also refused with their own reasons.
     fn validate_mode(&self, draft: bool) -> Result<(), String> {
         if self.pads.len() > MAX_PADS {
             return Err(format!("a footprint has at most {MAX_PADS} pads, not {}", self.pads.len()));
@@ -364,6 +425,9 @@ impl FootprintDefinition {
             return Err("invalid circular non-plated hole count, centre or finished diameter".into());
         }
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
+        if self.orientation.as_ref().and_then(|o| o.pin_1.as_deref()).is_some_and(|pin| !numbers.contains(pin)) {
+            return Err("orientation pin_1 names no pad of this footprint".into());
+        }
         if !valid_id(&self.library)
             || !valid_id(&self.id)
             || self.revision == 0

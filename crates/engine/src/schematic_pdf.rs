@@ -1,5 +1,6 @@
 //! Read-only vector export of an addressed sheet or a project hierarchy.
 
+mod navigation;
 mod occurrences;
 mod pdf;
 #[cfg(test)]
@@ -51,14 +52,15 @@ impl std::error::Error for PdfError {}
 /// This function never writes files, changes project state, or traverses pages for export.
 pub fn export(project: &Project, target: SheetTarget) -> Result<Vec<u8>, PdfError> {
     let sheet = project.for_sheet(target).ok_or(PdfError::UnknownSheet)?;
-    draw_page(&sheet, None)?.finish()
+    draw_page(&sheet, None, None)?.finish()
 }
 
 /// Export every project sheet occurrence, with a bookmark per page and nested child bookmarks.
 /// Visit roots in project sheet order, then children by ascending parent sheet-symbol ID,
 /// depth first. The same order numbers the pages in the title block. Separate occurrences of
-/// a definition always get separate pages. The active editor sheet has no effect. If any page
-/// cannot be drawn, return no document.
+/// a definition always get separate pages. Sheet symbols link to their children and global
+/// labels and ports link to the next page on their net. The active editor sheet has no effect.
+/// If any page cannot be drawn, return no document.
 pub fn export_project(project: &Project) -> Result<Vec<u8>, PdfError> {
     export_occurrences(project, &project.occurrence_instances().sheet_occurrences)
 }
@@ -66,20 +68,22 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>, PdfError> {
 /// Draw pages from the occurrence projection rather than from a set of unique definitions.
 fn export_occurrences(project: &Project, records: &[crate::instances::SheetOccurrence]) -> Result<Vec<u8>, PdfError> {
     let ordered = occurrences::ordered(project, records)?;
+    let sheets = ordered.iter().map(|visit| project.for_sheet(visit.sheet.target).ok_or(PdfError::UnknownSheet)).collect::<Result<Vec<_>, _>>()?;
+    let links = navigation::Navigation::new(project, &ordered, &sheets);
     let mut document = pdf::Document::new();
     let pages = ordered.len();
     let mut bookmarks = Vec::with_capacity(pages);
-    for (index, (info, parent)) in ordered.into_iter().enumerate() {
-        let sheet = project.for_sheet(info.target).ok_or(PdfError::UnknownSheet)?;
-        document.add_page(draw_page(&sheet, Some((index + 1, pages)))?);
-        bookmarks.push(pdf::Bookmark { title: info.name, parent });
+    for (index, (visit, sheet)) in ordered.into_iter().zip(&sheets).enumerate() {
+        document.add_page(draw_page(sheet, Some((index + 1, pages)), Some((&links, index)))?);
+        bookmarks.push(pdf::Bookmark { title: visit.sheet.name, parent: visit.parent.map(|(parent, _)| parent) });
     }
     document.finish(&bookmarks)
 }
 
 /// Render the saved paper, frame and geometry. Project export supplies its occurrence's
-/// one-based page number and page count; addressed export keeps the editor frame values.
-fn draw_page(sheet: &Project, output_page: Option<(usize, usize)>) -> Result<pdf::Page, PdfError> {
+/// one-based page number and page count, and resolved link targets; addressed export keeps
+/// the editor frame values and draws no links.
+fn draw_page(sheet: &Project, output_page: Option<(usize, usize)>, nav: Option<(&navigation::Navigation, usize)>) -> Result<pdf::Page, PdfError> {
     let paper = sheet.page().ok_or(PdfError::MissingPaper)?;
     let frame = match output_page {
         Some((page, pages)) => paper.frame(&|text| sheet.resolve_text_for_output_page(sheet.sheet_target(), text, page, pages)),
@@ -101,7 +105,7 @@ fn draw_page(sheet: &Project, output_page: Option<(usize, usize)>) -> Result<pdf
     for symbol in sheet.symbols() {
         draw_symbol(sheet, &mut page, symbol)?;
     }
-    draw_labels(sheet, &mut page)?;
+    draw_labels(sheet, &mut page, nav)?;
     Ok(page.pdf)
 }
 
@@ -122,6 +126,11 @@ impl Drawing {
     /// Project absolute sheet coordinates (Y down) into PDF coordinates (Y up).
     fn point(&self, at: Point) -> [f64; 2] {
         [pt(at.x_nm - self.left), pt(self.bottom - at.y_nm)]
+    }
+
+    /// Attach an invisible jump to a physical region of the current sheet.
+    fn link(&mut self, a: Point, b: Point, destination: usize) {
+        self.pdf.link(self.point(a), self.point(b), destination);
     }
 
     /// Write one connected vector path in physical units, with a minimum print stroke.
@@ -297,8 +306,10 @@ fn draw_shape(page: &mut Drawing, symbol: &SymbolPlacement, shape: &Shape, bound
 }
 
 /// Draw saved net names and hierarchy interfaces on this sheet only, including turned name
-/// offsets and directional child-side markers at their wire contacts.
-fn draw_labels(sheet: &Project, page: &mut Drawing) -> Result<(), PdfError> {
+/// offsets and directional child-side markers at their wire contacts. In project exports,
+/// attach only resolved destinations; hidden global label text does not remove the drawn
+/// linkable symbol.
+fn draw_labels(sheet: &Project, page: &mut Drawing, nav: Option<(&navigation::Navigation, usize)>) -> Result<(), PdfError> {
     for label in sheet.net_labels() {
         let global = label.style.global();
         let default = Layout {
@@ -321,6 +332,9 @@ fn draw_labels(sheet: &Project, page: &mut Drawing) -> Result<(), PdfError> {
             let h = layout.height_nm.max(LABEL_NM);
             let width = (page.pdf.text_width(pt(h), &shown)? / PT_PER_NM).ceil() as i64 + 2 * h;
             page.path([pose(0, 0), pose(h, -h), pose(width, -h), pose(width, h), pose(h, h)], STROKE_NM, true, Fill::None);
+            if let Some(destination) = nav.and_then(|(nav, _)| nav.net(WireEndpoint::NetLabel(label.id))) {
+                page.link(pose(0, -h), pose(width, h), destination);
+            }
             pose((h + width) / 2, 0)
         } else {
             pose(LABEL_NM / 3, -layout.height_nm)
@@ -341,10 +355,20 @@ fn draw_labels(sheet: &Project, page: &mut Drawing) -> Result<(), PdfError> {
         let wing = GRID_NM / 4;
         page.path([add(label.at, dx, -wing), label.at, add(label.at, dx, wing)], STROKE_NM, false, Fill::None);
         page.text(add(label.at, dx + dx / 2, 0), LABEL_NM, 0, align, &label.name)?;
+        if let Some(destination) = nav.and_then(|(nav, _)| nav.net(WireEndpoint::Label(label.id))) {
+            // Cover the marker and the name on whichever side the direction puts it.
+            let width = (page.pdf.text_width(pt(LABEL_NM), &label.name)? / PT_PER_NM).ceil() as i64;
+            let end = dx + dx / 2 + dx.signum() * width;
+            page.link(add(label.at, 0, -LABEL_NM), add(label.at, end, LABEL_NM), destination);
+        }
     }
     for block in sheet.sheet_symbols() {
         let size = sheet.sheet_symbol_size(block);
-        page.path(rectangle(block.at, add(block.at, size.x_nm, size.y_nm)), STROKE_NM, true, Fill::None);
+        let extent = add(block.at, size.x_nm, size.y_nm);
+        page.path(rectangle(block.at, extent), STROKE_NM, true, Fill::None);
+        if let Some(destination) = nav.and_then(|(nav, index)| nav.child(index, block.id)) {
+            page.link(block.at, extent, destination);
+        }
         page.text(add(block.at, 0, -LABEL_NM), LABEL_NM, 0, TextAlign::Start, sheet.child_name(block))?;
         for pin in sheet.sheet_pins(block) {
             let (dx, align) = if pin.label.direction.right() { (-GRID_NM, TextAlign::End) } else { (GRID_NM, TextAlign::Start) };

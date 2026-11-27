@@ -4,6 +4,8 @@ use egui_kittest::{Harness, kittest::Queryable};
 
 #[cfg(target_os = "linux")]
 mod native;
+#[cfg(target_os = "linux")]
+mod native_detached;
 mod window_size;
 
 /// Use the ordinary resistor fixture and an explicitly enabled local endpoint.

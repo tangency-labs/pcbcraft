@@ -169,6 +169,33 @@ impl Contour {
         self.touches(other)
     }
 
+    /// Bound the nearest pair of core points, expanding each by its own copper radius and
+    /// rounding outward to whole nanometres. Overlapping cores use a common point. This is
+    /// display geometry only: it does not change the checking distance or predicate.
+    pub fn nearest_pair_bounds(&self, other: &Self) -> [Point; 2] {
+        let shared =
+            self.core.iter().find(|&&point| other.contains_core(point)).or_else(|| other.core.iter().find(|&&point| self.contains_core(point)));
+        let (a, b) = if let Some(&point) = shared {
+            let point = point_xy(point);
+            (point, point)
+        } else {
+            self.edges()
+                .flat_map(|(a, b)| other.edges().map(move |(c, d)| closest_segment_pair(a, b, c, d)))
+                .min_by(|left, right| witness_distance_sq(*left).total_cmp(&witness_distance_sq(*right)))
+                .unwrap_or_else(|| (point_xy(self.core[0]), point_xy(other.core[0])))
+        };
+        [
+            Point {
+                x_nm: (a.0 - self.radius).min(b.0 - other.radius).floor() as i64,
+                y_nm: (a.1 - self.radius).min(b.1 - other.radius).floor() as i64,
+            },
+            Point {
+                x_nm: (a.0 + self.radius).max(b.0 + other.radius).ceil() as i64,
+                y_nm: (a.1 + self.radius).max(b.1 + other.radius).ceil() as i64,
+            },
+        ]
+    }
+
     /// Bounds for pruning pad contact and clearance candidates before testing their contours.
     pub fn bounds(&self) -> [f64; 4] {
         let mut bounds = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
@@ -218,11 +245,93 @@ pub(super) fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
 
 /// Distance from a point to a closed segment; a degenerate segment is a point.
 pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
-    let (px, py, ax, ay, bx, by) = (p.x_nm as f64, p.y_nm as f64, a.x_nm as f64, a.y_nm as f64, b.x_nm as f64, b.y_nm as f64);
+    let ((px, py), (ax, ay), (dx, dy), t) = segment_projection(p, a, b);
+    ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
+}
+
+type XY = (f64, f64);
+type Witness = (XY, XY);
+
+fn point_xy(point: Point) -> XY {
+    (point.x_nm as f64, point.y_nm as f64)
+}
+
+/// Return the point, segment origin and direction, and its clamped projection fraction.
+/// Keeping the fraction separate preserves the arithmetic of the existing gap predicate.
+fn segment_projection(p: Point, a: Point, b: Point) -> (XY, XY, XY, f64) {
+    let (px, py) = point_xy(p);
+    let (ax, ay) = point_xy(a);
+    let (bx, by) = point_xy(b);
     let (dx, dy) = (bx - ax, by - ay);
     let length = dx * dx + dy * dy;
     let t = if length > 0. { (((px - ax) * dx + (py - ay) * dy) / length).clamp(0., 1.) } else { 0. };
-    ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
+    ((px, py), (ax, ay), (dx, dy), t)
+}
+
+fn closest_point(p: Point, a: Point, b: Point) -> XY {
+    let (_, (ax, ay), (dx, dy), t) = segment_projection(p, a, b);
+    (ax + t * dx, ay + t * dy)
+}
+
+fn witness_distance_sq(((ax, ay), (bx, by)): Witness) -> f64 {
+    (ax - bx).powi(2) + (ay - by).powi(2)
+}
+
+/// Return paired witnesses in caller order. A strict interior crossing uses its intersection;
+/// touching, overlapping collinear, and degenerate segments are covered by endpoint projections.
+fn closest_segment_pair(a: Point, b: Point, c: Point, d: Point) -> Witness {
+    let cross = |o: Point, p: Point, q: Point| {
+        let (px, py) = (i128::from(p.x_nm) - i128::from(o.x_nm), i128::from(p.y_nm) - i128::from(o.y_nm));
+        let (qx, qy) = (i128::from(q.x_nm) - i128::from(o.x_nm), i128::from(q.y_nm) - i128::from(o.y_nm));
+        px * qy - py * qx
+    };
+    let (ab_c, ab_d, cd_a, cd_b) = (cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b));
+    if ab_c.signum() * ab_d.signum() < 0 && cd_a.signum() * cd_b.signum() < 0 {
+        let t = cd_a as f64 / (cd_a - cd_b) as f64;
+        let ((ax, ay), (bx, by)) = (point_xy(a), point_xy(b));
+        let crossing = (ax + t * (bx - ax), ay + t * (by - ay));
+        return (crossing, crossing);
+    }
+    let first = (point_xy(a), closest_point(a, c, d));
+    [(point_xy(b), closest_point(b, c, d)), (closest_point(c, a, b), point_xy(c)), (closest_point(d, a, b), point_xy(d))]
+        .into_iter()
+        .fold(first, |best, pair| if witness_distance_sq(pair) < witness_distance_sq(best) { pair } else { best })
+}
+
+#[cfg(test)]
+mod nearest_pair_tests {
+    use super::*;
+
+    fn at(x_nm: i64, y_nm: i64) -> Point {
+        Point { x_nm, y_nm }
+    }
+
+    /// The far track endpoint does not affect the local frame; both half-nanometre radii fit.
+    #[test]
+    fn nearest_bounds_frame_local_parts_of_long_copper() {
+        let track = Contour::capsule(at(-10_000, 0), at(10_000, 0), 50.5);
+        let via = Contour::capsule(at(250, 190), at(250, 190), 60.5);
+        let bounds = [at(189, -51), at(311, 251)];
+        assert_eq!(track.nearest_pair_bounds(&via), bounds);
+        assert_eq!(via.nearest_pair_bounds(&track), bounds);
+    }
+
+    /// Proper crossings and containment choose a point shared by the two cores.
+    #[test]
+    fn nearest_bounds_cover_crossing_and_contained_cores() {
+        let a = Contour::capsule(at(-1_000, 0), at(1_000, 0), 31.5);
+        let b = Contour::capsule(at(0, -1_000), at(0, 1_000), 25.0);
+        assert_eq!(a.nearest_pair_bounds(&b), [at(-32, -32), at(32, 32)]);
+        let pad = Contour::pad(
+            at(0, 0),
+            [at(-100, -100), at(100, -100), at(100, 100), at(-100, 100)],
+            crate::board::definition::PadShape::Rectangle,
+            0,
+            (200, 200),
+        );
+        let via = Contour::capsule(at(20, 30), at(20, 30), 10.0);
+        assert_eq!(pad.nearest_pair_bounds(&via), [at(10, 20), at(30, 40)]);
+    }
 }
 
 /// Locate closest approach on the first closed segment. For a tied parallel

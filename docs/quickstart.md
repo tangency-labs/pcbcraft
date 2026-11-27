@@ -254,7 +254,8 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
-For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
+Through MCP you can [set exact spacing between footprint origins](pcb-layout-workflow.md#set-pitch-distribution)
+or [align to a fixed reference footprint](pcb-layout-workflow.md#align-to-a-reference-footprint).
 The router defaults to Walkaround and keeps its starting net through vertices
 and vias. Open **Layout → Route → Router Settings** to choose Walkaround, Shove,
 or Highlight collisions for new routes, **D**, and held drags on a single track.
@@ -588,8 +589,11 @@ Cancellation retains accepted assignments; reopen Update PCB and choose
 Compatible pad mappings are preselected, including named terminals. The starter
 LED defaults to terminal 1 (Anode) → pad 2 and terminal 2 (Cathode) → pad 1 from
 revision-qualified library data. Saved package mappings take precedence, and
-you can change any default before assigning. The report includes full mapping and connection changes;
-Show filters control visibility while totals always count every warning/error.
+you can change any default before assigning. Click a change message to reveal its
+parts in open schematic and PCB panes without approving the update. Only existing
+footprints can be highlighted on the PCB. The report includes full mapping and
+connection changes; Show filters control visibility while totals always count
+every warning/error.
 Turn off **Place new footprints after updating** to keep the updated report open
 and place later. **Copy report** includes all message categories.
 **Close** leaves an unapplied review unchanged, while board creation/current-state
@@ -632,6 +636,9 @@ opens a sparse definition: check a dimension to give the class an opinion, or le
 it unchecked to inherit defaults. Save class commits one undoable edit. Classes
 can be authored in a schematic-only project; they do not create a board.
 
+To declare a net's or class's working voltage, use the **Working voltage** page in
+**Analyze → Rules** or the [electrical intent commands](formats/electrical-intent.md).
+
 Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
 Properties, or use the **Effective net rules** page in Rules to search for a current net.
 Check the classes to assign and choose **Assign classes**. The page shows effective
@@ -659,7 +666,10 @@ see the [consumer contract](formats/net-class-consumers.md).
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops
 unfinished work; **Run again** replaces it with a check of the current revision.
-Edits and project reopening invalidate unfinished reports.
+Edits and project reopening invalidate unfinished reports. Click a current finding
+to center its marker; if it names pads or footprints, their parts are also
+highlighted in open PCB and schematic views. Run the check again before navigating
+from an out-of-date result.
 
 Pad clearance is measured against the
 resolved circular, oval, rounded-rectangle or rectangular copper contour, including
@@ -786,8 +796,11 @@ for the result contract. For one placed instance, pass the reported `board`
 and `part_instance` to `library.preview_footprint_revision`. The
 [pad preview](libraries/native-library-sources.md#preview-footprint-pad-changes) shows what
 would change and which straight track ends or through vias would lose contact;
-standalone circular track ends are not checked. Nothing is applied; pad map
-resolution and adoption remain future work.
+standalone circular track ends are not checked. Nothing changes until you
+[apply the reviewed revision](libraries/native-library-sources.md#apply-a-reviewed-footprint-revision)
+with `pcb.apply_footprint_revision`. Pass the successful unfiltered preview's
+board, instance, revision and acceptance digest plus a complete terminal map.
+Tracks and vias stay in place, so run the board design checks after adoption.
 
 To find where an exact revision is used in the open project, select that item in
 Parts Library and click **Where used** in Preview. From MCP, pass its exact

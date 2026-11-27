@@ -2,7 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+- A multi-item schematic selection (symbols, wires and net labels) now mirrors with **X**, **Y** or the Capture ribbon's Mirror buttons as one undo step, through the shared `schematic.mirror_items` command. The group is reflected about its center, snapped so pins and wire corners stay on the grid; symbols compose the mirror with their rotation as single-symbol mirroring does, net labels flip their text direction, and wires to unselected parts stay on their pins. Mirroring twice on the same axis restores the saved project. A single selected symbol keeps using `schematic.mirror_symbol`.
+- Check for polarized packages with no readable orientation using `pcb.check_assembly`. The read-only report warns once per package revision when symmetrical lands, silkscreen and fabrication artwork leave its orientation ambiguous and no zero orientation is declared. Read-only headless sessions can run it. New footprint exports and publications use `pcbcraft-footprint/7`, which is `pcbcraft-footprint/6` plus an optional orientation statement; earlier footprint formats stay readable, refuse the statement and keep their bytes when pinned, and assembly output profiles are unchanged.
+- `pcbcraft-cli --help` reports the [oldest readable split project entry-point format](docs/formats/native-project-storage.md#compatibility-and-fixtures), `pcbcraft-project/5`.
+- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Native saves use `pcbcraft-project/68` and, for registered boards, `pcbcraft-instances/12` whether or not a declaration is present. Files using the previous headers still open and migrate on save. Declarations are optional `authored_intent` fields, and the project envelope versions those fields inside the unchanged `pcbcraft-net-classes/1` catalog.
 - Add shared exact circular arc contact geometry (`board::arc::geometry::ArcGeometry`) and wire circular arcs into board copper connectivity (`copper`, `copper_nets`, `copper_with_nets`), ratsnest, via inspection and the engine `copper_shorts` primitive. Clearance queries, DRC, copper preparation, transforms, clipboard, fabrication and PCB editing keep refusing arc boards until follow-up PRs account for arcs.
+
+A self-contained KiCad 6–10 schematic can be imported as a new project, through
+`project.import_kicad_schematic` in headless MCP or `pcbcraft-cli import-kicad`.
+Symbols, units, references, values, fields, fitting and exclusion flags, power
+symbols, wires, labels and no-connects carry over; the import refuses, with
+reasons, anything that would change which pins connect, such as KiCad 10 jumper
+pin groups, and lists what it left out. See [KiCad schematic import](docs/schematic/kicad-import.md) (#60).
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
@@ -10,7 +21,9 @@ its old slot. Splitting a pane itself opens another view. Separate Split window
 up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
+- Live MCP UI input (`ui.click`, `ui.drag`, `ui.key`, `ui.text`, `ui.move`, `ui.scroll`) now works in detached editor windows as well as the main window. Input needs the addressed window's focus and current layout, and is cancelled on focus loss, physical input, a resize, redocking, closing the window or a revoked connection. See [UI automation](docs/automation/ui-automation.md).
 - Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
+- Copper zones can remove islands that touch no pad, via or track of their net (**Remove unconnected islands** in zone Properties, `remove_unconnected_islands` in zone options). Fill inspection now lists each removed island with its reason, area and bounds (#232). Normal board saves and packed exports use `pcbcraft-board/59`, even without zones. Each saved zone records the option explicitly; boards in format 43 or earlier supported formats load with it off.
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -18,6 +31,14 @@ canvas and Browser rows, or the live `view.select_inspection` command. Inspectio
 has its own highlight and read-only Properties label without selecting an owner
 for editing. These filters start off to preserve existing picking defaults;
 project edits and reopened documents do not restore stale inspection selections.
+
+`pcb.set_test_point` marks individual placed pads and vias for assembly or
+bare-board fabrication testing. The two marks are independent, name the board
+face, and survive Undo/Redo and native save/reopen. Board format 43 introduced
+optional marks alongside the format 42 records, and format 59 retains those
+marks. Format 42 boards still open but reject stored marks. Releases predating
+format 43 cannot read it. Clearing the last mark omits the list without
+changing the current save format. This change does not add reports.
 
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the
@@ -116,6 +137,7 @@ transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
 - Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; adoptions require at least board format 22, stack fields 23, explicit via assignments 24, material reports 25, arcs 26 and footprint locks 34 (35 when both arcs and locks are present). Generic rows and other profiles are unchanged. No placement file is written yet.
+- `pcb.export_fabrication` returns a drill chart beside the files: one row per tool of each drill file, with its plating, tool number, size as written and hole count, built from the same holes as the drill files. See [fabrication through MCP](docs/manufacturing/fabrication-mcp.md#generate-fabrication-files).
 - Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon use the resolved placement-origin frame, Y up; Excellon coordinates are rounded to 0.001 mm, and the export result names the origin used. Arc-bearing boards do not yet support fabrication output. Boards with an origin require at least board format 21; profile adoptions require 22, stack fields 23, explicit via assignments 24, material reports 25, arcs 26 and footprint locks 34 (35 when both arcs and locks are present). Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
 - Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent, material reports, arcs or footprint locks select the required format without dropping rules. Boards without rules keep the format required by their other content.
 

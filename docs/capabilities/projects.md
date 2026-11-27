@@ -73,8 +73,8 @@
 - Drag-in docks beside a destination pane, with direct cross-window drops when positions are
   available.
 - Schematic and PCB inspection targets in per-window split layouts.
-- Multiple native editor windows with Linux title-bar dragging/maximize/restore and edge/corner
-  resizing, including while project dialogs block editing.
+- Multiple native editor windows with the integrated title bar, window dragging, maximize and
+  restore, and edge and corner resizing, including while project dialogs block editing.
 - Splitting inside them, tab placement/close actions, independent cameras and selections, shared
   edits/undo/save, bidirectional component counterpart highlights and [optional directed following
   across schematic sheets](../design/board-workspace-plan.md#correspondence-and-cross-probing) for PCB
@@ -92,6 +92,23 @@
   storage/assignment [#122](https://github.com/tangency-labs/pcbcraft/issues/122), portable
   arrangement export, full multi-monitor restoration, outside-client drag previews, provider view
   payloads.
+
+## Interchange
+
+### Available
+
+- [KiCad schematic import](../schematic/kicad-import.md) of one self-contained KiCad 6–10
+  `.kicad_sch` through `project.import_kicad_schematic` in headless MCP and
+  `pcbcraft-cli import-kicad`: symbols, units, pins, references, values, fields, power symbols,
+  wires, labels and no-connects.
+- The import is exact or refused with reasons (including KiCad 10 jumper pin groups and parts
+  shown in another body style than the normal one), checked against the nets the file describes.
+
+### Remaining scope
+
+- Sub-sheets, buses, board import and a desktop menu entry remain in
+  [#60](https://github.com/tangency-labs/pcbcraft/issues/60).
+- IPC-2581/ODB++/EDIF in [#119](https://github.com/tangency-labs/pcbcraft/issues/119).
 
 ## Sharing
 

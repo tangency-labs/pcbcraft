@@ -100,6 +100,8 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         .find(|layer| layer.purpose == board::setup::LayerPurpose::Outline)
         .unwrap()
         .id;
+    editor.apply(net_classes::CREATE, &json!({"name":"Review class","rules":{},"expected_revision":editor.revision()})).unwrap();
+    let class = editor.project().unwrap().net_classes().definitions[0].id;
     editor.apply(ADD_DRAWING, &json!({"layer":edge,"points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":20_000_000},{"x_nm":-20_000_000,"y_nm":20_000_000}],"closed":true,"expected_revision":editor.revision()})).unwrap();
     let project = editor.snapshot().unwrap();
     let board = project.board_target().unwrap().board;
@@ -125,7 +127,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         let id = command.id;
         // These are independent expectations, not derived from the production access policy.
         let params = match id {
-            netlist::EXPORT_BOARD_NETLIST => json!({"board":board}),
+            netlist::EXPORT_BOARD_NETLIST | CHECK_ASSEMBLY => json!({"board":board}),
             netlist::COMPARE_NETLIST => json!({"netlist":netlist_text}),
             no_connect::CHECK
             | sheets::page::LIST_TEMPLATES
@@ -146,6 +148,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             parameters::LIST => json!({"scope":"project"}),
             parameters::RESOLVE => json!({"text":"@project.Revision"}),
             annotation::PREVIEW => json!({"expected_revision":revision}),
+            sheet_split::PREVIEW => json!({"items":{"symbols":[symbol.id()],"wires":[]},"name":"Split","expected_revision":revision}),
             PREVIEW_UPDATE => {
                 preview_and_cancel(
                     &mut reader,
@@ -169,6 +172,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             board::class_rules::ROUTE_RULES => json!({"at":{"x_nm":0,"y_nm":0},"layer":layer}),
             board::route::PLAN_ROUTE => json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":1_000_000,"y_nm":0},"layer":layer}),
             net_classes::RESOLVE => json!({"classes":[]}),
+            nets::intent::INSPECT => json!({"version":1,"target":{"kind":"net_class","project":project.id(),"class":class}}),
             sources::SEARCH => json!({"query":"resistor"}),
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
@@ -212,8 +216,14 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
                 continue;
             }
         };
-        let expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
-        let actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        let mut expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
+        let mut actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        if id == annotation::PREVIEW {
+            // Each session issues its own Apply token; the rest of the report must agree.
+            for report in [&mut expected, &mut actual] {
+                assert!(report.as_object_mut().and_then(|report| report.remove("token")).is_some_and(|token| token.is_string()));
+            }
+        }
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
             // These readers create a disposable project to build a fragment with its own IDs.
             assert!(actual["clipboard"].as_str().is_some_and(|text| !text.is_empty()), "{id}");
@@ -224,6 +234,10 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         if id == annotation::PREVIEW {
             assert_eq!(actual["annotation_preview"]["rows"].as_array().map(Vec::len), Some(1));
             assert_eq!(actual["annotation_preview"]["errors"], json!([]));
+        }
+        if id == sheet_split::PREVIEW {
+            assert_eq!(actual["split_preview"]["symbols"][0]["symbol"], json!(symbol.id()));
+            assert_eq!(actual["split_preview"]["ports"], json!([]));
         }
         if id == sources::PREVIEW_PIN_REMAP {
             assert_eq!(actual["changes"][0]["after"], "7");

@@ -2,8 +2,8 @@
 
 ## Placed-footprint locks
 
-Placed footprints use an optional `locked` flag in
-[board format 42](../formats/native-project-storage.md#current-board-records).
+Placed footprints use an optional `locked` flag in the
+[current board format](../formats/native-project-storage.md#current-board-records).
 Inspection and typed views report a boolean, defaulting to false when the flag
 is absent. Canonical saves omit false. Clearing the last lock leaves the same
 board header.
@@ -50,7 +50,7 @@ track's fixed geometry. Locking/unlocking alone changes no copper connectivity.
 Copy, duplicate and paste preserve lock flags while assigning new identities
 and the requested new positions to copies. Existing source objects remain
 protected. Cut refuses a selection containing locked copper. Native folder and
-archive saves preserve copper locks in board format 42. Board-kind clipboard
+archive saves preserve copper locks in the current board format. Board-kind clipboard
 format 3, or format 4 with explicit via assignments, also carries them.
 Clearing the last copper lock keeps the board format current. Inspection exposes
 an explicit `locked` boolean for every track and via, and typed board snapshots

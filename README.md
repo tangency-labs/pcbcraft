@@ -44,6 +44,8 @@ save the schematic and board together with shared undo/redo.
   circular non-plated footprint holes go in a separate drill file, in the same archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
+- **3D preview:** inspect the board substrate, cutouts and round through holes in
+  the desktop [3D render workspace](docs/pcb-layout-workflow.md#preview-the-board-in-3d).
 - **Libraries:** browse built-in, project-pinned and registered native libraries
   in Parts Library. Place generic or orderable parts, choose packages and assign
   footprints. Author symbols and footprints in their own workspaces, then publish
@@ -55,7 +57,7 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots and independent
+and assembled 3D models and STEP export remain in development. Footprint slots and independent
 footprint mask/paste controls are not yet supported.
 The current checks and exporters do not establish manufacturing readiness.
 
@@ -113,7 +115,7 @@ cargo run --locked -p pcbcraft-cli -- mcp
 
 Native live MCP also supports [UI automation](docs/automation/ui-automation.md): locate named
 controls and send clicks, drags, keys, text and scrolling through ordinary editor
-input. Input currently targets the original native window and its split panes;
+input, in the main window, its split panes and detached editor windows;
 headless sessions operate separately from the open editor.
 
 The [AI and MCP guide](docs/mcp.md) covers agent setup, permissions, live

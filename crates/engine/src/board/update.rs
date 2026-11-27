@@ -609,6 +609,59 @@ impl Baseline {
         Ok(())
     }
 
+    /// Keep the accepted logical source and net membership, except where a lone terminal
+    /// gains or loses a physical connection between its own pads. Never use pending schematic
+    /// edits to infer what the accepted board meant.
+    pub(crate) fn replace_reviewed_package(&mut self, previous: &Footprint, assignment: &super::assignment::Assignment) -> Result<(), String> {
+        self.validate_footprint(previous)?;
+        let component = self.components.get_mut(&previous.component).ok_or("Missing accepted part instance.")?;
+        let package = Package::from_assignment(assignment);
+        package.validate(&component.terminals)?;
+        let mut extra_lands: BTreeSet<_> = package.mapping.iter().filter(|(_, pads)| pads.pads().len() > 1).map(|(pin, _)| pin.clone()).collect();
+        // Only pad-only unnamed singletons may be retired when a package edit reduces pads.
+        for net in self
+            .nets
+            .iter()
+            .filter(|net| net.needs_origin() && net.terminals[0].component == previous.component && !extra_lands.contains(&net.terminals[0].terminal))
+        {
+            match net.origin {
+                None => return Err("Cannot remove an accepted connection without explicit net origin.".into()),
+                Some(NetOrigin::Schematic) => return Err("Cannot remove an accepted schematic connection through a footprint revision.".into()),
+                Some(NetOrigin::PadOnly) => {}
+            }
+        }
+        if self.format == FORMAT && package.extended() {
+            self.format = MULTIPAD_FORMAT.into();
+        }
+        component.package = Some(package);
+        self.nets.retain(|net| {
+            if net.needs_origin() && net.terminals[0].component == previous.component {
+                return extra_lands.remove(&net.terminals[0].terminal);
+            }
+            for key in net.terminals.iter().filter(|key| key.component == previous.component) {
+                extra_lands.remove(&key.terminal);
+            }
+            true
+        });
+        if self.format == NET_ORIGIN_FORMAT && extra_lands.is_empty() && !self.nets.iter().any(NetState::needs_origin) {
+            self.format = DISPLAY_FORMAT.into();
+        }
+        if !extra_lands.is_empty() {
+            if self.nets.iter().any(|net| net.display_name.is_none() || (net.needs_origin() && net.origin.is_none())) {
+                return Err("Cannot add an accepted connection without explicit net display names and singleton origins.".into());
+            }
+            self.format = NET_ORIGIN_FORMAT.into();
+            self.nets.extend(extra_lands.into_iter().map(|terminal| NetState {
+                display_name: Some("Unconnected".into()),
+                terminals: vec![TerminalKey { component: previous.component, terminal }],
+                names: Vec::new(),
+                origin: Some(NetOrigin::PadOnly),
+            }));
+            self.nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
+        }
+        self.validate()
+    }
+
     /// Validate an accepted unplaced package without resolving live component state.
     pub(crate) fn validate_assignment(&self, assignment: &super::assignment::Assignment) -> bool {
         self.components.get(&assignment.component).and_then(|component| component.package.as_ref()) == Some(&Package::from_assignment(assignment))
@@ -763,11 +816,26 @@ pub fn preview(accepted: &Baseline, proposed: &Baseline) -> Result<Preview, Stri
     for id in accepted.components.keys().filter(|id| !proposed.components.contains_key(id)) {
         changes.push(ComponentChange::Removed { component: *id });
     }
-    let before: BTreeSet<_> = accepted.nets.iter().collect();
-    let after: BTreeSet<_> = proposed.nets.iter().collect();
-    let removed_nets = accepted.nets.iter().filter(|net| !after.contains(net)).cloned().collect();
-    let added_nets = proposed.nets.iter().filter(|net| !before.contains(net)).cloned().collect();
+    let (before, after) = (shown_nets(accepted), shown_nets(proposed));
+    let (old, new): (BTreeSet<_>, BTreeSet<_>) = (before.iter().collect(), after.iter().collect());
+    let removed_nets = accepted.nets.iter().zip(&before).filter(|(_, shown)| !new.contains(shown)).map(|(net, _)| net.clone()).collect();
+    let added_nets = proposed.nets.iter().zip(&after).filter(|(_, shown)| !old.contains(shown)).map(|(net, _)| net.clone()).collect();
     Ok(Preview { components: changes, removed_nets, added_nets, blockers })
+}
+
+/// Net membership, authored names, origin and the name the board shows.
+type ShownNet<'a> = (&'a [TerminalKey], &'a [String], Option<NetOrigin>, Option<String>);
+
+/// One comparison key per net, in record order. A baseline saved before display names
+/// were stored shows its fallback name, so reopening it proposes no change that Apply
+/// would not make.
+fn shown_nets(baseline: &Baseline) -> Vec<ShownNet<'_>> {
+    baseline
+        .nets
+        .iter()
+        .enumerate()
+        .map(|(index, net)| (net.terminals.as_slice(), net.names.as_slice(), net.origin, baseline.net_name(index)))
+        .collect()
 }
 
 /// Build a complete physical candidate with its matching accepted baseline installed,
@@ -810,6 +878,10 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
     for footprint in &mut board.footprints {
         let package =
             proposed.components.get(&footprint.component).and_then(|component| component.package.as_ref()).ok_or("missing accepted package")?;
+        // A different physical definition must be marked again; matching pad labels are not proof of equal probe access.
+        if footprint.library != package.library || footprint.definition != package.definition || footprint.definition_revision != package.revision {
+            footprint.test_points.clear();
+        }
         footprint.library = package.library.clone();
         footprint.definition = package.definition.clone();
         footprint.definition_revision = package.revision;

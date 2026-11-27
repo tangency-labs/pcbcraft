@@ -67,6 +67,7 @@ impl Assignment {
             locked: false,
             reference_offset: None,
             reference_text: None,
+            test_points: Default::default(),
         }
     }
 

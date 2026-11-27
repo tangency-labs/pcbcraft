@@ -165,7 +165,12 @@ impl Backend for Remote {
         Ok((reply["result"].take(), metadata))
     }
 
+    /// A headless-only command is refused here, before a request that may be too large for the
+    /// live transport is sent, with the editor's own answer.
     fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        if let Some(id) = request["command"].as_str().filter(|id| pcbcraft_engine::headless_only(id)) {
+            return Err(headless_only_refusal(id));
+        }
         let mut reply = self.request("engine.execute", request)?;
         let warnings = reply["warnings"].as_array().into_iter().flatten().filter(|value| value.is_object()).cloned().collect();
         Ok((reply["result"].take(), warnings))
@@ -261,6 +266,12 @@ pub fn success_reply(request: &Value, result: Value) -> Value {
     Value::Object(reply)
 }
 
+/// Why an open editor refuses a headless-only command; the same answer whether the editor or
+/// the client in front of it refuses.
+fn headless_only_refusal(id: &str) -> Failure {
+    Failure::new(ErrorCode::Unavailable, format!("`{id}` runs only in a headless MCP session or from the command line, not in an open editor"))
+}
+
 /// Unknown commands keep the window or UI handler's own refusal.
 fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result<(), Failure> {
     if !stated.is_null() && editor.window_commands().iter().any(|command| command["id"] == id) {
@@ -274,7 +285,8 @@ fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
 /// inspection (or only the unchanged revision when `inspect` is false); document commands answer
 /// as in a headless session. A symbol-field preview that exceeds the live reply limit
-/// returns a tool error without applying the edit.
+/// returns a tool error without applying the edit. Headless-only engine commands are left out
+/// of the catalog and refused as unavailable before any other check or work.
 pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
     call_editor_with_package_commit(editor, request, || Ok(()))
 }
@@ -301,6 +313,7 @@ fn call_editor_with_package_commit_limit(
     match method {
         "engine.commands" => {
             let mut commands = describe_engine_commands(DEPRECATIONS);
+            commands.retain(|command| !command["id"].as_str().is_some_and(pcbcraft_engine::headless_only));
             commands.extend(editor.window_commands().into_iter().map(|mut command| {
                 command_api::mark_deprecations(&mut command, DEPRECATIONS);
                 command
@@ -314,6 +327,9 @@ fn call_editor_with_package_commit_limit(
             if id.starts_with("ui.") {
                 check_window_version(editor, id, &params["version"])?;
                 return editor.ui_command(id, &params["params"]);
+            }
+            if pcbcraft_engine::headless_only(id) {
+                return Err(headless_only_refusal(id));
             }
             if let Some(reason) = editor.refusal(id) {
                 return Err(Failure::new(ErrorCode::Unavailable, reason));

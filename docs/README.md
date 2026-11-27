@@ -47,6 +47,7 @@ before treating an older plan as implemented behavior.
 | Explicit via nets | [Placement, Properties and storage](pcb/via-net-assignments.md) |
 | Remove one routed arm | [Unroute one connection](pcb/unroute.md#unroute-one-connection) |
 | Space footprints or protect placed copper | [Set-pitch distribution](pcb/set-pitch-distribution.md) · [PCB locks](pcb/locks.md) |
+| Align footprints to one that stays fixed | [Align to a reference footprint](pcb/align-to-reference-footprint.md) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](pcb/copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](pcb/board-rules.md) · [Materials and dielectric construction](pcb/board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](pcb/net-class-editor.md) |
@@ -62,12 +63,13 @@ supported versions and deferred work before extending a format or consumer.
 | --- | --- |
 | Native files and compatibility | [Project storage](formats/native-project-storage.md) · [Reading a saved project](formats/reading-native-projects.md) · [Optional single-board foundation](formats/single-board-storage.md) · [Single-use sheet occurrences](formats/sheet-occurrence-storage.md) |
 | Persistent net records and differential pairs | [Sparse net registry](formats/net-registry-storage.md) |
+| KiCad interchange | [Schematic import](schematic/kicad-import.md) |
 | Netlist export | [JSON netlist format](formats/netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
 | Schematic document output | [Schematic PDF writer](manufacturing/schematic-pdf.md) |
 | Object identities | [Identity inventory](formats/object-identity.md) |
 | Object-query parsing | [Syntax, trees and byte-offset diagnostics](design/object-queries.md), without evaluation or UI |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](formats/pin-pad-correspondence.md) |
-| Dimensional net classes | [Catalog and resolver](formats/net-classes.md) · [Assignments and topology reconciliation](formats/net-class-assignments.md) · [Routing and checking consumers](formats/net-class-consumers.md) |
+| Dimensional net classes | [Catalog and resolver](formats/net-classes.md) · [Assignments and topology reconciliation](formats/net-class-assignments.md) · [Routing and checking consumers](formats/net-class-consumers.md) · [Authored electrical intent](formats/electrical-intent.md) |
 | Part groups | [Catalog, membership and storage](formats/part-groups.md) |
 | Library records | [Symbol schema](libraries/symbol-schema.md) · [Footprint and placement schema](libraries/footprint-schema.md) · [Parts, categories and manufacturer records](libraries/part-schema.md), with [format-5 descriptive metadata](libraries/part-schema.md#descriptive-metadata-and-search) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](formats/quantity-units.md) |
@@ -81,6 +83,8 @@ supported versions and deferred work before extending a format or consumer.
 
 [Continuous integration](testing/continuous-integration.md) describes quick PR feedback,
 approval and affected native checks, deferred platform coverage and build caches.
+[Desktop builds and releases](testing/desktop-builds-and-releases.md)
+covers nightly downloads and the release checklist.
 
 These documents explain design decisions and staged work. Several combine
 delivered foundations with proposed extensions; they do not establish feature

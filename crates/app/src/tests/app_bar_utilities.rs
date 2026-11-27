@@ -13,7 +13,7 @@ fn choose_workspace(h: &mut Harness<'_, PcbApp>, label: &str) {
 /// The application-wide utilities in the app bar, left to right, with their left edges.
 fn utilities(h: &Harness<'_, PcbApp>) -> Vec<(String, i32)> {
     let bar = h.get_by_label("File").rect().bottom();
-    let version = format!("v{VERSION}");
+    let version = format!("v{}", display_version());
     let mut found: Vec<_> = [version.as_str(), "Report a bug", "Help", "Preferences", "Assistant"]
         .into_iter()
         .filter_map(|label| {
@@ -29,7 +29,7 @@ fn utilities(h: &Harness<'_, PcbApp>) -> Vec<(String, i32)> {
 /// utilities in the same places, at full and compact widths.
 #[test]
 fn every_workspace_shows_the_same_utilities_in_the_same_places() {
-    let version = format!("v{VERSION}");
+    let version = format!("v{}", display_version());
     for (width, expected) in
         [(1000.0, vec!["Assistant", "Preferences", "Help", "Report a bug", version.as_str()]), (360.0, vec!["Assistant", "Preferences"])]
     {

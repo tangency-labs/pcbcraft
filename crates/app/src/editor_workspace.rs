@@ -1,10 +1,19 @@
 //! Independently addressed editor views over one session, placed in per-window layouts.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    ops::Deref,
+    sync::Arc,
+};
 
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, grid, shell, workspace};
-use pcbcraft_engine::{Session, selection::Selection};
+use pcbcraft_engine::{
+    Session, SheetTarget,
+    board::view::{BoardTarget, BoardView},
+    schematic::Point,
+    selection::Selection,
+};
 
 use crate::{
     Dialog, EditorView, PcbApp, ViewId, ViewInput,
@@ -27,7 +36,41 @@ pub(super) struct EditorViews {
     next_host: u64,
     primary: ViewId,
     selection_source: Option<(ViewId, Workspace)>,
+    report_probe: Option<ReportProbe>,
     pending_reveal: BTreeMap<ViewId, PendingReveal>,
+}
+
+/// A report projects stable addresses for one board and one live source revision. Neither
+/// side is a local edit selection, and a report click never broadcasts a selection event.
+#[derive(Debug)]
+struct ReportProbe {
+    source: ViewInput,
+    board: BoardTarget,
+    schematic: HashMap<SheetTarget, (Point, Arc<Selection>)>,
+    first_sheet: Option<SheetTarget>,
+    footprints: Arc<BTreeSet<String>>,
+    board_anchor: Option<Point>,
+    #[cfg(test)]
+    symbols_visited: usize,
+}
+
+/// Release the view registry borrow before mutably borrowing the destination camera. Reports
+/// share their already projected sets; ordinary selection following keeps its existing path.
+pub(super) enum PaintHighlight<T> {
+    Shared(Arc<T>),
+    Owned(T),
+}
+
+impl<T> Deref for PaintHighlight<T> {
+    type Target = T;
+
+    /// Borrow either highlight set without cloning it.
+    fn deref(&self) -> &T {
+        match self {
+            Self::Shared(value) => value,
+            Self::Owned(value) => value,
+        }
+    }
 }
 
 /// A reveal addresses one live recipient and expires on input/revision or policy changes.
@@ -52,6 +95,7 @@ impl Default for EditorViews {
             next_host: 1,
             primary: ViewId(0),
             selection_source: None,
+            report_probe: None,
             pending_reveal: BTreeMap::new(),
         }
     }
@@ -134,6 +178,7 @@ impl EditorViews {
         self.next_view = next_view;
         self.next_host = next_host;
         self.selection_source = None;
+        self.report_probe = None;
         self.pending_reveal.clear();
         Some(())
     }
@@ -477,7 +522,10 @@ impl EditorViews {
     /// Remove selection/navigation references to closed views and choose a surviving primary
     /// role if necessary. Focus changes never change this role.
     fn prune_closed(&mut self) {
-        let live: std::collections::BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
+        let live: BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
+        if self.report_probe.as_ref().is_some_and(|probe| !live.contains(&probe.source.view())) {
+            self.report_probe = None;
+        }
         self.pending_reveal.retain(|_, pending| live.contains(&pending.source.view()) && live.contains(&pending.target.view()));
         if self.selection_source.is_some_and(|(id, _)| self.view(id).is_none()) {
             self.selection_source = None;
@@ -505,6 +553,7 @@ impl EditorViews {
             view.bind_opened_project(session);
         }
         self.selection_source = None;
+        self.report_probe = None;
         self.pending_reveal.clear();
     }
 
@@ -517,6 +566,9 @@ impl EditorViews {
         if changed {
             self.selection_source = None;
             self.pending_reveal.clear();
+        }
+        if self.report_probe.as_ref().is_some_and(|probe| !self.probe_is_current(probe, session)) {
+            self.report_probe = None;
         }
     }
 
@@ -583,6 +635,7 @@ impl EditorViews {
     /// counterpart without turning the old selection into edit authority in the new workspace.
     fn selection_changed(&mut self, session: &Session, policy: SelectionFollow) {
         self.selection_source = Some((self.active.id(), self.active.workspace));
+        self.report_probe = None;
         self.pending_reveal.clear();
         let Some(source) = self.active.input(session) else {
             return;
@@ -616,6 +669,101 @@ impl EditorViews {
                 .is_some_and(|pane| pane.views().contains(&id))
     }
 
+    /// Project an Update PCB row's part instances. The schematic side remains useful before
+    /// placement, or the PCB side alone when a placed part is pending removal.
+    pub(super) fn probe_update_parts(&mut self, source: ViewId, board: BoardTarget, parts: &BTreeSet<u64>, session: &Session) {
+        let Some(view) = session.project().and_then(|project| project.board_view(board)) else { return };
+        self.show_report_probe(source, board, parts, view.footprints_for_parts(parts), view, session);
+    }
+
+    /// Project a current finding. The marker, not the owning placement, locates the fault.
+    fn probe_drc_finding(&mut self, source: ViewId, board: BoardTarget, index: usize, session: &Session) {
+        let Some(view) = session.project().and_then(|project| project.board_view(board)) else { return };
+        let Some(items) = self.view(source).and_then(|view| view.board.drc.finding_items(session, board, index)) else { return };
+        let (parts, footprints) = Self::resolve_drc_items(items, view);
+        self.show_report_probe(source, board, &parts, footprints, view, session);
+    }
+
+    /// Recognize DRC footprint and pad addresses, not track/via IDs, text or coordinates.
+    fn resolve_drc_items(items: &[String], view: BoardView<'_>) -> (BTreeSet<u64>, BTreeSet<String>) {
+        let owners: BTreeSet<_> = items.iter().map(|item| item.split_once(':').map_or(item.as_str(), |(owner, _)| owner)).collect();
+        let mut parts = BTreeSet::new();
+        let mut footprints = BTreeSet::new();
+        for owner in owners {
+            if let Some(part) = view.footprint_part(owner) {
+                parts.insert(part);
+                footprints.insert(owner.to_owned());
+            }
+        }
+        (parts, footprints)
+    }
+
+    /// Resolve a report once. Work scales with the clicked row's addresses plus at most one
+    /// pass over native symbols, not that pass multiplied by the number of open views.
+    fn show_report_probe(
+        &mut self,
+        source: ViewId,
+        board: BoardTarget,
+        parts: &BTreeSet<u64>,
+        footprints: BTreeSet<String>,
+        project: BoardView<'_>,
+        session: &Session,
+    ) {
+        let Some(input) = self.view(source).and_then(|view| view.input(session)) else { return };
+        if self.owner(source).is_none() {
+            return;
+        }
+        let mut first_sheet = None;
+        let mut by_sheet: HashMap<_, (_, Selection)> = HashMap::new();
+        #[cfg(test)]
+        let mut symbols_visited = 0;
+        if !parts.is_empty() {
+            for (sheet, part, unit) in project.sheet_symbols() {
+                #[cfg(test)]
+                {
+                    symbols_visited += 1;
+                }
+                if parts.contains(&part) {
+                    first_sheet.get_or_insert(sheet);
+                    by_sheet.entry(sheet).or_insert_with(|| (unit.position, Selection::default())).1.symbols.insert(unit.id());
+                }
+            }
+        }
+        let schematic = by_sheet.into_iter().map(|(sheet, (at, selection))| (sheet, (at, Arc::new(selection)))).collect();
+        let board_anchor = footprints.first().and_then(|id| project.footprint_anchor(id));
+        self.selection_source = None;
+        self.pending_reveal.clear();
+        self.report_probe = Some(ReportProbe {
+            source: input,
+            board,
+            schematic,
+            first_sheet,
+            footprints: Arc::new(footprints),
+            board_anchor,
+            #[cfg(test)]
+            symbols_visited,
+        });
+        let targets: Vec<_> = self.hosts.values().flat_map(|host| host.layout.visible_views()).collect();
+        // An explicit report click reveals regardless of the automatic follow preference.
+        for id in targets {
+            if self.report_probe_for(id, session).is_some() {
+                self.reveal_report(id, session, source);
+            }
+        }
+    }
+
+    /// Do not paint a captured report after an edit, reopen or change of source document.
+    fn probe_is_current(&self, probe: &ReportProbe, session: &Session) -> bool {
+        self.owner(probe.source.view()).is_some() && self.view(probe.source.view()).is_some_and(|view| view.accepts(probe.source, session))
+    }
+
+    /// A report applies only to a live project pane in its captured opening.
+    fn report_probe_for(&self, id: ViewId, session: &Session) -> Option<&ReportProbe> {
+        self.report_probe.as_ref().filter(|probe| {
+            self.probe_is_current(probe, session) && self.owner(id).is_some() && self.view(id).and_then(|view| view.input(session)).is_some()
+        })
+    }
+
     /// Resolve a live source and destination in this opening. A source workspace may be parked
     /// within its view after switching, but closed views or replaced projects cannot contribute.
     fn probe_source(&self, id: ViewId, session: &Session) -> Option<(&EditorView, Workspace)> {
@@ -632,9 +780,8 @@ impl EditorViews {
         Some((source, workspace))
     }
 
-    /// Resolve a schematic projection before filtering to the receiving sheet. Board placements
-    /// map through component identity; literal wires remain local to their schematic sheet.
-    fn schematic_probe(&self, id: ViewId, session: &Session) -> Option<(Workspace, Selection)> {
+    /// Resolve an ordinary edit selection and whether it may reveal across sheets.
+    fn schematic_probe(&self, id: ViewId, session: &Session) -> Option<(bool, Selection)> {
         let (source, workspace) = self.probe_source(id, session)?;
         let selection = match workspace {
             Workspace::Schematic => {
@@ -649,11 +796,24 @@ impl EditorViews {
                 .and_then(|p| p.board_view(source.board.target?))
                 .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.probe_footprints())),
         };
-        Some((workspace, selection))
+        Some((workspace == Workspace::Board, selection))
     }
 
-    /// Filter counterparts to the displayed sheet without moving the view or editing selection.
-    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+    /// Filter ordinary counterparts to the displayed sheet; share the prefiltered report set.
+    pub(super) fn schematic_paint_highlight(&self, id: ViewId, session: &Session) -> PaintHighlight<Selection> {
+        if let Some(probe) = self.report_probe_for(id, session) {
+            if let Some(DocumentTarget::Sheet(sheet)) = self.view(id).and_then(EditorView::target)
+                && let Some((_, selection)) = probe.schematic.get(&sheet)
+            {
+                return PaintHighlight::Shared(Arc::clone(selection));
+            }
+            return PaintHighlight::Owned(Selection::default());
+        }
+        PaintHighlight::Owned(self.selection_highlight(id, session))
+    }
+
+    /// Restrict ordinary cross-probe highlights to objects present in the target view's snapshot.
+    fn selection_highlight(&self, id: ViewId, session: &Session) -> Selection {
         let Some((_, mut selection)) = self.schematic_probe(id, session) else {
             return Selection::default();
         };
@@ -664,8 +824,32 @@ impl EditorViews {
         selection
     }
 
-    /// Resolve board counterparts using the shared engine adapter, preserving stable placement IDs.
-    pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> std::collections::BTreeSet<String> {
+    /// Share report counterparts for the captured board, retaining stable placement IDs.
+    pub(super) fn board_paint_highlight(&self, id: ViewId, session: &Session) -> PaintHighlight<BTreeSet<String>> {
+        if let Some(probe) = self.report_probe_for(id, session) {
+            return if self.view(id).and_then(EditorView::target) == Some(DocumentTarget::Board(probe.board)) {
+                PaintHighlight::Shared(Arc::clone(&probe.footprints))
+            } else {
+                PaintHighlight::Owned(BTreeSet::new())
+            };
+        }
+        PaintHighlight::Owned(self.board_selection_highlight(id, session))
+    }
+
+    /// Copy the schematic highlights that would be painted in this view, not its edit selection.
+    #[cfg(test)]
+    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+        self.schematic_paint_highlight(id, session).clone()
+    }
+
+    /// Copy the footprint IDs that would be highlighted in this board view, not its edit selection.
+    #[cfg(test)]
+    pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> BTreeSet<String> {
+        self.board_paint_highlight(id, session).clone()
+    }
+
+    /// Project ordinary edit selection only, separately from the captured report highlights.
+    fn board_selection_highlight(&self, id: ViewId, session: &Session) -> BTreeSet<String> {
         let Some((source, workspace)) = self.probe_source(id, session) else {
             return Default::default();
         };
@@ -696,13 +880,16 @@ impl EditorViews {
         self.reveal_highlight(id, session, policy)
     }
 
-    /// Reveal the counterpart without selecting it. Only a board source can change the sheet a
-    /// schematic pane displays. Report that change so the host paints the pane again.
+    /// Reveal the counterpart without selecting it. PCB selections or report results may change
+    /// the sheet a schematic pane displays. Report that change so the host paints the pane again.
     pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) -> bool {
+        if let Some(probe) = self.report_probe_for(id, session) {
+            return self.reveal_report(id, session, probe.source.view());
+        }
         match self.view(id).map(|view| view.workspace) {
             Some(Workspace::Schematic) => self.reveal_schematic(id, session, policy),
             Some(Workspace::Board) => {
-                let highlight = self.board_highlight_for(id, session);
+                let highlight = self.board_selection_highlight(id, session);
                 if let Some(view) = self.view_mut(id)
                     && let Some(project) = view.snapshot(session)
                     && let Some(target) = view.board.target.and_then(|target| project.board_view(target))
@@ -715,12 +902,48 @@ impl EditorViews {
         }
     }
 
+    /// Keep a report match on the current sheet, or show the first matching sheet only in a peer
+    /// pane, reusing its cached view of that sheet. Reveal one stable anchor per view without
+    /// resolving graphics or changing zoom; a newly shown view centers once it has geometry.
+    fn reveal_report(&mut self, id: ViewId, session: &Session, origin: ViewId) -> bool {
+        let Some(probe) = self.report_probe.as_ref() else { return false };
+        let (target, at) = match self.view(id).and_then(EditorView::target) {
+            Some(DocumentTarget::Sheet(sheet)) => {
+                if let Some(&(at, _)) = probe.schematic.get(&sheet) {
+                    (None, at)
+                } else if id != origin
+                    && let Some(first) = probe.first_sheet
+                    && let Some(&(at, _)) = probe.schematic.get(&first)
+                {
+                    (Some(first), at)
+                } else {
+                    return false;
+                }
+            }
+            Some(DocumentTarget::Board(board)) if board == probe.board => {
+                let Some(at) = probe.board_anchor else { return false };
+                (None, at)
+            }
+            _ => return false,
+        };
+        let shown = match target {
+            Some(sheet) => match self.show_sheet_in_pane(id, sheet, session) {
+                Some(shown) => shown,
+                None => return false,
+            },
+            None => id,
+        };
+        let Some(view) = self.view_mut(shown) else { return false };
+        view.camera.reveal_report_anchor(at);
+        target.is_some()
+    }
+
     /// Keep a sheet that already contains a match; otherwise use the first matching sheet in
     /// project order. Match the resolved unit IDs, never a reference, sheet name or definition.
     /// A sheet change shows that sheet's document in the same pane and reveals there on its next
     /// paint, once the pane has supplied geometry; the matching sheet then settles in place.
     fn reveal_schematic(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) -> bool {
-        let Some((workspace, all)) = self.schematic_probe(id, session) else {
+        let Some((may_change_sheet, all)) = self.schematic_probe(id, session) else {
             return false;
         };
         let Some(current) = self.view(id).and_then(|view| view.snapshot(session)) else {
@@ -734,7 +957,7 @@ impl EditorViews {
             }
             return false;
         }
-        if workspace != Workspace::Board || all.symbols.is_empty() {
+        if !may_change_sheet || all.symbols.is_empty() {
             return false;
         }
         let Some(sheet) = current.first_sheet_for_symbols(&all) else {
@@ -907,11 +1130,13 @@ impl EditorViews {
                 if let Some(id) = parked {
                     let library = self.active.library.clone();
                     let manufacturing = self.active.manufacturing.as_mut().map(crate::manufacturing::State::fork);
+                    let render = self.active.render.as_ref().map(crate::render_workspace::State::fork);
                     let definition = self.active.definition;
                     if let Some(view) = self.view_mut(id) {
                         view.library = library;
                         view.manufacturing = manufacturing;
-                        if view.library.is_some() || view.manufacturing.is_some() {
+                        view.render = render;
+                        if view.library.is_some() || view.manufacturing.is_some() || view.render.is_some() {
                             view.definition = None;
                         } else if definition.is_some() {
                             view.definition = definition;
@@ -976,7 +1201,7 @@ impl PcbApp {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
         let Some(view) = self.views.view(id) else { return plain() };
-        if view.manufacturing.is_some() {
+        if view.manufacturing.is_some() || view.render.is_some() {
             return vec![egui::Shape::rect_filled(area, 0, t.board_canvas)];
         }
         if view.unavailable() || view.library.is_some() {
@@ -1219,7 +1444,11 @@ impl PcbApp {
             let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
             match self.views.active.board.drc.show(ui, drc_area, revision, self.preferences.units) {
-                crate::board_drc::Action::Focus(at) => self.views.active.camera.center_on(at),
+                crate::board_drc::Action::Focus { at, board, index } => {
+                    self.views.probe_drc_finding(self.views.active.id(), board, index, &self.session);
+                    self.views.active.camera.center_on(at);
+                    self.repaint_editors(ui.ctx());
+                }
                 crate::board_drc::Action::Rerun => self.run_drc(),
                 crate::board_drc::Action::None => {}
             }
@@ -1266,6 +1495,11 @@ impl PcbApp {
                 // Workspace painters may fill their maximum rectangle. Keep the shared
                 // pane header outside their clip, including Library and definition panes.
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.views.view(id).is_some_and(|view| view.render.is_some()) {
+                    self.render_pane(ui, id);
+                    return;
+                }
                 if self.views.view(id).is_some_and(|view| view.manufacturing.is_some()) {
                     self.manufacturing_pane(ui, id);
                     return;
@@ -1333,7 +1567,7 @@ impl PcbApp {
                         && matches!(self.dialog, Dialog::None)
                         && !self.parts.is_modal()
                         && !egui::Popup::is_any_open(ui.ctx());
-                    let highlight = self.views.highlight_for(id, &self.session);
+                    let highlight = self.views.schematic_paint_highlight(id, &self.session);
                     let label = format!("Schematic canvas {}", id.0 + 1);
                     let Some(view) = self.views.view_mut(id) else {
                         return;
@@ -1432,6 +1666,7 @@ impl PcbApp {
         let browser_area = self.parts.browser_area(area).intersect(area);
         let browser_area =
             if self.properties_open && !self.parts.open { pcbcraft_chrome::properties::browser_area(browser_area) } else { browser_area };
+        let can_close_project = self.can_close_document();
         let pick = self.browser.show(
             ui,
             browser_area,
@@ -1442,6 +1677,7 @@ impl PcbApp {
             self.views.active.filters,
             &self.views.active.inspection,
             &self.views.active.board.hidden_layers,
+            can_close_project,
         );
         // Panels belong to individual hosts; apply personal criteria to each bound chooser.
         self.parts.set_filter(self.library_preferences.filter.clone());
@@ -1467,5 +1703,124 @@ impl PcbApp {
             }
         }
         pick.map(|pick| (source, pick))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// DRC item addresses identify placements and pad owners; unrelated physical items must
+    /// not leave a prior report's symbol or footprint highlights on screen.
+    #[test]
+    fn drc_report_addresses_project_only_existing_footprint_owners() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        let mut symbols = Vec::new();
+        for x in [0, 5_080_000, 10_160_000] {
+            let revision = session.revision();
+            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
+            let symbol = session.project().unwrap().symbols().last().unwrap().id();
+            let revision = session.revision();
+            session
+                .apply(
+                    pcbcraft_engine::PLACE_FOOTPRINT,
+                    &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":0,"expected_revision":revision}),
+                )
+                .unwrap();
+            symbols.push(symbol);
+        }
+        let project = session.project().unwrap();
+        let board = project.board_target().unwrap();
+        let board_view = project.board_view(board).unwrap();
+        let ids: Vec<_> = board_view.footprint_ids().collect();
+        let track = "00000000-0000-4000-8000-000000000001";
+        let via = "00000000-0000-4000-8000-000000000002";
+        let cases: [(&str, Vec<String>, &[usize]); 3] = [
+            ("direct footprint", vec![ids[0].clone()], &[0]),
+            (
+                "direct and pad duplicates mixed with unrelated IDs",
+                vec![
+                    ids[0].clone(),
+                    format!("{}:1", ids[0]),
+                    format!("{}:2", ids[0]),
+                    format!("{}:1", ids[1]),
+                    track.to_owned(),
+                    via.to_owned(),
+                    "footprint-999999".to_owned(),
+                    ids[2].replacen("footprint-", "footprint-0", 1),
+                ],
+                &[0, 1],
+            ),
+            ("track and via only clear prior highlights", vec![track.to_owned(), via.to_owned()], &[]),
+        ];
+
+        let mut views = EditorViews::default();
+        views.bind_opened_project(&session);
+        let schematic = views.active.id();
+        let pcb = views.open_beside(schematic).unwrap();
+        views.switch_workspace(pcb, Workspace::Board, &session);
+        for (name, items, expected) in cases {
+            let (parts, footprints) = EditorViews::resolve_drc_items(&items, board_view);
+            views.show_report_probe(pcb, board, &parts, footprints, board_view, &session);
+            let expected_symbols: BTreeSet<_> = expected.iter().map(|&i| symbols[i].clone()).collect();
+            let expected_placements: BTreeSet<_> = expected.iter().map(|&i| ids[i].clone()).collect();
+            assert_eq!(views.schematic_paint_highlight(schematic, &session).symbols, expected_symbols, "{name}");
+            assert_eq!(*views.board_paint_highlight(pcb, &session), expected_placements, "{name}");
+        }
+    }
+
+    /// A large connection-style row spanning 768 of 1,024 parts must visit at most one
+    /// symbol per live unit on activation, with no report-sized copies on repeat paint.
+    #[test]
+    fn large_report_probe_is_single_pass_and_reuses_paint_sets() {
+        const UNITS: usize = 1024;
+        const ENDPOINT_PARTS: usize = 768;
+        const PAINTS: usize = 32;
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        for i in 0..UNITS {
+            let x = (i % 32) as i64 * 5_080_000;
+            let y = (i / 32) as i64 * 5_080_000;
+            let revision = session.revision();
+            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":y,"expected_revision":revision})).unwrap();
+            if i < ENDPOINT_PARTS {
+                let symbol = session.project().unwrap().symbols().last().unwrap().id();
+                let revision = session.revision();
+                session
+                    .apply(
+                        pcbcraft_engine::PLACE_FOOTPRINT,
+                        &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":y,"expected_revision":revision}),
+                    )
+                    .unwrap();
+            }
+        }
+        let project = session.project().unwrap();
+        let board = project.board_target().unwrap();
+        let part_numbers: BTreeSet<_> = project.board_view(board).unwrap().sheet_symbols().take(ENDPOINT_PARTS).map(|(_, part, _)| part).collect();
+        assert_eq!(project.all_symbols().count(), UNITS);
+        assert_eq!(part_numbers.len(), ENDPOINT_PARTS);
+
+        let mut views = EditorViews::default();
+        views.bind_opened_project(&session);
+        let schematic = views.active.id();
+        let peer = views.open_beside(schematic).unwrap();
+        let pcb = views.open_beside(peer).unwrap();
+        views.switch_workspace(pcb, Workspace::Board, &session);
+        views.probe_update_parts(schematic, board, &part_numbers, &session);
+        let report = views.report_probe.as_ref().unwrap();
+        assert_eq!(report.symbols_visited, UNITS);
+        let (_, symbol_set) = &report.schematic[&project.sheet_target()];
+        assert_eq!(symbol_set.symbols.len(), ENDPOINT_PARTS);
+        assert_eq!(report.footprints.len(), ENDPOINT_PARTS);
+        for _ in 0..PAINTS {
+            for pane in [schematic, peer] {
+                let PaintHighlight::Shared(highlight) = views.schematic_paint_highlight(pane, &session) else { panic!("must reuse report symbols") };
+                assert!(Arc::ptr_eq(&highlight, symbol_set));
+            }
+            let PaintHighlight::Shared(highlight) = views.board_paint_highlight(pcb, &session) else { panic!("must reuse report placements") };
+            assert!(Arc::ptr_eq(&highlight, &report.footprints));
+        }
     }
 }

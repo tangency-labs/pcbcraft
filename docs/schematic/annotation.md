@@ -1,8 +1,8 @@
-# Preview schematic annotation
+# Preview and apply schematic annotation
 
 Use `annotate.preview` to review reference designators without editing the
 schematic. It is a shared project command available in headless and live MCP,
-including a read-only headless session.
+including a read-only headless session, where `annotate.apply` is refused.
 The command does not need a PCB. Its query result is returned even with
 `inspect: false`:
 
@@ -14,8 +14,9 @@ Pass `sheet` with the sheet UUID from project inspection to limit the report to
 that sheet. Omitting it covers the whole project, independent of the active
 view. The optional `expected_revision` rejects a preview of a more recent
 project state. The reply contains `revision` and `annotation_preview`, with
-`rows` and `errors`. No review authority is cached; the revision describes the
-state previewed and is not an Apply token.
+`rows` and `errors`, plus an opaque `token` for applying that specific proposal
+in the same session. The numeric `revision` describes the previewed state and
+cannot authorize Apply.
 
 Each row gives the stable `part_instance` ID, the representative `symbol` ID,
 its `sheet` and `occurrence` UUIDs, its center `at` in integer nanometers,
@@ -40,6 +41,29 @@ claimants when at least one is in scope; the planner leaves them unchanged.
 This is not a way to open an invalid file or to reset duplicates.
 
 Preview does not write files, change the project revision, add an undo entry,
-clear redo or change any board link. Applying proposals, duplicate repair,
-renumbering already numbered parts and a graphical review control are not
-implemented here.
+clear redo or change any board link.
+
+## Apply the reviewed proposal
+
+Call `annotate.apply` with the `token` from the latest preview in the same
+session. No scope or reference overrides are accepted; the token already binds
+that proposal and its revision. A new preview replaces the previous token. A
+successful apply consumes the token, even when there are no renames. Opening a
+project again discards outstanding tokens. Desktop recovery records the edit's
+resulting documents, not the token.
+
+Apply refuses a proposal with errors or a revision that changed even if Undo
+has since restored the same design. A stale-token refusal carries
+`details.current_revision` and `details.part_instances`, with IDs for parts
+added, removed, renamed, locked or unlocked, or with moved, rotated, mirrored,
+added or removed units. An empty list means no such differences remain; it does
+not make the token valid. Preview again before applying.
+
+All proposed renames publish as one edit and one undo step; empty proposals do
+not change the revision or history. Part instance IDs, placements and native
+file formats are unchanged. Internal reference numbers follow the proposed
+numbers when available. If an unchanged part has that internal number under a
+manually edited reference, Apply assigns the renamed part a free internal
+number rather than changing the unchanged part. There is no automatic save.
+Duplicate repair, renumbering already numbered parts and a graphical review
+control are not implemented here.

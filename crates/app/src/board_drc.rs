@@ -53,8 +53,12 @@ impl Default for Drc {
 /// What a person did in the card this frame.
 pub(super) enum Action {
     None,
-    /// Center the view on a finding.
-    Focus(Point),
+    /// Center on a current finding and reveal its linked parts using the reported item IDs.
+    Focus {
+        at: Point,
+        board: BoardTarget,
+        index: usize,
+    },
     Rerun,
 }
 
@@ -174,8 +178,17 @@ impl Drc {
             .unwrap_or_default()
     }
 
-    /// Float the results card inside `area`. Clicking a finding focuses it and asks the caller
-    /// to center the view there; Run again asks for a fresh check; Close hides the card.
+    /// Borrow the current finding addresses by index, without allocating a copy on activation.
+    pub(super) fn finding_items(&self, session: &pcbcraft_engine::Session, board: BoardTarget, index: usize) -> Option<&[String]> {
+        let ran = self.result.as_ref()?;
+        if ran.outdated || ran.source.target() != board || !ran.source.is_current(session) {
+            return None;
+        }
+        Some(&ran.report.violations.get(index)?.items)
+    }
+
+    /// Float the results card inside `area`. Current findings can be focused; stale ones remain
+    /// readable without navigating to obsolete objects. Run again requests a fresh check.
     pub(super) fn show(&mut self, ui: &Ui, area: Rect, revision: u64, unit: units::Unit) -> Action {
         if !self.open {
             self.rect = Rect::NOTHING;
@@ -212,7 +225,8 @@ impl Drc {
                 }
                 return;
             };
-            if ran.source.revision() != revision || ran.outdated {
+            let current = ran.source.revision() == revision && !ran.outdated;
+            if !current {
                 ui.label(shell::dim("The board changed since this check. Run again to refresh."));
             }
             ui.label(shell::dim(format!("Revision {}", ran.source.revision())));
@@ -233,9 +247,9 @@ impl Drc {
             egui::ScrollArea::vertical().id_salt("board_drc_list").max_height(320.).show(ui, |ui| {
                 for (index, violation) in report.violations.iter().enumerate() {
                     let text = format!("{} · {}", label(violation.kind), violation.message);
-                    if ui.selectable_label(self.focus == Some(index), text).clicked() {
+                    if ui.add_enabled(current, egui::Button::selectable(self.focus == Some(index), text)).clicked() {
                         self.focus = Some(index);
-                        action = Action::Focus(violation.at);
+                        action = Action::Focus { at: violation.at, board: ran.source.target(), index };
                     }
                 }
                 if report.violations.len() < report.total {

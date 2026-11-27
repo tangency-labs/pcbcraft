@@ -2,7 +2,7 @@
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
-use pcbcraft_engine::SessionScope;
+use pcbcraft_engine::{SessionScope, persistence::OLDEST_READABLE_PROJECT_FORMAT};
 use pcbcraft_mcp::{
     Backend, Headless, Server,
     live::{Remote, TOKEN_ENV},
@@ -16,9 +16,19 @@ const USAGE: &str = "Usage: pcbcraft-cli mcp [--read-only] [--project FILE_OR_FO
        pcbcraft-cli convert SOURCE DESTINATION
                         Convert a previous split project to a new destination. A .pc destination
                         creates a ZIP package; other names create a new project folder.
+       pcbcraft-cli import-kicad SCHEMATIC DESTINATION
+                        Import a self-contained KiCad 6-10 schematic (.kicad_sch) as a new project
+                        at DESTINATION, a .pc package or a new folder, and list what was left out.
        pcbcraft-cli --help, -h
                         Print this usage information.
        pcbcraft-cli --version";
+
+/// Include the oldest readable split format wherever usage is printed.
+fn usage() -> String {
+    format!(
+        "{USAGE}\n\nThe oldest split project entry-point format this build opens is {OLDEST_READABLE_PROJECT_FORMAT}, in project folders and .pc packages."
+    )
+}
 
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
@@ -26,29 +36,26 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         [command, source, destination] if command == "convert" => {
             let destination = Path::new(destination);
-            let encoding = if destination.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
-                pcbcraft_engine::persistence::Encoding::Zip
-            } else {
-                pcbcraft_engine::persistence::Encoding::Json
-            };
+            let encoding = pcbcraft_storage::conversion::encoding_for(destination);
             pcbcraft_storage::conversion::convert(Path::new(source), destination, encoding).map(|()| {
                 println!("Converted project written to {}", destination.display());
             })
         }
+        [command, source, destination] if command == "import-kicad" => import_kicad(Path::new(source), Path::new(destination)),
         [command, flag, port, options @ ..] if command == "mcp" && flag == "--connect" => match connect_options(options) {
             Some((token_file, wait)) => connect_editor(port, token_file, wait).and_then(|backend| serve(Box::new(backend))),
-            None => Err(format!("unrecognized --connect options\n{USAGE}")),
+            None => Err(format!("unrecognized --connect options\n{}", usage())),
         },
         [command, options @ ..] if command == "mcp" => {
             let Some((scope, path)) = headless_options(options) else {
-                eprintln!("{USAGE}");
+                eprintln!("{}", usage());
                 return ExitCode::from(2);
             };
             let project = path.map(|path| load_project(path, scope)).transpose();
             project.and_then(|project| serve(Box::new(Headless::with_scope(scope, project))))
         }
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("{USAGE}");
+            println!("{}", usage());
             return ExitCode::SUCCESS;
         }
         [flag] if flag == "--version" => {
@@ -56,7 +63,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };
@@ -67,6 +74,36 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Import a KiCad schematic file through the shared engine command and write the result as a
+/// new project; what the import left out is printed. Nothing is written when the file is
+/// refused, too large or the destination is taken.
+fn import_kicad(source: &Path, destination: &Path) -> Result<(), String> {
+    use std::io::Read;
+    let failed = |e: std::io::Error| format!("{}: {e}", source.display());
+    if !std::fs::metadata(source).map_err(failed)?.is_file() {
+        return Err(format!("{} is not a regular file", source.display()));
+    }
+    // Read one byte past the limit, so a file that grows or lies about its size is still bounded.
+    let limit = pcbcraft_engine::kicad_import::MAX_TEXT_BYTES;
+    let mut bytes = Vec::new();
+    std::fs::File::open(source).map_err(failed)?.take(limit as u64 + 1).read_to_end(&mut bytes).map_err(failed)?;
+    if bytes.len() > limit {
+        return Err(format!("{} is larger than the {} MiB a KiCad schematic import accepts", source.display(), limit >> 20));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", source.display()))?;
+    let name = source.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".to_owned());
+    let mut session = pcbcraft_engine::Session::default();
+    let result =
+        session.execute(pcbcraft_engine::kicad_import::IMPORT, &serde_json::json!({"name": name, "text": text})).map_err(|e| e.to_string())?;
+    let project = session.snapshot().ok_or("the import produced no project")?;
+    pcbcraft_storage::conversion::create(project, destination, pcbcraft_storage::conversion::encoding_for(destination))?;
+    println!("Imported project written to {}", destination.display());
+    for note in result["report"].as_array().into_iter().flatten() {
+        println!("  left out or changed: {} ({}×)", note["what"].as_str().unwrap_or_default(), note["count"]);
+    }
+    Ok(())
 }
 
 /// Read headless options in either order, refusing duplicates and all live-only options.

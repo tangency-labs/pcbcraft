@@ -22,6 +22,8 @@
   edits for selected symbols, attached-wire movement and read-only terminal/library details.
 - place, rotate, mirror horizontally or vertically about the symbol center with attached wires, edit
   standard/custom component fields and population/exclusion attributes, move/delete symbols.
+- mirror a multi-item selection (symbols, wires and net labels) as one undoable edit about the
+  selection center, snapped so pins stay on the grid.
 - Independently drag reference/value/custom text with per-unit visibility, name display, physical
   size/alignment/rotation, offsets and automatic-layout reset.
 - Local/global net labels with automatic orientation away from snapped pins and upright default
@@ -101,20 +103,39 @@
 
 ### Available
 
-- [Read-only `annotate.preview`](../schematic/annotation.md) in the engine and live/headless MCP, with sheet or
-  project scope, lock-aware gap filling for placeholders and duplicate diagnostics.
+- [`annotate.preview` and `annotate.apply`](../schematic/annotation.md) in the engine and live/headless MCP, with
+  sheet or project scope, lock-aware gap filling for placeholders, duplicate diagnostics, stale-token refusal and
+  one-step undo.
 
 ### Remaining scope
 
-- Applying proposals, duplicate repair, full renumbering and a graphical review control remain in
+- Duplicate repair, full renumbering and a graphical review control remain in
   [#45](https://github.com/tangency-labs/pcbcraft/issues/45).
+
+## Sheet split
+
+### Available
+
+- [Read-only `schematic.preview_split_sheet`](../schematic/hierarchical-sheets.md#preview-a-split-to-a-new-sheet)
+  and [`schematic.split_sheet`](../schematic/hierarchical-sheets.md#move-a-selection-to-a-new-sheet) in the
+  engine and live/headless MCP, and a Move to New Sheet… form from the schematic context menu and
+  Sheets ribbon menu.
+- Moved symbols, wires and part instances keep their IDs.
+- Boundary nets become hierarchical labels and sheet pins with previewed names and directions;
+  global or power nets need no port.
+- One undo step, refused if the netlist would change.
+
+### Remaining scope
+
+- Merging sheets back, choosing port names or directions in the form, and splits that need assembly
+  variants.
 
 ## Implementation notes
 
 The engine can produce a [vector schematic PDF](../manufacturing/schematic-pdf.md) of one sheet
 or all project sheets in hierarchy order, with searchable text at each sheet's
-saved paper size and project-export bookmarks. There is no export action in
-the UI or MCP yet.
+saved paper size. A project PDF includes hierarchy bookmarks and internal
+sheet and net navigation links. There is no export action in the UI or MCP yet.
 
 [Intentional no-connect markers](../schematic/no-connect-markers.md) attach to logical part
 terminals and open wire ends through Q, Capture and context actions. They follow

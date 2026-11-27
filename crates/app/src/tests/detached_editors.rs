@@ -14,6 +14,7 @@ use super::*;
 use crate::editor_layout::HostId;
 
 mod board_properties;
+mod input;
 mod pane_drag;
 mod window_size;
 
@@ -35,7 +36,6 @@ fn ui_automation_ignores_detached_assistant_targets() {
 }
 
 /// Named geometry remains window-local even though immediate hosts share the toolkit registry.
-/// The pinned framework lacks the input hook for these child windows, which must refuse input.
 #[test]
 fn ui_automation_lookup_keeps_detached_hosts_separate() {
     let (mut h, peer) = multi_window();
@@ -54,17 +54,13 @@ fn ui_automation_lookup_keeps_detached_hosts_separate() {
         assert!(targets["handles"].as_array().unwrap().iter().any(|target| target["name"] == format!("canvas:{}", view.0)), "{targets}");
     }
     assert!(!child_targets["handles"].as_array().unwrap().iter().any(|target| target["name"] == format!("canvas:{}", root.0)));
-    assert!(
-        h.state_mut()
-            .automation_command(&ctx, "ui.click", &json!({"window":1,"target":{"handle":"tab:View"}}))
-            .unwrap_err()
-            .contains("detached windows support named lookup only")
-    );
 }
 
 #[derive(Default)]
 struct Peer {
     origin: Option<Pos2>,
+    /// The client size this peer reports; 1100×760 when unset.
+    size: Option<egui::Vec2>,
     focused: bool,
     maximized: bool,
     close: bool,
@@ -128,6 +124,7 @@ fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
             peer.decorations = viewport.builder.decorations;
             peer.title = viewport.builder.title.clone();
             input.focused = peer.focused;
+            input.screen_rect = peer.size.map(|size| Rect::from_min_size(Pos2::ZERO, size)).or(input.screen_rect);
             input.events = std::mem::take(&mut peer.events);
             let mut info = egui::ViewportInfo {
                 parent: Some(ViewportId::ROOT),
@@ -328,7 +325,7 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
         assert!(!h.state().views.is_split(), "detaching does not require splitting first");
         let before = h.state().session.snapshot().unwrap();
         detach(&mut h);
-        assert_eq!(peer.borrow().decorations, Some(!integrated));
+        assert_eq!(peer.borrow().decorations, Some(!integrated || cfg!(target_os = "macos")));
         assert_eq!(peer.borrow().nodes.values().any(|node| node.label() == Some("Close window")), integrated);
         if integrated {
             for (label, command) in [
@@ -447,6 +444,9 @@ fn native_window_gestures_for_workspace(workspace: Option<&str>) {
                 (drag, ViewportCommand::StartDrag),
                 (brand, ViewportCommand::StartDrag),
             ];
+            if cfg!(target_os = "macos") {
+                cases.retain(|(_, command)| *command == ViewportCommand::StartDrag);
+            }
             if let Some(title) = title {
                 cases.push((title.center(), ViewportCommand::StartDrag));
             }
@@ -557,6 +557,7 @@ fn titlebar_double_click_preserves_clicks_and_targets_its_host() {
 
 /// Wayland can return the pointer after a native grab without a button release. The previous
 /// window gesture must not suppress resize cursors or keep ownership of the next edge press.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn native_resize_recovers_after_the_compositor_consumes_release() {
     for child in [false, true] {

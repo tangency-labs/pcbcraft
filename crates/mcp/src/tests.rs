@@ -173,7 +173,8 @@ fn package_completion_report_survives_inspect_false() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
-/// Annotation previews stay identical across headless and live dispatch with inspection omitted.
+/// Annotation previews stay identical with inspection omitted; their distinct session-local
+/// tokens authorize only the originating session and apply one edit on either dispatcher.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
@@ -224,6 +225,114 @@ fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() 
     assert!(report.get("project").is_none());
     assert_eq!(editor.0.inspect(), before);
     assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+    let apply = |token: &Value| json!({"command":pcbcraft_engine::annotation::APPLY,"params":{"token":token},"inspect":false});
+    let foreign = headless.call("engine.execute", apply(&live["token"])).unwrap_err();
+    assert_eq!(foreign.code(), "unavailable");
+    assert!(foreign.message().contains("unknown or replaced"));
+    let result = call_editor(&mut editor, &json!({"method":"engine.execute","params":apply(&live["token"])})).unwrap();
+    assert_eq!(result, json!({"revision":before["revision"].as_u64().unwrap() + 1}));
+    assert_eq!(headless.call("engine.execute", apply(&report["token"])).unwrap(), json!({"revision":revision.as_u64().unwrap() + 1}));
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap()["project"], editor.0.inspect()["project"]);
+}
+
+/// The split preview returns the same review data through live and headless dispatch with
+/// inspection omitted, and neither path changes the project or its revision.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn split_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
+    use crate::{
+        Backend, Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::sheet_split::PREVIEW;
+
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = OpenEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = editor.0.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    editor.0.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":editor.0.revision()})).unwrap();
+    let snapshot = editor.0.snapshot().unwrap();
+    editor.0.open_snapshot(snapshot.clone());
+    let mut headless = Headless::with_project(snapshot.clone());
+    let revision = headless.call("project.inspect", json!({})).unwrap()["revision"].clone();
+    let request = json!({"command":PREVIEW,"params":{"items":{"symbols":[symbols[0]],"wires":[]},"name":"Split"},"inspect":false});
+    let before = editor.0.inspect();
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let report = headless.call("engine.execute", request).unwrap();
+    assert_eq!(report["split_preview"], live["split_preview"]);
+    let ports = report["split_preview"]["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0]["inside"], json!([from]));
+    assert_eq!(ports[0]["outside"], json!([to]));
+    assert_eq!(report["split_preview"]["cut_wires"].as_array().unwrap().len(), 1);
+    assert_eq!(report["revision"], revision);
+    assert_eq!(live["revision"], before["revision"]);
+    assert!(report.get("project").is_none());
+    assert_eq!(editor.0.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+}
+
+/// The split runs through MCP as one edit at the previewed revision: the moved symbol is on
+/// the new sheet, one undo restores the project, and a repeated sheet name is refused.
+#[test]
+fn split_sheet_applies_through_mcp_as_one_undo_step() {
+    use pcbcraft_engine::sheet_split::{PREVIEW, SPLIT};
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    for x in [0, 50_800_000] {
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    }
+    let symbols: Vec<_> = session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+    let (from, to) = (json!({"symbol":symbols[0],"terminal":"2"}), json!({"symbol":symbols[1],"terminal":"1"}));
+    session.apply(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":session.revision()})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let items = json!({"symbols":[symbols[0]],"wires":[]});
+    let preview = json!({"command":PREVIEW,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let report = crate::backend::call_session(&mut session, "engine.execute", &preview).unwrap();
+    assert_eq!(report["split_preview"]["ports"].as_array().unwrap().len(), 1);
+
+    let split = json!({"command":SPLIT,"params":{"items":items,"name":"Split","expected_revision":revision},"inspect":false});
+    let done = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap();
+    assert_eq!(done["revision"], json!(session.revision()));
+    let project = session.project().unwrap();
+    let child = project.sheets().find(|sheet| sheet.name == "Split").unwrap().target;
+    assert_eq!(project.for_sheet(child).unwrap().symbols().iter().map(|symbol| symbol.id()).collect::<Vec<_>>(), [symbols[0].clone()]);
+    assert_eq!(project.for_sheet(child).unwrap().hierarchical_labels().len(), 1);
+
+    let again = json!({"command":PREVIEW,"params":{"sheet":before.sheet_target().id(),"items":{"symbols":[symbols[1]],"wires":[]},"name":"split"},"inspect":false});
+    let refused = crate::backend::call_session(&mut session, "engine.execute", &again).unwrap_err();
+    assert_eq!(refused.code(), "invalid_params");
+    assert!(refused.message().contains("already exists"), "{}", refused.message());
+    let stale = crate::backend::call_session(&mut session, "engine.execute", &split).unwrap_err();
+    assert_eq!(stale.code(), "stale_revision");
+
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(session.project().unwrap().sheets().len(), before.sheets().len());
+    assert_eq!(session.project().unwrap().symbols().len(), 2);
 }
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
@@ -1067,6 +1176,34 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     assert_eq!(query["revision"], before["revision"]);
     assert!(query["netlist"].is_object());
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+}
+
+/// A read-only headless session admits the assembly orientation check in both return modes,
+/// with the same report as an editing session, and leaves the project, revision and undo and
+/// redo history unchanged.
+#[test]
+fn headless_read_only_runs_the_assembly_check_without_changing_anything() {
+    use pcbcraft_engine::{CHECK_ASSEMBLY, SessionScope};
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture","create_board":true})).unwrap();
+    let mut control = Server::new(Box::new(Headless::with_scope(SessionScope::Edit, editor.snapshot())));
+    let mut s = Server::new(Box::new(Headless::with_scope(SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    assert_eq!(before["can_undo"], false);
+    assert_eq!(before["can_redo"], false);
+    let board = before["project"]["boards"][0]["id"].clone();
+    assert!(board.is_string(), "{before}");
+    for (params, inspect) in [(json!({}), false), (json!({"board":board}), false), (json!({"board":board}), true)] {
+        let args = json!({"command":CHECK_ASSEMBLY,"params":params,"inspect":inspect});
+        let response = call(&mut s, "execute", args.clone());
+        assert_ne!(response["isError"], true, "{response}");
+        let result = body(&response);
+        assert_eq!(result["revision"], before["revision"]);
+        assert_eq!(result["assembly_check"]["board"], json!({"project":before["project"]["id"],"board":board}));
+        assert_eq!(result["assembly_check"], body(&call(&mut control, "execute", args))["assembly_check"]);
+        assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+    }
 }
 
 /// A read-only headless session runs the layer-group query without changing the revision,
@@ -2073,6 +2210,37 @@ fn design_check_report_survives_suppressed_project_inspection() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
+/// The read-only assembly orientation report also survives suppressed project inspection.
+#[test]
+fn assembly_check_report_survives_suppressed_project_inspection() {
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::CHECK_ASSEMBLY,"params":{},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["revision"], created["revision"]);
+    assert_eq!(result["assembly_check"]["findings"], json!([]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// An explicit unknown board returns the published error code instead of falling back.
+#[test]
+fn assembly_check_unknown_board_keeps_typed_error() {
+    let mut server = server();
+    let _ = call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}}));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::CHECK_ASSEMBLY,"params":{"board":"00000000-0000-0000-0000-000000000000"},"inspect":false}),
+    );
+    assert_eq!(response["isError"], true, "{response}");
+    assert_eq!(response["structuredContent"]["error"]["code"], "not_found");
+    assert_eq!(response["structuredContent"]["error"]["message"], "unknown board ID");
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
 /// Fabrication files survive inspect:false through the shared dispatcher without changing the
 /// project, revision or history, alongside clipboard preparation and DRC report results.
 #[test]
@@ -2652,4 +2820,96 @@ fn unroute_preview_returns_its_diff_with_inspection_disabled() {
     assert_eq!(error["structuredContent"]["error"]["code"], "stale_revision");
     assert_eq!(error["structuredContent"]["error"]["details"], json!({"current_revision":before["revision"]}));
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+const DIVIDER: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../kicad/tests/fixtures/divider.kicad_sch"));
+
+/// The KiCad import is headless-only: an open editor leaves it out of its catalog and refuses
+/// it before any work, so the project and its revision stay as they were.
+#[test]
+fn an_open_editor_neither_lists_nor_runs_the_kicad_import() {
+    use crate::{
+        Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::kicad_import::IMPORT;
+
+    // An editor that would refuse everything for a state reason, such as an open dialog: the
+    // headless-only answer comes first, since no change of state lets the import run here.
+    struct BusyEditor(Session);
+    impl Editor for BusyEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            Some("Finish the current dialog".to_owned())
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = BusyEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    let before = editor.0.inspect();
+    let catalog = call_editor(&mut editor, &json!({"method":"engine.commands","params":{}})).unwrap();
+    let ids: Vec<&str> = catalog.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
+    assert!(ids.contains(&"project.new") && !ids.contains(&IMPORT));
+    for method in ["engine.execute", "engine.execute_versioned"] {
+        let mut request = json!({"method":method,"params":{"command":IMPORT,"params":{"text":DIVIDER},"version":pcbcraft_engine::command_api::COMMAND_API_VERSION}});
+        crate::live::normalize_request(&mut request).unwrap();
+        let error = call_editor(&mut editor, &request).unwrap_err();
+        assert_eq!(error.code(), "unavailable");
+        assert!(error.message().contains("headless"), "{error}");
+    }
+    assert_eq!(editor.0.inspect(), before);
+
+    // The same request imports in a session of its own.
+    let mut s = server();
+    let imported = body(&call(&mut s, "execute", json!({"command":IMPORT,"params":{"text":DIVIDER},"inspect":false})));
+    assert!(imported["report"].is_array(), "{imported}");
+}
+
+/// A schematic at the import's 8 MiB text limit fits headless stdio's 16 MiB request line and
+/// imports. The padding is spaces, which JSON doesn't escape; the guide says that text which
+/// escapes heavily can exceed the line.
+#[test]
+fn a_kicad_schematic_at_the_text_limit_imports_through_headless_stdio() {
+    use pcbcraft_engine::kicad_import::{IMPORT, MAX_TEXT_BYTES};
+
+    let open = DIVIDER.trim_end().strip_suffix(')').unwrap();
+    let text = format!("{open}{})", " ".repeat(MAX_TEXT_BYTES - open.len() - 1));
+    assert_eq!(text.len(), MAX_TEXT_BYTES);
+    let line = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":IMPORT,"params":{"text":text},"inspect":false}}})
+    .to_string();
+    let mut output = Vec::new();
+    server().serve(Cursor::new(format!("{line}\n")), &mut output).unwrap();
+    let reply: Value = serde_json::from_slice(&output).unwrap();
+    assert_ne!(reply["result"]["isError"], true, "{reply}");
+    assert!(body(&reply["result"])["report"].is_array(), "{reply}");
+}
+
+/// The client in front of an open editor refuses a headless-only command itself, with the
+/// editor's answer, instead of sending a request the live transport would drop unanswered.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_live_client_refuses_the_kicad_import_without_connecting() {
+    use crate::Backend;
+
+    // Nothing listens on this port; a request that reached the network would fail to connect.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut remote = crate::live::Remote::new(port, &"a".repeat(64)).unwrap();
+    let request = json!({"command":pcbcraft_engine::kicad_import::IMPORT,"params":{"text":DIVIDER.repeat(64)}});
+    let refused = remote.execute(request).unwrap_err();
+    assert_eq!(refused.code(), "unavailable", "{refused}");
+    assert!(refused.message().contains("headless"), "{refused}");
 }

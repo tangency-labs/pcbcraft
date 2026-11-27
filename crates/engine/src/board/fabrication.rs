@@ -6,7 +6,8 @@
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Circular non-plated
 //! footprint holes, when present, go in a separate non-plated Excellon file. Each drill file
 //! names its content in XNC standard-comment file attributes (`Plated,1,N,PTH` or
-//! `NonPlated,1,N,NPTH` over all N copper layers). Every coordinate
+//! `NonPlated,1,N,NPTH` over all N copper layers). A drill chart lists every tool of those
+//! files with its hole count, from the same hole census. Every coordinate
 //! is written in the board's output frame: measured from its placement origin with Y up, seen
 //! from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
@@ -17,8 +18,10 @@
 //! X2 aperture functions describe the emitted features without changing their geometry.
 //! Copper object attributes describe intended nets and component pins.
 //! Track and Board Outline strokes remain linear. Export refuses boards with copper zones.
+mod drill_chart;
 mod object_attributes;
 
+pub use self::drill_chart::{DrillChart, DrillChartRow};
 use self::object_attributes::{Object, RoutedNets};
 use super::{
     definition::{GraphicPurpose, PadShape},
@@ -43,7 +46,7 @@ pub mod review;
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
 /// Silkscreen strokes without an authored width use 0.12 mm.
-const DEFAULT_SILK_NM: i64 = 120_000;
+pub(super) const DEFAULT_SILK_NM: i64 = 120_000;
 /// The outline is drawn with a thin 0.1 mm line, the conventional profile width.
 const OUTLINE_NM: i64 = 100_000;
 /// Segments per corner for rounded pads that cannot use a macro.
@@ -69,6 +72,8 @@ pub struct Fabrication {
     pub origin: Resolved,
     /// The files in a fixed order with unique portable names.
     pub files: Vec<Output>,
+    /// Every tool of the drill files among `files`, with its hole count; empty without drill files.
+    pub drill_chart: DrillChart,
 }
 
 /// Integrity of the exact bytes of one generated artifact, not a design-state identity.
@@ -771,13 +776,14 @@ impl BoardView<'_> {
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive", &frame_id) });
 
         let span = order.len();
+        let drill_chart = DrillChart::new(&plated, &non_plated);
         files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::Plated, span, plated) });
         if !non_plated.is_empty() {
             files
                 .push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::NonPlated, span, non_plated) });
         }
         unique_file_names(&mut files, copper_count);
-        Ok(Fabrication { origin, files })
+        Ok(Fabrication { origin, files, drill_chart })
     }
 
     /// Group via and plated pad drill hits by diameter.
@@ -822,7 +828,10 @@ impl BoardView<'_> {
 const DRILL_DECIMALS: usize = 3;
 const DRILL_UNIT_NM: i64 = 10_i64.pow(6 - DRILL_DECIMALS as u32);
 
-enum DrillPlating {
+/// Which drill file a hole is written to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrillPlating {
     Plated,
     NonPlated,
 }
@@ -921,11 +930,17 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// Return file text, resolved origin and the same member records as the ZIP manifest.
+    /// Return file text, resolved origin, the drill chart and the same member records as the
+    /// ZIP manifest.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
         let manifest = Manifest::from_outputs(&fabrication.files);
-        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": manifest}))
+        Ok(json!({
+            "files": fabrication.files,
+            "origin": fabrication.origin,
+            "drill_chart": fabrication.drill_chart,
+            "manifest": manifest,
+        }))
     }
 }
 

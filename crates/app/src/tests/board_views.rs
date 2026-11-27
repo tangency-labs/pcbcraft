@@ -712,7 +712,19 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.key_press(Key::ArrowDown);
     h.run();
     h.key_press(Key::Enter);
+    // The native preview spinner repaints until its worker finishes.
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::render_workspace::wait_for_preview(&mut h);
+    #[cfg(target_arch = "wasm32")]
     h.run();
+    if !crate::IN_BROWSER {
+        assert_eq!(h.state().workspace_key(), "render");
+        click(&mut h, "Choose workspace");
+        h.key_press(Key::ArrowDown);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    }
     assert!(h.state().library_editors.active.is_none());
     assert_eq!(h.state().workspace_key(), "schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);

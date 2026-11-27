@@ -2,8 +2,9 @@
 import json
 import os
 
-JOBS = {"native-tests": "native", "windows-tests": "windows", "windows-smoke": "windows",
-        "web": "web", "geometry-webassembly": "wasi", "licenses": "licenses", "quick-compile": "quick"}
+JOBS = {"linux-tests": "native", "windows-tests": "windows", "windows-smoke": "windows",
+        "macos-tests": "macos", "web": "web", "geometry-webassembly": "wasi",
+        "licenses": "licenses", "quick-compile": "quick"}
 ALWAYS = ("changes", "documentation-links", "library-schemas")
 
 

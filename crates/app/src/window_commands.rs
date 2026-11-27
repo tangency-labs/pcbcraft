@@ -98,6 +98,11 @@ impl PcbApp {
     /// Unknown views are ignored; the project and other views are unchanged.
     pub(super) fn fit_view(&mut self, id: crate::ViewId) {
         if let Some(view) = self.views.view_mut(id) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(state) = &mut view.render {
+                state.fit();
+                return;
+            }
             if let Some(state) = &mut view.manufacturing {
                 state.fit();
             } else {
@@ -527,11 +532,26 @@ mod live {
                     name: "workspace",
                     summary: "Workspace to enter",
                     required: true,
-                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library", "manufacturing"]),
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library", "manufacturing", "render"]),
                 },
                 Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
                 Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
             ],
+        },
+        WindowCommand {
+            id: "app.board_image",
+            title: "Board Ray Tracing",
+            summary: "Enable or disable live GPU ray tracing in a 3D render pane.",
+            params: &[
+                VIEW,
+                Param { name: "action", summary: "Ray-tracing mode action", required: true, kind: Kind::Choice(&["render", "cancel", "preview"]) },
+            ],
+        },
+        WindowCommand {
+            id: "app.set_render_board",
+            title: "Choose 3D Render Board",
+            summary: "Show a board from the open project in the addressed 3D render pane. Layout and project history are unchanged.",
+            params: &[VIEW, Param { name: "board", summary: "Physical board UUID from project inspection", required: true, kind: Kind::Name }],
         },
         WindowCommand {
             id: "app.library_source",
@@ -1266,6 +1286,12 @@ mod live {
             params: &[Param { name: "shown", summary: "Whether Home shows", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "file.close",
+            title: "Close Project",
+            summary: "Close the current project and return to Home. If there are unsaved changes, the editor asks the user what to do.",
+            params: &[],
+        },
+        WindowCommand {
             id: "file.save",
             title: "Save",
             summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as while inspect_editor's file.location is null.",
@@ -1287,6 +1313,20 @@ mod live {
                     summary: "A project folder or a portable .pc archive",
                     required: true,
                     kind: Kind::Choice(&["folder", "archive"]),
+                },
+            ],
+        },
+        WindowCommand {
+            id: "file.archive_folder",
+            title: "Archive Project Folder",
+            summary: "Save the open project folder as a compressed .pc at a new path outside the folder and switch to it. The original folder stays by default. Set trash_source to true to request system Trash after verification. Check file.last for the outcome.",
+            params: &[
+                Param { name: "path", summary: "Absolute path of the new .pc archive", required: true, kind: Kind::Path },
+                Param {
+                    name: "trash_source",
+                    summary: "Request system Trash for the original folder after verification; defaults to false",
+                    required: false,
+                    kind: Kind::Bool,
                 },
             ],
         },
@@ -1537,10 +1577,11 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": if view.manufacturing.is_some() {"manufacturing"} else if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
+                    "workspace": if view.render.is_some() {"render"} else if view.manufacturing.is_some() {"manufacturing"} else if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
                     "manufacturing":view.manufacturing.as_ref().map(|state| state.inspect(&app.manufacturing_files, id)),
+                    "render":view.render.as_ref().map(crate::render_workspace::State::inspect),
                     "library_workspace":view.library.as_ref().map(|state|app.inspect_library_workspace(state)),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
@@ -1691,6 +1732,18 @@ mod live {
                 )?;
                 self.repaint_editors(ctx);
                 return Ok(());
+            }
+            if id == "app.board_image" {
+                let view = ViewId(params["view"].as_u64().ok_or("Choose a 3D render pane.")?);
+                return self.board_image_action(ctx, view, params["action"].as_str().ok_or("Choose a board render action.")?);
+            }
+            if id == "app.set_render_board" {
+                let view = ViewId(params["view"].as_u64().ok_or("Choose a 3D render pane.")?);
+                self.view_window(view)?;
+                let board = params["board"].as_str().ok_or("Choose a board.")?;
+                let project = self.session.project().ok_or("Open a project first.")?;
+                let target = project.resolve_board(Some(board)).map_err(|error| error.to_string())?;
+                return self.set_render_board(ctx, view, target);
             }
             if id == "app.set_workspace" {
                 let source = ViewId(params["view"].as_u64().unwrap_or_else(|| self.views.hosts[&self.views.main].focused.0));
@@ -2106,6 +2159,7 @@ mod live {
                         self.home = false;
                     }
                 }
+                ("file.close", _, _) => self.request_close_document(ctx)?,
                 ("file.save", _, _) => {
                     if self.session.project().is_none() {
                         return Err("No project is open.".to_owned());
@@ -2118,11 +2172,20 @@ mod live {
                         return Err(message);
                     }
                 }
-                ("file.save_as", _, _) => {
+                ("file.save_as" | "file.archive_folder", _, _) => {
                     if self.session.project().is_none() {
                         return Err("No project is open.".to_owned());
                     }
-                    let format = if params["format"] == "archive" { crate::SaveFormat::Archive } else { crate::SaveFormat::Folder };
+                    let format = if id == "file.archive_folder" {
+                        if self.files.archive_source(&self.session).is_none() {
+                            return Err("Open a project folder to archive it.".to_owned());
+                        }
+                        crate::SaveFormat::ArchiveFolder { trash_source: params["trash_source"].as_bool().unwrap_or(false) }
+                    } else if params["format"] == "archive" {
+                        crate::SaveFormat::Archive
+                    } else {
+                        crate::SaveFormat::Folder
+                    };
                     let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
                     self.files.save_to(&self.session, format, path, ctx)?;
                     self.message = None;

@@ -140,8 +140,8 @@ Opening a project never searches or refreshes a library to replace its geometry.
 It compares existing part instances with native revisions already loaded in the
 session, without refreshing sources or accessing the network. It works through
 the shared engine command, including live and headless MCP with `inspect: false`.
-In the desktop app, Parts Library's **Review library updates** (also
-**Libraries → Updates** on the ribbon) lists the instances this query reports
+In the desktop app, Parts Library's **Project → Updates** ribbon tool (also
+**Libraries → Updates** in Schematic) lists the instances this query reports
 with a supported update; see
 [adopt non-geometric revisions](#adopt-non-geometric-revisions).
 
@@ -178,8 +178,8 @@ An unresolvable latest part is `Unresolved` even when it equals or is older than
 the project pin, unless an immutable-address conflict takes precedence.
 A valid newer revision means available, **not compatible or adopted**. Geometry,
 pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
-The pad preview below is read-only. Compatibility decisions for geometric
-changes and pad map resolution remain separate work.
+The pad preview below is read-only. It does not resolve the terminal map or
+apply a revision.
 
 ## Preview footprint pad changes
 
@@ -222,10 +222,44 @@ inspect its copper in the board editor; the query cannot split one pad's list.
 The query does not move copper or alter pins, saved bytes, project revision or
 Undo/Redo.
 
+## Apply a reviewed footprint revision
+
+A successful unfiltered `library.preview_footprint_revision` returns `acceptance`,
+`current_mapping`, `current_unconnected_pads`, and the `candidate_package` for an
+owning native part (`null` for a standalone footprint). Filtering by `pad`
+returns `acceptance: null` because the other changes were not reviewed. If the
+unfiltered preview exceeds the loose-end limit, it returns an error with no
+acceptance digest. Separate pad previews cannot authorize Apply.
+
+Use `pcb.apply_footprint_revision` with the preview's `board`, `part_instance`,
+`acceptance`, and `revision` as `expected_revision`. Supply a complete `mapping`
+from every symbol terminal to one pad ID or an array of pad IDs. Every candidate
+pad must appear once, either in that map or in `unconnected_pads`. If a revision
+adds pad `9`, the old map alone no longer works. For example, use
+`{"1":"1","2":["2","9"]}` if pads `2` and `9` belong to terminal `2`, or list
+`9` in `unconnected_pads` if it is intentionally not connected. Removed pad IDs
+cannot stay in the map. For a native part the submitted map must match the
+candidate package declaration. Changes to the symbol, category or fixed values,
+other package variants, and existing manufacturer selections require separate
+review and are refused by this command.
+
+After a project edit or source reload, preview again. A locked footprint or
+one with a different pending package choice cannot be changed here. Apply pins
+the exact new package for this one instance, retains its placement and leaves
+tracks and vias where they are. Clear any pad test-point marks on this footprint
+before applying; the reviewed pad map does not establish probe access on the new
+package. On a board with an accepted baseline, a terminal
+that gains an extra pad still needs those pads connected, even if it is unwired
+in the schematic. Apply updates that connection without accepting pending
+schematic changes. Desktop live Apply checks save limits on a worker and refuses
+an obsolete request before editing. Run the board design checks after applying;
+this command does not repair routing. One Undo restores the prior package and
+mapping. Neither preview nor Apply writes to a library source.
+
 ## Adopt non-geometric revisions
 
-With a project open, choose **Review library updates** in Parts Library, or
-**Updates** on the ribbon's Libraries tab, which opens the same review. Select
+With a project open, choose **Project → Updates** on the Parts Library ribbon, or
+**Libraries → Updates** in Schematic, which opens the same review. Select
 instances, choose **Preview selected updates**, and read the exact before and
 after fields. **Apply reviewed updates** uses the same command and Undo history
 as the schematic editor. **Undo adoption** reverses the change directly from

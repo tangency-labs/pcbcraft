@@ -203,11 +203,12 @@ fn arc_report_superset_retains_header_and_material_validation() {
     let saved = encode_documents(snapshot.clone()).unwrap();
     let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
     assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    let reports_refusal = format!("reports require board format 25, 26, 34, 35, 41, 42, 43 or {}", crate::persistence::CURRENT_BOARD_FORMAT);
     let mut invalid = Vec::new();
     plain_board["format"] = json!("pcbcraft-board/25");
     invalid.push((plain_board, "format 25 requires at least one of them"));
     reported_board["format"] = json!("pcbcraft-board/24");
-    invalid.push((reported_board, "reports require board format 25, 26, 34 or 35"));
+    invalid.push((reported_board, reports_refusal.as_str()));
     let mut candidate = board.clone();
     candidate["format"] = json!("pcbcraft-board/25");
     invalid.push((candidate, "arcs require format 26"));

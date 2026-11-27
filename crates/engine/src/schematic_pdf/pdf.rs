@@ -15,6 +15,12 @@ pub(super) struct Page {
     ink: String,
     codes: BTreeMap<char, usize>,
     glyphs: Vec<Glyph>,
+    links: Vec<Link>,
+}
+
+struct Link {
+    rect: [f64; 4],
+    destination: usize,
 }
 
 struct Glyph {
@@ -27,7 +33,23 @@ struct Glyph {
 impl Page {
     /// Start in PDF points with a paper-sized clip, black ink and round line ends and joins.
     pub(super) fn new([width, height]: [f64; 2]) -> Self {
-        Self { size: [width, height], ink: format!("q\n0 0 {width:.5} {height:.5} re W n\n1 J 1 j\n"), codes: BTreeMap::new(), glyphs: Vec::new() }
+        Self {
+            size: [width, height],
+            ink: format!("q\n0 0 {width:.5} {height:.5} re W n\n1 J 1 j\n"),
+            codes: BTreeMap::new(),
+            glyphs: Vec::new(),
+            links: Vec::new(),
+        }
+    }
+
+    /// Normalize the click region, clip it to the paper and omit empty/off-paper regions.
+    pub(super) fn link(&mut self, a: [f64; 2], b: [f64; 2], destination: usize) {
+        let [width, height] = self.size;
+        let [left, bottom] = [a[0].min(b[0]).max(0.), a[1].min(b[1]).max(0.)];
+        let [right, top] = [a[0].max(b[0]).min(width), a[1].max(b[1]).min(height)];
+        if right - left >= 0.00001 && top - bottom >= 0.00001 {
+            self.links.push(Link { rect: [left, bottom, right, top], destination });
+        }
     }
 
     /// Paint a nonempty polyline with optional closure and a solid ink or paper fill.
@@ -133,12 +155,13 @@ pub(super) struct Bookmark<'a> {
 pub(super) struct Document {
     objects: Objects,
     pages: Vec<usize>,
+    links: Vec<(usize, Vec<Link>)>,
 }
 
 impl Document {
     /// Reserve the catalog and page tree before assigning page and resource references.
     pub(super) fn new() -> Self {
-        Self { objects: Objects(vec![String::new(); 2]), pages: Vec::new() }
+        Self { objects: Objects(vec![String::new(); 2]), pages: Vec::new(), links: Vec::new() }
     }
 
     /// Append a page and its local resources; each page gets a distinct indirect reference.
@@ -152,21 +175,27 @@ impl Document {
             let _ = write!(fonts, "/F{i} {font} 0 R ");
         }
         let [width, height] = page.size;
+        // The dictionary stays open until `finish` has added any link annotations.
         self.objects.fill(
             id,
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents {contents} 0 R >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents {contents} 0 R"
             ),
         );
         self.pages.push(id);
+        if !page.links.is_empty() {
+            self.links.push((id, page.links));
+        }
     }
 
-    /// Close the page tree and optional one-to-one outline, then write the xref table.
+    /// Close the page dictionaries, tree and optional outline, then write the xref table.
     pub(super) fn finish(mut self, bookmarks: &[Bookmark<'_>]) -> Result<Vec<u8>, PdfError> {
+        self.add_annotations();
         let mut kids = String::new();
         for (i, page) in self.pages.iter().enumerate() {
             let sep = if i == 0 { "" } else { " " };
             let _ = write!(kids, "{sep}{page} 0 R");
+            self.objects.append(*page, " >>");
         }
         self.objects.fill(2, format!("<< /Type /Pages /Count {} /Kids [{kids}] >>", self.pages.len()));
         let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
@@ -177,6 +206,26 @@ impl Document {
         catalog.push_str(" >>");
         self.objects.fill(1, catalog);
         self.objects.encode()
+    }
+
+    /// Now that every page has an indirect reference, attach document-internal destinations.
+    fn add_annotations(&mut self) {
+        for (source, links) in std::mem::take(&mut self.links) {
+            let mut annots = String::from(" /Annots [");
+            for link in links {
+                let [l, b, r, t] = link.rect;
+                let Some(dest) = self.pages.get(link.destination) else {
+                    debug_assert!(false, "link to missing page {}", link.destination);
+                    continue;
+                };
+                let id = self
+                    .objects
+                    .push(format!("<< /Type /Annot /Subtype /Link /Rect [{l:.5} {b:.5} {r:.5} {t:.5}] /Border [0 0 0] /Dest [{dest} 0 R /Fit] >>"));
+                let _ = write!(annots, "{id} 0 R ");
+            }
+            annots.push(']');
+            self.objects.append(source, &annots);
+        }
     }
 
     /// Emit an open outline tree, with explicit sibling/parent links and one `/Fit` per page.
@@ -273,6 +322,16 @@ impl Objects {
         debug_assert!(slot.is_some(), "unreserved PDF object {id}");
         if let Some(slot) = slot {
             *slot = object;
+        }
+    }
+
+    /// Extend a reserved object by its one-based reference number, under the same contract as
+    /// [`Objects::fill`].
+    fn append(&mut self, id: usize, text: &str) {
+        let slot = id.checked_sub(1).and_then(|index| self.0.get_mut(index));
+        debug_assert!(slot.is_some(), "unreserved PDF object {id}");
+        if let Some(slot) = slot {
+            slot.push_str(text);
         }
     }
 

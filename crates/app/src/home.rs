@@ -16,6 +16,7 @@ enum Action {
     Open,
     Save,
     SaveAs,
+    CloseProject,
     Preferences,
     About,
     #[cfg(not(target_arch = "wasm32"))]
@@ -68,6 +69,7 @@ impl PcbApp {
             rows.push(("home:save_as", "Save As…", key(&SAVE_AS), can_save, Some(Action::SaveAs)));
         }
         let first_save = 3;
+        rows.push(("home:close_project", "Close Project", String::new(), self.can_close_document(), Some(Action::CloseProject)));
         let first_app = rows.len();
         rows.push(("home:preferences", "Preferences", ui.ctx().format_shortcut(&COMMAND_COMMA), true, Some(Action::Preferences)));
         rows.push(("home:about", "About PCBCraft", String::new(), true, Some(Action::About)));
@@ -174,6 +176,7 @@ impl PcbApp {
                 self.dialog = Dialog::SaveEncoding;
             }
             Action::Preferences => self.open_preferences(),
+            Action::CloseProject => self.message = self.request_close_document(ctx).err(),
             Action::About => self.dialog = Dialog::About,
             #[cfg(not(target_arch = "wasm32"))]
             Action::OpenRecent(index) => {

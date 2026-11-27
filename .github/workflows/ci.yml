@@ -40,6 +40,7 @@ jobs:
       native: ${{ steps.select.outputs.native }}
       windows: ${{ steps.select.outputs.windows }}
       windows_full: ${{ steps.select.outputs.windows_full }}
+      macos: ${{ steps.select.outputs.macos }}
       web: ${{ steps.select.outputs.web }}
       wasi: ${{ steps.select.outputs.wasi }}
       licenses: ${{ steps.select.outputs.licenses }}
@@ -102,18 +103,18 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: ci-profile-v1
+          prefix-key: ci-profile-v2
           shared-key: linux-native
-          cache-workspace-crates: true
+          cache-workspace-crates: false
           save-if: false
       - run: cargo fmt --all --check
       - run: cargo check --locked --profile ci --workspace
 
-  native-tests:
+  linux-tests:
     needs: changes
     if: needs.changes.outputs.native == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS || '4' }}
     steps:
@@ -126,26 +127,31 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: ci-profile-v1
+          prefix-key: ci-profile-v2
           shared-key: linux-native
-          cache-workspace-crates: true
+          cache-workspace-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fmt --all --check
-      - name: Check affected native packages (full workspace outside PRs)
-        run: python -B scripts/ci/native.py
-        env:
-          CI_MODE: ${{ needs.changes.outputs.mode }}
-      - name: Compare command contracts with the base branch
+      - name: Read command contract baseline
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
-            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
-            cargo run --locked --profile ci -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
+          snapshot=docs/schemas/command-contracts.json
+          git cat-file -e "$BASE_SHA^{commit}"
+          if git cat-file -e "$BASE_SHA:$snapshot" 2>/dev/null; then
+            baseline="$RUNNER_TEMP/base-command-contracts.json"
+            git show "$BASE_SHA:$snapshot" > "$baseline"
+            if ! cmp -s "$baseline" "$snapshot"; then
+              printf 'PCBCRAFT_COMMAND_CONTRACT_BASE=%s\n' "$baseline" >> "$GITHUB_ENV"
+            fi
           else
             echo "No command contract snapshot on the base branch; checking the first snapshot against the catalog in workspace tests."
           fi
+      - name: Check affected native packages (full workspace outside PRs)
+        run: python -B scripts/ci/native.py
+        env:
+          CI_MODE: ${{ needs.changes.outputs.mode }}
       - name: Test command-contract workflow baseline
         run: python -B -m unittest discover -s scripts -p 'test_command_contract_workflow.py'
 
@@ -153,7 +159,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.windows == 'true'
     runs-on: ${{ vars.CI_RUNNER_WINDOWS || 'windows-latest' }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS_WINDOWS || '2' }}
     steps:
@@ -170,9 +176,9 @@ jobs:
           python-version: '3.12'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: ci-profile-v1
+          prefix-key: ci-profile-v2
           shared-key: windows-native
-          cache-workspace-crates: true
+          cache-workspace-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: python -m pip install 'jsonschema==4.23.0'
       - name: Windows script regressions
@@ -180,7 +186,7 @@ jobs:
       - name: Windows diagnostic-page regressions
         run: node --no-warnings --experimental-vm-modules --test scripts/test-performance-page.cjs scripts/test-rendered-performance-page.cjs
       - name: Full Windows tests and native-window artifact
-        run: python -B scripts/ci/windows.py --artifacts ci-artifacts
+        run: python -X utf8 -B scripts/ci/windows.py --artifacts ci-artifacts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-lifecycle
@@ -211,6 +217,27 @@ jobs:
           path: ci-artifacts
       - run: python -B scripts/ci/window_smoke.py ci-artifacts/native_window_lifecycle.exe
 
+  macos-tests:
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: ${{ vars.CI_RUNNER_MACOS || 'macos-latest' }}
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CI_BUILD_JOBS_MACOS || '2' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: ci-profile-v2
+          shared-key: macos-native
+          cache-workspace-crates: false
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      - name: Run macOS workspace tests
+        run: cargo test --locked --profile ci --workspace
+
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -221,15 +248,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: ci-profile-v1
+          prefix-key: ci-profile-v2
           shared-key: web
-          cache-workspace-crates: true
+          cache-workspace-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - name: Check browser performance diagnostics
         run: cargo check --locked --profile ci -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
@@ -245,6 +273,13 @@ jobs:
       - name: Build the web app
         working-directory: apps/pcbcraft-web
         run: trunk build --release --locked
+      - name: Stage the tested site for Pages
+        if: ${{ needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.private }}
+        # A Pages upload failure is reported by deployment and does not block desktop nightlies.
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/web
 
   geometry-webassembly:
     needs: changes
@@ -263,9 +298,9 @@ jobs:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: ci-profile-v1
+          prefix-key: ci-profile-v2
           shared-key: wasi
-          cache-workspace-crates: true
+          cache-workspace-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - name: Check WASI runner exit status
         run: node --test scripts/test-wasi-test-runner.cjs
@@ -292,7 +327,7 @@ jobs:
   checks:
     # Report the selected stage honestly: passing quick feedback is green, not full qualification.
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    needs: [changes, documentation-links, library-schemas, quick-compile, native-tests, windows-tests, windows-smoke, web, geometry-webassembly, licenses]
+    needs: [changes, documentation-links, library-schemas, quick-compile, linux-tests, windows-tests, windows-smoke, macos-tests, web, geometry-webassembly, licenses]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 65
     steps:
@@ -309,38 +344,46 @@ jobs:
           CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
 
-  pages-build:
-    # Only a fully qualified main revision may produce a deployment artifact.
-    # Full CI skips quick-compile; do not inherit its implicit ancestor success check.
+  nightly-packages:
+    name: Nightly desktop packages
     needs: [changes, checks]
-    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.private }}
+    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/desktop-preview.yml
+    with:
+      artifact-prefix: pcbcraft-nightly-${{ github.sha }}
+      nightly: true
+
+  nightly-release:
+    name: Publish Nightly prerelease
+    needs: [nightly-packages]
+    if: ${{ !cancelled() && needs.nightly-packages.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Install trunk
-        run: |
-          mkdir -p "$HOME/.local/bin"
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Build the web app
-        working-directory: apps/pcbcraft-web
-        run: trunk build --release --locked
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist/web
+          pattern: pcbcraft-nightly-${{ github.sha }}-*
+          path: packages
+      - name: Update the rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/publish-nightly.sh
 
   pages-deploy:
-    needs: [checks, pages-build]
-    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.pages-build.result == 'success' }}
+    # Full CI skips quick-compile, so check the required results explicitly.
+    needs: [changes, checks, web]
+    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.web.result == 'success' && needs.changes.outputs.mode == 'full' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && !github.event.repository.private }}
     permissions:
       contents: read
       pages: write
@@ -367,6 +410,8 @@ jobs:
             echo "current=false" >> "$GITHUB_OUTPUT"
             echo "Skipping Pages deployment: a newer main revision exists."
           fi
+      - uses: actions/configure-pages@v5
+        if: steps.revision.outputs.current == 'true'
       - id: deployment
         if: steps.revision.outputs.current == 'true'
         uses: actions/deploy-pages@v4

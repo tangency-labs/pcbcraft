@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:pcbcraft:schema:footprint:6",
   "title": "PCBcraft canonical published footprint definition, format 6",
-  "description": "Current footprint format for any supported pad and hole mix. The engine checks electrical identities, pad geometry and copper containment.",
+  "description": "Historical footprint format for any supported pad and hole mix, without an orientation statement; format 7 is written instead. The engine checks electrical identities, pad geometry and copper containment.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics"],

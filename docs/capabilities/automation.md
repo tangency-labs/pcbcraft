@@ -7,7 +7,8 @@
 - [Read-only headless MCP sessions](../mcp.md) and the headless command catalog with a command API
   version and a catalog revision in discovery, and a published error code on failed project commands
   and live requests.
-- The desktop live connection runs every project command with shared undo, plus window commands for
+- The desktop live connection runs every project command except headless-only ones (the KiCad
+  import) with shared undo, plus window commands for
   schematic and PCB views, workspaces, footprint selection, named arrangements under File → Layouts,
   windows, panels, preferences, Home, in-place Save, Save As/Open to an explicit path without the
   picker, and `inspect_editor` with file location and job results.
@@ -40,5 +41,5 @@ window coordinates for a click. `ui.resize` requests a reproducible native windo
 size before a recording, and `ui.window` reports the measured result.
 Pointer, key, text and scroll operations use normal UI handling and report
 completion or cancellation through a bounded ticket. Input supports the original
-native window and its split panes; detached windows currently support lookup
-only. This does not record video.
+native window, its split panes and detached editor windows. This does not record
+video.

@@ -47,6 +47,28 @@ fn board_path(d: &Documents) -> String {
     super::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap()
 }
 
+/// Missing mandatory fields identify the incoming envelope, not its shared layout vocabulary.
+#[test]
+fn missing_numeric_id_high_water_reports_the_incoming_envelope() {
+    for create_board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":create_board})).unwrap();
+        let mut docs = documents(&session);
+        let instance = session.snapshot().unwrap().instances_document_path();
+        for (project_header, instance_header) in [("pcbcraft-project/68", "pcbcraft-instances/12"), ("pcbcraft-project/63", "pcbcraft-instances/10")]
+        {
+            edit(&mut docs, ENTRY_POINT, |entry| entry["format"] = json!(project_header));
+            if let Some(path) = &instance {
+                edit(&mut docs, path, |entry| entry["format"] = json!(instance_header));
+            }
+            decode_documents(&docs).unwrap();
+            let mut missing = docs.clone();
+            edit(&mut missing, ENTRY_POINT, |entry| assert!(entry.as_object_mut().unwrap().remove("numeric_id_high_water").is_some()));
+            assert_eq!(decode_documents(&missing).unwrap_err(), format!("{ENTRY_POINT}: {project_header} requires numeric_id_high_water."));
+        }
+    }
+}
+
 /// A bare legacy board retains its identity and absent setup through the first current save.
 #[test]
 fn bare_board_migrates_to_current_folder_and_archive_bytes() {
@@ -76,6 +98,7 @@ fn bare_board_migrates_to_current_folder_and_archive_bytes() {
 }
 
 /// Split and legacy forms retain identities, pin mappings, wire geometry and sheet names.
+/// The oldest split fixture opens; its entry point with the preceding format is refused.
 #[test]
 fn round_trip_and_legacy_migrations_have_identical_documents() {
     let expected = documents(&session());
@@ -91,8 +114,16 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
             include_bytes!("../../../app/tests/fixtures/split/two-resistors/library/symbols/starter/resistor.r1.json").as_slice(),
         ),
     ];
-    let old_documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
+    let old_documents: Documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
     assert_eq!(expected, encode_documents(decode_documents(&old_documents).unwrap()).unwrap());
+    let mut too_old = old_documents;
+    edit(&mut too_old, ENTRY_POINT, |entry| {
+        assert_eq!(entry["format"], OLDEST_READABLE_PROJECT_FORMAT);
+        entry["format"] = json!("pcbcraft-project/4");
+    });
+    assert!(
+        matches!(decode_documents(&too_old), Err(refusal) if refusal == "project.json: unsupported project format or incompatible board registration for pcbcraft-project/4.")
+    );
     let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc")).unwrap();
     assert_eq!(expected, encode_documents(old_archive.project).unwrap());
     for bytes in [

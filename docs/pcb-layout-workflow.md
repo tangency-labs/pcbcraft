@@ -62,10 +62,48 @@ it. A `pcb.check_design` request can override the fixed defaults for that run. S
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
+## Preview the board in 3D
+
+On desktop, choose **3D render** from the workspace picker. Open it beside
+PCB Layout to watch outline and hole changes as you edit or undo. **Browse…**
+chooses another board in the open project without switching the layout pane.
+
+Drag to orbit, middle-drag to pan, and scroll to zoom. Use the compass to look
+along a board axis or return to the isometric view. **Fit** frames the board in
+the current orientation.
+
+**Ray tracing** toggles live GPU path tracing. Orbit, pan, zoom and Fit work
+in both modes. The raster preview follows the camera during navigation.
+When the camera has been still for 650 ms, the viewer starts a new ray-traced
+frame. The canvas shows progress while the renderer prepares shaders, builds
+the board scene, or traces the frame. Ray tracing needs a compatible hardware
+Vulkan or Metal adapter.
+
+The preview shows the substrate from a closed Board Outline, including cutouts
+and supported round through holes. It uses the declared finished stackup
+thickness or displays a nominal 1.6 mm when no thickness is specified.
+Exterior tracks and through-via rings are visible on the corresponding
+board faces. Pads, silkscreen, component models and STEP export are later parts of
+[#86](https://github.com/tangency-labs/pcbcraft/issues/86).
+
+The preview and STEP substrate use the same board/1 frame, with Z = 0 at
+the finished top surface. The [3D model record and frame contract](design/3d-model-records.md)
+from [PR #504](https://github.com/tangency-labs/pcbcraft/pull/504) defines how future
+STEP model bindings attach to this frame. Package models seat on the board
+surface on their placement side, with a half-turn about Y on the bottom.
+The model record and package-binding codecs are still pending.
+
+To refresh a linked SolidCraft assembly after
+saving an outline edit, see the [parametric outline exchange prototype](RFC/parametric-outline-prototype.md)
+from [PR #594](https://github.com/tangency-labs/pcbcraft/pull/594). The prototype
+publishes the exact substrate from the saved archive. Both viewport modes
+use the open board geometry, including edits before Save.
+
 ## PCB operations
 
 - <a name="unroute-one-connection"></a>[Unroute one connection](pcb/unroute.md)
 - <a name="set-pitch-distribution"></a>[Set-pitch distribution](pcb/set-pitch-distribution.md)
+- <a name="align-to-a-reference-footprint"></a>[Align to a reference footprint](pcb/align-to-reference-footprint.md)
 - <a name="placed-footprint-locks"></a>[Placed-footprint locks](pcb/locks.md#placed-footprint-locks) and
   <a name="fixed-tracks-and-vias"></a>[fixed tracks and vias](pcb/locks.md#fixed-tracks-and-vias)
 - <a name="fabrication-drill-files"></a>[Fabrication drill files](manufacturing/drill-files.md)
@@ -75,17 +113,18 @@ grouped by snapshot-local net index. Those indices must not be used as saved bin
 | Slice | Stored formats | Stored |
 | --- | --- | --- |
 | 1. Footprint moves carry copper | none | — |
-| 2. Board rules (implemented) | board/42 | Board-scoped rule records |
+| 2. Board rules (implemented) | board/59 | Board-scoped rule records |
 | 2. Net classes (implemented) | project/20 for definitions; project/21 with bindings; instances/3 for board-owned bindings | Project class definitions and assignments to persistent net IDs; consumers add no saved vocabulary |
 | 3. Clearance while routing | none | — |
-| 4. Zones | board/42 | Zone outlines; fills are not stored |
+| 4. Zones | board/59 | Zone outlines and connection-removal settings; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/42](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
-| Named layer groups | [board/42](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
+| Placed-footprint lock metadata | [board/59](formats/native-project-storage.md#placed-footprint-lock-metadata) | Optional placement lock flags |
+| Named layer groups | [board/59](formats/native-project-storage.md#named-layer-groups) | Authored named groups |
 
-Current saves use one board header for every supported combination of records.
-Historical boards adopt that header on Save. Subsequent no-op saves preserve
-current bytes. See the [native board format](formats/native-project-storage.md#current-board-records).
+Current saves use board/59 even when no zone uses connection-based island
+removal. Board/43 and earlier supported boards load with the option off and
+adopt board/59 on Save. Subsequent no-op saves preserve current bytes. See the
+[native board format](formats/native-project-storage.md#current-board-records).
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](pcb/via-net-assignments.md) for automatic inheritance, physical

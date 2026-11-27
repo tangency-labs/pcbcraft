@@ -52,7 +52,7 @@ assignment and registry state remain inspectable, but `net` and `connected_to_pa
 are null with a `geometry_error`. Neither a false disconnection nor a partial
 straight-only membership is reported.
 
-Current board files use [format 42](../formats/native-project-storage.md#current-board-records).
+Saves use the [current board format](../formats/native-project-storage.md#current-board-records).
 A via's optional `net_assignment` contains `project`, `scope` and `net`.
 Automatic mode omits the address and keeps the same board header. Explicit
 null and nil identities are rejected. Historical format 24 requires at least

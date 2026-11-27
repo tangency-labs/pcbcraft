@@ -18,6 +18,10 @@
   support a read-only correction preview, digest-checked board adoption, retirement and Undo/Redo.
   Project format 36 supports up to 64 profile identities, 128 retained revisions and 4,096 corrections.
   Adoptions require board format 22 or a later compatible format.
+- Read-only [`pcb.check_assembly`](../automation/board-commands.md#assembly-orientation-check)
+  warns about declared polarized packages with neither an orientation mark nor a stated zero
+  orientation. Footprint editor authoring, placement export and design-check waivers are not part
+  of this check.
 
 ## Remaining scope
 

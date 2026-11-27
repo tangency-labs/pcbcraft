@@ -531,7 +531,7 @@ staging, timeout/result checks and policy regressions are independently authored
 for this repository. The workflow retains existing pinned actions and adds the
 same pinned GitHub artifact upload/download actions used by that reference.
 
-`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so that notices file must include it.
+`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. The desktop preview packager generates `THIRD-PARTY-LICENSES.txt` from the platform-specific Cargo metadata and dependency license files. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so the packager includes its license text when the platform dependency graph contains that crate.
 
 The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspace.rs`,
 `picker` and `workspace_row`) follows SolidCraft's `workspace_menu` in
@@ -1103,7 +1103,7 @@ dependency or native saved-format change was introduced.
 ## Shared Craft UI migration
 
 `solidcraft-ui-kit`, `solidcraft-look` and `solidcraft-theme` are pinned to
-SolidCraft revision `73bdb6cdd39efc3899fb54e7217289a630a89efe`, copyright
+SolidCraft revision `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, copyright
 2026 the SolidCraft maintainers, under the SolidCraft Brand and Interface
 Licence. They retain that licence independently of PCBcraft's MIT OR Apache-2.0
 code. The retained text is
@@ -1378,6 +1378,20 @@ The Brand and Interface licence bytes and retained SHA-256 are unchanged, and
 The existing upstream written-record request remains separate from this local
 official-project authorization; no release or publication is part of this work.
 
+On November 25, 2026, @travle1 explicitly authorized updating to the latest
+shared UI kit. The coupled UI kit, look, theme, registry and text crates, the
+viewport, render, GPU and geometry crates, the solidcore kernel crates and the
+egui-wgpu and winit patches now use SolidCraft 0.50.0 at
+`eeb366c2ff276987a15c043d63b9072b58274703`. SolidCraft vendors egui
+0.37 with its own fixes, and its egui-wgpu and toolkit build against that copy, so
+`ecolor`, `egui`, `emath`, `epaint` and `epaint_default_fonts` come from the same
+revision. The UI kit, look and theme retain the licence text recorded above.
+SolidCraft 0.50.0 extracts the icon parser into `solidcraft-icon-svg` under the
+same Brand and Interface Licence. Its
+[upstream licence text](https://github.com/tangency-labs/solidcraft/blob/eeb366c2ff276987a15c043d63b9072b58274703/crates/icon-svg/LICENSE)
+has SHA-256 `9de75c0d4a1dce95fd221514802f7d83ff9a19714ea0fb3ed732c84fee012298`.
+`deny.toml` records its own file hash and limits the exception to 0.50.0.
+
 `solidcraft-ui-text` and `solidcraft-ui-registry` retain MIT OR Apache-2.0.
 `crates/chrome/assets/shared-ui/en.json` retains the English entries referenced
 as literals by the shared kit/look/theme from that revision's
@@ -1385,6 +1399,10 @@ as literals by the shared kit/look/theme from that revision's
 controls render, including text-edit context menus. Application/electronics copy
 remains host-owned. The extracted shared UI English data follows the same retained
 Brand and Interface notice; no new fonts or unrelated application assets were copied.
+
+The #658 pin moves the shared UI and kernel crates to `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`.
+The retained Brand and Interface Licence and icon parser hashes are unchanged.
+The shared UI kit now also depends on `solidcraft-panel-layout` (MIT OR Apache-2.0).
 
 ## UI automation adapter
 
@@ -1691,7 +1709,7 @@ introduced. Test projects use production commands and native codecs.
 
 `crates/geometry` depends on `solidcore`, `solidcore-ops`, `solidcore-record`
 and `solidcore-step` from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
-`73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision already pinned for the
+`de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, the revision already pinned for the
 Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
 these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
 contributors. `solidcore` is a Rust port of the SMLib and SM_API components of
@@ -1701,12 +1719,10 @@ Apache-2.0). Its `NOTICE` is retained unchanged in
 distributed builds, so the release notices file described under
 [Dependencies](#dependencies) must include it.
 
-The local `vendor/solidcore-ops` package retains that revision's Apache-2.0 ops
-source, LICENSE and NOTICE, with a narrow STEP composition backport from
-[SolidCraft #17776](https://github.com/tangency-labs/solidcraft/pull/17776), commit
-`7dc89ee26e4d5f20c3bb93137fc35fb430e34245`. Its source hashes, exact diff and
-standalone manifest adjustments are recorded in
-[the patch record](vendor/solidcore-ops/PATCH.md). The three new nested/mapped
+The STEP composition fix from
+[SolidCraft #17776](https://github.com/tangency-labs/solidcraft/pull/17776) is part of
+that revision, so the earlier local `vendor/solidcore-ops` backport of it has been
+removed. The three nested/mapped
 STEP fixtures are original PCBcraft test data generated by the existing native
 fixture writer, with analytically authored placements and world bounds. No
 external CAD file, EDA implementation or artwork was incorporated.
@@ -1772,7 +1788,7 @@ continuity. No Sparksmith world model, shove, dependency or file format was impo
 The #232 fill orchestration, source-keyed cache, worker transport, thermal-spoke
 construction, physical connectivity integration, diagnostics and canvas adapter
 are original MIT OR Apache-2.0 PCBcraft work. The geometry wrapper additionally
-uses `solidcore-tess` from the same `73bdb6cdd39efc3899fb54e7217289a630a89efe`
+uses `solidcore-tess` from the same `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`
 SolidCraft pin, Apache-2.0 (solidcore contributors), to triangulate analytic
 material for display only. Its transitive Spade dependency is MIT OR Apache-2.0;
 existing notices and dependency qualification apply. No kernel version, external
@@ -1839,8 +1855,7 @@ are adapted from:
   `codesign` + `notarytool` workflow, and `hdiutil` retry loop.
 - `UCS-Care-Group/mailcraft` at commit
   `b1e2d1ce0aa9b1e780dcec57e658df261b5bc452` (MIT OR Apache-2.0): minimal
-  hardened-runtime `entitlements.plist`, DMG layout hooks, and CLI archive
-  packaging flow.
+  hardened-runtime `entitlements.plist` and DMG layout hooks.
 
 Changes for PCBCraft: set bundle identifier `io.tangencylabs.pcbcraft`,
 adapted desktop/CLI target names (`pcbcraft`, `pcbcraft-cli`) and `.pc`
@@ -1848,6 +1863,13 @@ document association, made `.icns` icon embedding optional until artwork
 is added, added absolute `CARGO_TARGET_DIR` resolution, added per-attempt
 keychain cleanup in `import-cert.sh`, and added input character validation
 for `VERSION` and `PCBCRAFT_BUILD_SHA` before `Info.plist` templating.
+
+## Linux DEB and RPM packaging
+
+The runtime dependency declarations in `packaging/linux/nfpm.yaml` are adapted
+from SolidCraft's `packaging/linux/nfpm.yaml` at revision
+`ec363a78f` (MIT OR Apache-2.0). PCBcraft declares the glibc version required
+by its own binaries and installs its own launcher, binaries, and notices.
 
 ## Directional pane splitting
 
@@ -1910,3 +1932,44 @@ The degree-two trace-chain graph, cooperative per-query topology preparation,
 soft bend hints, source-preserving path partitioning and independent chain/contact
 validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
 implementation, dependency or saved-format change was introduced.
+
+## Board substrate preview
+
+The desktop 3D render workspace uses the SolidCraft camera, shaded GPU
+viewport and egui background painter at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright
+2026 SolidCraft contributors). The view compass and board picker chrome use
+the existing licensed Craft UI toolkit in the same revision. PCBcraft owns
+the board-to-triangle conversion, the pane-local egui callback and board
+addressing. Separate callbacks are required because the shared egui
+callback holds one prepared picture per renderer. No component models or
+other external 3D assets are included.
+
+Spade 2.15.1 (MIT OR Apache-2.0), already used by the pinned SolidCore
+display tessellator, also triangulates the preview's bounded,
+non-intersecting board outlines and drill loops. The board's exact solid
+continues to use SolidCore.
+
+The 3D workspace uses the pinned SolidCraft `solidcraft-gpu` hardware
+path tracer, `solidcraft-render` image host and `solidcraft-geom` scene types
+(MIT OR Apache-2.0). PCBcraft supplies the board geometry, studio lighting,
+material settings and render controls.
+
+## Adapted from CircuitCraft
+
+[CircuitCraft](https://github.com/slafebre/circuitcraft), revision
+`83532ab648d58de49adc0a73714b5c37594ee4d8`. Copyright (c) 2026 The CircuitCraft
+contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE). CircuitCraft's KiCad readers were written from KiCad's
+published file format documentation and from reading schematic and board files of public
+designs saved by KiCad (listed in the pull request); no KiCad or other GPL EDA source was
+consulted, and none of those files is included here.
+
+| PCBCraft file | CircuitCraft source | What changed |
+|---|---|---|
+| `crates/kicad/src/sexp.rs` | `crates/import/src/sexp.rs` | Kept the bounded one-item-at-a-time reader and node accessors. Uses this crate's error type. Tests rewritten. |
+| `crates/kicad/src/schematic.rs` | `crates/import/src/kicad_sch.rs` | Kept the item dispatch, paper sizes, unit/style naming, pin, label, drawing and text reading, the `extends` resolution and the reference lookup order. Reads one file into a KiCad-shaped model instead of CircuitCraft's schematic model; sheet files are not followed. Tests and fixtures are new. |
+
+The divider fixture in `crates/kicad/tests/fixtures/` is original, written by hand for
+PCBCraft. Its KiCad 10 variants were saved and exported by KiCad 10.0.8, run as a black box,
+and contributed in the review of #503; the README there gives their provenance.
