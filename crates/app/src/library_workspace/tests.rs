@@ -918,3 +918,30 @@ fn compact_panel_style_joins_library_columns() {
     assert_eq!(rects(&h), [row, browser, preview]);
     assert_eq!(h.state().session.inspect(), before);
 }
+
+/// Parts Library uses the shared project file lifecycle, including when no project is open.
+#[test]
+fn parts_library_file_menu_matches_the_project_state() {
+    for project_open in [false, true] {
+        let mut app = PcbApp::default();
+        app.preferences.theme = if project_open { crate::ThemeChoice::Dark } else { crate::ThemeChoice::Light };
+        if project_open {
+            app.run("project.new", &json!({"name":"Catalog project"}));
+        }
+        app.place_library_workspace(&egui::Context::default(), Placement::Here).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        h.run();
+        h.get_by_label(if project_open { "Catalog project" } else { "Parts Library" });
+        click(&mut h, "File");
+        h.get_by_label("Open…");
+        h.get_by_label("Preferences…");
+        for label in ["Save As…", "Close Project"] {
+            assert_eq!(h.get_by_label(label).accesskit_node().is_disabled(), !project_open, "{label}");
+        }
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::S);
+        h.run();
+        assert_eq!(matches!(h.state().dialog, Dialog::SaveEncoding), project_open);
+    }
+}

@@ -793,31 +793,19 @@ impl PcbApp {
                     }
                 });
                 menu::library(ui, |ui| {
-                    if pcbcraft_chrome::MenuItem::new("Preview pin table…")
-                        .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
-                        .show(ui)
-                    {
-                        intents.borrow_mut().push(Intent::PinTable);
-                    }
-                    if pcbcraft_chrome::MenuItem::new("Remap pins…")
-                        .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
-                        .show(ui)
-                    {
-                        intents.borrow_mut().push(Intent::Remap);
+                    if self.library_editors.active_kind() == Some(Kind::Symbol) {
+                        if pcbcraft_chrome::MenuItem::new("Preview pin table…").enabled(can_save).show(ui) {
+                            intents.borrow_mut().push(Intent::PinTable);
+                        }
+                        if pcbcraft_chrome::MenuItem::new("Remap pins…").enabled(can_save).show(ui) {
+                            intents.borrow_mut().push(Intent::Remap);
+                        }
                     }
                     if pcbcraft_chrome::MenuItem::new("Publish…").enabled(can_save && !IN_BROWSER).show(ui) {
                         intents.borrow_mut().push(Intent::Publish);
                     }
                     if pcbcraft_chrome::MenuItem::new("Edit copy").enabled(can_save).show(ui) {
                         intents.borrow_mut().push(Intent::Copy);
-                    }
-                    if pcbcraft_chrome::MenuItem::new("Save Library Copy…")
-                        .enabled(can_save)
-                        .show_response(ui)
-                        .on_hover_text("Save an unfinished draft file; this does not publish it to the catalog.")
-                        .clicked()
-                    {
-                        intents.borrow_mut().push(Intent::Save(false));
                     }
                 });
                 if menu::quick_action(ui, MenuIcon::Save, if IN_BROWSER { "Download Library Item" } else { "Publish Library Item" }, "", can_save)

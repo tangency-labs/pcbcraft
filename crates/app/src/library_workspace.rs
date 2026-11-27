@@ -139,7 +139,7 @@ impl PcbApp {
         self.repaint_editors(ctx);
         Ok(())
     }
-    /// A service workspace shares the application shell but does not consume project edit keys.
+    /// Share the project File menu and title while the catalog retains its own canvas input.
     pub(super) fn library_workspace_frame(&mut self, ui: &mut egui::Ui, integrated: bool) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let ctx = ui.ctx().clone();
@@ -152,33 +152,33 @@ impl PcbApp {
         #[cfg(target_arch = "wasm32")]
         let _ = main;
         let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-        let home = std::cell::Cell::new(false);
+        let project = self.project_title();
+        let title = project.as_ref().map_or(("Parts Library", false), |(name, dirty)| (name.as_str(), *dirty));
+        let mut home = false;
         let mut picked = crate::Utilities::default();
         let assistant = self.assistant_toolbar();
         shell::app_bar(
             ui,
-            Some(("Parts Library", false)),
+            Some(title),
             integrated,
             enabled,
+            |ui| home = menu::quick_action(ui, menu::MenuIcon::Home, "Home", "", true).clicked(),
             |ui| {
-                home.set(menu::quick_action(ui, menu::MenuIcon::Home, "Home", "", true).clicked());
-            },
-            |ui| {
-                menu::file(ui, |ui| {
-                    if pcbcraft_chrome::MenuItem::new("Home").show(ui) {
-                        home.set(true);
-                    }
-                });
+                menu::file(ui, |ui| self.file_menu(ui));
             },
             |_| {},
             |ui, width| picked = crate::utilities(ui, width, assistant),
         );
-        if home.get() {
+        if home {
             self.show_home();
         }
         self.apply_utilities(&ctx, picked);
-        if enabled && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
-            self.open_preferences();
+        if enabled && matches!(self.dialog, Dialog::None) && ctx.input(|input| input.focused) && !ctx.egui_wants_keyboard_input() {
+            if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_COMMA)) {
+                self.open_preferences();
+            } else {
+                self.project_file_shortcuts(&ctx);
+            }
         }
         ui.add_enabled_ui(enabled, |ui| {
             self.library_workspace_ribbon(ui);
