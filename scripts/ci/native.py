@@ -70,6 +70,8 @@ def main() -> None:
     if mode == "approved":
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
         packages = affected(metadata, changed_paths("pull_request", payload))
+        if packages is not None and os.environ.get("PCBCRAFT_COMMAND_CONTRACT_BASE"):
+            packages = sorted(set(packages) | {"pcbcraft-engine"})
     print("Native packages: " + ("whole workspace" if packages is None else ", ".join(packages)), flush=True)
     for command in commands(packages, mode == "full"):
         print("Running: " + " ".join(command), flush=True)

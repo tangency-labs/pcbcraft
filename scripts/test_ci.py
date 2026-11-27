@@ -288,6 +288,10 @@ class NativeSelectionTests(unittest.TestCase):
             with patch.dict(os.environ, env), patch("ci.native.subprocess.check_output", return_value=json.dumps(self.metadata())), patch("ci.native.changed_paths", return_value=["crates/app/src/lib.rs"]), patch("ci.native.subprocess.run") as run, patch("builtins.print"):
                 native.main()
             self.assertEqual([call.args[0] for call in run.call_args_list], native.commands(["app", "web"], False))
+            env["PCBCRAFT_COMMAND_CONTRACT_BASE"] = str(Path(temp) / "base.json")
+            with patch.dict(os.environ, env), patch("ci.native.subprocess.check_output", return_value=json.dumps(self.metadata())), patch("ci.native.changed_paths", return_value=["crates/app/src/lib.rs"]), patch("ci.native.subprocess.run") as run, patch("builtins.print"):
+                native.main()
+            self.assertEqual([call.args[0] for call in run.call_args_list], native.commands(["app", "pcbcraft-engine", "web"], False))
             with patch.dict(os.environ, {"CI_MODE": "full"}), patch("ci.native.subprocess.check_output", return_value=json.dumps(self.metadata())), patch("ci.native.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["cargo"])) as run, patch("builtins.print"), self.assertRaises(subprocess.CalledProcessError):
                 native.main()
             self.assertEqual(run.call_count, 1)
