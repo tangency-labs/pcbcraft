@@ -110,10 +110,15 @@ fn chooses_typed_function_without_changing_connectivity() {
 }
 
 /// Extend the fixture with independent, uniquely placed parts without replaying thousands of edits.
+/// Rows from the 65th on continue at negative y, so the symbol limit fits within the sheet bounds,
+/// smaller fixtures keep their positions and the first part stays alone at the origin.
 fn extend_fixture(project: &mut Project, count: usize) {
     let part = project.components().next().unwrap().clone();
     let symbol = project.symbols()[0].clone();
+    let rows = count.div_ceil(64) as i64;
     for i in 1..count {
+        let row = (i / 64) as i64;
+        let row = if row < 64 { row } else { row - rows };
         let mut extra = part.clone();
         extra.ordinal = 2 * i as u64 + 1;
         extra.reference_number = i + 1;
@@ -122,7 +127,7 @@ fn extend_fixture(project: &mut Project, count: usize) {
         placed.ordinal = extra.ordinal + 1;
         placed.component = extra.ordinal;
         placed.position.x_nm = (i % 64) as i64 * 10 * crate::schematic::GRID_NM;
-        placed.position.y_nm = (i / 64) as i64 * 10 * crate::schematic::GRID_NM;
+        placed.position.y_nm = row * 10 * crate::schematic::GRID_NM;
         assert!(placed.position.x_nm.abs().max(placed.position.y_nm.abs()) <= crate::schematic::MAX_CENTER_NM);
         Arc::make_mut(&mut project.units).insert((extra.ordinal, placed.unit_id().to_owned()), placed.ordinal);
         Arc::make_mut(&mut project.components).insert(extra.ordinal, extra);

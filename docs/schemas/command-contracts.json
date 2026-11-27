@@ -374,7 +374,7 @@
               "pattern": "^component-[1-9][0-9]*$",
               "type": "string"
             },
-            "maxItems": 4096,
+            "maxItems": 8192,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -546,7 +546,7 @@
               "pattern": "^component-[1-9][0-9]*$",
               "type": "string"
             },
-            "maxItems": 4096,
+            "maxItems": 8192,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -3299,7 +3299,7 @@
               "pattern": "^footprint-[1-9][0-9]*$",
               "type": "string"
             },
-            "maxItems": 4096,
+            "maxItems": 8192,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -3603,7 +3603,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -4591,7 +4591,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -4674,7 +4674,7 @@
               "pattern": "^footprint-[1-9][0-9]*$",
               "type": "string"
             },
-            "maxItems": 4096,
+            "maxItems": 8192,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -4716,7 +4716,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -6043,7 +6043,7 @@
                   "pattern": "^footprint-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -6290,7 +6290,7 @@
               "pattern": "^component-[1-9][0-9]*$",
               "type": "string"
             },
-            "maxItems": 4096,
+            "maxItems": 8192,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -10794,7 +10794,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -10843,7 +10843,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -10852,7 +10852,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -10935,7 +10935,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -10984,7 +10984,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -10993,7 +10993,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -11065,7 +11065,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11114,7 +11114,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11123,7 +11123,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -11636,7 +11636,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11685,7 +11685,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11694,7 +11694,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -11740,7 +11740,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11789,7 +11789,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11798,7 +11798,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -11888,7 +11888,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11937,7 +11937,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -11946,7 +11946,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -12957,7 +12957,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -13006,7 +13006,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -13015,7 +13015,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -13590,7 +13590,7 @@
                   "pattern": "^net-label-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -13639,7 +13639,7 @@
                   "pattern": "^symbol-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 8192,
                 "type": "array",
                 "uniqueItems": true
               },
@@ -13648,7 +13648,7 @@
                   "pattern": "^wire-[1-9][0-9]*$",
                   "type": "string"
                 },
-                "maxItems": 4096,
+                "maxItems": 16384,
                 "type": "array",
                 "uniqueItems": true
               }
@@ -16022,7 +16022,7 @@
                 "items": {
                   "type": "string"
                 },
-                "maxItems": 256,
+                "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": true
               },

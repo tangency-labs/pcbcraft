@@ -29,6 +29,8 @@ pub enum CoordinateUnits {
 
 /// Limit ordinary text before splitting or numeric parsing.
 pub const MAX_TEXT_BYTES: usize = 65_536;
+/// Net-name lines in one text paste, well inside a sheet's label limit.
+const MAX_LABEL_LINES: usize = 256;
 
 /// Keep preparation failures in the normal command error channel.
 fn invalid(text: impl ToString) -> CommandError {
@@ -49,7 +51,7 @@ fn plain(text: &str) -> Result<&str, CommandError> {
 fn labels(params: &Value) -> Result<String, CommandError> {
     let text = plain(params["text"].as_str().unwrap_or_default())?;
     let names: Vec<_> = text.lines().map(str::trim).collect();
-    if names.is_empty() || names.len() > crate::net_labels::MAX_LABELS || names.iter().any(|s| s.is_empty() || s.contains('\t')) {
+    if names.is_empty() || names.len() > MAX_LABEL_LINES || names.iter().any(|s| s.is_empty() || s.contains('\t')) {
         return Err(invalid("Use 1–256 nonempty net-name lines in one column."));
     }
     let spacing = params["spacing_nm"].as_i64().unwrap_or_default();

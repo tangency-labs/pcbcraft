@@ -22,8 +22,9 @@ rejected. The registry stores
 UUID-sorted records, each with one primary anchor, up to three ordered fallbacks,
 snapshot-qualified lineage and an active, ambiguous or retired state. It never
 stores a complete endpoint membership list. Retired records reserve their UUIDs.
-The registry is limited to 4,096 records, including ambiguous and retired IDs,
-and 8 MiB of serialized data. Exceeding either limit refuses the transaction.
+The registry is limited to 8,192 records (4,096 in earlier releases), including
+ambiguous and retired IDs, and 8 MiB of serialized data. Exceeding either limit
+refuses the transaction.
 
 Live anchors use the current project and schematic/board scope. Named labels and
 hierarchical ports use their sheet occurrence and numeric object ID; component
@@ -74,8 +75,9 @@ current headers.
 is an optional field on a net registry record in the current project format;
 it does not select a different instance header or affect wire appearance.
 
-At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
-the registry's existing 8 MiB serialized limit. Incremental writing charges one
+At most 4,096 pairs fit alongside 8,192 net records. Pair content counts toward
+the registry's existing 8 MiB serialized limit, which is unchanged and can bind
+first when pair names and reasons are long. Incremental writing charges one
 record per pair, and history snapshots share the pair list and individual values.
 Read-only registry inspection includes `pairs` only when present. There is no
 pair authoring command, editor, class, inference, reconciliation or router in

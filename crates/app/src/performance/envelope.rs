@@ -9,7 +9,7 @@
 //! - `MAX_PADS = 1,024`, `MAX_ARTWORK = 256` (`crates/engine/src/board/definition.rs:10,12`, `docs/formats/native-project-storage.md`)
 //! - `MAX_TERMINALS = 1,024` (`crates/engine/src/library.rs:92`, `docs/formats/native-project-storage.md`)
 //! - 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus
-//!   one 32 x 32 BGA, within `MAX_SYMBOLS = 4,096` at `crates/engine/src/schematic.rs:24`)
+//!   one 32 x 32 BGA, within `MAX_SYMBOLS = 8,192` at `crates/engine/src/schematic.rs:27`)
 //! - Storage bounds: `MAX_DOCUMENT_BYTES = 16 MiB` (`crates/engine/src/persistence/documents.rs:41`),
 //!   `MAX_DOCUMENTS_BYTES = 48 MiB` (`crates/engine/src/persistence/documents.rs:43`),
 //!   `MAX_ARCHIVE_BYTES = 64 MiB` (`crates/engine/src/persistence.rs:63`).

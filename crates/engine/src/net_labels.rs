@@ -10,7 +10,7 @@ pub const SET: &str = "schematic.set_net_label";
 /// Remove a named anchor and wires directly attached to its identity.
 pub const DELETE: &str = "schematic.delete_net_label";
 /// Per-sheet limit independent of component and wire counts.
-pub const MAX_LABELS: usize = 256;
+pub const MAX_LABELS: usize = 4096;
 
 /// Text labels are either sheet-scoped or global; power symbols use native definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,7 +246,7 @@ impl Session {
             }
         } else {
             if index.is_none() && project.net_labels.len() >= MAX_LABELS {
-                return Err(CommandError::CapExceeded("sheet already has 256 named labels".into()));
+                return Err(CommandError::CapExceeded(format!("sheet already has {MAX_LABELS} named labels")));
             }
             let id = match index {
                 Some(index) => project.net_labels[index].id,

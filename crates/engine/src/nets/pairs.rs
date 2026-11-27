@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize, de};
 use std::{collections::BTreeSet, fmt, sync::Arc};
 use uuid::Uuid;
 
-/// Each member belongs to at most one pair within the registry's 4,096 net identities.
+/// Each member belongs to at most one pair, so the registry's `MAX_RECORDS` (8,192) net
+/// identities hold at most half as many pairs.
 pub const MAX_PAIRS: usize = super::MAX_RECORDS / 2;
 /// Pair display names use the same character bound as authored net names.
 pub const MAX_PAIR_NAME_CHARS: usize = 200;

@@ -97,7 +97,7 @@ impl BoardSelection {
     pub fn parse(value: &Value) -> Option<Self> {
         let selection: Self = serde_json::from_value(value.clone()).ok()?;
         for (key, count, limit) in [
-            ("footprints", selection.footprints.len(), 4096),
+            ("footprints", selection.footprints.len(), crate::schematic::MAX_SYMBOLS),
             ("drawings", selection.drawings.len(), 512),
             ("zones", selection.zones.len(), super::zones::MAX_ZONES),
             ("tracks", selection.tracks.len(), super::track::MAX_TRACKS),
@@ -471,7 +471,7 @@ impl BoardFragment {
             return Err(invalid("unsupported board clipboard format or source address"));
         }
         if envelope.circuits.len() > crate::sheets::MAX_SHEETS
-            || envelope.footprints.len() > 4096
+            || envelope.footprints.len() > crate::schematic::MAX_SYMBOLS
             || envelope.layers.len() > 128
             || envelope.drawings.len() > 512
             || envelope.tracks.len() > super::track::MAX_TRACKS

@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Maximum retained live, ambiguous and retired identities in one registry.
-pub const MAX_RECORDS: usize = 4096;
+pub const MAX_RECORDS: usize = 8192;
 /// Bound registry payloads independently from sheets and pinned assets.
 pub const MAX_REGISTRY_BYTES: usize = 8 * 1024 * 1024;
 

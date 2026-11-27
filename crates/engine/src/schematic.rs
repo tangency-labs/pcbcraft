@@ -1,6 +1,8 @@
 //! In-memory schematic placement. Positions are nanometers in schematic space.
 
 #[cfg(test)]
+mod capacity_tests;
+#[cfg(test)]
 mod designator_tests;
 pub(crate) mod wiring;
 
@@ -21,7 +23,8 @@ pub const PIN_OFFSET_NM: i64 = 5 * GRID_NM;
 pub const MAX_PIN_OFFSET_NM: i64 = 2 * PIN_OFFSET_NM;
 /// Symbol centers stay this far inside the sheet edge, so every library pin stays on the sheet.
 pub const MAX_CENTER_NM: i64 = 1_000_000_000 - MAX_PIN_OFFSET_NM;
-pub(crate) const MAX_SYMBOLS: usize = 4096;
+/// Placed symbol units across all sheets of a project; it also bounds the components they draw.
+pub(crate) const MAX_SYMBOLS: usize = 8192;
 
 /// Format the symbol ID used by inspection and command endpoints.
 pub(crate) fn symbol_id(ordinal: u64) -> String {

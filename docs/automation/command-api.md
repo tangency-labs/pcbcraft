@@ -181,7 +181,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar; also a headless-only command sent to an open editor. |
 | `stale_revision` | The request was prepared against an earlier revision. `details.current_revision` gives the current one. For annotation, `details.part_instances` names affected parts; preview again instead of retrying a stale token. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
-| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 4,096 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
 | `denied` | The person declined the request in the editor's assistant. |
 | `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |

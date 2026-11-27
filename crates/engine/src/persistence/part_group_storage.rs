@@ -15,7 +15,8 @@ pub(super) struct CompactPartInstance {
     groups: Vec<u8>,
 }
 
-/// At most 256 UUIDs and 4096 rows, expanding to at most the supported membership count.
+/// At most 256 UUIDs and one row per part instance within the project symbol limit,
+/// expanding to at most the supported membership count.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct CompactMemberships {
     groups: Vec<Uuid>,
@@ -97,7 +98,8 @@ impl CompactMemberships {
     }
 
     /// Refuse malformed dictionaries, repeated or unordered rows/references, unused dictionary
-    /// entries and excess expansion before installing any decoded memberships.
+    /// entries and excess expansion before installing any decoded memberships. The expanded list
+    /// is transient and holds at most `MAX_MEMBERSHIPS` (2,097,152) 24-byte entries, about 48 MiB.
     pub(super) fn expand(self) -> Result<Vec<Membership>, String> {
         if self.groups.is_empty()
             || self.groups.len() > MAX_GROUPS
@@ -228,7 +230,7 @@ mod tests {
             json!([]),
             json!([{"part_instance":1,"groups":[0]},{"part_instance":1,"groups":[1]}]),
             json!([{"part_instance":9,"groups":[0]},{"part_instance":1,"groups":[1]}]),
-            json!((1..=4097).map(|key| json!({"part_instance":key,"groups":[0]})).collect::<Vec<_>>()),
+            json!((1..=crate::schematic::MAX_SYMBOLS + 1).map(|key| json!({"part_instance":key,"groups":[0]})).collect::<Vec<_>>()),
         ] {
             let mut value = baseline.clone();
             value["part_instances"] = rows;
@@ -245,6 +247,9 @@ mod tests {
         let mut unused = baseline.clone();
         unused["part_instances"].as_array_mut().unwrap().pop();
         cases.push((unused, "unused UUIDs"));
+        let mut unused_rows = baseline.clone();
+        unused_rows["part_instances"] = json!((1..=4097).map(|key| json!({"part_instance":key,"groups":[0]})).collect::<Vec<_>>());
+        cases.push((unused_rows, "unused UUIDs"));
         for (value, reason) in cases {
             let refusal = serde_json::from_value::<CompactMemberships>(value).unwrap().expand().unwrap_err();
             assert!(refusal.contains(reason), "expected {reason:?}, got {refusal:?}");

@@ -84,7 +84,7 @@ the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and
 pending board updates remain independent of classification edits.
 
-Each record permits at most 4,096 binding pairs, with the existing 4,096-record
+Each record permits at most 8,192 binding pairs, with the existing 8,192-record
 and 8 MiB registry limits still enforced. Missing classes/origins, duplicate or
 unsorted bindings, empty/null stored arrays, old headers carrying bindings and
 assignment-only headers without bindings are refused. Projects without bindings retain their

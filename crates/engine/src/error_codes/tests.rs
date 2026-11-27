@@ -128,7 +128,8 @@ fn every_command_reports_its_documented_failures_with_published_codes() {
     assert_eq!(session.inspect(), before);
 }
 
-/// State, lookup and limit failures carry their own codes.
+/// State, lookup and limit failures carry their own codes. Fill the sheet on a grid
+/// so the next label fails the count limit, not the coordinate bounds.
 #[test]
 fn state_lookup_and_limit_failures_have_their_codes() {
     let mut empty = Session::default();
@@ -153,16 +154,17 @@ fn state_lookup_and_limit_failures_have_their_codes() {
 
     let grid = crate::schematic::GRID_NM;
     for k in 0..net_labels::MAX_LABELS as i64 {
-        let params = json!({"name": format!("N{k}"), "style": "local", "x_nm": k * grid, "y_nm": 0, "expected_revision": session.revision()});
+        let params = json!({"name": format!("N{k}"), "style": "local", "x_nm": (k % 64) * grid, "y_nm": (k / 64) * grid,
+            "expected_revision": session.revision()});
         session.execute(net_labels::ADD, &params).unwrap();
     }
     let revision = session.revision();
     let full = session
-        .execute(net_labels::ADD, &json!({"name": "MORE", "style": "local", "x_nm": 0, "y_nm": grid, "expected_revision": revision}))
+        .execute(net_labels::ADD, &json!({"name": "MORE", "style": "local", "x_nm": -grid, "y_nm": 0, "expected_revision": revision}))
         .unwrap_err();
     assert_eq!(session.project().unwrap().net_labels.len(), net_labels::MAX_LABELS);
     assert_eq!(full.code(), ErrorCode::CapExceeded, "{full}");
-    assert_eq!(full.to_string(), "sheet already has 256 named labels");
+    assert_eq!(full.to_string(), format!("sheet already has {} named labels", net_labels::MAX_LABELS));
     assert_eq!(full.details(), json!({}));
     assert_eq!(session.revision(), revision);
 }

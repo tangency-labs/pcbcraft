@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 
 use super::{SymbolPlacement, SymbolUnit, parse_symbol_id, symbol_id};
 
-pub(crate) const MAX_WIRES: usize = 4096;
+/// Wires across all sheets of a project.
+pub(crate) const MAX_WIRES: usize = 16_384;
 
 /// A pin number as libraries spell it: 1 to 8 ASCII letters, digits, `+`, `-` or `_`, such as
 /// `1`, `A3` or `VCC`. It is stored inline, so terminals are small, copyable and own their

@@ -261,7 +261,8 @@ fn ambiguous_split_has_explicit_persisted_revision_checked_resolution() {
     round_trip(&session);
 }
 
-/// Allocation refusal at the canonical transaction boundary cannot publish a partial named edit.
+/// A full registry survives folder/archive round trips; one extra record or a named edit
+/// requiring a new identity is refused without publishing a partial project transaction.
 #[test]
 fn exhausted_registry_preserves_the_project_revision_history_and_update_preview() {
     let (mut session, pins) = circuit(2, true);
@@ -279,6 +280,14 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
     });
     project.net_registry.validate(&project).unwrap();
     session.open_snapshot(Arc::new(project));
+    round_trip(&session);
+    let mut excessive = session.project().unwrap().clone();
+    Arc::make_mut(&mut excessive.net_registry).records.push(Record {
+        id: Uuid::from_u128(MAX_RECORDS as u128 + 1),
+        generated_number: Some(MAX_RECORDS as u32 + 1),
+        ..template
+    });
+    assert_eq!(excessive.net_registry.validate(&excessive).unwrap_err(), "Net registry requires adopted occurrences and a bounded record count.");
     apply(&mut session, crate::board::update::PREVIEW_UPDATE, json!({}));
     let before = session.snapshot().unwrap();
     let revision = session.revision();
@@ -287,7 +296,7 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
     let redo = session.redo.len();
     let result =
         session.apply(crate::net_labels::ADD, &json!({"name":"REFUSED","style":"local","x_nm":0,"y_nm":25_400_000,"expected_revision":revision}));
-    assert!(result.is_err());
+    assert!(matches!(result, Err(crate::CommandError::Unavailable(ref reason)) if reason == "Net identity registry is full."));
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
     assert_eq!((session.undo.len(), session.redo.len()), (undo, redo));
