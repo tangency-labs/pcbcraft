@@ -51,6 +51,7 @@ mod optional_board;
 mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod redo_shortcut;
 mod ribbon;
 mod save_changes;
 mod selection_filters;
