@@ -1,5 +1,52 @@
 use super::{BTreeMap, BTreeSet, CommandError, MovePlan, Point, Project, Uuid, dragged_ends, invalid};
+use crate::board::track::Track;
+use geo_index::rtree::{RTree, RTreeBuilder, RTreeIndex, sort::HilbertSort};
 use std::sync::Arc;
+
+/// A copper capsule fits in its centerline envelope expanded by its own radius. Including both
+/// radii admits every pair that can touch, including exact tangencies and odd-nanometre widths.
+fn copper_bounds(track: &Track) -> [f64; 4] {
+    let (a, b) = (track.start, track.end);
+    let radius = track.width_nm as f64 / 2.;
+    [a.x_nm.min(b.x_nm) as f64 - radius, a.y_nm.min(b.y_nm) as f64 - radius, a.x_nm.max(b.x_nm) as f64 + radius, a.y_nm.max(b.y_nm) as f64 + radius]
+}
+
+/// Immutable source geometry: one packed index per step, never rebuilt as the candidate moves.
+struct StationaryTracks<'a> {
+    tracks: Vec<&'a Track>,
+    tree: Option<RTree<f64>>,
+}
+
+impl<'a> StationaryTracks<'a> {
+    fn new(tracks: &'a [Track], selected: &BTreeSet<Uuid>) -> Result<Self, CommandError> {
+        if selected.is_empty() {
+            return Ok(Self { tracks: Vec::new(), tree: None });
+        }
+        let tracks: Vec<_> = tracks.iter().filter(|t| !selected.contains(&t.id)).collect();
+        let count = u32::try_from(tracks.len()).map_err(|_| invalid("Too many stationary tracks to nudge this selection."))?;
+        let tree = (count != 0).then(|| {
+            let mut builder = RTreeBuilder::<f64>::new(count);
+            for track in &tracks {
+                let [x_min, y_min, x_max, y_max] = copper_bounds(track);
+                builder.add(x_min, y_min, x_max, y_max);
+            }
+            #[cfg(test)]
+            tests::record_index_build(tracks.len());
+            builder.finish::<HilbertSort>()
+        });
+        Ok(Self { tracks, tree })
+    }
+
+    fn candidates(&self, dragged: &Track) -> impl Iterator<Item = &'a Track> + '_ {
+        let [x_min, y_min, x_max, y_max] = copper_bounds(dragged);
+        let mut hits = self.tree.as_ref().map_or_else(Vec::new, |tree| tree.search(x_min, y_min, x_max, y_max));
+        // Keep source order; dragged_ends still makes the exact layer and geometry decisions.
+        hits.sort_unstable();
+        #[cfg(test)]
+        tests::record_query(hits.len());
+        hits.into_iter().map(|i| self.tracks[i as usize])
+    }
+}
 
 /// Merge constraints from different moving objects without choosing an arbitrary winner at a junction.
 fn merge(merged: &mut Point, original: Point, proposal: Point) -> Result<(), CommandError> {
@@ -25,10 +72,10 @@ impl MovePlan {
         let view = self.source.board_view(self.target).ok_or_else(|| invalid("Board is unavailable."))?;
         let tracks = view.tracks();
         let ends: BTreeMap<_, _> = tracks.iter().enumerate().map(|(i, track)| (track.id, i)).collect();
-        let stationary: Vec<_> = tracks.iter().filter(|t| !self.items.tracks.contains(&t.id)).collect();
+        let stationary = StationaryTracks::new(tracks, &self.items.tracks)?;
         let board = Arc::make_mut(&mut next.board);
         for dragged in tracks.iter().filter(|t| self.items.tracks.contains(&t.id)) {
-            let edits = dragged_ends(dragged, stationary.iter().copied(), (delta.x_nm, delta.y_nm));
+            let edits = dragged_ends(dragged, stationary.candidates(dragged), (delta.x_nm, delta.y_nm));
             if edits.is_empty() {
                 // Both ends meet the middle of unselected copper. Refuse the whole step rather than
                 // leave this leg behind while the rest of the selection moves.

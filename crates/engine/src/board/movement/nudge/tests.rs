@@ -7,6 +7,28 @@ use crate::{
     },
 };
 use serde_json::{Value, json};
+use std::cell::Cell;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct IndexWork {
+    builds: usize,
+    indexed: usize,
+    queries: usize,
+    candidates: usize,
+}
+
+thread_local! {
+    static INDEX_WORK: Cell<Option<IndexWork>> = const { Cell::new(None) };
+}
+
+pub(super) fn record_index_build(indexed: usize) {
+    INDEX_WORK.with(|cell| cell.set(cell.get().map(|work| IndexWork { builds: work.builds + 1, indexed: work.indexed + indexed, ..work })));
+}
+
+pub(super) fn record_query(candidates: usize) {
+    INDEX_WORK
+        .with(|cell| cell.set(cell.get().map(|work| IndexWork { queries: work.queries + 1, candidates: work.candidates + candidates, ..work })));
+}
 
 fn p(x_nm: i64, y_nm: i64) -> Point {
     Point { x_nm, y_nm }
@@ -41,6 +63,48 @@ fn refused(s: &mut Session, params: &Value) -> String {
     assert_eq!(s.revision(), revision);
     assert!(s.snapshot().is_some_and(|live| Arc::ptr_eq(&snapshot, &live)), "a refused move leaves the project untouched");
     error.to_string()
+}
+
+/// Exercise the real nudge reshape on 1,000 selected and 9,000 stationary tracks. Each selected
+/// track has one local follower; the shared packed lookup passes 1,000 candidates (not 9 million)
+/// to the unchanged D geometry. This measures work, not elapsed time or contact validation.
+#[test]
+fn large_nudge_reuses_one_stationary_track_index() {
+    const SELECTED: usize = 1_000;
+    const STATIONARY: usize = 9_000;
+    let (s, layer) = fixture();
+    let target = view(&s).target;
+    let mut project = s.snapshot().unwrap_or_else(|| panic!("missing fixture project"));
+    let board = Arc::make_mut(&mut Arc::make_mut(&mut project).board);
+    let origin = |i: usize| p(30_000_000 + (i % 100) as i64 * 2_000_000, 30_000_000 + (i / 100) as i64 * 2_000_000);
+    let id = |i: usize| Uuid::from_u128(i as u128 + 1);
+    let track = |i, start, end| Track { id: id(i), locked: false, layer, width_nm: 100_001, start, end };
+    board.tracks.extend((0..SELECTED).map(|i| {
+        let at = origin(i);
+        track(i, at, p(at.x_nm + 500_000, at.y_nm))
+    }));
+    // The first follower touches only at copper-width tangency, not at the centerline.
+    let follower_x = |i| origin(i).x_nm - if i == 0 { 100_001 } else { 0 };
+    board.tracks.extend((0..STATIONARY).map(|i| {
+        let at = p(follower_x(i), origin(i).y_nm);
+        track(i + SELECTED, at, p(at.x_nm, at.y_nm - 500_000))
+    }));
+    let items = super::super::BoardSelection { tracks: (0..SELECTED).map(id).collect(), ..Default::default() };
+    let plan = MovePlan::new(project, target, items).unwrap_or_else(|error| panic!("move plan: {error}"));
+    let delta = p(0, 254_000);
+    let candidate = plan.at(delta).unwrap_or_else(|error| panic!("move candidate: {error}"));
+    let mut next = candidate.as_ref().clone();
+    INDEX_WORK.set(Some(IndexWork::default()));
+    let changed = plan.reshape_tracks(&mut next, delta);
+    assert_eq!(INDEX_WORK.replace(None), Some(IndexWork { builds: 1, indexed: STATIONARY, queries: SELECTED, candidates: SELECTED }));
+    assert_eq!(changed.map(|ids| ids.len()).ok(), Some(2 * SELECTED));
+    let (dragged, stationary) = next.board.tracks.split_at(SELECTED);
+    for (i, (dragged, follower)) in dragged.iter().zip(stationary).enumerate() {
+        let moved_y = origin(i).y_nm + delta.y_nm;
+        assert_eq!(dragged.start, p(origin(i).x_nm, moved_y));
+        assert_eq!(follower.start, p(follower_x(i), moved_y));
+        assert_eq!(follower.end, p(follower_x(i), origin(i).y_nm - 500_000));
+    }
 }
 
 /// An exact grid displacement of the middle leg changes only the neighboring endpoints at the
