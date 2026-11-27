@@ -43,3 +43,27 @@ deadline no longer ends the reply wait. A client timeout or transport failure ca
 still lose the reply to a committed edit; inspect before retrying. See [package
 completion](../libraries/symbol-schema.md#complete-loose-packages) for the matching and
 electrical restrictions.
+
+`part.set_fields` edits several physical components as one revision-checked undo
+step, for a component table or an agent. `edits` holds one row per
+`component-…` ID, so a multi-unit part is one row and all its units show the
+result. Each row takes optional `reference`, `value`, `fields` and `footprint`;
+what a row omits is kept. `fields` maps a field ID (`datasheet`, `description`,
+`manufacturer`, `manufacturer_part_number` or a UUID) to `{name, value}`, or to
+`null` to remove that field; fields a row does not name keep their content.
+`footprint` takes the `library`, `definition`, `definition_revision`, `mapping`
+and optional `unconnected_pads` of `pcb.assign_footprint` and follows its rules,
+so changing a placed package still needs a reviewed board update. Reference,
+value and field text follow `schematic.set_symbol_fields`. References must be
+unique in the complete result, so two parts can swap references in one edit. A
+refused row refuses the whole edit; its message starts with the row's component
+ID. The reply is `{revision, changes}`: each change names `component`, its
+`reference` before the edit, `field` (`reference`, `value`, a field ID or
+`footprint`) and `old` and `new`, null when absent. `dry_run: true` validates the
+same edit and returns the same list without changing the revision, history or
+saved files. Both modes check the native save limits. If the change report would
+exceed the 16 MiB live reply limit, the editor refuses the request before
+applying any edits. Use fewer rows or a headless session for a large report.
+A request that changes nothing adds no undo step. A read-only session refuses
+both modes. Rows address the project's single circuit use;
+references per repeated sheet occurrence are not part of this command.

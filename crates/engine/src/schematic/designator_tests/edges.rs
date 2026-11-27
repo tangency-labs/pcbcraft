@@ -137,10 +137,8 @@ fn set_metadata(session: &mut Session, symbol: &str, metadata: &Metadata) {
     edit(session, SET_SYMBOL_FIELDS, params);
 }
 
-/// Native size is independent of model validity: preview refuses cap+1 without publication,
-/// ordinary Apply can publish it, and stale/invalid requests still get their ordinary causes.
-#[test]
-fn designator_lock_real_document_limit_and_authority_precedence() {
+/// Build a project close to the native document limit, without retaining large undo snapshots.
+fn near_document_limit() -> (Session, String, usize) {
     let mut session = fixture(false);
     for index in 2..32 {
         edit(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":index*25_400_000i64,"y_nm":0}));
@@ -152,16 +150,49 @@ fn designator_lock_real_document_limit_and_authority_precedence() {
         fresh.open_snapshot(session.snapshot().unwrap());
         session = fresh;
     }
-    let last = &symbols[31];
-    set_metadata(&mut session, last, &metadata(0));
+    let last = symbols[31].clone();
+    set_metadata(&mut session, &last, &metadata(0));
     let base_length = documents(&session)[persistence::ENTRY_POINT].len();
+    (session, last, base_length)
+}
+
+/// Dry run and Apply reject a bulk field edit that grows a native document past its limit.
+#[test]
+fn bulk_field_edit_cannot_publish_an_unsaveable_project() {
+    let (mut session, last, base_length) = near_document_limit();
+    let last_metadata = metadata(persistence::MAX_DOCUMENT_BYTES - base_length);
+    let key = uuid::Uuid::from_u128(64).to_string();
+    let field = &last_metadata.fields[&key];
+    assert_eq!(field.value, "");
+    set_metadata(&mut session, &last, &last_metadata);
+    assert_eq!(documents(&session)[persistence::ENTRY_POINT].len(), persistence::MAX_DOCUMENT_BYTES);
+    let component = session.project().unwrap().symbols()[31].component_id();
+    let before = session.snapshot().unwrap();
+    let history = (session.revision(), session.undo.len(), session.redo.len());
+    for dry_run in [true, false] {
+        let params = json!({
+            "edits":[{"component":component,"fields":{key.clone():{"name":field.name,"value":"x"}}}],
+            "dry_run":dry_run,"expected_revision":session.revision()
+        });
+        let error = session.execute(crate::part_instances::SET_FIELDS, &params).unwrap_err();
+        assert!(matches!(&error, CommandError::InvalidParams(message) if message == "Encoded instance document exceeds its size limit."), "{error}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
+    }
+}
+
+/// Native size is independent of model validity: preview refuses cap+1 without publication,
+/// ordinary Apply can publish it, and stale/invalid requests still get their ordinary causes.
+#[test]
+fn designator_lock_real_document_limit_and_authority_precedence() {
+    let (mut session, last, base_length) = near_document_limit();
     let mut calibrated = Session { libraries: session.libraries.clone(), ..Session::default() };
     calibrated.open_snapshot(session.snapshot().unwrap());
     lock(&mut calibrated, true);
     let lock_bytes = documents(&calibrated)[persistence::ENTRY_POINT].len() - base_length;
     drop(calibrated);
     let payload = persistence::MAX_DOCUMENT_BYTES.checked_sub(base_length + lock_bytes).unwrap();
-    set_metadata(&mut session, last, &metadata(payload));
+    set_metadata(&mut session, &last, &metadata(payload));
     assert_eq!(documents(&session)[persistence::ENTRY_POINT].len(), persistence::MAX_DOCUMENT_BYTES - lock_bytes);
     let params =
         |revision| json!({"symbol":"symbol-2","reference":"R1","value":"R","designator_locked":true,"dry_run":true,"expected_revision":revision});
@@ -170,7 +201,7 @@ fn designator_lock_real_document_limit_and_authority_precedence() {
     lock(&mut session, true);
     assert_eq!(documents(&session)[persistence::ENTRY_POINT].len(), persistence::MAX_DOCUMENT_BYTES);
     edit(&mut session, "edit.undo", Value::Null);
-    set_metadata(&mut session, last, &metadata(payload + 1));
+    set_metadata(&mut session, &last, &metadata(payload + 1));
     assert_eq!(documents(&session)[persistence::ENTRY_POINT].len(), persistence::MAX_DOCUMENT_BYTES - lock_bytes + 1);
     let before = session.snapshot().unwrap();
     let history = (session.revision(), session.undo.len(), session.redo.len());

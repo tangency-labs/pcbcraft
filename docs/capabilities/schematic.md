@@ -22,6 +22,8 @@
   edits for selected symbols, attached-wire movement and read-only terminal/library details.
 - place, rotate, mirror horizontally or vertically about the symbol center with attached wires, edit
   standard/custom component fields and population/exclusion attributes, move/delete symbols.
+- edit references, values, component fields and footprint assignments on several components as
+  one undo step, with a dry run listing every change (`part.set_fields`).
 - mirror a multi-item selection (symbols, wires and net labels) as one undoable edit about the
   selection center, snapped so pins stay on the grid.
 - Independently drag reference/value/custom text with per-unit visibility, name display, physical

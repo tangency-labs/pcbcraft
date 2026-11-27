@@ -46,13 +46,7 @@ pub fn check_package_completion_reply_size(request: &Value, report: &Value, effe
 /// Same as [`check_package_completion_reply_size`] with an explicit byte budget, counting both
 /// the `{"result":...}` envelope and any deprecation `warnings` emitted by [`success_reply`].
 pub fn check_package_completion_reply_size_limit(request: &Value, report: &Value, effectful: bool, max_bytes: usize) -> Result<(), Failure> {
-    let warnings_overhead = if request["method"] == "engine.execute" {
-        let warnings = execute_warnings(&request["params"], DEPRECATIONS);
-        if warnings.is_empty() { 0 } else { b",\"warnings\":".len() + serde_json::to_vec(&warnings).map_or(0, |encoded| encoded.len()) }
-    } else {
-        0
-    };
-    check_reply_size_within(report, max_bytes, warnings_overhead).map_err(|_| {
+    check_execute_reply_size(request, report, max_bytes).map_err(|_| {
         let message = if effectful {
             "Package completion reply exceeds the 16 MiB live reply limit; no edit was applied. Run with sheet scope or in a headless session."
         } else {
@@ -60,6 +54,17 @@ pub fn check_package_completion_reply_size_limit(request: &Value, report: &Value
         };
         Failure::new(ErrorCode::CapExceeded, message)
     })
+}
+
+/// Count the complete command reply, including transport warnings.
+fn check_execute_reply_size(request: &Value, report: &Value, max_bytes: usize) -> Result<(), String> {
+    let warnings_overhead = if request["method"] == "engine.execute" {
+        let warnings = execute_warnings(&request["params"], DEPRECATIONS);
+        if warnings.is_empty() { 0 } else { b",\"warnings\":".len() + serde_json::to_vec(&warnings).map_or(0, |encoded| encoded.len()) }
+    } else {
+        0
+    };
+    check_reply_size_within(report, max_bytes, warnings_overhead)
 }
 
 fn check_reply_size_within(result: &Value, max_bytes: usize, extra_overhead: usize) -> Result<(), String> {
@@ -291,21 +296,21 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
     call_editor_with_package_commit(editor, request, || Ok(()))
 }
 
-/// Dispatch through the same live policy, letting the host arbitrate an effectful package
-/// completion after preparation and reply-size validation, but before publication. Other
-/// commands, previews and no-ops do not invoke the supplied authorization.
+/// Dispatch through the same live policy, letting the host authorize effectful package completion
+/// and bulk component edits after preparation and reply-size validation. Previews and no-ops
+/// do not invoke the supplied authorization.
 pub fn call_editor_with_package_commit(
     editor: &mut dyn Editor,
     request: &Value,
     authorize: impl FnOnce() -> Result<(), Failure>,
 ) -> Result<Value, Failure> {
-    call_editor_with_package_commit_limit(editor, request, MAX_REPLY_BYTES, authorize)
+    call_editor_with_commit_limit(editor, request, MAX_REPLY_BYTES, authorize)
 }
 
-fn call_editor_with_package_commit_limit(
+fn call_editor_with_commit_limit(
     editor: &mut dyn Editor,
     request: &Value,
-    package_reply_limit: usize,
+    reply_limit: usize,
     authorize: impl FnOnce() -> Result<(), Failure>,
 ) -> Result<Value, Failure> {
     let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
@@ -350,11 +355,26 @@ fn call_editor_with_package_commit_limit(
             if id == pcbcraft_engine::COMPLETE_PACKAGES {
                 check_deferred_version(id, params)?;
                 let prepared = editor.session().prepare_package_completion(&params["params"])?.finish()?;
-                check_package_completion_reply_size_limit(request, prepared.report(), prepared.is_effectful(), package_reply_limit)?;
+                check_package_completion_reply_size_limit(request, prepared.report(), prepared.is_effectful(), reply_limit)?;
                 if prepared.is_effectful() {
                     authorize()?;
                 }
                 return editor.session().commit_package_completion(prepared).map_err(Failure::from);
+            }
+            if id == pcbcraft_engine::part_instances::SET_FIELDS {
+                check_deferred_version(id, params)?;
+                return editor.session().set_part_fields_with_commit(&params["params"], |reply, effectful| {
+                    check_execute_reply_size(request, reply, reply_limit).map_err(|_| {
+                        Failure::new(
+                            ErrorCode::CapExceeded,
+                            "Bulk component field report exceeds the 16 MiB live reply limit; no edit was applied. Use fewer rows or a headless session.",
+                        )
+                    })?;
+                    if effectful {
+                        authorize()?;
+                    }
+                    Ok(())
+                });
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
@@ -460,6 +480,26 @@ mod tests {
 #[cfg(test)]
 mod reply_size_tests {
     use super::*;
+    use std::sync::Arc;
+
+    struct TestEditor(Session);
+    impl Editor for TestEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Ok(())
+        }
+    }
 
     /// Match the actual frame reader's success-wrapper budget, accepting the last JSON byte
     /// and refusing the next. UTF-8 characters and JSON escapes count as their encoded bytes.
@@ -488,31 +528,65 @@ mod reply_size_tests {
         assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
     }
 
+    /// Size and host authority must both allow a bulk Apply before it creates an undo step.
+    #[test]
+    fn bulk_fields_reply_limit_refuses_before_commit() {
+        use pcbcraft_engine::{PLACE_RESISTOR, part_instances::SET_FIELDS};
+
+        let mut editor = TestEditor(Session::default());
+        editor.0.apply("project.new", &json!({})).unwrap();
+        editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+        let component = editor.0.project().unwrap().symbols()[0].component_id();
+        let before = editor.0.snapshot().unwrap();
+        let revision = editor.0.revision();
+        let request = |dry_run| {
+            json!({"method":"engine.execute","params":{"command":SET_FIELDS,"params":{
+            "edits":[{"component":component,"value":"1 kΩ"}],"dry_run":dry_run,"expected_revision":revision}}})
+        };
+        let preview_request = request(true);
+        let preview = call_editor(&mut editor, &preview_request).unwrap();
+        assert_eq!(preview["revision"], revision);
+        assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+
+        let apply_request = request(false);
+        let expected = json!({"revision":revision+1,"changes":preview["changes"]});
+        let apply_size = serde_json::to_vec(&success_reply(&apply_request, expected.clone())).unwrap().len();
+        let preview_size = serde_json::to_vec(&success_reply(&preview_request, preview.clone())).unwrap().len();
+        for (request, size) in [(&preview_request, preview_size), (&apply_request, apply_size)] {
+            let error =
+                call_editor_with_commit_limit(&mut editor, request, size - 1, || panic!("oversized reply requested commit authority")).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::CapExceeded.as_str());
+        }
+        let at_limit =
+            call_editor_with_commit_limit(&mut editor, &preview_request, preview_size, || panic!("preview requested commit authority")).unwrap();
+        assert_eq!(at_limit, preview);
+
+        let denied = call_editor_with_commit_limit(&mut editor, &apply_request, apply_size, || {
+            Err(Failure::new(ErrorCode::Unavailable, "test host refused publication"))
+        })
+        .unwrap_err();
+        assert_eq!(denied.code(), ErrorCode::Unavailable.as_str());
+        assert!(Arc::ptr_eq(&before, &editor.0.snapshot().unwrap()));
+        assert_eq!(editor.0.revision(), revision);
+
+        let mut authorized = false;
+        let applied = call_editor_with_commit_limit(&mut editor, &apply_request, apply_size, || {
+            authorized = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(authorized);
+        assert_eq!(applied, expected);
+        assert_eq!(editor.0.revision(), revision + 1);
+        editor.0.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &editor.0.snapshot().unwrap()));
+    }
+
     /// Package completion enforces the exact live frame cap before publication and on dry runs,
     /// leaving revision, snapshot and Undo history untouched when an Apply is refused.
     #[test]
     fn package_completion_reply_limit_matches_frame_cap_and_refuses_before_commit() {
         use pcbcraft_engine::{COMPLETE_PACKAGES, PLACE_SYMBOL, library::sources};
-        use std::sync::Arc;
-
-        struct TestEditor(Session);
-        impl Editor for TestEditor {
-            fn session(&mut self) -> &mut Session {
-                &mut self.0
-            }
-            fn refusal(&self, _command: &str) -> Option<String> {
-                None
-            }
-            fn window_commands(&self) -> Vec<Value> {
-                Vec::new()
-            }
-            fn inspect(&self) -> Value {
-                json!({})
-            }
-            fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
-                Ok(())
-            }
-        }
 
         let request = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"params":{"scope":"project"}}});
         let overhead = serde_json::to_vec(&json!({"result":{"revision":1,"changes":[""],"skipped":[]}})).unwrap().len();
@@ -567,7 +641,7 @@ mod reply_size_tests {
 
         let dry_run = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"params":{
             "scope":"project","dry_run":true,"expected_revision":revision}}});
-        let dry_err = call_editor_with_package_commit_limit(&mut editor, &dry_run, 64, || {
+        let dry_err = call_editor_with_commit_limit(&mut editor, &dry_run, 64, || {
             authorized = true;
             Ok(())
         })
@@ -579,7 +653,7 @@ mod reply_size_tests {
 
         let apply = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"params":{
             "scope":"project","dry_run":false,"expected_revision":revision}}});
-        let apply_err = call_editor_with_package_commit_limit(&mut editor, &apply, 64, || {
+        let apply_err = call_editor_with_commit_limit(&mut editor, &apply, 64, || {
             authorized = true;
             Ok(())
         })
@@ -597,7 +671,7 @@ mod reply_size_tests {
         assert!(Arc::ptr_eq(&before, &editor.0.snapshot().unwrap()));
         let redo_revision = editor.0.revision();
 
-        let ok = call_editor_with_package_commit_limit(
+        let ok = call_editor_with_commit_limit(
             &mut editor,
             &json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"params":{
                 "scope":"project","dry_run":false,"expected_revision":redo_revision}}}),

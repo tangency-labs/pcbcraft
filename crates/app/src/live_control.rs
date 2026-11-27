@@ -144,14 +144,14 @@ impl Request {
         Instant::now() >= self.deadline || self.authority.cancelled()
     }
 
-    /// Dispatch on the editor thread and acquire the socket's grant only for an effectful
-    /// package completion, after validation and preparation have finished.
+    /// Dispatch on the editor thread. Effectful package completion and bulk component edits
+    /// acquire the socket's commit grant after validation and preparation.
     pub(super) fn dispatch(&self, app: &mut PcbApp, ctx: &egui::Context) -> Result<Value, Failure> {
         call_editor_with_package_commit(&mut LiveEditor { app, ctx }, self.body(), || {
             if self.authority.grant_commit(self.deadline) {
                 Ok(())
             } else {
-                Err(Failure::new(ErrorCode::Cancelled, "Package completion request expired or disconnected before publication"))
+                Err(Failure::new(ErrorCode::Cancelled, "Edit request expired or disconnected before publication"))
             }
         })
     }
