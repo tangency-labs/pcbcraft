@@ -1103,7 +1103,7 @@ dependency or native saved-format change was introduced.
 ## Shared Craft UI migration
 
 `solidcraft-ui-kit`, `solidcraft-look` and `solidcraft-theme` are pinned to
-SolidCraft revision `eeb366c2ff276987a15c043d63b9072b58274703`, copyright
+SolidCraft revision `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, copyright
 2026 the SolidCraft maintainers, under the SolidCraft Brand and Interface
 Licence. They retain that licence independently of PCBcraft's MIT OR Apache-2.0
 code. The retained text is
@@ -1399,6 +1399,10 @@ as literals by the shared kit/look/theme from that revision's
 controls render, including text-edit context menus. Application/electronics copy
 remains host-owned. The extracted shared UI English data follows the same retained
 Brand and Interface notice; no new fonts or unrelated application assets were copied.
+
+The #658 pin moves the shared UI and kernel crates to `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`.
+The retained Brand and Interface Licence and icon parser hashes are unchanged.
+The shared UI kit now also depends on `solidcraft-panel-layout` (MIT OR Apache-2.0).
 
 ## UI automation adapter
 
@@ -1705,7 +1709,7 @@ introduced. Test projects use production commands and native codecs.
 
 `crates/geometry` depends on `solidcore`, `solidcore-ops`, `solidcore-record`
 and `solidcore-step` from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
-`eeb366c2ff276987a15c043d63b9072b58274703`, the revision already pinned for the
+`de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, the revision already pinned for the
 Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
 these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
 contributors. `solidcore` is a Rust port of the SMLib and SM_API components of
@@ -1784,7 +1788,7 @@ continuity. No Sparksmith world model, shove, dependency or file format was impo
 The #232 fill orchestration, source-keyed cache, worker transport, thermal-spoke
 construction, physical connectivity integration, diagnostics and canvas adapter
 are original MIT OR Apache-2.0 PCBcraft work. The geometry wrapper additionally
-uses `solidcore-tess` from the same `eeb366c2ff276987a15c043d63b9072b58274703`
+uses `solidcore-tess` from the same `de3c68956eebed3aa0ac0ba26e91492fa6adaea8`
 SolidCraft pin, Apache-2.0 (solidcore contributors), to triangulate analytic
 material for display only. Its transitive Spade dependency is MIT OR Apache-2.0;
 existing notices and dependency qualification apply. No kernel version, external

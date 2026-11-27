@@ -987,9 +987,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "bytemuck",
  "emath",
@@ -1035,7 +1041,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "accesskit",
  "ahash",
@@ -1056,7 +1062,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1148,7 +1154,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "bytemuck",
  "serde",
@@ -1215,7 +1221,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1241,7 +1247,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 
 [[package]]
 name = "equivalent"
@@ -3489,6 +3495,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e440fb4e4b4147295338efb76001ab9e4efc0e5839df2c47fc5ac2381d365c3"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3741,6 +3767,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
+dependencies = [
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3862,6 +3913,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4085,7 +4147,7 @@ dependencies = [
 [[package]]
 name = "solidcore"
 version = "1.0.1"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4094,7 +4156,7 @@ dependencies = [
 [[package]]
 name = "solidcore-convert"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "solidcore",
  "solidcore-record",
@@ -4103,7 +4165,7 @@ dependencies = [
 [[package]]
 name = "solidcore-ops"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "serde",
  "solidcore",
@@ -4114,7 +4176,7 @@ dependencies = [
 [[package]]
 name = "solidcore-record"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "serde",
  "serde_json",
@@ -4124,7 +4186,7 @@ dependencies = [
 [[package]]
 name = "solidcore-step"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "solidcore",
  "solidcore-convert",
@@ -4135,7 +4197,7 @@ dependencies = [
 [[package]]
 name = "solidcore-tess"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "rayon",
  "serde",
@@ -4149,12 +4211,12 @@ dependencies = [
 [[package]]
 name = "solidcraft-color"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 
 [[package]]
 name = "solidcraft-geom"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "serde",
  "solidcore-record",
@@ -4165,7 +4227,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-gpu"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "log",
  "pollster 0.4.0",
@@ -4184,7 +4246,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-icon-svg"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "tiny-skia 0.12.0",
 ]
@@ -4192,7 +4254,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-look"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "egui",
  "log",
@@ -4202,9 +4264,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "solidcraft-panel-layout"
+version = "0.50.0"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "solidcraft-render"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "image",
  "moxcms",
@@ -4225,7 +4298,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-theme"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "egui",
  "serde",
@@ -4236,7 +4309,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-ui-kit"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "arboard",
  "egui",
@@ -4247,6 +4320,7 @@ dependencies = [
  "serde_json",
  "solidcraft-color",
  "solidcraft-icon-svg",
+ "solidcraft-panel-layout",
  "solidcraft-theme",
  "solidcraft-ui-registry",
  "solidcraft-ui-text",
@@ -4259,7 +4333,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-ui-registry"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "egui",
 ]
@@ -4267,7 +4341,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-ui-text"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "flate2",
  "log",
@@ -4279,7 +4353,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-viewport"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "image",
  "serde",
@@ -4291,7 +4365,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-viewport-egui"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -4303,7 +4377,7 @@ dependencies = [
 [[package]]
 name = "solidcraft-viewport-gpu"
 version = "0.50.0"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "log",
  "pollster 0.4.0",
@@ -5650,7 +5724,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/tangency-labs/solidcraft.git?rev=eeb366c2ff276987a15c043d63b9072b58274703#eeb366c2ff276987a15c043d63b9072b58274703"
+source = "git+https://github.com/tangency-labs/solidcraft.git?rev=de3c68956eebed3aa0ac0ba26e91492fa6adaea8#de3c68956eebed3aa0ac0ba26e91492fa6adaea8"
 dependencies = [
  "ahash",
  "android-activity",

@@ -213,6 +213,7 @@ pub fn documents(ui: &mut Ui, documents: &[(String, bool, String)], selected: Op
             view_close: "",
             view_new: "",
             view_more: "",
+            view_collapse: "",
             switcher: "",
             file_drop: "",
         },
