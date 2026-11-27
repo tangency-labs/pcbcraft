@@ -981,8 +981,10 @@ fn a_part_shown_in_another_body_style_than_the_normal_one_refuses_the_file() {
     let (control, xml) = kicad10("jumper-control");
     assert_eq!(partition(&import(&control, "Control").unwrap().project), kicad_partition(&xml));
     assert_eq!(control.matches("(body_style 1)").count(), 1);
-    for style in [2, 3] {
-        let refused = import(&control.replace("(body_style 1)", &format!("(body_style {style})")), "Style");
+    let legacy_normal = control.replace("(body_style 1)", "(convert 1)");
+    assert_eq!(partition(&import(&legacy_normal, "Legacy control").unwrap().project), kicad_partition(&xml));
+    for (selector, style) in [("body_style", 2), ("body_style", 3), ("convert", 2)] {
+        let refused = import(&control.replace("(body_style 1)", &format!("({selector} {style})")), "Style");
         assert!(
             matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains(&format!("J1 shows body style {style} of `Fixture:InternalJumper`"))),
             "{refused:?}"

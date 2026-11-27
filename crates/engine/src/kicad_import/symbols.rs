@@ -86,7 +86,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
     }
     // Style 0 is drawn in every body style, 1 is the normal style and 2 the alternate one.
     // A placed symbol that says it shows another style than the normal one is refused, but a
-    // file may not say (only KiCad 10's `body_style` is read), so an alternate style is accepted
+    // file may omit the selector, so an alternate style definition is accepted
     // only when it puts exactly the same pins in the same places.
     if symbol.units.iter().any(|unit| unit.style == 2) {
         // Names compare in full, as the file writes them, so names that differ only in spaces

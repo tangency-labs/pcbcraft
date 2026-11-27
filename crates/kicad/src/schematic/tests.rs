@@ -290,12 +290,16 @@ fn a_placed_symbols_body_style_is_read_and_an_unreadable_one_is_lost() {
     let s = read_schematic(&file(
         r#"(symbol (lib_id "L:R") (at 0 0 0) (unit 1)) (symbol (lib_id "L:R") (at 0 0 0) (unit 1) (body_style 3))
            (symbol (lib_id "L:R") (at 0 0 0) (body_style 0)) (symbol (lib_id "L:R") (at 0 0 0) (body_style demorgan))
-           (symbol (lib_id "L:R") (at 0 0 0) (body_style 1) (body_style 3))"#,
+           (symbol (lib_id "L:R") (at 0 0 0) (body_style 1) (body_style 3))
+           (symbol (lib_id "L:R") (at 0 0 0) (convert 1))
+           (symbol (lib_id "L:R") (at 0 0 0) (convert 2))
+           (symbol (lib_id "L:R") (at 0 0 0) (convert))
+           (symbol (lib_id "L:R") (at 0 0 0) (convert 1) (convert 2))
+           (symbol (lib_id "L:R") (at 0 0 0) (convert 2) (body_style 1))"#,
     ))
     .unwrap();
-    assert_eq!(s.symbols.iter().map(|p| p.body_style).collect::<Vec<_>>(), [1, 3], "the normal style unless the file says");
-    // Zero, a word, and a style given twice.
-    assert_eq!(s.lost.iter().collect::<Vec<_>>(), [("placed symbol whose body style can't be read left out", 3)]);
+    assert_eq!(s.symbols.iter().map(|p| p.body_style).collect::<Vec<_>>(), [1, 3, 1, 2]);
+    assert_eq!(s.lost.iter().collect::<Vec<_>>(), [("placed symbol whose body style can't be read left out", 6)]);
     // KiCad 10.0.8 writes the style on every placed symbol.
     assert!(read_schematic(JUMPER_CONTROL).unwrap().symbols.iter().all(|p| p.body_style == 1));
 }

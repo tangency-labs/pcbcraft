@@ -195,7 +195,7 @@ pub struct PlacedSymbol {
     pub mirror: Mirror,
     /// The unit placed, from 1.
     pub unit: u32,
-    /// The body style shown, from 1 (`body_style`, as KiCad 10 writes it); 1, the normal style,
+    /// The body style shown, from 1 (`body_style` or legacy `convert`); 1, the normal style,
     /// when the file doesn't say. The library symbol need not have that style: KiCad 10.0.8
     /// then gives the part none of the normal style's pins, so a caller that must keep every
     /// connection can't use those pins for a style other than 1 without checking
@@ -783,8 +783,8 @@ impl State {
     }
 
     /// A placed symbol. Its reference and unit are settled in [`State::finish`]. One without a
-    /// library symbol, out of range, or whose `body_style` isn't a whole number from 1 or is
-    /// given more than once is left out and counted in [`Schematic::lost`].
+    /// library symbol, out of range, or with anything but one positive integer body-style
+    /// selector when specified is left out and counted in [`Schematic::lost`].
     fn placed_symbol(&mut self, node: &Node) -> Result<(), Error> {
         let lib_id = node.child("lib_id").and_then(|n| n.text(0)).unwrap_or_default();
         let lib_symbol = node.child("lib_name").and_then(|n| n.text(0)).unwrap_or(lib_id);
@@ -794,10 +794,13 @@ impl State {
             return Ok(());
         };
         // Which body style is shown decides which pins the symbol has.
-        let mut styles = node.all("body_style");
+        let mut styles = node.all("body_style").chain(node.all("convert"));
         let body_style = match styles.next() {
             None => 1,
-            Some(style) => match style.number(0).filter(|s| *s >= 1.0 && s.fract() == 0.0 && *s <= f64::from(u32::MAX) && styles.next().is_none()) {
+            Some(style) => match style
+                .number(0)
+                .filter(|s| style.args().len() == 1 && *s >= 1.0 && s.fract() == 0.0 && *s <= f64::from(u32::MAX) && styles.next().is_none())
+            {
                 Some(style) => style as u32,
                 None => {
                     self.schematic.lost.add("placed symbol whose body style can't be read left out");

@@ -59,11 +59,10 @@ replaces anything. There is no desktop menu entry yet.
   normal one. KiCad 10 writes the style shown as `body_style`; for a style the
   library symbol doesn't have, KiCad 10.0.8 connects none of the normal style's
   pins, so importing them would invent connections. Only the normal style's
-  pins are read, so any other style refuses for now. A placed symbol without
-  `body_style` is read as showing the normal style: the published format has no
-  such setting, and whether KiCad 6 to 9 write it under another name isn't
-  confirmed. For those files an alternate style is accepted only when it has the
-  normal style's pins, as described below.
+  pins are read, so any other style is refused. Saved KiCad 8 and 9 schematics
+  use `convert` for this selector. Both spellings must specify a single positive
+  integer, and a symbol with both spellings or repeated selectors is refused.
+  Without a selector, the symbol is read as showing the normal style.
 - A KiCad 10 library symbol that declares body styles (`body_styles`, which
   KiCad 10 writes for a symbol with a De Morgan style). The setting isn't read
   yet, so the file is refused as having a library-symbol setting the reader
