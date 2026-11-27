@@ -156,9 +156,11 @@ impl Panel {
                 ui,
                 id.with(("resize", horizontal, leading)),
                 bounds,
+                bounds,
                 &label,
-                horizontal,
+                if horizontal { solidcraft_ui_kit::SashAxis::Horizontal } else { solidcraft_ui_kit::SashAxis::Vertical },
                 if horizontal { rect.height() } else { rect.width() },
+                true,
             );
             if response.clicked() || response.drag_started() {
                 response.request_focus();

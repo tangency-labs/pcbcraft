@@ -557,6 +557,8 @@ impl PcbApp {
                         state.fit = true;
                     }
                     ViewAction::Snap { axis, .. } => snap_view(&mut state.camera, axis),
+                    // The compass offers Turn Around only with a hover label, and chrome passes none.
+                    ViewAction::TurnAround => {}
                 }
                 ui.ctx().request_repaint();
             }

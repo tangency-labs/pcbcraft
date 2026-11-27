@@ -47,6 +47,15 @@ plus the copy chord and the shifted-chord raw-key path. Application tests drive
 the same seams to feed real translated events into the editor harness; they do
 not need a `Window`, an event loop or an OS clipboard.
 
+## SolidCraft's egui
+
+The workspace takes egui itself from SolidCraft's vendored copy (see
+`Cargo.toml`), whose `ViewportBuilder` has an extra `native_owner` field.
+`create_winit_window_attributes` names it as `native_owner: _`, exactly as
+SolidCraft's own egui-winit does: the WGPU backend applies it when it creates an
+owned window, and PCBcraft sets no owner. This is a compile fix only; no window
+attribute changes.
+
 ## Maintenance
 
 Keep this dependency patch separate from document and workspace models. Reassess

@@ -14,7 +14,7 @@ pub(super) type Pipeline = Arc<Mutex<Renderer>>;
 /// Build a renderer with its own offscreen depth buffer. Each pane has a separate picture and
 /// camera, because the shared callback resource supports only one prepared frame per render pass.
 pub(super) fn pipeline(rs: &RenderState) -> Pipeline {
-    let window = GpuTarget { format: rs.target_format, depth: None, samples: 1, tess: false, oit: false };
+    let window = GpuTarget { format: rs.target_format, depth: None, samples: 1, tess: false, oit: false, edges: false };
     let scene = GpuTarget { depth: Some(wgpu::TextureFormat::Depth24Plus), ..window };
     Arc::new(Mutex::new(Renderer::with_window_target(&rs.device, scene, window, None)))
 }
@@ -57,6 +57,7 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, bounds: &Bounds, key: 
         sketch_slot: empty.clone(),
         hl_key: 0,
         hl_slot: empty.clone(),
+        hover_body: None,
         pv_key: 0,
         pv_slot: empty,
         pv_hide: false,
@@ -65,7 +66,10 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, bounds: &Bounds, key: 
         turned_depth: None,
         back: vector(camera.back()),
         size_px: (rect.size() * ui.ctx().pixels_per_point()).into(),
-        clip: [0.0; 4],
+        // No section planes: the board preview never cuts the substrate.
+        clip: [[0.0; 4]; solidcraft_viewport::MAX_SECTION_PLANES],
+        clip_hatch: [0; solidcraft_viewport::MAX_SECTION_PLANES],
+        selection_all: false,
         cap: [0.0; 4],
         images: Vec::new(),
         clouds: Vec::new(),
@@ -76,12 +80,16 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, bounds: &Bounds, key: 
         eye: [eye[0], eye[1], eye[2], 0.0],
         ao_radius: 0.0,
         ao_samples: 0,
+        edge_px: solidcraft_viewport_gpu::view::EDGE_PX,
+        occlusion: false,
         ssaa: 1.0,
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],
         hatch: Default::default(),
         sky: [0.0; 4],
         moving: None,
+        motions: Default::default(),
+        ground: None,
     };
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, Callback { pipeline: pipeline.clone(), frame }));
 }
