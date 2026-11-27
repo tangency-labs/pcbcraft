@@ -23,6 +23,20 @@ pub const MAX_POINTS: usize = 256;
 pub const MAX_TOTAL_POINTS: usize = 8192;
 /// Bound saved island-removal intent to one square metre.
 pub const MAX_ISLAND_AREA_NM2: u64 = 1_000_000_000_000_000_000;
+/// Maximum polygon edges (each checked against all non-adjacent following edges) validated per
+/// resumable work unit.
+pub(crate) const ZONE_VALIDATION_EDGES_PER_UNIT: usize = 32;
+
+#[cfg(test)]
+thread_local! {
+    static ZONE_EDGES_STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Return and reset the count of zone outline edges checked by [`ZoneValidationSteps::step`].
+#[cfg(test)]
+pub(crate) fn take_zone_edges_stepped() -> usize {
+    ZONE_EDGES_STEPPED.with(|count| count.replace(0))
+}
 
 /// Future fill connection intent, without generating copper or spokes in this slice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,55 +123,130 @@ fn intersects(a: Point, b: Point, c: Point, d: Point) -> bool {
         || (cb == 0 && inside(b, c, d))
         || (ac.signum() != ad.signum() && ca.signum() != cb.signum())
 }
-/// Require at least three distinct bounded vertices, nonzero area and no crossing/touching edges.
-pub fn validate_outline(points: &[Point]) -> Result<(), String> {
+/// Verify that an outline has 3–256 distinct in-bounds vertices before checking edges.
+fn validate_outline_vertices(points: &[Point]) -> Result<(), String> {
     if !(3..=MAX_POINTS).contains(&points.len())
         || points.iter().any(|p| !crate::wire::valid_point(p))
         || points.iter().map(|p| (p.x_nm, p.y_nm)).collect::<BTreeSet<_>>().len() != points.len()
     {
         return Err("A zone needs 3–256 distinct bounded vertices; closure is implicit.".into());
     }
-    let mut area = 0i128;
-    for i in 0..points.len() {
-        let (a, b) = (points[i], points[(i + 1) % points.len()]);
-        area += a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128;
-        for j in i + 1..points.len() {
-            if j == i + 1 || (i == 0 && j == points.len() - 1) {
+    Ok(())
+}
+/// Check outline edges `start..end` against all non-adjacent following edges while accumulating
+/// twice the signed polygon area.
+fn validate_outline_edges(points: &[Point], start: usize, end: usize, area: &mut i128) -> Result<(), String> {
+    let count = points.len();
+    for i in start..end {
+        let (a, b) = (points[i], points[(i + 1) % count]);
+        *area += a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128;
+        for j in i + 1..count {
+            if j == i + 1 || (i == 0 && j == count - 1) {
                 continue;
             }
-            if intersects(a, b, points[j], points[(j + 1) % points.len()]) {
+            if intersects(a, b, points[j], points[(j + 1) % count]) {
                 return Err("Zone outlines cannot intersect or touch themselves.".into());
             }
         }
     }
+    Ok(())
+}
+/// Require at least three distinct bounded vertices, nonzero area and no crossing/touching edges.
+pub fn validate_outline(points: &[Point]) -> Result<(), String> {
+    validate_outline_vertices(points)?;
+    let mut area = 0i128;
+    validate_outline_edges(points, 0, points.len(), &mut area)?;
     if area == 0 {
         return Err("A zone must enclose a nonzero area.".into());
     }
     Ok(())
 }
+/// Work units required to validate one zone: at least one unit, plus one per
+/// [`ZONE_VALIDATION_EDGES_PER_UNIT`] outline edges.
+fn zone_validation_units(zone: &Zone) -> usize {
+    zone.points.len().div_ceil(ZONE_VALIDATION_EDGES_PER_UNIT).max(1)
+}
+/// Resumable validator for a board's authored copper zones.
+///
+/// Enforces the board-wide zone and total-vertex limits once at startup, then validates each
+/// zone's identity, net registration, copper layer, options and outline in bounded batches of at
+/// most [`ZONE_VALIDATION_EDGES_PER_UNIT`] polygon edges per work unit. Dropping the validator
+/// mid-run cancels cleanly with no side effects.
+pub(crate) struct ZoneValidationSteps {
+    checked_limits: bool,
+    zone_cursor: usize,
+    edge_cursor: usize,
+    area: i128,
+    ids: BTreeSet<Uuid>,
+}
+impl ZoneValidationSteps {
+    /// Start before checking board-wide limits and the first zone.
+    pub(crate) fn new() -> Self {
+        Self { checked_limits: false, zone_cursor: 0, edge_cursor: 0, area: 0, ids: BTreeSet::new() }
+    }
+    /// Work units required to validate every zone on the board (zero when no zones exist).
+    pub(crate) fn total(project: &Project) -> usize {
+        project.board.zones.iter().fold(0usize, |acc, zone| acc.saturating_add(zone_validation_units(zone)))
+    }
+    /// Advance at most `budget` zone-validation units, decrementing it by the units completed.
+    /// Returns `Ok(true)` once every zone on the board has passed validation.
+    pub(crate) fn step(&mut self, project: &Project, budget: &mut usize) -> Result<bool, String> {
+        let zones = &project.board.zones;
+        if zones.is_empty() {
+            return Ok(true);
+        }
+        if !self.checked_limits {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            if zones.len() > MAX_ZONES || zones.iter().fold(0usize, |acc, z| acc.saturating_add(z.points.len())) > MAX_TOTAL_POINTS {
+                return Err("Zone resource limit exceeded.".into());
+            }
+            self.checked_limits = true;
+        }
+        while self.zone_cursor < zones.len() {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            let z = &zones[self.zone_cursor];
+            if self.edge_cursor == 0 {
+                if z.id.is_nil() || !self.ids.insert(z.id) || project.net_registry.record(z.net).is_none() {
+                    return Err("Zone has a duplicate/nil identity or unregistered net.".into());
+                }
+                if !project
+                    .board
+                    .setup
+                    .as_ref()
+                    .is_some_and(|s| s.layers().iter().any(|l| l.id == z.layer && l.purpose == super::setup::LayerPurpose::Copper))
+                {
+                    return Err("Zone needs a copper layer on its board.".into());
+                }
+                z.options.validate()?;
+                validate_outline_vertices(&z.points)?;
+                self.area = 0;
+            }
+            let end = self.edge_cursor.saturating_add(ZONE_VALIDATION_EDGES_PER_UNIT).min(z.points.len());
+            #[cfg(test)]
+            ZONE_EDGES_STEPPED.with(|count| count.set(count.get() + end.saturating_sub(self.edge_cursor)));
+            validate_outline_edges(&z.points, self.edge_cursor, end, &mut self.area)?;
+            *budget -= 1;
+            self.edge_cursor = end;
+            if self.edge_cursor == z.points.len() {
+                if self.area == 0 {
+                    return Err("A zone must enclose a nonzero area.".into());
+                }
+                self.zone_cursor += 1;
+                self.edge_cursor = 0;
+                self.area = 0;
+            }
+        }
+        Ok(true)
+    }
+}
 /// Validate all authored records against this physical board; inactive net identities remain inspectable.
 pub(crate) fn validate(project: &Project) -> Result<(), String> {
-    let zones = &project.board.zones;
-    if zones.len() > MAX_ZONES || zones.iter().map(|z| z.points.len()).sum::<usize>() > MAX_TOTAL_POINTS {
-        return Err("Zone resource limit exceeded.".into());
-    }
-    let mut ids = BTreeSet::new();
-    for z in zones {
-        if z.id.is_nil() || !ids.insert(z.id) || project.net_registry.record(z.net).is_none() {
-            return Err("Zone has a duplicate/nil identity or unregistered net.".into());
-        }
-        if !project
-            .board
-            .setup
-            .as_ref()
-            .is_some_and(|s| s.layers().iter().any(|l| l.id == z.layer && l.purpose == super::setup::LayerPurpose::Copper))
-        {
-            return Err("Zone needs a copper layer on its board.".into());
-        }
-        z.options.validate()?;
-        validate_outline(&z.points)?;
-    }
-    Ok(())
+    let mut budget = usize::MAX;
+    if ZoneValidationSteps::new().step(project, &mut budget)? { Ok(()) } else { Err("zone validation did not complete".into()) }
 }
 impl Project {
     /// Report historical net state instead of silently redirecting a zone after a merge or split.

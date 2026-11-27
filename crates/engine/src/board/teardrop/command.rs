@@ -1,21 +1,25 @@
 //! One revision-checked transaction for a batch of straight-via intent changes.
 use super::{
-    Record, ViaTeardrop,
+    Error as ShapeError, Record, ViaTeardrop,
     edit::{self, Addition, Edit, Rule, RuleBlock},
 };
 use crate::{
-    CommandError, Session,
+    CommandError, Project, Session,
     board::{
-        clearance::{ClearanceQuery, ObstacleId, Overlay},
+        clearance::{BoardGeometry, ClearanceQuery, ObstacleId, Overlay},
         drc::Outline,
         geometry::Contour,
         view::{BoardTarget, BoardView},
+        work::Source,
     },
     schematic::MAX_CENTER_NM,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 /// Add and remove checked straight-via teardrop intents.
@@ -170,6 +174,162 @@ impl<'a> Evaluator<'a> {
 /// A zero-radius convex core is the exact derived teardrop polygon.
 fn contour(addition: &Addition) -> Contour {
     Contour { core: addition.copper.vertices, radius: 0. }
+}
+
+/// Resumable straight-via teardrop regeneration over a private candidate board.
+/// Prunes sites whose attachments no longer form a taper and checks every surviving
+/// contour in bounded batches. Dropping unfinished work leaves the published board unchanged.
+pub(in crate::board) struct Regeneration {
+    project: Project,
+    source: Source,
+    geometry: Option<Arc<BoardGeometry>>,
+    derive_next: usize,
+    last_id: Option<Uuid>,
+    sites: BTreeSet<(Uuid, Uuid)>,
+    retained: Vec<Addition>,
+    evaluator: Option<Evaluator<'static>>,
+    check_next: usize,
+}
+
+impl Evaluator<'static> {
+    /// Own one immutable query so resumable regeneration can outlive a single step call.
+    fn owned(query: ClearanceQuery, board: BoardView<'_>) -> Self {
+        let sources =
+            query.objects().iter().enumerate().filter_map(|(index, object)| Uuid::parse_str(&object.name).ok().map(|id| (id, index))).collect();
+        Self { overlay: query.into_overlay(), sources, added_islands: BTreeMap::new(), outline: board.outline_edges(), initialized: false }
+    }
+}
+
+impl Regeneration {
+    /// Start resumable teardrop regeneration over an already-reconciled candidate project.
+    pub(in crate::board) fn new(project: Project, source: Source, geometry: Arc<BoardGeometry>) -> Self {
+        Self {
+            project,
+            source,
+            geometry: Some(geometry),
+            derive_next: 0,
+            last_id: None,
+            sites: BTreeSet::new(),
+            retained: Vec::new(),
+            evaluator: None,
+            check_next: 0,
+        }
+    }
+
+    /// Monotonic work count across derivation and clearance checking.
+    pub(in crate::board) fn progress(&self) -> (usize, usize) {
+        let records = self.project.board.teardrops.len();
+        let total = records.saturating_mul(2).max(1);
+        let completed = if self.derive_next < records {
+            self.derive_next
+        } else {
+            let pruned = records.saturating_sub(self.retained.len());
+            records.saturating_add(pruned).saturating_add(self.check_next)
+        };
+        (completed.min(total), total)
+    }
+
+    /// Advance bounded derivation and clearance-check batches. Returns `Ok(true)` only
+    /// after every surviving teardrop has passed validation and pruning has been applied.
+    pub(in crate::board) fn step(&mut self, mut budget: usize) -> Result<bool, CommandError> {
+        if budget == 0 {
+            return Ok(false);
+        }
+        let target = self.source.target;
+        let board = self.project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
+        let records = board.teardrops();
+        if self.derive_next == 0 && !records.is_empty() {
+            if records.len() > edit::MAX_INTENTS {
+                return Err(CommandError::InvalidParams("too many or non-unique teardrop identities".into()));
+            }
+            if !self.project.board.arcs.is_empty() {
+                return Err(CommandError::InvalidParams("teardrop checking does not support boards with circular copper arcs".into()));
+            }
+            if board.setup().is_none() {
+                return Err(CommandError::InvalidParams("teardrops require a copper board setup".into()));
+            }
+        }
+        if self.derive_next < records.len() {
+            let end = self.derive_next.saturating_add(budget).min(records.len());
+            for &record in &records[self.derive_next..end] {
+                let intent = record.on(target);
+                match intent.derive(board) {
+                    Ok(copper) => {
+                        if self.last_id.is_some_and(|previous| previous >= record.id) {
+                            return Err(CommandError::InvalidParams("too many or non-unique teardrop identities".into()));
+                        }
+                        if board.tracks().binary_search_by_key(&record.id, |track| track.id).is_ok()
+                            || board.vias().binary_search_by_key(&record.id, |via| via.id).is_ok()
+                            || !self.sites.insert((record.via, record.track))
+                        {
+                            return Err(CommandError::InvalidParams("duplicate teardrop attachment or copper identity".into()));
+                        }
+                        self.last_id = Some(record.id);
+                        self.retained.push(Addition { intent, copper });
+                    }
+                    Err(
+                        ShapeError::MissingTrack
+                        | ShapeError::MissingVia
+                        | ShapeError::NotCentered
+                        | ShapeError::TrackTooShort
+                        | ShapeError::NoTaper
+                        | ShapeError::WidthLimit
+                        | ShapeError::UnrepresentableContour,
+                    ) => (),
+                    Err(error) => return Err(CommandError::InvalidParams(format!("invalid teardrop {}: {error:?}", record.id))),
+                }
+            }
+            budget -= end - self.derive_next;
+            self.derive_next = end;
+            if self.derive_next < records.len() {
+                return Ok(false);
+            }
+        }
+        if self.retained.is_empty() {
+            if !self.project.board.teardrops.is_empty() {
+                Arc::make_mut(&mut self.project.board).teardrops.clear();
+            }
+            return Ok(true);
+        }
+        if self.evaluator.is_none() {
+            if budget == 0 {
+                return Ok(false);
+            }
+            let geometry = self.geometry.take().ok_or_else(|| CommandError::Unavailable("teardrop clearance geometry is unavailable".into()))?;
+            let candidate_source = Source { snapshot: Arc::new(self.project.clone()), ..self.source.clone() };
+            let query = ClearanceQuery::from_geometry(&candidate_source, geometry)?;
+            let board = self.project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
+            self.evaluator = Some(Evaluator::owned(query, board));
+            budget -= 1;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        let board = self.project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
+        let evaluator = self.evaluator.as_mut().ok_or_else(|| CommandError::Unavailable("teardrop evaluator is unavailable".into()))?;
+        let end = self.check_next.saturating_add(budget).min(self.retained.len());
+        for addition in &self.retained[self.check_next..end] {
+            if let Some(block) = evaluator.check(board, addition, &[])? {
+                return Err(CommandError::InvalidParams(format!(
+                    "teardrop {} blocked by {:?} at {} (gap {} nm; required {} nm)",
+                    addition.intent.id, block.rule, block.other_object, block.actual_nm, block.required_nm
+                )));
+            }
+        }
+        self.check_next = end;
+        if self.check_next < self.retained.len() {
+            return Ok(false);
+        }
+        if self.retained.len() != self.project.board.teardrops.len() {
+            Arc::make_mut(&mut self.project.board).teardrops = self.retained.iter().map(|addition| Record::from(addition.intent)).collect();
+        }
+        Ok(true)
+    }
+
+    /// Consume the validated candidate project after [`Self::step`] returns `Ok(true)`.
+    pub(in crate::board) fn finish(self) -> Project {
+        self.project
+    }
 }
 
 impl Session {

@@ -52,10 +52,27 @@ fn rule_key(id: ObstacleId) -> String {
     }
 }
 
+/// Either a borrowed query or an owned one for resumable background work.
+enum QueryRef<'a> {
+    Borrowed(&'a ClearanceQuery),
+    Owned(Box<ClearanceQuery>),
+}
+
+impl std::ops::Deref for QueryRef<'_> {
+    type Target = ClearanceQuery;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(query) => query,
+            Self::Owned(query) => query,
+        }
+    }
+}
+
 /// Disposable query data, never authored geometry or an authorization to publish an edit.
 /// The source index remains immutable and the overlay has bounded capacity.
 pub struct Overlay<'a> {
-    query: &'a ClearanceQuery,
+    query: QueryRef<'a>,
     changed: BTreeMap<usize, Option<Object>>,
     added: BTreeMap<Uuid, Object>,
     added_from: BTreeMap<Uuid, Option<usize>>,
@@ -70,10 +87,23 @@ impl ClearanceQuery {
         self.overlay_with_limit(8192)
     }
 
+    /// Start an empty disposable overlay owning this captured board's index and authority.
+    pub(crate) fn into_overlay(self) -> Overlay<'static> {
+        Overlay {
+            query: QueryRef::Owned(Box::new(self)),
+            changed: BTreeMap::new(),
+            added: BTreeMap::new(),
+            added_from: BTreeMap::new(),
+            identity: Arc::new(()),
+            generation: 0,
+            limit: 8192,
+        }
+    }
+
     /// Bind capacity to the owner of the disposable work.
     fn overlay_with_limit(&self, limit: usize) -> Overlay<'_> {
         Overlay {
-            query: self,
+            query: QueryRef::Borrowed(self),
             changed: BTreeMap::new(),
             added: BTreeMap::new(),
             added_from: BTreeMap::new(),

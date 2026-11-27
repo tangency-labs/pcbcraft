@@ -1346,6 +1346,9 @@ fn edit_candidate(project: &Project, command: &str, params: &Value, changes: Opt
             Some(super::class_rules::Applied { nets: vec![*address], bindings: resolved.bindings, resolution: resolved.resolution })
                 .filter(|p| p.has_dimensions())
         } else {
+            if !view.teardrops().is_empty() {
+                return Err(CommandError::Unavailable(super::teardrop::EXPLICIT_DIMENSIONS.into()));
+            }
             view.route_rules_at(at, layer)?.filter(|policy| policy.has_dimensions())
         }
     } else {

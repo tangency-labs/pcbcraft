@@ -1870,7 +1870,7 @@ pub struct DocumentsEncoder {
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
     generated_legs: Vec<GeneratedLegRecord<'static>>,
-    test_point_pad: Option<String>,
+    test_points: TestPointSteps,
 }
 
 /// Identical shared pins are reusable, but one immutable address cannot discard a different body.
@@ -1906,7 +1906,7 @@ impl DocumentsEncoder {
             use_compact_memberships,
             size_limit_exceeded: false,
             generated_legs: Vec::new(),
-            test_point_pad: None,
+            test_points: TestPointSteps::default(),
         }
     }
 
@@ -2289,8 +2289,11 @@ impl DocumentsEncoder {
                         self.start_board_list_after_vias();
                     }
                 }
-                BOARD_PAD_TEST_POINTS => self.step_pad_test_points()?,
-                BOARD_VIA_TEST_POINTS => self.step_via_test_points()?,
+                BOARD_TEST_POINTS => {
+                    if self.test_points.step(&mut self.bytes, &self.project, &mut 1)? {
+                        self.start_board_placements();
+                    }
+                }
                 7 => {
                     if let Some((&id, assignment)) =
                         self.project.board.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
@@ -2501,10 +2504,11 @@ impl DocumentsEncoder {
         }
     }
 
-    /// Test-point marks follow routed copper and precede placements.
+    /// Test-point marks follow routed copper and precede placements; [`TestPointSteps`] writes
+    /// the list opener with its first mark and the closer after its last.
     fn start_board_list_after_vias(&mut self) {
         if self.project.board.has_test_points() {
-            self.start_board_list(BOARD_PAD_TEST_POINTS, BOARD_TEST_POINTS_START);
+            self.phase = BOARD_TEST_POINTS;
         } else {
             self.start_board_placements();
         }
@@ -2516,42 +2520,6 @@ impl DocumentsEncoder {
         self.phase = phase;
         self.cursor = 0;
         self.first = true;
-    }
-
-    /// Emit at most one mark or advance one placement; a sparse board cannot skip a whole run
-    /// of unmarked placements inside one budget step.
-    fn step_pad_test_points(&mut self) -> Result<(), String> {
-        use std::ops::Bound::{Excluded, Unbounded};
-        let Some(footprint) = self.project.board.footprints().get(self.cursor as usize) else {
-            self.phase = BOARD_VIA_TEST_POINTS;
-            self.cursor = 0;
-            return Ok(());
-        };
-        let after = self.test_point_pad.as_deref().map_or(Unbounded, Excluded);
-        if let Some((pad, &flags)) = footprint.test_points.range::<str, _>((after, Unbounded)).next() {
-            let mark = crate::board::test_points::Record::pad(footprint.id, pad.clone(), flags);
-            record(&mut self.bytes, &mut self.first, &mark)?;
-            self.test_point_pad = Some(pad.clone());
-        } else {
-            self.cursor += 1;
-            self.test_point_pad = None;
-        }
-        Ok(())
-    }
-
-    /// Visit one via per budget step after the pads, retaining UUID order and the array separator.
-    fn step_via_test_points(&mut self) -> Result<(), String> {
-        if let Some(via) = self.project.board.vias.get(self.cursor as usize) {
-            if !via.test_points.is_empty() {
-                let mark = crate::board::test_points::Record::via(via.id, via.test_points);
-                record(&mut self.bytes, &mut self.first, &mark)?;
-            }
-            self.cursor += 1;
-        } else {
-            self.bytes.extend_from_slice(BOARD_ARRAY_END);
-            self.start_board_placements();
-        }
-        Ok(())
     }
 
     /// Continue into the ordinary assignment and footprint phases after the optional marks.
@@ -2578,8 +2546,7 @@ impl DocumentsEncoder {
     }
 }
 
-const BOARD_PAD_TEST_POINTS: u8 = 21;
-const BOARD_VIA_TEST_POINTS: u8 = 22;
+const BOARD_TEST_POINTS: u8 = 21;
 const BOARD_TRACKS: u8 = 23;
 const BOARD_VIAS: u8 = 24;
 const BOARD_TRACKS_START: &[u8] = b"  \"tracks\": [\n";
@@ -2609,120 +2576,551 @@ impl Write for BoardByteCounter {
     }
 }
 
-/// Check the native board document before adopting an edited board with copper, package maps
-/// or test-point marks. Use the native writer's header, record framing, serialized fields and closing bytes.
-pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
-    let mut bytes = BoardByteCounter::default();
-    board_header(&mut bytes, project)?;
-    count_board_array(&mut bytes, BOARD_TRACKS_START, &project.board.tracks)?;
-    count_board_array(&mut bytes, BOARD_VIAS_START, &project.board.vias)?;
-    if project.board.has_test_points() {
-        let mut first = true;
-        bytes.write_all(BOARD_TEST_POINTS_START).map_err(|error| error.to_string())?;
-        use crate::board::test_points::Record;
-        for footprint in project.board.footprints() {
-            for (pad, &flags) in &footprint.test_points {
-                record(&mut bytes, &mut first, &Record::pad(footprint.id, pad.clone(), flags))?;
-            }
-        }
-        for via in project.board.vias.iter().filter(|via| !via.test_points.is_empty()) {
-            record(&mut bytes, &mut first, &Record::via(via.id, via.test_points))?;
-        }
-        bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
-    }
-    bytes.write_all(board_placements_header(project)).map_err(|error| error.to_string())?;
-    let mut first = true;
-    for assignment in project.board.assignments.values() {
-        record(&mut bytes, &mut first, assignment)?;
-    }
-    if !project.board.assignments.is_empty() {
-        bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
-        first = true;
-    }
-    for footprint in project.board.footprints() {
-        record(&mut bytes, &mut first, footprint)?;
-    }
-    bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
-}
-
-/// Count an optional routed-copper list with the same framing and record writer as Save.
-fn count_board_array(bytes: &mut BoardByteCounter, start: &[u8], records: &[impl Serialize]) -> Result<(), String> {
-    if !records.is_empty() {
-        bytes.write_all(start).map_err(|error| error.to_string())?;
-        let mut first = true;
-        for item in records {
-            record(bytes, &mut first, item)?;
-        }
-        bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 /// Open the next canonical array, shared by Save and the board size check.
 fn board_placements_header(project: &Project) -> &'static [u8] {
     if project.board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" }
 }
 
-/// Emit the same current header for folder saves, packed saves and board size preflight.
-/// Optional authored records are omitted when absent.
-fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
-    crate::board::zones::validate(project)?;
+#[cfg(test)]
+thread_local! {
+    static BOARD_RECORD_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Record one serialized board record on the current test thread.
+#[cfg(test)]
+pub(crate) fn count_board_record_write() {
+    BOARD_RECORD_WRITES.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+/// Return and reset the current test thread's serialized board-record count.
+#[cfg(test)]
+pub(crate) fn take_board_record_writes() -> usize {
+    BOARD_RECORD_WRITES.with(|count| count.replace(0))
+}
+
+/// Resumable native board document size check matching [`check_board_document_size`] byte-for-byte.
+pub(crate) struct BoardSizeCheck {
+    bytes: BoardByteCounter,
+    header: BoardHeaderSteps,
+    phase: u8,
+    cursor: usize,
+    last_assignment: Option<u64>,
+    test_points: TestPointSteps,
+    first: bool,
+    validate_teardrops: bool,
+    completed: usize,
+}
+
+impl BoardSizeCheck {
+    /// Start counting native board bytes; callers that already validated teardrops may skip
+    /// repeating [`crate::board::teardrop::validate`].
+    pub(crate) fn new(validate_teardrops: bool) -> Self {
+        Self {
+            bytes: BoardByteCounter::default(),
+            header: BoardHeaderSteps::new(),
+            phase: 0,
+            cursor: 0,
+            last_assignment: None,
+            test_points: TestPointSteps::default(),
+            first: true,
+            validate_teardrops,
+            completed: 0,
+        }
+    }
+
+    /// Native board bytes counted so far; equals the saved board document once `step` returns true.
+    #[cfg(test)]
+    pub(crate) fn byte_count(&self) -> usize {
+        self.bytes.0
+    }
+
+    /// Monotonic work count across header units and serialized board records.
+    pub(crate) fn progress(&self, project: &Project) -> (usize, usize) {
+        let total = self
+            .header
+            .total(project)
+            .saturating_add(project.board.teardrops.len())
+            .saturating_add(project.board.tracks.len())
+            .saturating_add(project.board.vias.len())
+            .saturating_add(self.test_points.total(project))
+            .saturating_add(project.board.assignments.len())
+            .saturating_add(project.board.footprints().len());
+        (self.completed.min(total), total)
+    }
+
+    /// Advance bounded record-counting batches. Returns `Ok(true)` once the closing bytes fit.
+    pub(crate) fn step(&mut self, project: &Project, mut budget: usize) -> Result<bool, String> {
+        if self.phase == 7 {
+            return Ok(true);
+        }
+        if budget == 0 {
+            return Ok(false);
+        }
+        if self.phase == 0 {
+            let before = budget;
+            let done = self.header.step(&mut self.bytes, project, self.validate_teardrops, &mut budget)?;
+            self.completed = self.completed.saturating_add(before - budget);
+            if !done {
+                return Ok(false);
+            }
+            self.phase = 1;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 1 {
+            if !project.board.teardrops.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.teardrops.len());
+                for intent in &project.board.teardrops[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, intent)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.teardrops.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.phase = 2;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 2 {
+            if !project.board.tracks.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.tracks.len());
+                for track in &project.board.tracks[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, track)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.tracks.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.phase = 3;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 3 {
+            if !project.board.vias.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.vias.len());
+                for via in &project.board.vias[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, via)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.vias.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.phase = 4;
+        }
+        if self.phase == 4 {
+            let before = budget;
+            let done = self.test_points.step(&mut self.bytes, project, &mut budget)?;
+            self.completed = self.completed.saturating_add(before - budget);
+            if !done {
+                return Ok(false);
+            }
+            self.bytes.write_all(board_placements_header(project)).map_err(|error| error.to_string())?;
+            self.phase = 5;
+            self.cursor = 0;
+            self.last_assignment = None;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 5 {
+            if !project.board.assignments.is_empty() {
+                let range = match self.last_assignment {
+                    Some(last) => project.board.assignments.range((std::ops::Bound::Excluded(last), std::ops::Bound::Unbounded)),
+                    None => project.board.assignments.range(..),
+                };
+                let mut count = 0;
+                for (&key, assignment) in range.take(budget) {
+                    record(&mut self.bytes, &mut self.first, assignment)?;
+                    self.last_assignment = Some(key);
+                    count += 1;
+                }
+                budget -= count;
+                self.cursor += count;
+                self.completed = self.completed.saturating_add(count);
+                if self.cursor < project.board.assignments.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
+            }
+            self.phase = 6;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        let footprints = project.board.footprints();
+        if self.cursor < footprints.len() {
+            let end = self.cursor.saturating_add(budget).min(footprints.len());
+            for footprint in &footprints[self.cursor..end] {
+                record(&mut self.bytes, &mut self.first, footprint)?;
+            }
+            let done_here = end - self.cursor;
+            self.cursor = end;
+            self.completed = self.completed.saturating_add(done_here);
+            if self.cursor < footprints.len() {
+                return Ok(false);
+            }
+        }
+        self.bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())?;
+        self.phase = 7;
+        Ok(true)
+    }
+}
+
+/// Write or count test-point marks in native order, budgeting sparse scans as well as records.
+#[derive(Default)]
+struct TestPointSteps {
+    footprint: usize,
+    pad: Option<String>,
+    via: usize,
+    wrote_mark: bool,
+    pad_units: usize,
+}
+
+impl TestPointSteps {
+    /// Start with traversal units and add each pad record as it is found, without rescanning.
+    fn total(&self, project: &Project) -> usize {
+        project.board.footprints().len().saturating_add(project.board.vias.len()).saturating_add(self.pad_units)
+    }
+
+    fn step(&mut self, bytes: &mut impl Write, project: &Project, budget: &mut usize) -> Result<bool, String> {
+        use crate::board::test_points::Record;
+        use std::ops::Bound::{Excluded, Unbounded};
+        while let Some(footprint) = project.board.footprints().get(self.footprint) {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            let after = self.pad.as_deref().map_or(Unbounded, Excluded);
+            if let Some((pad, &flags)) = footprint.test_points.range::<str, _>((after, Unbounded)).next() {
+                self.write_mark(bytes, &Record::pad(footprint.id, pad.clone(), flags))?;
+                self.pad = Some(pad.clone());
+                self.pad_units = self.pad_units.saturating_add(1);
+            } else {
+                self.footprint += 1;
+                self.pad = None;
+            }
+            *budget -= 1;
+        }
+        while let Some(via) = project.board.vias.get(self.via) {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            if !via.test_points.is_empty() {
+                self.write_mark(bytes, &Record::via(via.id, via.test_points))?;
+            }
+            self.via += 1;
+            *budget -= 1;
+        }
+        if self.wrote_mark {
+            bytes.write_all(BOARD_ARRAY_END).map_err(|error| error.to_string())?;
+        }
+        Ok(true)
+    }
+
+    fn write_mark(&mut self, bytes: &mut impl Write, mark: &crate::board::test_points::Record) -> Result<(), String> {
+        let mut first = !self.wrote_mark;
+        if first {
+            bytes.write_all(BOARD_TEST_POINTS_START).map_err(|error| error.to_string())?;
+        }
+        record(bytes, &mut first, mark)?;
+        self.wrote_mark = true;
+        Ok(())
+    }
+}
+
+/// Check the native board document before adopting an edited board with copper, package
+/// maps or test-point marks. Use the native writer's record framing, fields and closing bytes.
+pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
+    let mut check = BoardSizeCheck::new(true);
+    while !check.step(project, usize::MAX)? {}
+    Ok(())
+}
+
+/// The current header is written in [`BoardHeaderSteps`] units; one unbounded step is the full writer.
+fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
+    let mut budget = usize::MAX;
+    if BoardHeaderSteps::new().step(bytes, project, validate_teardrops, &mut budget)? { Ok(()) } else { Err("board header did not complete".into()) }
+}
+
+const HEADER_VALIDATE_ZONES: u8 = 0;
+const HEADER_OPEN: u8 = 1;
+const HEADER_MATERIALS: u8 = 2;
+const HEADER_LAYERS: u8 = 3;
+const HEADER_STRATA: u8 = 4;
+const HEADER_BASELINE: u8 = 5;
+const HEADER_FIELDS: u8 = 6;
+const HEADER_GRAPHIC_LAYERS: u8 = 7;
+const HEADER_GRAPHIC_ITEMS: u8 = 8;
+const HEADER_ZONES: u8 = 9;
+const HEADER_ARCS: u8 = 10;
+const HEADER_DONE: u8 = 11;
+
+/// Resumable board header writer. Any authored zones are validated first in budgeted outline-edge
+/// batches ([`crate::board::zones::ZoneValidationSteps`]); the validated opening and the remaining
+/// single-value fields (rules, placement origin, assembly profiles, silkscreen and outline) are
+/// one unit each; a baseline adds one opening unit plus one per baseline component and net batch;
+/// every setup material, layer and stratum, graphics layer and item, zone and arc is one unit.
+/// Lists keep the full writer's openers, separators, closers and empty forms.
+struct BoardHeaderSteps {
+    phase: u8,
+    cursor: usize,
+    first: bool,
+    zone_validation: Option<crate::board::zones::ZoneValidationSteps>,
+    baseline: Option<crate::board::update::BaselineSteps>,
+    baseline_extra_units: usize,
+}
+
+impl BoardHeaderSteps {
+    /// Start before budgeted zone validation and the validated opening.
+    fn new() -> Self {
+        Self { phase: HEADER_VALIDATE_ZONES, cursor: 0, first: true, zone_validation: None, baseline: None, baseline_extra_units: 0 }
+    }
+
+    /// Header units: zone-validation batches, the opening and field units, baseline units, and
+    /// one per variable-sized header record. Baseline units start from the O(1) metadata lower
+    /// bound ([`crate::board::update::BaselineSteps::base_total`]) and accumulate multi-batch net
+    /// units as nets are stepped, so every progress poll—including the first—stays O(1).
+    fn total(&self, project: &Project) -> usize {
+        let board = &project.board;
+        let zone_validation = crate::board::zones::ZoneValidationSteps::total(project);
+        let setup = board
+            .setup
+            .as_ref()
+            .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
+        let baseline = board
+            .baseline
+            .as_deref()
+            .map_or(0, |baseline| crate::board::update::BaselineSteps::base_total(baseline).saturating_add(self.baseline_extra_units));
+        let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
+        2usize
+            .saturating_add(zone_validation)
+            .saturating_add(setup)
+            .saturating_add(baseline)
+            .saturating_add(graphics)
+            .saturating_add(board.zones.len())
+            .saturating_add(board.arcs.len())
+    }
+
+    /// Enter the next header list with a fresh cursor and separator state.
+    fn advance(&mut self, phase: u8) {
+        self.phase = phase;
+        self.cursor = 0;
+        self.first = true;
+    }
+
+    /// Continue one header list: write its opener before its first record (or alone when the
+    /// list is empty), then records while budget lasts. Returns true once every record is
+    /// written; the caller then writes the list's closer.
+    fn records<T: Serialize>(&mut self, bytes: &mut impl Write, items: &[T], opener: &[u8], budget: &mut usize) -> Result<bool, String> {
+        if self.cursor < items.len() && *budget == 0 {
+            return Ok(false);
+        }
+        if self.first {
+            bytes.write_all(opener).map_err(|error| error.to_string())?;
+        }
+        let end = self.cursor.saturating_add(*budget).min(items.len());
+        for item in &items[self.cursor..end] {
+            record(bytes, &mut self.first, item)?;
+        }
+        *budget -= end - self.cursor;
+        self.cursor = end;
+        Ok(self.cursor == items.len())
+    }
+
+    /// Advance at most `budget` header units, decrementing it by the units done. Returns
+    /// `Ok(true)` once the header through the arcs list is written.
+    fn step(&mut self, bytes: &mut impl Write, project: &Project, validate_teardrops: bool, budget: &mut usize) -> Result<bool, String> {
+        let board = &project.board;
+        loop {
+            match self.phase {
+                HEADER_VALIDATE_ZONES => {
+                    if !board.zones.is_empty() {
+                        let steps = self.zone_validation.get_or_insert_with(crate::board::zones::ZoneValidationSteps::new);
+                        if !steps.step(project, budget)? {
+                            return Ok(false);
+                        }
+                        self.zone_validation = None;
+                    }
+                    self.advance(HEADER_OPEN);
+                }
+                HEADER_OPEN => {
+                    if *budget == 0 {
+                        return Ok(false);
+                    }
+                    board_header_open(bytes, project, validate_teardrops)?;
+                    *budget -= 1;
+                    self.advance(if board.setup.is_some() {
+                        HEADER_MATERIALS
+                    } else if board.baseline.is_some() {
+                        HEADER_BASELINE
+                    } else {
+                        HEADER_FIELDS
+                    });
+                }
+                HEADER_MATERIALS | HEADER_LAYERS | HEADER_STRATA => {
+                    let setup = board.setup.as_ref().ok_or("board setup changed during the header count")?;
+                    if self.phase == HEADER_MATERIALS {
+                        if !setup.materials().is_empty() {
+                            if !self.records(bytes, setup.materials(), b"    \"materials\": [\n", budget)? {
+                                return Ok(false);
+                            }
+                            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
+                        }
+                        self.advance(HEADER_LAYERS);
+                    } else if self.phase == HEADER_LAYERS {
+                        if !self.records(bytes, setup.layers(), b"    \"layers\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        write!(bytes, "    ],\n    \"stackup\": {{\n      \"id\": \"{}\",\n      \"strata\": [\n", setup.stackup().id)
+                            .map_err(|e| e.to_string())?;
+                        self.advance(HEADER_STRATA);
+                    } else {
+                        let stackup = setup.stackup();
+                        if !self.records(bytes, &stackup.strata, b"", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
+                        if !stackup.layer_groups.is_empty() {
+                            bytes.write_all(b",\n      \"layer_groups\": [\n").map_err(|error| error.to_string())?;
+                            let mut first = true;
+                            for group in &stackup.layer_groups {
+                                record(bytes, &mut first, group)?;
+                            }
+                            bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
+                        }
+                        for (field, value) in [
+                            ("finished_thickness_nm", stackup.finished_thickness_nm),
+                            ("finished_thickness_tolerance_nm", stackup.finished_thickness_tolerance_nm),
+                            ("declared_minimum_thickness_nm", stackup.declared_minimum_thickness_nm),
+                        ] {
+                            if let Some(value) = value {
+                                write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
+                            }
+                        }
+                        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
+                        self.advance(if board.baseline.is_some() { HEADER_BASELINE } else { HEADER_FIELDS });
+                    }
+                }
+                HEADER_BASELINE => {
+                    let baseline = board.baseline.as_ref().ok_or("board baseline changed during the header count")?;
+                    if self.first {
+                        if *budget == 0 {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+                        self.first = false;
+                    }
+                    let steps = self.baseline.get_or_insert_with(crate::board::update::BaselineSteps::new);
+                    let done = steps.step_indented(bytes, baseline, budget)?;
+                    self.baseline_extra_units = steps.extra_net_units();
+                    if !done {
+                        return Ok(false);
+                    }
+                    self.baseline = None;
+                    bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+                    self.advance(HEADER_FIELDS);
+                }
+                HEADER_FIELDS => {
+                    if *budget == 0 {
+                        return Ok(false);
+                    }
+                    board_header_fields(bytes, project)?;
+                    *budget -= 1;
+                    self.advance(if board.drawings.is_some() { HEADER_GRAPHIC_LAYERS } else { HEADER_ZONES });
+                }
+                HEADER_GRAPHIC_LAYERS | HEADER_GRAPHIC_ITEMS => {
+                    let graphics = board.drawings.as_ref().ok_or("board graphics changed during the header count")?;
+                    if self.phase == HEADER_GRAPHIC_LAYERS {
+                        if !self.records(bytes, &graphics.layers, b"  \"graphics\": {\n    \"layers\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
+                        self.advance(HEADER_GRAPHIC_ITEMS);
+                    } else {
+                        if !self.records(bytes, &graphics.items, b"    \"items\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
+                        self.advance(HEADER_ZONES);
+                    }
+                }
+                HEADER_ZONES => {
+                    if !board.zones.is_empty() {
+                        if !self.records(bytes, &board.zones, b"  \"zones\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+                    }
+                    self.advance(HEADER_ARCS);
+                }
+                HEADER_ARCS => {
+                    if !board.arcs.is_empty() {
+                        if !self.records(bytes, &board.arcs, b"  \"arcs\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+                    }
+                    self.advance(HEADER_DONE);
+                }
+                _ => return Ok(true),
+            }
+        }
+    }
+}
+
+/// Validate arcs and teardrops (zones are already validated in [`HEADER_VALIDATE_ZONES`]), then
+/// write the board format line and, for configured boards, the setup opener.
+fn board_header_open(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
     crate::board::arc::validate(project, &project.board.arcs)?;
-    crate::board::teardrop::validate(project)?;
+    if validate_teardrops {
+        crate::board::teardrop::validate(project)?;
+    }
     let board = &project.board;
     write!(bytes, "{{\n  \"format\": \"{CURRENT_BOARD_FORMAT}\",\n").map_err(|error| error.to_string())?;
-    if let Some(setup) = &board.setup {
+    if board.setup.is_some() {
         bytes.write_all(b"  \"setup\": {\n").map_err(|error| error.to_string())?;
-        if !setup.materials().is_empty() {
-            bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
-            let mut first = true;
-            for material in setup.materials() {
-                record(bytes, &mut first, material)?;
-            }
-            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b"    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in setup.layers() {
-            record(bytes, &mut first, layer)?;
-        }
-        write!(bytes, "    ],\n    \"stackup\": {{\n      \"id\": \"{}\",\n      \"strata\": [\n", setup.stackup().id).map_err(|e| e.to_string())?;
-        first = true;
-        for stratum in &setup.stackup().strata {
-            record(bytes, &mut first, stratum)?;
-        }
-        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
-        let stackup = setup.stackup();
-        if !stackup.layer_groups.is_empty() {
-            bytes.write_all(b",\n      \"layer_groups\": [\n").map_err(|error| error.to_string())?;
-            let mut first = true;
-            for group in &stackup.layer_groups {
-                record(bytes, &mut first, group)?;
-            }
-            bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
-        }
-        for (field, value) in [
-            ("finished_thickness_nm", stackup.finished_thickness_nm),
-            ("finished_thickness_tolerance_nm", stackup.finished_thickness_tolerance_nm),
-            ("declared_minimum_thickness_nm", stackup.declared_minimum_thickness_nm),
-        ] {
-            if let Some(value) = value {
-                write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
-            }
-        }
-        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     }
-    if let Some(baseline) = &board.baseline {
-        let encoded = baseline.encode()?;
-        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
-        for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
-            if index != 0 {
-                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
-            }
-            bytes.write_all(line).map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
-    }
+    Ok(())
+}
+
+/// Write the single-value header fields between the baseline and the graphics, in saved order.
+fn board_header_fields(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    let board = &project.board;
     if let Some(rules) = &board.rules {
         rules.validate()?;
         writeln!(bytes, "  \"rules\": {},", serde_json::to_string(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -2741,35 +3139,14 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     if let Some(outline) = &board.outline {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(graphics) = &board.drawings {
-        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in &graphics.layers {
-            record(bytes, &mut first, layer)?;
-        }
-        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
-        first = true;
-        for item in &graphics.items {
-            record(bytes, &mut first, item)?;
-        }
-        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
-    }
-    if !board.zones.is_empty() {
-        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for zone in &board.zones {
-            record(bytes, &mut first, zone)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.arcs.is_empty() {
-        bytes.write_all(b"  \"arcs\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for arc in &board.arcs {
-            record(bytes, &mut first, arc)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
+    Ok(())
+}
+
+/// Write the current board header through teardrops; Save then writes tracks and vias in
+/// bounded record batches before test points and placements.
+fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    board_header_prefix(bytes, project, true)?;
+    let board = &project.board;
     if !board.teardrops.is_empty() {
         bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
@@ -2783,6 +3160,8 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
 fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+    #[cfg(test)]
+    BOARD_RECORD_WRITES.with(|count| count.set(count.get().saturating_add(1)));
     if !*first {
         bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
     }
@@ -2851,4 +3230,350 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     }
     bytes.extend_from_slice(b"  \"net_labels\": [\n");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Session,
+        board::update::{
+            BASELINE_NET_TERMINALS_PER_UNIT, Baseline, BaselineSteps, FORMAT as BASELINE_FORMAT, NetState, PartInstanceState, SourceCapture,
+            TerminalKey, take_baseline_total_net_scans,
+        },
+    };
+
+    /// Polling [`BoardSizeCheck::progress`] across every step of a large baseline—including the
+    /// very first poll—never scans `baseline.nets`: it starts from O(1) metadata and refines
+    /// multi-batch net units incrementally as nets are stepped, keeping `(completed, total)`
+    /// monotonic and exact at completion.
+    #[test]
+    fn board_size_check_progress_caches_baseline_total_across_polls() {
+        const COMPONENT_COUNT: usize = 512;
+        let mut session = Session::default();
+        session.apply("project.new", &serde_json::json!({"create_board": true})).unwrap();
+        let mut project = (*session.snapshot().unwrap()).clone();
+        let target = project.boards().next().unwrap().target;
+
+        let mut components = BTreeMap::new();
+        for id in 1..=(COMPONENT_COUNT as u64) {
+            components.insert(
+                id,
+                PartInstanceState {
+                    library: "starter".into(),
+                    definition: "resistor".into(),
+                    revision: 1,
+                    reference: format!("R{id}"),
+                    value: "10k".into(),
+                    primary_quantity: None,
+                    terminals: vec!["1".into(), "2".into()],
+                    package: None,
+                },
+            );
+        }
+        let mut nets = Vec::with_capacity(COMPONENT_COUNT + 1);
+        nets.push(NetState {
+            display_name: None,
+            terminals: (1..=(COMPONENT_COUNT as u64)).map(|component| TerminalKey { component, terminal: "1".into() }).collect(),
+            names: vec!["WIDE_BUS".into()],
+            origin: None,
+        });
+        for id in 1..=(COMPONENT_COUNT as u64) {
+            nets.push(NetState {
+                display_name: None,
+                terminals: vec![TerminalKey { component: id, terminal: "2".into() }],
+                names: vec![format!("NET_{id}")],
+                origin: None,
+            });
+        }
+        let net_count = nets.len();
+        let expected_wide_units = COMPONENT_COUNT.div_ceil(BASELINE_NET_TERMINALS_PER_UNIT);
+        let expected_baseline_units = 1 + COMPONENT_COUNT + expected_wide_units + COMPONENT_COUNT;
+        let baseline = Baseline {
+            format: BASELINE_FORMAT.into(),
+            project: target.project,
+            board: target.board,
+            source: SourceCapture { capture_id: Uuid::from_u128(1), content_digest: "0".repeat(64) },
+            components,
+            nets,
+        };
+        let _ = take_baseline_total_net_scans();
+        assert_eq!(BaselineSteps::base_total(&baseline), 1 + COMPONENT_COUNT + net_count);
+        assert_eq!(take_baseline_total_net_scans(), 0);
+        assert_eq!(BaselineSteps::total(&baseline), expected_baseline_units);
+        assert_eq!(take_baseline_total_net_scans(), net_count);
+
+        let expected_initial_total = 2 + BaselineSteps::base_total(&baseline) + 2 * project.board.footprints().len();
+        Arc::make_mut(&mut project.board).baseline = Some(Arc::new(baseline));
+        let expected_final_total = 2 + expected_baseline_units + 2 * project.board.footprints().len();
+        let saved_documents = encode_documents(Arc::new(project.clone())).unwrap();
+        let saved_board_len = saved_documents[&project_board_path(&saved_documents[ENTRY_POINT]).unwrap().unwrap()].len();
+
+        let _ = take_baseline_total_net_scans();
+        check_board_document_size(&project).unwrap();
+        assert_eq!(take_baseline_total_net_scans(), 0);
+
+        let mut check = BoardSizeCheck::new(true);
+        let _ = take_baseline_total_net_scans();
+        assert_eq!(check.progress(&project), (0, expected_initial_total));
+        assert_eq!(take_baseline_total_net_scans(), 0);
+
+        let mut previous_completed = 0usize;
+        let mut previous_total = expected_initial_total;
+        let mut steps = 0usize;
+        while !check.step(&project, 1).unwrap() {
+            steps += 1;
+            let (completed, total) = check.progress(&project);
+            assert_eq!(completed, steps);
+            assert!(completed >= previous_completed);
+            assert!(total >= previous_total);
+            assert!(completed <= total);
+            assert!(total <= expected_final_total);
+            previous_completed = completed;
+            previous_total = total;
+            assert_eq!(take_baseline_total_net_scans(), 0);
+        }
+        assert_eq!(check.progress(&project), (expected_final_total, expected_final_total));
+        assert_eq!(take_baseline_total_net_scans(), 0);
+        assert_eq!(steps, expected_final_total);
+        assert_eq!(check.byte_count(), saved_board_len);
+    }
+
+    use crate::board::track::tests::{copper_layers, routed_fixture, view};
+    use crate::board::zones::{
+        ADD_ZONE, MAX_POINTS, MAX_ZONES, ZONE_VALIDATION_EDGES_PER_UNIT, ZoneValidationSteps, take_zone_edges_stepped, validate as validate_zones,
+    };
+    use serde_json::json;
+
+    /// Both marks count toward the same native byte limit even when checked a unit at a time.
+    #[test]
+    fn board_size_check_counts_test_points_in_save_order() {
+        let mut session = routed_fixture();
+        session
+            .apply(
+                crate::ADD_VIA,
+                &json!({"at":{"x_nm":0,"y_nm":20_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,
+                    "expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let board = view(&session).target.board;
+        let pad = json!({"kind":"pad","footprint":view(&session).footprints().next().unwrap().id,"pad":"1"});
+        let via = json!({"kind":"via","via":view(&session).vias()[0].id});
+        for target in [pad, via] {
+            session
+                .apply(
+                    crate::board::test_points::SET_TEST_POINT,
+                    &json!({"board":board,"target":target,"purpose":"assembly","sides":"top","expected_revision":session.revision()}),
+                )
+                .unwrap();
+        }
+        let project = session.snapshot().unwrap();
+        let documents = encode_documents(project.clone()).unwrap();
+        let saved = &documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()];
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(saved).unwrap()["test_points"].as_array().unwrap().len(), 2);
+        let mut check = BoardSizeCheck::new(true);
+        let (_, initial_total) = check.progress(&project);
+        loop {
+            take_board_record_writes();
+            let done = check.step(&project, 1).unwrap();
+            assert!(take_board_record_writes() <= 1);
+            if done {
+                break;
+            }
+        }
+        assert_eq!(check.progress(&project), (initial_total + 1, initial_total + 1));
+        assert_eq!(check.byte_count(), saved.len());
+    }
+
+    /// Build a strictly convex `count`-vertex polygon in nanometres for zone validation tests.
+    fn regular_polygon(count: usize, offset_x_nm: i64) -> Vec<Point> {
+        const RADIUS_NM: f64 = 5_000_000.0;
+        (0..count)
+            .map(|index| {
+                let angle = 2.0 * std::f64::consts::PI * (index as f64) / (count as f64);
+                Point { x_nm: offset_x_nm + (RADIUS_NM * angle.cos()).round() as i64, y_nm: (RADIUS_NM * angle.sin()).round() as i64 }
+            })
+            .collect()
+    }
+
+    /// Step `BoardSizeCheck` one unit at a time until it returns an error, asserting every
+    /// intermediate step stays within the per-unit zone-edge budget.
+    fn drain_budget_one_error(project: &Project) -> String {
+        let mut check = BoardSizeCheck::new(true);
+        let limit = check.progress(project).1.saturating_add(4);
+        let _ = take_zone_edges_stepped();
+        for _ in 0..=limit {
+            match check.step(project, 1) {
+                Ok(true) => panic!("expected zone validation error, but BoardSizeCheck completed"),
+                Ok(false) => {
+                    assert!(take_zone_edges_stepped() <= ZONE_VALIDATION_EDGES_PER_UNIT);
+                }
+                Err(error) => return error,
+            }
+        }
+        panic!("BoardSizeCheck did not terminate");
+    }
+
+    /// A board at the maximum total-vertex budget (32 zones x 256 vertices = 8,192 points)
+    /// validates zones in bounded edge batches, cancels cleanly mid-validation, matches saved
+    /// board bytes, and preserves exact limit, duplicate-ID, option, and outline errors.
+    #[test]
+    fn board_size_check_validates_zones_in_bounded_cancellable_batches() {
+        const ZONES: usize = 32;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let nets = session.project().unwrap().inspect_net_registry().unwrap();
+        let square = [
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 10_000_000 },
+            Point { x_nm: 0, y_nm: 10_000_000 },
+        ];
+        session
+            .apply(
+                ADD_ZONE,
+                &json!({
+                    "board": board,
+                    "layer": copper_layer,
+                    "target": { "kind": "derived", "anchor": nets["nets"][0]["anchor"] },
+                    "points": square,
+                    "expected_revision": session.revision(),
+                }),
+            )
+            .unwrap();
+
+        let mut base = session.project().unwrap().clone();
+        let template = base.board.zones[0].clone();
+        Arc::make_mut(&mut base.board).zones = (0..ZONES)
+            .map(|index| {
+                let mut zone = template.clone();
+                zone.id = Uuid::from_u128(0x70_0000 + index as u128);
+                zone.points = regular_polygon(MAX_POINTS, (index as i64) * 12_000_000);
+                zone
+            })
+            .collect();
+        let project = Arc::new(base);
+
+        let expected_zone_units = ZONES * MAX_POINTS.div_ceil(ZONE_VALIDATION_EDGES_PER_UNIT);
+        assert_eq!(ZoneValidationSteps::total(&project), expected_zone_units);
+
+        let documents = encode_documents(project.clone()).unwrap();
+        let saved_board = documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()].len();
+        let mut whole = BoardSizeCheck::new(true);
+        assert!(whole.step(&project, usize::MAX).unwrap());
+        assert_eq!(whole.byte_count(), saved_board);
+        let (whole_completed, total) = whole.progress(&project);
+        assert_eq!(whole_completed, total);
+
+        // Budget-0 does no work; budget-1 validates at most ZONE_VALIDATION_EDGES_PER_UNIT edges
+        // per step and counts the exact saved board bytes.
+        let mut single = BoardSizeCheck::new(true);
+        let _ = take_zone_edges_stepped();
+        assert!(!single.step(&project, 0).unwrap());
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(single.progress(&project), (0, total));
+
+        let mut steps = 0usize;
+        let mut total_zone_edges = 0usize;
+        while !single.step(&project, 1).unwrap() {
+            let edges = take_zone_edges_stepped();
+            assert!(edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            steps += 1;
+            if steps <= expected_zone_units {
+                assert!(edges > 0);
+            } else {
+                assert_eq!(edges, 0);
+            }
+            total_zone_edges += edges;
+            assert_eq!(single.progress(&project), (steps, total));
+        }
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(total_zone_edges, ZONES * MAX_POINTS);
+        assert_eq!(single.progress(&project), (total, total));
+        assert_eq!(single.byte_count(), saved_board);
+
+        // Dropping mid-validation (mid-first-zone and mid-board) cancels cleanly before any header
+        // bytes are written, and resuming from those boundaries still matches the saved board.
+        for pause_at in [3usize, expected_zone_units / 2] {
+            let mut canceled = BoardSizeCheck::new(true);
+            let _ = take_zone_edges_stepped();
+            for expected in 1..=pause_at {
+                assert!(!canceled.step(&project, 1).unwrap());
+                assert!(take_zone_edges_stepped() <= ZONE_VALIDATION_EDGES_PER_UNIT);
+                assert_eq!(canceled.progress(&project), (expected, total));
+            }
+            assert_eq!(canceled.byte_count(), 0);
+            drop(canceled);
+
+            let mut resumed = BoardSizeCheck::new(true);
+            for _ in 0..pause_at {
+                assert!(!resumed.step(&project, 1).unwrap());
+            }
+            assert_eq!(resumed.byte_count(), 0);
+            assert_eq!(resumed.progress(&project), (pause_at, total));
+            assert!(resumed.step(&project, usize::MAX).unwrap());
+            assert_eq!(resumed.progress(&project), (total, total));
+            assert_eq!(resumed.byte_count(), saved_board);
+        }
+        assert_eq!(encode_documents(project.clone()).unwrap(), documents);
+
+        // Board-wide point limit (8,196 > 8,192).
+        let mut over_points = (*project).clone();
+        let mut extra = template.clone();
+        extra.id = Uuid::from_u128(0x70_ffff);
+        Arc::make_mut(&mut over_points.board).zones.push(extra);
+        let expected = validate_zones(&over_points).unwrap_err();
+        assert_eq!(expected, "Zone resource limit exceeded.");
+        assert_eq!(drain_budget_one_error(&over_points), expected);
+
+        // Board-wide zone count limit (257 > MAX_ZONES).
+        let mut over_zones = (*project).clone();
+        Arc::make_mut(&mut over_zones.board).zones = (0..=MAX_ZONES)
+            .map(|index| {
+                let mut zone = template.clone();
+                zone.id = Uuid::from_u128(0x71_0000 + index as u128);
+                zone
+            })
+            .collect();
+        let expected = validate_zones(&over_zones).unwrap_err();
+        assert_eq!(expected, "Zone resource limit exceeded.");
+        assert_eq!(drain_budget_one_error(&over_zones), expected);
+
+        // Duplicate zone ID across separate validation batches.
+        let mut dup_id = (*project).clone();
+        let first_id = dup_id.board.zones[0].id;
+        Arc::make_mut(&mut dup_id.board).zones[ZONES - 1].id = first_id;
+        let expected = validate_zones(&dup_id).unwrap_err();
+        assert_eq!(expected, "Zone has a duplicate/nil identity or unregistered net.");
+        assert_eq!(drain_budget_one_error(&dup_id), expected);
+
+        // Invalid zone options.
+        let mut bad_options = (*project).clone();
+        Arc::make_mut(&mut bad_options.board).zones[ZONES / 2].options.priority = 1001;
+        let expected = validate_zones(&bad_options).unwrap_err();
+        assert_eq!(drain_budget_one_error(&bad_options), expected);
+
+        // Self-intersecting outline detected in a later edge batch (edge_cursor >= 32).
+        let mut self_intersect = (*project).clone();
+        Arc::make_mut(&mut self_intersect.board).zones[20].points.swap(40, 41);
+        let expected = validate_zones(&self_intersect).unwrap_err();
+        assert_eq!(expected, "Zone outlines cannot intersect or touch themselves.");
+        assert_eq!(drain_budget_one_error(&self_intersect), expected);
+
+        // Zero-area collinear outline.
+        let mut zero_area = (*project).clone();
+        Arc::make_mut(&mut zero_area.board).zones[10].points =
+            vec![Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 1_000_000, y_nm: 0 }, Point { x_nm: 2_000_000, y_nm: 0 }];
+        let expected = validate_zones(&zero_area).unwrap_err();
+        assert_eq!(expected, "A zone must enclose a nonzero area.");
+        assert_eq!(drain_budget_one_error(&zero_area), expected);
+
+        // Too-few-vertices outline.
+        let mut too_few = (*project).clone();
+        Arc::make_mut(&mut too_few.board).zones[5].points.truncate(2);
+        let expected = validate_zones(&too_few).unwrap_err();
+        assert_eq!(expected, "A zone needs 3–256 distinct bounded vertices; closure is implicit.");
+        assert_eq!(drain_budget_one_error(&too_few), expected);
+    }
 }
