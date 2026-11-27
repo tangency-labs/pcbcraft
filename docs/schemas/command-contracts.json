@@ -11132,6 +11132,9 @@
       "params": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
           "expected_revision": {
             "minimum": 0,
             "type": "integer"
@@ -12302,6 +12305,9 @@
       "params": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
           "expected_revision": {
             "minimum": 0,
             "type": "integer"
@@ -12325,7 +12331,8 @@
           "style": {
             "enum": [
               "local",
-              "global"
+              "global",
+              "bus"
             ],
             "type": "string"
           },
@@ -13127,6 +13134,9 @@
             "default": true,
             "type": "boolean"
           },
+          "dry_run": {
+            "type": "boolean"
+          },
           "expected_revision": {
             "minimum": 0,
             "type": "integer"
@@ -13158,7 +13168,8 @@
           "style": {
             "enum": [
               "local",
-              "global"
+              "global",
+              "bus"
             ],
             "type": "string"
           },

@@ -7,6 +7,9 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2, vec2};
 pub enum Style {
     Local,
     Global,
+    /// A vector bus label: local-style text over a heavy bus stub with a width slash. It makes
+    /// no contact, so it never shows the open-pin ring.
+    Bus,
 }
 
 /// Optional net-name appearance uses physical screen offsets supplied by the editor.
@@ -110,6 +113,17 @@ fn draw(
     };
     let offset = match style {
         Style::Local => vec2(4., -10.),
+        Style::Bus => {
+            // The width slash goes first: `line` borrows `bounds` until its last use.
+            line(vec2(7., 4.), vec2(13., -4.));
+            let heavy = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE * 3., color);
+            let (a, b) = (transform(vec2(0., 0.)), transform(vec2(20., 0.)));
+            if paint {
+                painter.line_segment([a, b], heavy);
+            }
+            bounds = bounds.union(Rect::from_two_pos(a, b).expand(heavy.width / 2.));
+            vec2(4., -10.)
+        }
         Style::Global => {
             let width =
                 crate::canvas_text::layout_no_wrap(painter, name.into(), FontId::proportional(Tokens::get().font_label * scale), color).size().x
@@ -126,7 +140,7 @@ fn draw(
         let label_at = text.and_then(|t| t.offset).map_or_else(|| transform(offset), |offset| at + offset);
         let align = text.map_or_else(
             || {
-                if matches!(style, Style::Local) {
+                if matches!(style, Style::Local | Style::Bus) {
                     if rotation == 180 { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
                 } else {
                     Align2::CENTER_CENTER
@@ -153,7 +167,7 @@ fn draw(
         }
     }
     // A small anchor marks the exact electrical contact, independent of glyph orientation.
-    if paint && !connected {
+    if paint && !connected && !matches!(style, Style::Bus) {
         painter.circle_stroke(at, 2.0, stroke);
     }
     Ink { bounds: bounds.expand(3.), name: name_ink }

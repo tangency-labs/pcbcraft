@@ -2817,14 +2817,6 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
     Ok(())
 }
 
-/// Write the bounded sheet header and return its first incremental record phase. Flat
-/// sheets retain version 1 and bypass hierarchy lists; named anchors add a bounded phase
-/// before those lists in version 3. Explicit field appearance uses version 4, net-name
-/// appearance version 5, mirrored placements version 6, and live generated contact-leg
-/// provenance version 7; wire-end intent uses version 8. Paper uses version 9, a superset of 8
-/// whose generated-leg and wire-end arrays are optional. Every sheet with paper is version 9;
-/// only a sheet decoded from an older version and not yet adopted keeps its earlier version.
-/// Versions 4 through 9 retain all three hierarchy/named arrays, including when empty.
 /// Write a nonempty parameter list as a top-level field, one parameter per line so a changed
 /// value changes one line. An empty list writes nothing.
 fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Parameters) -> Result<(), String> {
@@ -2841,6 +2833,7 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
 }
 
 /// Begin a sheet in the current format, retaining any authored paper and its parameters.
+/// Bus labels are records in the existing `net_labels` array, not a separate format.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<(), String> {
     write!(bytes, "{{\n  \"format\": \"{CURRENT_SHEET_FORMAT}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
     if let Some(page) = sheet.page {

@@ -3,7 +3,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Place a local or global text label.
+/// Place a local, global or bus text label.
 pub const ADD: &str = "schematic.place_net_label";
 /// Change a named anchor's properties, orientation or position.
 pub const SET: &str = "schematic.set_net_label";
@@ -11,18 +11,31 @@ pub const SET: &str = "schematic.set_net_label";
 pub const DELETE: &str = "schematic.delete_net_label";
 /// Per-sheet limit independent of component and wire counts.
 pub const MAX_LABELS: usize = 256;
+/// Refusal returned whenever a command or document tries to end a wire on a bus label.
+pub(crate) const BUS_WIRE_ENDPOINT_REFUSAL: &str = "a bus label cannot end a wire; connect its members through ordinary labels";
 
-/// Text labels are either sheet-scoped or global; power symbols use native definitions.
+pub mod bus;
+
+/// Text labels are sheet-scoped, global or a sheet-scoped vector bus; power symbols use
+/// native definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Style {
     Local,
     Global,
+    /// Names a range of member nets (see [`bus`]); each member joins the same-sheet net of
+    /// that member name.
+    Bus,
 }
 impl Style {
     /// Whether matching names connect outside this sheet.
     pub fn global(self) -> bool {
-        self != Self::Local
+        self == Self::Global
+    }
+    /// Whether the label is a single-net contact at its anchor. A bus label stands for several
+    /// nets, so it touches no pin or wire and cannot end a wire.
+    pub fn contact(self) -> bool {
+        self != Self::Bus
     }
 }
 
@@ -47,9 +60,13 @@ impl Label {
     pub fn object_id(&self) -> String {
         format!("net-label-{}", self.id)
     }
-    /// Editable properties and the endpoint accepted by draw-wire commands.
+    /// Editable properties and, for a single-net label, the endpoint accepted by draw-wire
+    /// commands.
     pub fn inspect(&self) -> Value {
-        let mut value = json!({"id":self.object_id(),"name":self.name,"style":self.style,"at":self.at,"rotation":self.rotation,"endpoint":WireEndpoint::NetLabel(self.id).inspect()});
+        let mut value = json!({"id":self.object_id(),"name":self.name,"style":self.style,"at":self.at,"rotation":self.rotation});
+        if self.style.contact() {
+            value["endpoint"] = WireEndpoint::NetLabel(self.id).inspect();
+        }
         if let Some(text) = &self.text {
             value["text"] = json!(text);
         }
@@ -114,6 +131,12 @@ impl Project {
                     || label.name.chars().any(char::is_control)
                 {
                     return Err("net name must contain 1–200 characters without surrounding whitespace or control characters".into());
+                }
+                if label.style == Style::Bus {
+                    bus::members(&label.name)?;
+                    if sheet.wires.iter().any(|wire| wire.endpoints.contains(&WireEndpoint::NetLabel(label.id))) {
+                        return Err(BUS_WIRE_ENDPOINT_REFUSAL.into());
+                    }
                 }
                 if let Some(text) = &label.text {
                     schematic::fields::validate_layouts(&BTreeMap::from([("value".into(), text.clone())]), &schematic::fields::Metadata::default())?;
@@ -185,9 +208,12 @@ impl Project {
             for block in project.sheet_symbols() {
                 links.extend(project.sheet_pins(block).map(|pin| [WireEndpoint::SheetPin(pin.label.id), WireEndpoint::Label(pin.label.id)]));
             }
+            // Bus labels make no contact of their own: their members take the nets of the
+            // ordinary same-sheet anchors named here.
             let markers = project
                 .net_labels()
                 .iter()
+                .filter(|label| label.style.contact())
                 .map(|label| (WireEndpoint::NetLabel(label.id), label.name.as_str(), label.at, label.style.global()))
                 .chain(project.power_terminals().map(|(end, name, at)| (end, name, at, true)));
             for (end, name, at, global) in markers {
@@ -221,6 +247,7 @@ impl Project {
 impl Session {
     /// Validate an isolated candidate before publishing one undoable edit. Unknown/foreign
     /// IDs and stale revisions leave state intact; unchanged properties do not advance history.
+    /// A marker with wire contact cannot become a bus, even when the edit also moves it.
     /// With keep_connected, moving captures the old marker's wire/pin contacts before updating
     /// metadata, committing the connected geometry and properties in one undo step.
     pub(crate) fn edit_net_label(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
@@ -268,7 +295,20 @@ impl Session {
             match index {
                 Some(index) if project.net_labels[index] == label => return Ok(()),
                 Some(index) => {
-                    if params["keep_connected"].as_bool().unwrap_or(false) && project.net_labels[index].at != label.at {
+                    let old = &project.net_labels[index];
+                    if old.style.contact() && label.style == Style::Bus {
+                        let endpoint = WireEndpoint::NetLabel(old.id);
+                        if project.wires().iter().any(|wire| wire.endpoints().contains(&endpoint)) {
+                            return Err(CommandError::InvalidParams(BUS_WIRE_ENDPOINT_REFUSAL.into()));
+                        }
+                        // The named graph also connects the old anchor to every route through it.
+                        if project.wires().iter().any(|wire| wire::path_contains_point(&project.wire_path(wire), old.at)) {
+                            return Err(CommandError::InvalidParams("a label touching a wire cannot become a bus label".into()));
+                        }
+                    }
+                    // A bus label holds no contacts, so there is nothing to carry along.
+                    let contact = old.style.contact() && label.style.contact();
+                    if contact && params["keep_connected"].as_bool().unwrap_or(false) && old.at != label.at {
                         project = project.dragged_net_label(label.id, label.at, label.rotation, self.revision(), wire::auto_heal(params))?;
                     }
                     Arc::make_mut(&mut project.sheet_mut().net_labels)[index] = label;

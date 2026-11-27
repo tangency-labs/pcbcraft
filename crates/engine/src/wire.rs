@@ -83,6 +83,17 @@ impl Anchor {
         }
     }
 
+    /// Whether this target names a bus label on the addressed sheet. Bus labels stand for
+    /// several nets and cannot end a wire, so callers refuse them explicitly rather than
+    /// reporting a missing endpoint.
+    pub(crate) fn is_bus_label(self, project: &Project) -> bool {
+        matches!(
+            self,
+            Self::Existing(WireEndpoint::NetLabel(id))
+                if project.net_labels().iter().any(|label| label.id == id && label.style == crate::net_labels::Style::Bus)
+        )
+    }
+
     /// Resolve a gesture target in its current project; missing identities are rejected.
     pub fn position(self, project: &Project) -> Option<Point> {
         match self {
@@ -345,6 +356,9 @@ impl Session {
         }
         let parse = |key: &str| Anchor::parse(&params[key]).ok_or_else(|| CommandError::InvalidParams(format!("invalid {key} wire endpoint")));
         let anchors = [parse("from")?, parse("to")?];
+        if anchors.into_iter().any(|anchor| anchor.is_bus_label(project)) {
+            return Err(CommandError::InvalidParams(crate::net_labels::BUS_WIRE_ENDPOINT_REFUSAL.to_owned()));
+        }
         let positions = anchors.map(|anchor| anchor.position(project));
         let [Some(from), Some(to)] = positions else {
             return Err(CommandError::NotFound("wire endpoint does not exist".to_owned()));

@@ -88,6 +88,7 @@ impl Targets {
         let markers = project
             .net_labels()
             .iter()
+            .filter(|label| label.style.contact())
             .map(|label| (WireEndpoint::NetLabel(label.id), label.at))
             .chain(project.power_terminals().map(|(end, _, at)| (end, at)));
         for (end, at) in markers {

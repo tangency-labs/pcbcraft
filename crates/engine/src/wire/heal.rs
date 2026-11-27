@@ -806,6 +806,9 @@ impl Project {
         if matches!(target, Anchor::Free(_)) {
             return Err(CommandError::InvalidParams("attachment requires a pin, endpoint or wire segment".into()));
         }
+        if target.is_bus_label(self) {
+            return Err(CommandError::InvalidParams(crate::net_labels::BUS_WIRE_ENDPOINT_REFUSAL.to_owned()));
+        }
         let point = target.position(self).ok_or_else(|| CommandError::NotFound("attachment target does not exist".into()))?;
         let attachments = self.wire_attachment_policy();
         if let Some(source) = self.endpoint_position(WireEndpoint::Junction(junction)) {

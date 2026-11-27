@@ -107,6 +107,7 @@ pub(super) fn visual(style: Style) -> chrome::Style {
     match style {
         Style::Local => chrome::Style::Local,
         Style::Global => chrome::Style::Global,
+        Style::Bus => chrome::Style::Bus,
     }
 }
 
@@ -486,6 +487,10 @@ impl PcbApp {
                 {
                     edit.error = Some("Enter a net name of 1–200 characters without surrounding whitespace or control characters.".into());
                 }
+                // Refuse a malformed bus name here, beside the fields, before a placement starts.
+                Ok(label) if label.style == Style::Bus && engine::bus::members(&label.name).is_err() => {
+                    edit.error = engine::bus::members(&label.name).err().map(|reason| format!("Enter a bus name such as D[0..7]: {reason}."));
+                }
                 Ok(label) if label.id == 0 => {
                     self.views.active.schematic.tool =
                         Some(Tool::NetLabel { label, revision: edit.source.revision, drag: None, orient_to_pin: edit.orient_to_pin });
@@ -624,9 +629,24 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
         edit.focused = true;
     }
     let enter = name.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-    let mut key = if edit.label.style == Style::Global { "global" } else { "local" }.to_owned();
-    form::choice(ui, "Scope", ui.scope_id().with("label_style"), &mut key, &[("local", "Local".into()), ("global", "Global".into())]);
-    edit.label.style = if key == "global" { Style::Global } else { Style::Local };
+    let mut key = match edit.label.style {
+        Style::Local => "local",
+        Style::Global => "global",
+        Style::Bus => "bus",
+    }
+    .to_owned();
+    form::choice(
+        ui,
+        "Scope",
+        ui.scope_id().with("label_style"),
+        &mut key,
+        &[("local", "Local".into()), ("global", "Global".into()), ("bus", "Bus".into())],
+    );
+    edit.label.style = match key.as_str() {
+        "global" => Style::Global,
+        "bus" => Style::Bus,
+        _ => Style::Local,
+    };
     if edit.label.id == 0 {
         let mut rotation = if edit.orient_to_pin { "auto".into() } else { edit.label.rotation.to_string() };
         form::choice(

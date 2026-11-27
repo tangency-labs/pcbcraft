@@ -200,8 +200,9 @@ impl Project {
     }
 
     /// Fixed hierarchy and named-net anchors participate in wire picking/healing beside pins.
+    /// Bus labels are not endpoints: they name several nets, so no wire can end on one.
     pub fn hierarchy_endpoints(&self) -> impl Iterator<Item = (WireEndpoint, Point)> + '_ {
-        self.net_labels.iter().map(|label| (WireEndpoint::NetLabel(label.id), label.at)).chain(
+        self.net_labels.iter().filter(|label| label.style.contact()).map(|label| (WireEndpoint::NetLabel(label.id), label.at)).chain(
             self.labels
                 .iter()
                 .map(|label| (WireEndpoint::Label(label.id), label.at))

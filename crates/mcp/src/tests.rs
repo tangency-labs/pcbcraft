@@ -153,6 +153,37 @@ fn designator_lock_preview_and_apply_share_mcp_dispatch() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
+/// A bus-label preview survives inspect:false and edits nothing; applying the same call places
+/// the bus label, whose inspection lists its members, and one Undo removes it.
+#[test]
+fn bus_label_preview_and_apply_share_mcp_dispatch() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let revision = session.revision();
+    let before = session.snapshot().unwrap();
+    let mut params = json!({"command":pcbcraft_engine::net_labels::ADD,"params":{"name":"D[0..3]","style":"bus","x_nm":0,"y_nm":0,"dry_run":true,"expected_revision":revision},"inspect":false});
+    let preview = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert_eq!(preview["revision"], revision);
+    assert_eq!(preview["provisional"], true);
+    assert!(preview["changes"].as_array().unwrap().iter().any(|change| change["after"].as_str().unwrap().contains("D[0..3]")));
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    params["params"]["dry_run"] = json!(false);
+    let applied = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert_eq!(applied, json!({"revision": session.revision()}));
+    assert!(session.revision() > revision);
+    let inspected = session.project().unwrap().inspect_schematic();
+    let label = &inspected["net_labels"][0];
+    assert_eq!(label["style"], "bus");
+    assert_eq!(label["members"], json!([{"name":"D0","net":null},{"name":"D1","net":null},{"name":"D2","net":null},{"name":"D3","net":null}]));
+    assert!(label.get("endpoint").is_none());
+    params["params"]["name"] = json!("D[0..64]");
+    params["params"]["expected_revision"] = json!(session.revision());
+    let refused = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap_err();
+    assert_eq!(refused.code(), "invalid_params");
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(session.project().unwrap().net_labels().is_empty());
+}
+
 /// An opt-in package dry run returns its report even when broad project inspection is suppressed.
 #[test]
 fn package_completion_report_survives_inspect_false() {

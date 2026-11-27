@@ -684,6 +684,12 @@ checks as in the earlier formats. Present generated-leg and wire-end lists must
 be nonempty. Parameters require a page. Paper may be absent from snapshots
 saved without the opening migration.
 
+A [bus label](../schematic/net-labels.md#buses) is an optional `"style": "bus"`
+record in the existing `net_labels` array. This record is valid in sheet formats
+/3–/10, which have that array. Adding or removing it never selects a format or
+changes the normal migration to sheet/10. Builds without bus-label support refuse
+the record rather than reading it as a different label style.
+
 The first desktop Save or browser Download rewrites older sheets at the same
 paths even when their records are unchanged. Later unchanged saves preserve
 the exact bytes. Removing optional records or using Undo and Redo keeps the

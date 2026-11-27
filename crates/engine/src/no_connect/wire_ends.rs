@@ -115,6 +115,7 @@ impl Project {
     fn wire_named_contacts(&self) -> BTreeSet<(i64, i64)> {
         self.net_labels()
             .iter()
+            .filter(|label| label.style.contact())
             .map(|label| label.at)
             .chain(self.power_terminals().map(|(_, _, at)| at))
             .chain(self.hierarchy_endpoints().map(|(_, at)| at))

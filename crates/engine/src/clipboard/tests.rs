@@ -250,6 +250,42 @@ fn pasted_label_names_and_rotations_follow_the_options() {
     assert!(Arc::ptr_eq(&before, &source.snapshot().unwrap()));
 }
 
+/// The sheet format each sheet of a session's project is written with.
+fn sheet_formats(s: &Session) -> Vec<String> {
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    documents
+        .iter()
+        .filter(|(path, _)| path.starts_with("sheets/"))
+        .map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).unwrap()["format"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A copied bus label pastes into another project as a bus, and the destination sheet keeps its
+/// sheet format, because a bus label is an optional record. A net-name suffix cannot rename a
+/// bus, so that paste is refused whole with a message that names the bus, and nothing changes.
+#[test]
+fn bus_labels_copy_and_paste_but_refuse_a_suffix() {
+    let mut source = fixture();
+    source
+        .apply(crate::net_labels::ADD, &json!({"name":"D[0..7]","style":"bus","x_nm":0,"y_nm":-10*GRID_NM,"expected_revision":source.revision()}))
+        .unwrap();
+    let text = Fragment::capture(source.project().unwrap(), &all(&source)).unwrap().to_text().unwrap();
+    let mut destination = Session::default();
+    destination.apply("project.new", &json!({"name":"Clipboard destination"})).unwrap();
+    assert_eq!(sheet_formats(&destination), [persistence::CURRENT_SHEET_FORMAT]);
+    destination.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":0,"expected_revision":destination.revision()})).unwrap();
+    let project = destination.project().unwrap();
+    let bus = project.net_labels().iter().find(|label| label.style == crate::net_labels::Style::Bus).unwrap();
+    assert_eq!(bus.name, "D[0..7]");
+    assert_eq!(sheet_formats(&destination), [persistence::CURRENT_SHEET_FORMAT]);
+
+    let before = destination.snapshot().unwrap();
+    let params = json!({"text":text,"x_nm":0,"y_nm":30*GRID_NM,"net_name_suffix":"_B","expected_revision":destination.revision()});
+    let error = destination.apply(PASTE, &params).unwrap_err().to_string();
+    assert!(error.contains("A net-name suffix cannot rename bus label D[0..7]; paste without a suffix, then rename the bus"), "{error}");
+    assert!(Arc::ptr_eq(&before, &destination.snapshot().unwrap()));
+}
+
 /// Native power names use component values, so suffix isolation must cover them as well as text labels.
 #[test]
 fn copied_power_symbols_receive_the_net_name_suffix() {

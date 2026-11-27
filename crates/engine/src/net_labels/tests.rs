@@ -2,6 +2,7 @@ use super::*;
 use crate::schematic::GRID_NM as G;
 
 mod drag;
+mod vector_bus;
 
 /// Exercise catalog validation and revision checks for every authored test operation.
 fn apply(s: &mut Session, command: &str, mut params: Value) {
@@ -385,5 +386,5 @@ fn obsolete_power_marker_styles_are_refused_atomically() {
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
         assert!(serde_json::from_value::<Label>(json!({"id":1,"name":"RAIL","style":style,"at":{"x_nm":0,"y_nm":0},"rotation":0})).is_err());
     }
-    assert_eq!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"], json!(["local", "global"]));
+    assert_eq!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"], json!(["local", "global", "bus"]));
 }

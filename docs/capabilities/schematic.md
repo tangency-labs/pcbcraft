@@ -27,7 +27,8 @@
 - Independently drag reference/value/custom text with per-unit visibility, name display, physical
   size/alignment/rotation, offsets and automatic-layout reset.
 - Local/global net labels with automatic orientation away from snapped pins and upright default
-  global text, plus global power/ground anchors, named inspection, shared GUI/MCP commands and
+  global text, sheet-local [bus labels](../schematic/net-labels.md#buses) such as `D[0..7]` that
+  group the member nets D0–D7, plus global power/ground anchors, named inspection, shared GUI/MCP commands and
   undo/save/reopen.
 - M/Disconnect and Move picks a selected or hovered symbol and preserves old wiring for replacement.
 - M moves a selected whole wire or mixed group while disconnecting contacts to unselected objects

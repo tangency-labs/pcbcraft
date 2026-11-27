@@ -363,6 +363,14 @@ impl Fragment {
     /// separate from existing geometry except for explicitly retained named-net semantics.
     /// A newly copied locked part adopts its required storage metadata in the candidate.
     pub fn placed(&self, destination: &Project, at: Point, first_id: u64, options: &PasteOptions) -> Result<(Project, Selection), CommandError> {
+        if !options.net_name_suffix.is_empty() {
+            // A suffix cannot rename a bus: `D[0..7]_A` breaks the grammar, and no spelling
+            // could rename its members `D0_A`..`D7_A`.
+            let mut buses = self.project.sheets.iter().flat_map(|sheet| sheet.net_labels.iter());
+            if let Some(bus) = buses.find(|label| label.style == crate::net_labels::Style::Bus) {
+                return Err(invalid(format!("A net-name suffix cannot rename bus label {}; paste without a suffix, then rename the bus", bus.name)));
+            }
+        }
         if self.has_hierarchy() {
             return self.placed_hierarchy(destination, at, first_id, options);
         }

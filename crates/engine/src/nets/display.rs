@@ -47,7 +47,9 @@ pub(crate) fn assign(project: &Project, graph: &mut Connectivity) {
         let Some(own) = project.for_sheet(sheet.target) else { continue };
         let Some(occurrence) = project.sheet_occurrence(sheet.target) else { continue };
         let sheet_path = path(project, sheet.target.id());
-        named.extend(own.net_labels().iter().map(|label| (WireEndpoint::NetLabel(label.id), label.name.clone())));
+        named.extend(
+            own.net_labels().iter().filter(|label| label.style.contact()).map(|label| (WireEndpoint::NetLabel(label.id), label.name.clone())),
+        );
         named.extend(own.hierarchical_labels().iter().map(|label| (WireEndpoint::Label(label.id), label.name.clone())));
         named.extend(own.power_terminals().map(|(end, name, _)| (end, name.to_owned())));
         for symbol in own.symbols().iter().filter(|symbol| connected_symbols.contains(&symbol.ordinal)) {

@@ -6,6 +6,7 @@ use pcbcraft_engine::{
 };
 
 mod connected_drag;
+mod vector_bus;
 
 /// Exercise the real editor with room for labels; panel state changes only test presentation.
 fn editor(width: f32) -> Harness<'static, PcbApp> {
