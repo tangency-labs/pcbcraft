@@ -2,7 +2,13 @@
 
 ## Command API version
 
-`list_commands` keeps returning the command array as its first text part. A
+`list_commands` returns full command descriptors, including titles, summaries
+and parameter schemas, as its first text part. Use `detail: false` for a
+compact list of command IDs, opening summary sentences and window scopes.
+The built-in Assistant requests the compact list to stay within its tool
+output limit and uses `describe_command` to get an individual command's full
+descriptor. Builds from before the `detail` option was added reject that
+argument, so omit it when requesting full descriptors from those builds. A
 second text part, also given as the result's `structuredContent`, reads
 `{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
@@ -16,8 +22,9 @@ These are three separate things:
   included. It changes whenever a command is added or removed or a description
   changes, so a client can drop cached discovery data; a new revision alone
   does not mean existing callers are incompatible. It covers the whole catalog
-  whatever `filter` keeps. A live editor (project, window and `ui.` commands)
-  and a headless session (project commands) describe different catalogs, and
+  of full descriptors regardless of `filter` or `detail`. A live editor
+  (project, window and `ui.` commands) and a headless session (project commands)
+  describe different catalogs, and
   builds differ, so each reports its own revision; it is computed when asked,
   not stored.
 - `capabilities` names the optional protocol features this build offers; a
