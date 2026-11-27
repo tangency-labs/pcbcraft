@@ -139,16 +139,23 @@ fn card(
             ui.horizontal(|ui| {
                 heading(ui, "Browser");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_24, Tokens::get().space_24));
+                    let t = Tokens::get();
+                    let (_, rect) = ui.allocate_space(vec2(t.space_24, t.space_24));
                     if kit::panel_disclosure_button_at(ui, rect, !*collapsed, if *collapsed { "Expand Browser" } else { "Collapse Browser" })
                         .clicked()
                     {
                         *collapsed = !*collapsed;
                     }
-                    let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_24, Tokens::get().space_24));
+                    let (_, divider) = ui.allocate_space(vec2(t.space_2, t.space_24));
+                    kit::navigation_separator(ui, divider);
+                    let (_, rect) = ui.allocate_space(vec2(t.space_24, t.space_24));
                     let more = kit::quiet_icon_button_at(ui, rect, "dots", "Browser tree actions");
+                    // The quiet icon button changes its ink on focus but paints no outline.
+                    if more.enabled() && more.has_focus() {
+                        kit::app_bar::paint_focus(ui.painter(), more.rect, solidcraft_theme::Tokens::get().control_radius);
+                    }
                     egui::Popup::menu(&more).frame(crate::menu::frame()).show(|ui| {
-                        for (label, choice) in [("Expand all", TreeAction::ExpandAll), ("Collapse all", TreeAction::CollapseAll)] {
+                        for (label, choice) in [("Expand all branches", TreeAction::ExpandAll), ("Collapse all branches", TreeAction::CollapseAll)] {
                             if crate::MenuItem::new(label).show(ui) {
                                 action = Some(choice);
                                 ui.close();
