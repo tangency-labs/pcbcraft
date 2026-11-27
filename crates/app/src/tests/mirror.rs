@@ -165,3 +165,62 @@ fn mirror_keys_without_a_target_or_after_escape_change_nothing() {
     h.run();
     assert_same_content(&mirrored, &h.state().session.snapshot().unwrap());
 }
+
+/// A box selection of two symbols and their wire mirrors as one group from X and from the ribbon:
+/// one shared command and one undo step each, about the selection center.
+#[test]
+fn box_selected_groups_mirror_from_x_and_the_ribbon_in_one_undo_step() {
+    use pcbcraft_engine::schematic::GRID_NM;
+    let mut h = editor();
+    let revision = h.state().session.revision();
+    for (index, x) in [0, 20].into_iter().enumerate() {
+        h.state_mut().run(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x * GRID_NM,"y_nm":0,"expected_revision":revision + index as u64}));
+    }
+    let [first, second] = [0, 1].map(|index| h.state().session.project().unwrap().symbols()[index].id());
+    h.state_mut().run(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":{"symbol":first,"terminal":"2"},"to":{"symbol":second,"terminal":"1"},"bends":[],"expected_revision":revision + 2}),
+    );
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+
+    let (from, to) = (screen(&h, Point { x_nm: -7 * GRID_NM, y_nm: -7 * GRID_NM }), screen(&h, Point { x_nm: 27 * GRID_NM, y_nm: 7 * GRID_NM }));
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert_eq!(h.state().views.active.schematic.selection.len(), 3);
+
+    click_tab(&mut h, "Capture");
+    for label in ["Mirror selected symbol left to right (X)", "Mirror selected symbol top to bottom (Y)"] {
+        assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} is enabled for a group");
+    }
+
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    h.hover_at(canvas.left_top() + egui::vec2(40., 40.));
+    h.run();
+    h.key_press(Key::X);
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let project = h.state().session.project().unwrap();
+    let placed: Vec<_> = project.symbols().iter().map(|symbol| (symbol.position, symbol.is_mirrored())).collect();
+    assert_eq!(placed, [(Point { x_nm: 20 * GRID_NM, y_nm: 0 }, true), (Point { x_nm: 0, y_nm: 0 }, true)]);
+    assert_eq!(h.state().views.active.schematic.selection.len(), 3, "the group stays selected");
+    click(&mut h, "Undo");
+    assert_same_content(&before, &h.state().session.snapshot().unwrap());
+
+    let revision = h.state().session.revision();
+    click(&mut h, "Mirror selected symbol top to bottom (Y)");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let project = h.state().session.project().unwrap();
+    assert!(project.symbols().iter().all(|symbol| symbol.is_mirrored() && symbol.turns() == 2));
+    assert_eq!(before.inspect_schematic()["netlist"], project.inspect_schematic()["netlist"]);
+    click(&mut h, "Undo");
+    assert_same_content(&before, &h.state().session.snapshot().unwrap());
+}
