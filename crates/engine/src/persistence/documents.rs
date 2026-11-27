@@ -290,7 +290,7 @@ impl ProjectDocument {
 /// Resolve a stored project's sole physical path before bounded filesystem reads.
 /// Full decoding still validates identities, schemas and exact document ownership.
 pub fn project_board_path(entry: &[u8]) -> Result<Option<String>, String> {
-    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let project: ProjectDocument = read_versioned(ENTRY_POINT, entry)?;
     let (records, layout) = project.registry()?;
     if let Some(layout) = layout {
         Ok(layout.folder.map(|folder| {
@@ -303,20 +303,20 @@ pub fn project_board_path(entry: &[u8]) -> Result<Option<String>, String> {
 
 /// Read an explicit board identity from the typed project registry without using a path as identity.
 pub fn project_registered_board_id(entry: &[u8]) -> Result<Option<Uuid>, String> {
-    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let project: ProjectDocument = read_versioned(ENTRY_POINT, entry)?;
     Ok(project.registry()?.0.and_then(|records| records.first().map(|record| record.id)))
 }
 
 /// Read the declared storage namespace without guessing ownership from directory contents.
 pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
-    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let project: ProjectDocument = read_versioned(ENTRY_POINT, entry)?;
     Ok(project.registry()?.1.map(|layout| layout.root))
 }
 
 /// Resolve only the registered current-format instance document; older layouts own no such file.
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
-    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let project: ProjectDocument = read_versioned(ENTRY_POINT, entry)?;
     if !matches!(
         project.layout_format(),
         OCCURRENCE_PROJECT_FORMAT
@@ -476,7 +476,7 @@ pub fn is_document_path(path: &str) -> bool {
 /// assembly profiles and extended stack fields optionally. Earlier headers refuse the reports.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
-    let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
+    let mut project: ProjectDocument = parse_versioned(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
     let legacy_appearance = project.format == LEGACY_APPEARANCE_PROJECT_FORMAT;
@@ -733,7 +733,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let instance_records = if occurrences {
         match (project_instances_path(&documents[ENTRY_POINT])?, project.schematic_instances.clone()) {
             (Some(path), None) => {
-                let instance: InstancesDocument = parse(documents, &path)?;
+                let instance: InstancesDocument = parse_versioned(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
                 let canonical_header = canonical_instances == Some(instance.format.as_str());
                 if current_format && !canonical_header && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_authored_intent) {
@@ -850,7 +850,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut parsed_sheets = Vec::with_capacity(project.sheets.len());
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
-        let mut sheet: SheetDocument = parse(documents, &reference.file)?;
+        let mut sheet: SheetDocument = parse_versioned(documents, &reference.file)?;
         let current = sheet.format == CURRENT_SHEET_FORMAT;
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
             (SHEET_FORMAT, false, false, false)
@@ -1055,7 +1055,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let board: BoardDocument = if has_board {
         let path = board_path.as_deref().ok_or("missing registered board document path")?;
         used.insert(path.to_owned());
-        parse(documents, path)?
+        parse_versioned(documents, path)?
     } else {
         BoardDocument {
             format: BOARD_FORMAT.into(),
@@ -1479,6 +1479,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         if used.insert(path.clone()) {
             let value: serde_json::Value = parse(documents, &path)?;
+            refuse_newer_format(&path, value["format"].as_str().unwrap_or_default(), crate::library::SYMBOL_FORMAT_V5)?;
             let definition = crate::library::read_saved_copy(value.clone()).map_err(|error| format!("{path}: {error}"))?;
             if definition.library != component.library
                 || definition.id != component.definition
@@ -1510,7 +1511,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             }
             if used.insert(path.clone()) {
                 let bytes = documents.get(&path).ok_or_else(|| format!("{path}: missing pinned footprint"))?;
-                let definition = crate::board::definition::read_saved(bytes).map_err(|e| format!("{path}: {e}"))?;
+                let definition = crate::board::definition::read_saved(bytes).or_else(|error| {
+                    refuse_newer_tag(&path, bytes, crate::board::definition::CURRENT_FORMAT)?;
+                    Err(format!("{path}: {error}"))
+                })?;
                 if definition.key() != key {
                     return Err(format!("{path}: footprint identity does not match its file name"));
                 }
@@ -1799,6 +1803,90 @@ fn check_project_field(format: &str, field: &str, required: bool, present: bool)
 fn parse<T: serde::de::DeserializeOwned>(documents: &Documents, path: &str) -> Result<T, String> {
     let bytes = documents.get(path).ok_or_else(|| format!("{path}: missing project document"))?;
     serde_json::from_slice(bytes).map_err(|error| format!("{path}: {error}"))
+}
+
+/// A project document whose format tag names the release that wrote it.
+trait Versioned {
+    /// The newest format of this document's family that this build reads.
+    const NEWEST: &'static str;
+    /// The stored format tag.
+    fn format(&self) -> &str;
+}
+
+impl Versioned for ProjectDocument {
+    const NEWEST: &'static str = CURRENT_PROJECT_FORMAT;
+    fn format(&self) -> &str {
+        &self.format
+    }
+}
+
+impl Versioned for InstancesDocument {
+    const NEWEST: &'static str = CURRENT_INSTANCES_FORMAT;
+    fn format(&self) -> &str {
+        &self.format
+    }
+}
+
+impl Versioned for SheetDocument {
+    const NEWEST: &'static str = CURRENT_SHEET_FORMAT;
+    fn format(&self) -> &str {
+        &self.format
+    }
+}
+
+impl Versioned for BoardDocument {
+    const NEWEST: &'static str = CURRENT_BOARD_FORMAT;
+    fn format(&self) -> &str {
+        &self.format
+    }
+}
+
+/// Parse a required versioned document, refusing one from a newer release before any field check.
+fn parse_versioned<T: serde::de::DeserializeOwned + Versioned>(documents: &Documents, path: &str) -> Result<T, String> {
+    let bytes = documents.get(path).ok_or_else(|| format!("{path}: missing project document"))?;
+    read_versioned(path, bytes)
+}
+
+/// Parse versioned bytes. A newer format is refused first, so neither a later release's
+/// fields nor its rules are reported in its place. When the typed parse fails, only the tag is
+/// read again; a document that is not newer keeps its own parse error.
+fn read_versioned<T: serde::de::DeserializeOwned + Versioned>(path: &str, bytes: &[u8]) -> Result<T, String> {
+    match serde_json::from_slice::<T>(bytes) {
+        Ok(document) => refuse_newer_format(path, document.format(), T::NEWEST).map(|()| document),
+        Err(error) => {
+            refuse_newer_tag(path, bytes, T::NEWEST)?;
+            Err(format!("{path}: {error}"))
+        }
+    }
+}
+
+/// Read only the format tag of a document that failed its full parse, refusing it when newer.
+/// Unreadable JSON or a missing tag is left to the caller's own error.
+fn refuse_newer_tag(path: &str, bytes: &[u8], newest: &str) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Tag {
+        format: String,
+    }
+    match serde_json::from_slice::<Tag>(bytes) {
+        Ok(tag) => refuse_newer_format(path, &tag.format, newest),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Refuse a format tag of the same family as `newest` with a higher number, naming both.
+/// Older, retired, foreign or malformed tags pass, so the caller's own checks report them.
+pub(super) fn refuse_newer_format(path: &str, format: &str, newest: &str) -> Result<(), String> {
+    /// Split `family/number`, or `None` when the tag has no numeric version.
+    fn split(tag: &str) -> Option<(&str, u64)> {
+        let (family, number) = tag.split_once('/')?;
+        Some((family, number.parse().ok()?))
+    }
+    match (split(format), split(newest)) {
+        (Some((family, found)), Some((known, readable))) if family == known && found > readable => {
+            Err(format!("{path}: saved by a newer PCBCraft in format {format}; this version reads formats up to {newest}."))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Encode the folder's complete logical contents; filesystem publication is a separate operation.

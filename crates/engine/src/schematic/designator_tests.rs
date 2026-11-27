@@ -309,14 +309,16 @@ fn designator_lock_codec_rejects_noncanonical_and_older_records() {
         let error = persistence::decode_documents(&bad).unwrap_err();
         assert!(error.contains(reason), "{error}");
     }
-    for header in
-        ["pcbcraft-project/16", "pcbcraft-project/23", "pcbcraft-project/24", "pcbcraft-project/30", "pcbcraft-project/39", "pcbcraft-project/999"]
-    {
+    for header in ["pcbcraft-project/16", "pcbcraft-project/23", "pcbcraft-project/24", "pcbcraft-project/30", "pcbcraft-project/39"] {
         let mut bad = locked.clone();
         entry_edit(&mut bad, |entry| entry["format"] = json!(header));
         let error = persistence::decode_documents(&bad).unwrap_err();
         assert!(error.contains(&format!("designator_locked not allowed in {header}")), "{error}");
     }
+    let mut newer = locked.clone();
+    entry_edit(&mut newer, |entry| entry["format"] = json!("pcbcraft-project/999"));
+    let error = persistence::decode_documents(&newer).unwrap_err();
+    assert!(error.contains("saved by a newer PCBCraft in format pcbcraft-project/999"), "{error}");
     let mut missing = unlocked.clone();
     entry_edit(&mut missing, |entry| entry["format"] = json!("pcbcraft-project/51"));
     assert!(persistence::decode_documents(&missing).unwrap_err().contains("at least one true"));
