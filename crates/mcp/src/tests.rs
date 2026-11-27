@@ -1073,7 +1073,7 @@ fn list_commands_filters() {
 }
 
 /// `list_commands` reports the command API version, the revision of the whole catalog (the same
-/// with or without a filter, and equal to `catalog_revision` of the unfiltered list) and the
+/// with or without a filter, and equal to `catalog_revision` of the unfiltered detailed list) and the
 /// capabilities. `describe_command` and the catalog resource agree with the detailed list, the
 /// listed contracts match the committed snapshot, and the default list gives each command's id
 /// and first summary sentence only.

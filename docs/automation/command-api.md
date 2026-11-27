@@ -7,7 +7,12 @@ entry gives the command's `id`, the first sentence of its `summary` and, for a
 window command, its `scope`, which keeps the whole live catalog readable by
 agents whose clients move long tool results to a file. `describe_command`
 returns one command's full descriptor, with its title, summary and `params`
-schema; `list_commands` with `detail: true` lists full descriptors. A
+schema; `list_commands` with `detail: true` lists full descriptors. Entries
+without `params` mark the brief list, so a client that read schemas from
+`list_commands` can tell it needs `detail: true` or `describe_command`; builds
+before `detail` refuse it as an unknown argument. The brief list changes only
+the MCP tool reply, not any command's contract, so `command_api_version` stays
+the same. A
 second text part, also given as the result's `structuredContent`, reads
 `{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
@@ -21,7 +26,8 @@ These are three separate things:
   included. It changes whenever a command is added or removed or a description
   changes, so a client can drop cached discovery data; a new revision alone
   does not mean existing callers are incompatible. It covers the whole catalog
-  whatever `filter` keeps. A live editor (project, window and `ui.` commands)
+  of full descriptors, as `detail: true` lists them, whatever `filter` keeps
+  and whether or not the list is brief. A live editor (project, window and `ui.` commands)
   and a headless session (project commands) describe different catalogs, and
   builds differ, so each reports its own revision; it is computed when asked,
   not stored.
