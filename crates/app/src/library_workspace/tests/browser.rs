@@ -12,14 +12,21 @@ fn browser_defaults_and_tree_actions_hide_empty_categories_in_both_themes() {
         assert!(h.query_all_by_label("Project library Project-only").next().is_none());
         let before = h.state().session.snapshot().unwrap();
         let selected = h.state().views.active.library.as_ref().unwrap().selected.clone();
+        let menu = h.get_by_label("Browser tree actions").rect();
+        let disclosure = h.get_by_label("Collapse Browser").rect();
+        assert!(h.output().shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::LineSegment { points: [top, bottom], stroke }
+                if menu.right() < top.x && top.x < disclosure.left() && top.x == bottom.x
+                && menu.top() <= top.y && bottom.y <= menu.bottom() && stroke.width > 0.0)
+        }));
         click(&mut h, "Browser tree actions");
-        click(&mut h, "Expand all");
+        click(&mut h, "Expand all branches");
         h.get_by_label("Generic parts in Native Parts Demo");
         h.get_by_label("Symbols in Basic components");
         assert!(h.query_all_by_label("Orderable parts in Basic components").next().is_none());
         assert!(h.query_all_by_label("Footprints in Power").next().is_none());
         click(&mut h, "Browser tree actions");
-        click(&mut h, "Collapse all");
+        click(&mut h, "Collapse all branches");
         assert!(h.query_all_by_label("Native Parts Demo").next().is_none());
         assert!(h.state().views.active.library.as_ref().unwrap().opened.is_empty());
         assert_eq!(h.state().views.active.library.as_ref().unwrap().selected, selected);
@@ -57,7 +64,7 @@ fn browser_tree_actions_draw_focus_outline_and_open_from_keyboard() {
 
         h.key_press(egui::Key::Enter);
         h.run();
-        h.get_by_label("Expand all");
+        h.get_by_label("Expand all branches");
         h.key_press(egui::Key::ArrowDown);
         h.run();
         h.key_press(egui::Key::Enter);

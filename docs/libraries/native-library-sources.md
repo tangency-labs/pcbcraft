@@ -18,7 +18,8 @@ pinned symbol or footprint as an independent draft; reviewed application to
 existing instances remains separate work. Refresh, Relocate, Remove and Delete
 operate on source registrations, not Project rows.
 Library folders start collapsed, and item types with no entries are hidden.
-The Browser header menu offers **Expand all** and **Collapse all**. Drag the
+The Browser header menu offers **Expand all branches** and **Collapse all branches**.
+The adjacent chevron folds or unfolds the Browser panel. Drag the
 Browser's right edge or the divider beside docked Preview to change their
 widths; both use the shared splitter and support Escape cancellation. Compact hosts use the full pane and
 retain that width for wider layouts. The tree does not scroll horizontally.
