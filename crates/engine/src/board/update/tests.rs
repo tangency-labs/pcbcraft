@@ -442,3 +442,83 @@ fn accepted_display_metadata_requires_its_version_and_a_nonempty_record() {
         assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
     }
 }
+
+/// Pad reduction must refuse removing a schematic-origin unnamed singleton while still
+/// retiring pad-only singletons and refusing unknown-origin singletons.
+#[test]
+fn replace_reviewed_package_refuses_removing_schematic_origin_singleton() {
+    use crate::library::parts::PadIds;
+    use crate::schematic::Point;
+
+    let session = fixture();
+    let project = session.project().unwrap();
+    let mut baseline = capture(project, 92);
+    let (&component, part) = baseline.components.iter_mut().next().unwrap();
+    let two_pad = super::super::assignment::Assignment {
+        component,
+        library: part.package.as_ref().unwrap().library.clone().unwrap(),
+        definition: part.package.as_ref().unwrap().definition.clone(),
+        definition_revision: part.package.as_ref().unwrap().revision,
+        mapping: BTreeMap::from([("1".into(), PadIds::One("1".into())), ("2".into(), PadIds::Many(vec!["2".into(), "9".into()]))]),
+        unconnected_pads: Vec::new(),
+    };
+    let one_pad = super::super::assignment::Assignment {
+        mapping: BTreeMap::from([("1".into(), PadIds::One("1".into())), ("2".into(), PadIds::One("2".into()))]),
+        ..two_pad.clone()
+    };
+    let previous = two_pad.footprint(1, Point { x_nm: 0, y_nm: 0 });
+    part.package = Some(Package::from_assignment(&two_pad));
+
+    // Schematic-origin unnamed singleton must be refused when reducing from two pads to one.
+    let mut schematic_baseline = baseline.clone();
+    schematic_baseline.format = NET_ORIGIN_FORMAT.into();
+    schematic_baseline.nets = vec![NetState {
+        display_name: Some("Net-0001".into()),
+        terminals: vec![TerminalKey { component, terminal: "2".into() }],
+        names: Vec::new(),
+        origin: Some(NetOrigin::Schematic),
+    }];
+    schematic_baseline.validate().unwrap();
+    let before_schematic = schematic_baseline.clone();
+    let error = schematic_baseline.replace_reviewed_package(&previous, &one_pad).unwrap_err();
+    assert_eq!(error, "Cannot remove an accepted schematic connection through a footprint revision.");
+    assert_eq!(schematic_baseline, before_schematic);
+
+    // Keeping two pads on that terminal preserves the schematic-origin singleton intact.
+    let still_two_pad = super::super::assignment::Assignment {
+        mapping: BTreeMap::from([("1".into(), PadIds::One("1".into())), ("2".into(), PadIds::Many(vec!["2".into(), "10".into()]))]),
+        ..two_pad.clone()
+    };
+    let mut kept_schematic = before_schematic.clone();
+    kept_schematic.replace_reviewed_package(&previous, &still_two_pad).unwrap();
+    assert_eq!(kept_schematic.nets, before_schematic.nets);
+
+    // Unknown-origin unnamed singleton remains refused with the existing error.
+    let mut unknown_baseline = baseline.clone();
+    unknown_baseline.format = DISPLAY_FORMAT.into();
+    unknown_baseline.nets = vec![NetState {
+        display_name: Some("Net-0001".into()),
+        terminals: vec![TerminalKey { component, terminal: "2".into() }],
+        names: Vec::new(),
+        origin: None,
+    }];
+    unknown_baseline.validate().unwrap();
+    let before_unknown = unknown_baseline.clone();
+    let error = unknown_baseline.replace_reviewed_package(&previous, &one_pad).unwrap_err();
+    assert_eq!(error, "Cannot remove an accepted connection without explicit net origin.");
+    assert_eq!(unknown_baseline, before_unknown);
+
+    // Pad-only unnamed singleton is still retired when reducing from two pads to one.
+    let mut pad_only_baseline = baseline;
+    pad_only_baseline.format = NET_ORIGIN_FORMAT.into();
+    pad_only_baseline.nets = vec![NetState {
+        display_name: Some("Unconnected".into()),
+        terminals: vec![TerminalKey { component, terminal: "2".into() }],
+        names: Vec::new(),
+        origin: Some(NetOrigin::PadOnly),
+    }];
+    pad_only_baseline.validate().unwrap();
+    pad_only_baseline.replace_reviewed_package(&previous, &one_pad).unwrap();
+    assert!(pad_only_baseline.nets.is_empty());
+    assert_eq!(pad_only_baseline.format, DISPLAY_FORMAT);
+}

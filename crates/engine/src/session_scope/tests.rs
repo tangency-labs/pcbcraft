@@ -149,6 +149,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             parameters::LIST => json!({"scope":"project"}),
             parameters::RESOLVE => json!({"text":"@project.Revision"}),
             annotation::PREVIEW => json!({"expected_revision":revision}),
+            sheet_split::PREVIEW => json!({"items":{"symbols":[symbol.id()],"wires":[]},"name":"Split","expected_revision":revision}),
             PREVIEW_UPDATE => {
                 preview_and_cancel(
                     &mut reader,
@@ -215,8 +216,14 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
                 continue;
             }
         };
-        let expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
-        let actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        let mut expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
+        let mut actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        if id == annotation::PREVIEW {
+            // Each session issues its own Apply token; the rest of the report must agree.
+            for report in [&mut expected, &mut actual] {
+                assert!(report.as_object_mut().and_then(|report| report.remove("token")).is_some_and(|token| token.is_string()));
+            }
+        }
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
             // These readers create a disposable project to build a fragment with its own IDs.
             assert!(actual["clipboard"].as_str().is_some_and(|text| !text.is_empty()), "{id}");
@@ -227,6 +234,10 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         if id == annotation::PREVIEW {
             assert_eq!(actual["annotation_preview"]["rows"].as_array().map(Vec::len), Some(1));
             assert_eq!(actual["annotation_preview"]["errors"], json!([]));
+        }
+        if id == sheet_split::PREVIEW {
+            assert_eq!(actual["split_preview"]["symbols"][0]["symbol"], json!(symbol.id()));
+            assert_eq!(actual["split_preview"]["ports"], json!([]));
         }
         if id == sources::PREVIEW_PIN_REMAP {
             assert_eq!(actual["changes"][0]["after"], "7");

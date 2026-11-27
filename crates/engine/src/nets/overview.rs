@@ -149,9 +149,8 @@ impl Project {
         self.sheet_overview_basis()?.overview(self, only)
     }
 
-    /// Collect the [`SheetOverviewBasis`] of this snapshot. It costs one pass over the
-    /// project's endpoints, like reading its connectivity, and skips the anchor resolution
-    /// that [`SheetOverviewBasis::overview`] performs.
+    /// Collect the [`SheetOverviewBasis`] of this snapshot using indexed endpoint lookups.
+    /// This skips the anchor resolution that [`SheetOverviewBasis::overview`] performs.
     pub fn sheet_overview_basis(&self) -> Result<SheetOverviewBasis, String> {
         let electrical = self.borrowed_electrical_connectivity();
         let pages: BTreeMap<Uuid, usize> = self.page_order().into_iter().enumerate().map(|(index, target)| (target.id(), index + 1)).collect();
@@ -274,7 +273,7 @@ impl SheetOverviewBasis {
     /// was collected from or one with an equal basis. With `only`, keep the nets that reach
     /// that sheet.
     pub fn overview(&self, project: &Project, only: Option<SheetTarget>) -> Result<SheetOverview, String> {
-        let graph = Graph::build(project)?;
+        let graph = Graph::build_for_overview(project)?;
         let mut active = BTreeMap::new();
         for record in self.registry.0.records.iter().filter(|record| matches!(record.state, State::Active {})) {
             if let Some(network) = graph.network(&record.primary) {
@@ -328,7 +327,7 @@ impl Rows {
     /// Record that the net holding `end`, when it has one, reaches `sheet`. `part` is the part
     /// owning a terminal endpoint and zero otherwise.
     fn mark(&mut self, electrical: &Connectivity, sheet: SheetTarget, end: WireEndpoint, part: u64) -> Option<usize> {
-        let row = electrical.net_index_for_endpoint(end)?;
+        let row = electrical.overview_net_index(end)?;
         self.endpoints.entry(row).or_default().insert((sheet.id(), end, part));
         self.reached.entry(row).or_default().entry(sheet.id()).or_default();
         Some(row)

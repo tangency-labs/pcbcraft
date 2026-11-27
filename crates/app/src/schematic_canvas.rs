@@ -143,6 +143,7 @@ pub(crate) enum Click {
     EditField(fields::Drag),
     FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
+    SplitNetLabel(u64),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
@@ -917,6 +918,10 @@ pub(crate) fn show(
                 menu::separator(ui);
             }
             if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_sheet.is_some()) {
+                return Some(Click::ToolAction(action, ui.ctx().clone()));
+            }
+            menu::separator(ui);
+            if let Some(action) = tool_menu::split(ui, !selected.symbols.is_empty() || !selected.net_labels.is_empty()) {
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
             menu::separator(ui);

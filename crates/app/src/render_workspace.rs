@@ -10,6 +10,8 @@ mod native;
 mod raytrace;
 #[cfg(not(target_arch = "wasm32"))]
 mod scene;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(super) use native::wait_for_preview;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) use native::{Browse, State, Worker};
 

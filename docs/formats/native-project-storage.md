@@ -1105,6 +1105,15 @@ from accepted placements. Format 11 requires pending package intent.
 Formats 42 and 43 support both states. Apply or resetting intent removes the difference. Desired
 mappings validate against live logical terminals and pinned package pads, while
 accepted footprint mappings validate independently against historical terminals.
+`pcb.apply_footprint_revision` replaces one matching desired and accepted package
+and its pinned definition in the existing formats. Multiple pads per terminal
+and explicitly unconnected pads use the existing explicit pad maps. The accepted
+source address, logical terminals and unrelated nets do not change. When a
+terminal gains multiple pads without an existing net, Apply records an explicit
+pad-only net in baseline format 5. When an unnamed single-terminal net no longer
+has multiple pads, Apply removes that record. Apply refuses a change that would
+require inferring missing accepted net display names or singleton origins; it
+never uses pending schematic changes to fill them in.
 
 Board format 9 stores `graphics` with `layers` and `items` arrays. Items have
 independent UUIDs, a layer UUID, integer-nanometer `points`, and a `closed` flag.
@@ -1636,6 +1645,9 @@ In the browser, Download creates a new upgraded `.pc` file; it leaves the upload
 archive unchanged. Reopen the downloaded file to use the saved copy.
 Standalone JSON/container-v1 projects remain unsupported. The optional explicit
 converter below creates a separate copy of the immediately previous split layout.
+
+The oldest readable split project entry-point format is `pcbcraft-project/5`,
+in project folders and `.pc` packages. `pcbcraft-cli --help` reports this limit.
 
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions

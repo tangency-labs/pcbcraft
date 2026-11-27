@@ -1439,6 +1439,7 @@ impl PcbApp {
         let browser_area = self.parts.browser_area(area).intersect(area);
         let browser_area =
             if self.properties_open && !self.parts.open { pcbcraft_chrome::properties::browser_area(browser_area) } else { browser_area };
+        let can_close_project = self.can_close_document();
         let pick = self.browser.show(
             ui,
             browser_area,
@@ -1449,6 +1450,7 @@ impl PcbApp {
             self.views.active.filters,
             &self.views.active.inspection,
             &self.views.active.board.hidden_layers,
+            can_close_project,
         );
         // Panels belong to individual hosts; apply personal criteria to each bound chooser.
         self.parts.set_filter(self.library_preferences.filter.clone());

@@ -27,9 +27,9 @@ are both retained rather than relabeled as a successful hardware result.
 Native model/input checks passed, while a captured completion milestone still
 showed the typed modal after an accepted UI pass and a visual hold. This evidence
 does not qualify compositor presentation or recording reliability. No physical
-input-to-photon, Wayland endurance, Windows or macOS claim is made. Input is
-limited to the original native window and split panes; detached windows expose
-lookup only, and specialized widgets may lack names. The user-facing contract is
+input-to-photon, Wayland endurance, Windows or macOS claim is made. This
+baseline covers the original native window and split panes; detached-window
+input is not measured here, and specialized widgets may lack names. The user-facing contract is
 in [UI automation](../../../../docs/automation/ui-automation.md).
 
 PR #325 review fixes add viewport-scoped collection and a human-consent boundary

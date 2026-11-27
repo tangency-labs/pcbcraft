@@ -1286,6 +1286,12 @@ mod live {
             params: &[Param { name: "shown", summary: "Whether Home shows", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "file.close",
+            title: "Close Project",
+            summary: "Close the current project and return to Home. If there are unsaved changes, the editor asks the user what to do.",
+            params: &[],
+        },
+        WindowCommand {
             id: "file.save",
             title: "Save",
             summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as while inspect_editor's file.location is null.",
@@ -2153,6 +2159,7 @@ mod live {
                         self.home = false;
                     }
                 }
+                ("file.close", _, _) => self.request_close_document(ctx)?,
                 ("file.save", _, _) => {
                     if self.session.project().is_none() {
                         return Err("No project is open.".to_owned());

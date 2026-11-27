@@ -39,6 +39,7 @@ pub mod schematic;
 pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
+pub mod sheet_split;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -991,6 +992,9 @@ impl Command {
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == sheet_split::SPLIT {
+            schema["dependentRequired"] = json!({"x_nm":["y_nm"], "y_nm":["x_nm"]});
+        }
         if self.id == RESHAPE_TRACKS {
             schema["if"] = json!({"required":["mode"]});
             schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});
@@ -1055,6 +1059,7 @@ pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_AS
 pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES, AlignMode};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
+pub use library::sources::APPLY_FOOTPRINT_REVISION;
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Move a placed footprint's reference without moving its physical package.
@@ -1806,6 +1811,24 @@ const CATALOG: &[Command] = &[
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
+        id: annotation::APPLY,
+        title: "Apply schematic annotation",
+        summary: "Apply the latest reviewed annotation in one undo step. Refuses a stale or replaced token.",
+        params: &[Param { required: true, name: "token", summary: "Token returned by annotate.preview in this session", kind: ParamKind::Text }],
+    },
+    Command {
+        id: sheet_split::PREVIEW,
+        title: "Preview Split to New Sheet",
+        summary: "Review moving selected objects to a new child sheet without editing: the symbols, part instances, wires and labels that move with their IDs, the boundary nets that become ports, and global or power nets that need none.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..EXPECTED_REVISION }],
+    },
+    Command {
+        id: sheet_split::SPLIT,
+        title: "Move to New Sheet",
+        summary: "Move selected objects to a new child sheet as one undo step. Symbols, part instances, wires and labels keep their IDs; each boundary net from the preview becomes a hierarchical label and sheet pin, so the netlist is unchanged. The sheet symbol goes at x_nm, y_nm, or where the moved objects were.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..ANCHOR_X }, Param { required: false, ..ANCHOR_Y }, EXPECTED_REVISION],
+    },
+    Command {
         id: annotation::PREVIEW,
         title: "Preview schematic annotation",
         summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
@@ -1956,6 +1979,7 @@ const CATALOG: &[Command] = &[
         summary: "Accept one current preview atomically, preserving unchanged footprint placement. Stale, replaced or foreign-session tokens are refused.",
         params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN],
     },
+    library::sources::FOOTPRINT_REVISION_COMMAND,
     Command {
         id: CANCEL_UPDATE,
         title: "Cancel Board Update Preview",
@@ -3068,6 +3092,11 @@ pub enum CommandError {
     StaleRevision {
         current: u64,
     },
+    /// Annotation was reviewed at an older revision; include parts with changed designators, locks or placements.
+    StaleAnnotation {
+        current: u64,
+        part_instances: Vec<String>,
+    },
     /// An id names nothing in the project; some lookups report an id not of the expected form
     /// this way too.
     NotFound(String),
@@ -3093,7 +3122,7 @@ impl CommandError {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
             Self::InvalidParams(_) | Self::CopperCollision { .. } => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
-            Self::StaleRevision { .. } => ErrorCode::StaleRevision,
+            Self::StaleRevision { .. } | Self::StaleAnnotation { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
             Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
@@ -3108,6 +3137,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::StaleAnnotation { current, part_instances } => json!({"current_revision":current,"part_instances":part_instances}),
             Self::CopperCollision { blockers } => json!({"blockers": blockers}),
             _ => json!({}),
         }
@@ -3127,6 +3157,16 @@ impl std::fmt::Display for CommandError {
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
             ),
             Self::OutOfScope { command } => write!(f, "`{command}` cannot run in a read-only session"),
+            Self::StaleAnnotation { current, part_instances } => {
+                write!(f, "annotation preview is stale at revision {current}; preview again")?;
+                if !part_instances.is_empty() {
+                    write!(f, "; changed part instances: {}", part_instances.iter().take(8).map(String::as_str).collect::<Vec<_>>().join(", "))?;
+                    if part_instances.len() > 8 {
+                        write!(f, " and {} more", part_instances.len() - 8)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -3515,6 +3555,8 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// One runtime-only setup review, never retained by authored history snapshots.
     setup_preview: Option<board::setup::preview::CachedPreview>,
+    /// One runtime-only annotation review, retained across edits to diagnose stale proposals.
+    annotation_preview: Option<annotation::ReviewedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
     /// Told about each new history root and committed edit; never part of the project.
@@ -3537,6 +3579,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             setup_preview: None,
+            annotation_preview: None,
             defer_net_reconciliation: false,
             observer: None,
         }
@@ -3575,6 +3618,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.annotation_preview = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -3590,6 +3634,23 @@ impl Session {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Unload the current project, retiring its history and revision-bound work while retaining
+    /// the session's scope and library catalog. The host owns any save decision before calling.
+    pub fn close_project(&mut self) {
+        if self.project.take().is_none() {
+            return;
+        }
+        self.revision += 1;
+        self.history_root_revision = self.revision;
+        self.undo.clear();
+        self.redo.clear();
+        self.local_history_step = None;
+        self.clearance_cache = std::sync::Mutex::new(None);
+        self.update_plan = None;
+        self.setup_preview = None;
+        self.annotation_preview = None;
     }
 
     /// Adopt the name, storage layout and occurrence IDs of a completed save without an electrical
@@ -3771,11 +3832,15 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
+            | annotation::APPLY
+            | sheet_split::PREVIEW
+            | sheet_split::SPLIT
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
             | PREVIEW_UPDATE
             | APPLY_UPDATE
+            | APPLY_FOOTPRINT_REVISION
             | CANCEL_UPDATE
             | PLACE_ASSIGNED_FOOTPRINT
             | PLACE_ASSIGNED_FOOTPRINTS
@@ -3943,7 +4008,7 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// Authorized symbol-field dry runs, annotation previews and split previews return proposals without
     /// publishing edits. Failed commands leave the project intact. Scope refusals precede
     /// validation; otherwise a stale `expected_revision` is reported first unless the command
     /// returns a stale query outcome, as `pcb.plan_route` does.
@@ -3974,6 +4039,10 @@ impl Session {
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
             return self.preview_annotation(params);
+        }
+        if id == sheet_split::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_split(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -4216,6 +4285,7 @@ impl Session {
             INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
                 | PLACE_FOOTPRINT
@@ -4328,11 +4398,15 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
+                | annotation::APPLY
+                | sheet_split::PREVIEW
+                | sheet_split::SPLIT
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
+                | APPLY_FOOTPRINT_REVISION
                 | CANCEL_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINTS
@@ -4374,36 +4448,39 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.validate_project_command(id, params)?;
         match id {
-            "project.new" => self.change(Project {
-                name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
-                id: fresh_id()?,
-                numeric_id_high_water: Some(0),
-                sheets: Arc::new(vec![sheets::SchematicSheet {
-                    occurrence_id: Some(fresh_id()?),
-                    page: Some(sheets::page::Page::new_sheet()),
-                    ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
-                }]),
-                sheet_index: 0,
-                components: Arc::default(),
-                pin_functions: Arc::default(),
-                units: Arc::default(),
-                schematic_packages: Arc::default(),
-                board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
-                named_graph: Arc::default(),
-                board_graphics: Arc::default(),
-                board_fill: Arc::default(),
-                upgraded_from: None,
-                layout: Some(persistence::layout::Layout::default()),
-                circuit_use: Some(fresh_id()?),
-                net_registry: Arc::default(),
-                net_classes: Arc::default(),
-                parameters: Arc::default(),
-                assembly_profiles: Arc::default(),
-                output_recipes: Arc::default(),
-                part_groups: Arc::default(),
-                part_group_memberships: Arc::default(),
-                prefer_compact_part_groups: false,
-            })?,
+            "project.new" => {
+                self.change(Project {
+                    name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
+                    id: fresh_id()?,
+                    numeric_id_high_water: Some(0),
+                    sheets: Arc::new(vec![sheets::SchematicSheet {
+                        occurrence_id: Some(fresh_id()?),
+                        page: Some(sheets::page::Page::new_sheet()),
+                        ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
+                    }]),
+                    sheet_index: 0,
+                    components: Arc::default(),
+                    pin_functions: Arc::default(),
+                    units: Arc::default(),
+                    schematic_packages: Arc::default(),
+                    board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
+                    named_graph: Arc::default(),
+                    board_graphics: Arc::default(),
+                    board_fill: Arc::default(),
+                    upgraded_from: None,
+                    layout: Some(persistence::layout::Layout::default()),
+                    circuit_use: Some(fresh_id()?),
+                    net_registry: Arc::default(),
+                    net_classes: Arc::default(),
+                    parameters: Arc::default(),
+                    assembly_profiles: Arc::default(),
+                    output_recipes: Arc::default(),
+                    part_groups: Arc::default(),
+                    part_group_memberships: Arc::default(),
+                    prefer_compact_part_groups: false,
+                })?;
+                self.annotation_preview = None;
+            }
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
@@ -4546,10 +4623,16 @@ impl Session {
             annotation::PREVIEW => {
                 self.preview_annotation(params)?;
             }
+            annotation::APPLY => self.apply_annotation(params)?,
+            sheet_split::PREVIEW => {
+                self.preview_split(params)?;
+            }
+            sheet_split::SPLIT => self.split_sheet(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
             APPLY_UPDATE => self.apply_board_update(params)?,
+            APPLY_FOOTPRINT_REVISION => self.apply_footprint_revision(params)?,
             CANCEL_UPDATE => self.cancel_board_update(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_ASSIGNED_FOOTPRINTS => {
@@ -5109,6 +5192,15 @@ impl Session {
         Self::prepare_change_from_snapshot(self.project.as_ref(), self.defer_net_reconciliation, project, reconcile)
     }
 
+    /// Run the same transaction preparation on an immutable source, including on a worker.
+    fn prepare_snapshot_change(
+        source: Option<&Arc<Project>>,
+        defer_net_reconciliation: bool,
+        project: Project,
+    ) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from_snapshot(source, defer_net_reconciliation, project, Project::reconcile_nets)
+    }
+
     /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
     /// preparation can run off the editor thread without mutating session state.
     pub(crate) fn prepare_change_from_snapshot(
@@ -5117,6 +5209,8 @@ impl Session {
         mut project: Project,
         reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
     ) -> Result<(Project, u64), CommandError> {
+        #[cfg(test)]
+        annotation::tests::count_work(|work| work.preparations += 1);
         #[cfg(test)]
         pin_functions::FULL_PREPARATIONS.set(pin_functions::FULL_PREPARATIONS.get() + 1);
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
@@ -5165,6 +5259,8 @@ impl Session {
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
                         || old.components.iter().any(|(id, part)| {
+                            #[cfg(test)]
+                            annotation::tests::count_work(|work| work.presentation_parts += 1);
                             project
                                 .components
                                 .get(id)
@@ -5179,6 +5275,8 @@ impl Session {
         if presentation_changed || project.requires_project_graph() || previous.is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
+                #[cfg(test)]
+                annotation::tests::count_work(|work| work.invalidated_sheets += 1);
                 sheet.connectivity = Arc::default();
             }
         }
@@ -5225,8 +5323,9 @@ impl Session {
         self.publish_change(project, highest);
     }
 
-    /// Publish a validated candidate through shared Undo/Redo and revision handling.
-    /// Callers skipping prepare_change must preserve topology, identities and allocation metadata.
+    /// Publish an already validated candidate through shared Undo/Redo and revision handling.
+    /// Deferred callers must recheck snapshot authority; callers skipping prepare_change must
+    /// preserve topology, identities and allocation metadata.
     fn publish_change(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;

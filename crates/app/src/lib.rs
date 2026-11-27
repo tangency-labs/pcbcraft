@@ -78,6 +78,7 @@ mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
 mod sheet_parameters;
+mod sheet_split;
 #[cfg(not(target_arch = "wasm32"))]
 mod ui_automation;
 mod unsaved;
@@ -258,6 +259,7 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
+    SplitSheet(Box<sheet_split::Edit>),
     NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
     Footprint(Box<footprint_assignment::Edit>),
@@ -525,8 +527,13 @@ impl PcbApp {
 
     /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
     pub fn with_integrated_titlebar(mut self, enabled: bool) -> Self {
-        self.integrated_titlebar = enabled;
+        self.set_integrated_titlebar(enabled);
         self
+    }
+
+    /// Configure window controls in place, avoiding a whole-app move during desktop startup.
+    pub fn set_integrated_titlebar(&mut self, enabled: bool) {
+        self.integrated_titlebar = enabled;
     }
 
     /// Open `path` through the ordinary project-file worker when this window first draws,
@@ -537,8 +544,15 @@ impl PcbApp {
     /// way. Desktop only: the browser has no command line.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
-        self.startup_open = Some(path);
+        self.set_startup_project(path);
         self
+    }
+
+    /// Queue a project for the first frame without moving the application state.
+    /// The normal file worker opens it with the same error handling as `with_startup_project`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_startup_project(&mut self, path: std::path::PathBuf) {
+        self.startup_open = Some(path);
     }
 
     pub fn session(&self) -> &Session {
@@ -790,6 +804,9 @@ impl PcbApp {
         }
 
         menu::separator(ui);
+        if MenuItem::new("Close Project").enabled(self.can_close_document()).show(ui) {
+            self.message = self.request_close_document(ui.ctx()).err();
+        }
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
@@ -1393,7 +1410,7 @@ impl PcbApp {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
+            Action::CloseProject | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Inspection { source, .. } => match source {
                 pcbcraft_engine::board::correspondence::Source::Terminal(target) => {
@@ -1422,7 +1439,12 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_)
+            | Action::CloseProject
+            | Action::ManageSheet { .. }
+            | Action::SetPage { .. }
+            | Action::SetTemplate { .. }
+            | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1851,6 +1873,7 @@ impl PcbApp {
                 self.message = Some("No-connect marks attach to a pin lead or an open wire end.".into())
             }
             (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
+            (None, Click::SplitNetLabel(id)) => self.begin_split_sheet_with_items(Selection::one_net_label(id)),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
                 self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
@@ -2061,6 +2084,7 @@ impl PcbApp {
             ToolAction::Copy | ToolAction::Cut => self.copy_schematic_clipboard(ctx, matches!(action, ToolAction::Cut)),
             ToolAction::Paste | ToolAction::PasteOptions => self.request_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
             ToolAction::Duplicate => self.duplicate_schematic_clipboard(),
+            ToolAction::MoveToNewSheet => self.begin_split_sheet(),
             ToolAction::Symbols => self.parts.focus_search(),
             ToolAction::Wire => self.begin_wire(),
             ToolAction::Ground => self.begin_ground(ctx),
@@ -2499,6 +2523,7 @@ impl PcbApp {
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
+            Dialog::SplitSheet(edit) => self.split_sheet_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {

@@ -15,7 +15,12 @@ before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
-`fabrication.manifest` for the same captured files. Neither operation writes files
+`fabrication.manifest` for the same captured files and `fabrication.drill_chart`.
+Its `rows` list every tool of each returned drill file, plated file first, in
+declaration order: `plating` (`plated` or `non_plated`), the file's `tool` number,
+`diameter_nm`, `size_mm` as the tool declaration writes it and the hole `count`.
+The rows are built from the same holes as the drill files, so their counts always
+match the files' hits. Neither operation writes files
 or changes the project or revision; `execute` does not build or return a ZIP.
 
 The manifest matches the `manifest.json` embedded in the fabrication ZIP for the

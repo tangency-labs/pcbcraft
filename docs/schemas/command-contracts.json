@@ -1,6 +1,20 @@
 {
   "command_api_version": 1,
   "commands": {
+    "annotate.apply": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      }
+    },
     "annotate.preview": {
       "params": {
         "additionalProperties": false,
@@ -3323,6 +3337,68 @@
           "expected_revision",
           "footprints",
           "mode"
+        ],
+        "type": "object"
+      }
+    },
+    "pcb.apply_footprint_revision": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                    "type": "string"
+                  },
+                  "maxItems": 128,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                }
+              ]
+            },
+            "maxProperties": 1024,
+            "minProperties": 1,
+            "type": "object"
+          },
+          "part_instance": {
+            "type": "string"
+          },
+          "unconnected_pads": {
+            "items": {
+              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "board",
+          "part_instance",
+          "expected_revision",
+          "acceptance",
+          "mapping"
         ],
         "type": "object"
       }
@@ -12745,6 +12821,106 @@
         "type": "object"
       }
     },
+    "schematic.preview_split_sheet": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "net_labels": {
+                "items": {
+                  "pattern": "^net-label-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "no_connects": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "part": {
+                          "pattern": "^component-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "terminal": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "part",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "junction": {
+                          "pattern": "^junction-[1-9][0-9]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "junction"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "symbols": {
+                "items": {
+                  "pattern": "^symbol-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "wires": {
+                "items": {
+                  "pattern": "^wire-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "symbols",
+              "wires"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
     "schematic.remove_sheet": {
       "params": {
         "additionalProperties": false,
@@ -13265,6 +13441,125 @@
         "required": [
           "wire",
           "at",
+          "expected_revision"
+        ],
+        "type": "object"
+      }
+    },
+    "schematic.split_sheet": {
+      "params": {
+        "additionalProperties": false,
+        "dependentRequired": {
+          "x_nm": [
+            "y_nm"
+          ],
+          "y_nm": [
+            "x_nm"
+          ]
+        },
+        "properties": {
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "net_labels": {
+                "items": {
+                  "pattern": "^net-label-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 256,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "no_connects": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "part": {
+                          "pattern": "^component-[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "terminal": {
+                          "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "part",
+                        "terminal"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "junction": {
+                          "pattern": "^junction-[1-9][0-9]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "junction"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "symbols": {
+                "items": {
+                  "pattern": "^symbol-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "wires": {
+                "items": {
+                  "pattern": "^wire-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "maxItems": 4096,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "symbols",
+              "wires"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "x_nm": {
+            "maximum": 987300000,
+            "minimum": -987300000,
+            "type": "integer"
+          },
+          "y_nm": {
+            "maximum": 987300000,
+            "minimum": -987300000,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "name",
           "expected_revision"
         ],
         "type": "object"
@@ -14766,6 +15061,15 @@
         "required": [
           "path"
         ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "file.close": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
         "type": "object"
       },
       "scope": "window"

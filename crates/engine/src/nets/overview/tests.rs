@@ -96,6 +96,26 @@ fn global_label_net_lists_the_sheets_it_reaches() {
     }
 }
 
+/// Label-only nets do not have terminals to fall back on when collecting rows or resolving anchors.
+#[test]
+fn overview_keeps_label_only_nets_separate() {
+    let mut s = session();
+    let sheets = add_sheets(&mut s, 3);
+    for (name, pair, x_nm) in [("CAN_H", [sheets[0], sheets[1]], 0), ("CAN_L", [sheets[0], sheets[2]], G)] {
+        for sheet in pair {
+            apply(&mut s, net_labels::ADD, json!({"sheet":sheet.id(),"name":name,"style":"global","x_nm":x_nm,"y_nm":0}));
+        }
+    }
+    let report = overview(&mut s, json!({}));
+    assert_eq!(names(&report), ["CAN_H", "CAN_L"]);
+    assert_eq!(pages(&report, "CAN_H"), [1, 2]);
+    assert_eq!(pages(&report, "CAN_L"), [1, 3]);
+    assert_ne!(report["nets"][0]["anchor"], report["nets"][1]["anchor"]);
+    let filtered = overview(&mut s, json!({"sheet":sheets[1].id()}));
+    assert_eq!(names(&filtered), ["CAN_H"]);
+    assert_eq!(filtered["nets"][0]["sheets"][0]["terminals"], 0);
+}
+
 /// Equal local names on different sheets are separate nets, so nothing crosses sheets.
 #[test]
 fn local_labels_with_one_name_do_not_cross_sheets() {

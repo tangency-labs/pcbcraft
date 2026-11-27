@@ -6,12 +6,15 @@ supports repeatable demonstrations and interaction tests. It does not move the
 operating system's pointer or record video. Headless sessions and the browser
 build do not expose this native input endpoint.
 
-Input currently targets the original native window (`window: 0`), including its
-split panes. Named lookup is window-scoped and also works in detached editor
-windows, but input to them is explicitly refused: the pinned eframe immediate
-viewport path does not call the application's raw-input hook. Supporting it
-requires a separate framework input boundary rather than injecting events after
-egui has already processed them.
+Input targets one native window by its ID: the original window (`window: 0`),
+including its split panes, or a detached editor window. Named lookup, layout
+tokens and coordinates are window-scoped, and input requires that window's
+focus. Window 0 receives input through eframe's raw-input hook. Detached windows
+are immediate viewports that eframe renders without that hook, so their input
+enters through egui's plugin input hook, which runs before the window's pass
+processes input. Both apply the same checks and cancellation rules. Where the
+platform embeds detached editors in the main window, input to them is refused;
+send it to window 0 instead.
 
 Enable the connection through **Help → Connect AI assistants…**, as described in
 [the MCP guide](../mcp.md#live-mcp-in-the-desktop-editor). Use `inspect_editor` to
@@ -154,7 +157,8 @@ the project uses the same command and Undo as a person's click; it is not an
 engine mutation disguised by a cursor animation.
 
 The addressed window must be focused. Physical input, loss of focus/visibility,
-resizing/scaling, a changed project/input destination, a file operation, endpoint
+resizing/scaling, a changed project/input destination (including detaching,
+redocking or closing the addressed window), a file operation, endpoint
 revocation or the five-second deadline cancels remaining events. Assistant jobs
 also belong to their originating reply and stop when that reply is stopped or
 replaced. Named destinations are checked again before button events. `ui.cancel`
