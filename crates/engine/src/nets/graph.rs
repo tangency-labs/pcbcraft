@@ -1,7 +1,7 @@
 //! Transient identity-relevant endpoint groups; never a persisted second connectivity graph.
 
 use super::{Anchor, AnchorKind, Record, Scope, ScopeKind, State};
-use crate::{CommandError, Project, SheetTarget, WireEndpoint};
+use crate::{CommandError, Project, SheetTarget, WireEndpoint, schematic::Connectivity};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A derived network's supported anchors and names; anonymous wire geometry is intentionally absent.
@@ -93,7 +93,16 @@ impl Graph {
     /// Build from the existing complete project graph, deduplicating repeated physical-terminal
     /// appearances and including standalone authored labels/ports. Does not allocate net IDs.
     pub fn build(project: &Project) -> Result<Self, String> {
-        let graph = project.electrical_connectivity();
+        Self::build_with_lookup(project, Connectivity::net_index_for_endpoint)
+    }
+
+    /// Resolve overview anchors against the same indexed graph used to collect sheet rows.
+    pub(super) fn build_for_overview(project: &Project) -> Result<Self, String> {
+        Self::build_with_lookup(project, Connectivity::overview_net_index)
+    }
+
+    fn build_with_lookup(project: &Project, lookup: fn(&Connectivity, WireEndpoint) -> Option<usize>) -> Result<Self, String> {
+        let graph = project.borrowed_electrical_connectivity();
         let scope = project.net_scope();
         let mut groups = BTreeMap::<Group, Network>::new();
         let mut endpoints = BTreeMap::new();
@@ -110,7 +119,7 @@ impl Graph {
                     terminal,
                 };
                 anchor.validate_form()?;
-                let index = graph.net_index_for_endpoint(endpoint);
+                let index = lookup(graph, endpoint);
                 let group = index.map_or_else(|| Group::Isolated(anchor.clone()), Group::Connected);
                 let network = groups.entry(group).or_insert_with(|| Network { anchors: BTreeSet::new(), names: BTreeSet::new() });
                 network.anchors.insert(anchor.clone());

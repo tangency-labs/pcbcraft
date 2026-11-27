@@ -135,6 +135,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             | CHECK_DESIGN
             | net_classes::INSPECT
             | nets::INSPECT_CLASSES
+            | nets::SHEET_OVERVIEW
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | INSPECT_LAYER_GROUPS

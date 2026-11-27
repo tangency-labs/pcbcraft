@@ -91,6 +91,18 @@ document lists every component with its logical terminals and every net across a
 sheets with its persistent UUID and joined terminals; see the
 [netlist format](../formats/netlist-format.md). Exporting an unchanged project gives the same bytes.
 
+`nets.sheet_overview` lists every net that reaches more than one sheet, without
+editing anything or changing the revision. Each entry in `sheet_overview.nets` has
+the persistent `id` (null before the net has one), a typed `anchor` that
+`nets.inspect_classes` and `nets.set_classes` accept as a derived target, the readable `name`, all authored
+`names`, and `sheets` in page order. Each sheet gives its `sheet` UUID, sheet
+`occurrence`, `name`, `page`, `terminals` (part pins on that sheet, not counting
+power symbols) and `via`: only the connection kinds that actually carry the net
+across sheets (`global_label`, `power_symbol`, `hierarchical_label`, `sheet_pin`,
+`shared_terminal`). An optional `sheet` keeps
+the nets that reach that sheet; an unknown sheet is `not_found`. Results are kept
+with `inspect: false`. See [hierarchical sheets](../schematic/hierarchical-sheets.md).
+
 `pcb.export_netlist` takes `board` and `dry_run` and returns the same shape for
 one board: `<project name>-<board name>-netlist.json`, format `pcbcraft-netlist/2` with `basis: accepted`, the
 components, packages, terminal pads and nets the board accepted at its last

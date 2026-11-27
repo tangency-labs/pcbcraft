@@ -86,6 +86,7 @@ fn is_read_command(id: &str) -> bool {
             | net_classes::RESOLVE
             | nets::INSPECT_CLASSES
             | nets::intent::INSPECT
+            | nets::SHEET_OVERVIEW
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
             | sources::LIST

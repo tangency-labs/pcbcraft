@@ -3002,6 +3002,17 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: nets::SHEET_OVERVIEW,
+        title: "Inter-Sheet Net Overview",
+        summary: "List each net that reaches more than one sheet, with its pages and how it reaches each one: global label, power symbol, hierarchical label, sheet pin or shared part terminal. Edits nothing.",
+        params: &[Param {
+            name: "sheet",
+            kind: ParamKind::SheetId,
+            required: false,
+            summary: "Optional sheet UUID; list only nets that reach this sheet",
+        }],
+    },
+    Command {
         id: nets::SET_APPEARANCE,
         title: "Set Net Appearance",
         summary: "Set one net's schematic wire color and drawn stroke width with stable identity, promotion, revision check and one undo step. Connectivity and PCB rules are unchanged.",
@@ -3858,6 +3869,7 @@ impl Session {
             | nets::INSPECT_CLASSES
             | nets::intent::SET
             | nets::intent::INSPECT
+            | nets::SHEET_OVERVIEW
             | nets::SET_APPEARANCE
             | nets::SET_PROPERTIES
             | nets::INSPECT_APPEARANCE
@@ -4160,6 +4172,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if id == nets::SHEET_OVERVIEW {
+            self.validate_project_command(id, params)?;
+            return self.sheet_overview_query(params);
+        }
         if id == nets::INSPECT_APPEARANCE {
             self.validate_project_command(id, params)?;
             return self.inspect_net_appearance(params);
@@ -4447,6 +4463,7 @@ impl Session {
                 | nets::INSPECT_CLASSES
                 | nets::intent::SET
                 | nets::intent::INSPECT
+                | nets::SHEET_OVERVIEW
                 | nets::SET_APPEARANCE
                 | nets::SET_PROPERTIES
                 | nets::INSPECT_APPEARANCE
@@ -4583,6 +4600,9 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            nets::SHEET_OVERVIEW => {
+                self.sheet_overview_query(params)?;
             }
             nets::SET_APPEARANCE => self.set_net_appearance(params)?,
             nets::SET_PROPERTIES => self.set_net_properties(params)?,

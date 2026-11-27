@@ -2220,6 +2220,19 @@
         "type": "object"
       }
     },
+    "nets.sheet_overview": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
     "parameter.list": {
       "params": {
         "additionalProperties": false,
