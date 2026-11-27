@@ -7,7 +7,8 @@
 - [Read-only headless MCP sessions](../mcp.md) and the headless command catalog with a command API
   version and a catalog revision in discovery, and a published error code on failed project commands
   and live requests.
-- The desktop live connection runs every project command with shared undo, plus window commands for
+- The desktop live connection runs every project command except headless-only ones (the KiCad
+  import) with shared undo, plus window commands for
   schematic and PCB views, workspaces, footprint selection, named arrangements under File → Layouts,
   windows, panels, preferences, Home, in-place Save, Save As/Open to an explicit path without the
   picker, and `inspect_editor` with file location and job results.

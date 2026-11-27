@@ -170,8 +170,8 @@ impl Backend for Headless {
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
 /// because a bare session has no window to act on. Clipboard/export queries, provisional
-/// property and annotation previews, and connection unroute retain their result data even
-/// when project inspection is suppressed.
+/// property and annotation previews, connection unroute and the KiCad import's report retain
+/// their result data even when project inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     serve_session(session, method, params, COMMAND_API_VERSION)
@@ -240,6 +240,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                         | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+                        | pcbcraft_engine::kicad_import::IMPORT
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)

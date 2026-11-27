@@ -63,6 +63,7 @@ supported versions and deferred work before extending a format or consumer.
 | --- | --- |
 | Native files and compatibility | [Project storage](formats/native-project-storage.md) · [Reading a saved project](formats/reading-native-projects.md) · [Optional single-board foundation](formats/single-board-storage.md) · [Single-use sheet occurrences](formats/sheet-occurrence-storage.md) |
 | Persistent net records and differential pairs | [Sparse net registry](formats/net-registry-storage.md) |
+| KiCad interchange | [Schematic import](schematic/kicad-import.md) |
 | Netlist export | [JSON netlist format](formats/netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
 | Schematic document output | [Schematic PDF writer](manufacturing/schematic-pdf.md) |
 | Object identities | [Identity inventory](formats/object-identity.md) |

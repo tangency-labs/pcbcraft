@@ -162,7 +162,9 @@ The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
-project's unsaved changes are saved or discarded in the editor. Commands normally
+project's unsaved changes are saved or discarded in the editor. Headless-only
+commands, such as the [KiCad schematic import](schematic/kicad-import.md), are not in the
+live `list_commands` and fail with `unavailable` there. Commands normally
 wait while an inline text edit, dialog or file operation is open. Addressed
 `app.library_pin_remap` apply/cancel may resolve its own remap dialog; a new live
 preview and other gated document/presentation commands still refuse that dialog.

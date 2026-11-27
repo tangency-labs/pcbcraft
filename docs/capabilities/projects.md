@@ -93,6 +93,23 @@
   arrangement export, full multi-monitor restoration, outside-client drag previews, provider view
   payloads.
 
+## Interchange
+
+### Available
+
+- [KiCad schematic import](../schematic/kicad-import.md) of one self-contained KiCad 6–10
+  `.kicad_sch` through `project.import_kicad_schematic` in headless MCP and
+  `pcbcraft-cli import-kicad`: symbols, units, pins, references, values, fields, power symbols,
+  wires, labels and no-connects.
+- The import is exact or refused with reasons (including KiCad 10 jumper pin groups and parts
+  shown in another body style than the normal one), checked against the nets the file describes.
+
+### Remaining scope
+
+- Sub-sheets, buses, board import and a desktop menu entry remain in
+  [#60](https://github.com/tangency-labs/pcbcraft/issues/60).
+- IPC-2581/ODB++/EDIF in [#119](https://github.com/tangency-labs/pcbcraft/issues/119).
+
 ## Sharing
 
 ### Available

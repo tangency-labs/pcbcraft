@@ -10407,6 +10407,24 @@
         "type": "object"
       }
     },
+    "project.import_kicad_schematic": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 8388608,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      }
+    },
     "project.new": {
       "params": {
         "additionalProperties": false,

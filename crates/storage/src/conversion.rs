@@ -1,6 +1,9 @@
-//! Explicit, source-preserving conversion of the immediately previous split layout.
+//! Explicit, source-preserving conversion of the immediately previous split layout, and
+//! publication of a project made elsewhere, such as an import, at a new destination.
 
-use pcbcraft_engine::persistence::{Documents, Encoding, decode_legacy_packed, encode_packed_documents, read_bytes};
+use pcbcraft_engine::Project;
+use pcbcraft_engine::persistence::{Documents, Encoding, decode_legacy_packed, encode_documents, encode_packed_documents, read_bytes};
+use std::sync::Arc;
 use std::{fs, io::Write, path::Path};
 
 /// A source is identified by its validated file type and content, independently of extension.
@@ -31,26 +34,55 @@ pub fn convert(source: &Path, destination: &Path, encoding: Encoding) -> Result<
     } else {
         return Err("Conversion source must be a regular project file or folder.".to_owned());
     };
-    let parent = destination.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let parent = fs::canonicalize(parent).map_err(error)?;
-    let destination = parent.join(destination.file_name().ok_or("Conversion destination has no filename")?);
-    refuse_device_destination(&destination)?;
+    let destination = canonical_destination(destination)?;
     if let Source::Folder(root) = &input {
         let root = fs::canonicalize(root).map_err(error)?;
         if destination.starts_with(&root) {
             return Err("Choose a conversion destination outside the source project folder.".to_owned());
         }
     }
-    match fs::symlink_metadata(&destination) {
-        Ok(_) => return Err("Conversion requires an unused destination; existing files and folders are never replaced.".to_owned()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(other) => return Err(error(other)),
-    }
+    refuse_existing(&destination, "Conversion requires an unused destination; existing files and folders are never replaced.")?;
     let documents = match input {
         Source::Folder(root) => super::folder::load_legacy(root)?,
         Source::Archive(bytes) => decode_legacy_packed(&bytes)?.documents,
     };
     publish(&destination, documents, encoding)
+}
+
+/// Write `project` as a new project at an unused `destination`: a ZIP package for
+/// [`Encoding::Zip`], else a new folder. Existing files and folders are never replaced, and
+/// destinations Windows reads as a device are refused on that platform.
+/// The project's layout is prepared as the editor's first Save prepares it, so opening the
+/// result and saving it unchanged rewrites nothing.
+pub fn create(project: Arc<Project>, destination: &Path, encoding: Encoding) -> Result<(), String> {
+    let destination = canonical_destination(destination)?;
+    refuse_existing(&destination, "Choose an unused destination; existing files and folders are never replaced.")?;
+    let project = super::layout::prepare(project, (encoding == Encoding::Json).then_some(destination.as_path()), None)?;
+    publish(&destination, encode_documents(project)?, encoding)
+}
+
+/// The encoding a destination asks for by its name: a ZIP package for a `.pc` name in any
+/// case, else a project folder.
+pub fn encoding_for(destination: &Path) -> Encoding {
+    if destination.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) { Encoding::Zip } else { Encoding::Json }
+}
+
+/// `destination` under its canonical parent folder, refusing names Windows reads as a device.
+fn canonical_destination(destination: &Path) -> Result<std::path::PathBuf, String> {
+    let parent = destination.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = fs::canonicalize(parent).map_err(error)?;
+    let destination = parent.join(destination.file_name().ok_or("The destination has no filename")?);
+    refuse_device_destination(&destination)?;
+    Ok(destination)
+}
+
+/// Refuse a destination that exists in any form, with `message`; other failures to look are errors too.
+fn refuse_existing(destination: &Path, message: &str) -> Result<(), String> {
+    match fs::symlink_metadata(destination) {
+        Ok(_) => Err(message.to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(other) => Err(error(other)),
+    }
 }
 
 /// Publish only validated documents at an unused destination. Archive installation is atomic
