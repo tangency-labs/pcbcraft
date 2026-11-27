@@ -210,6 +210,34 @@ fn copied_package_assignments_keep_the_pinned_mapping() {
     assert_eq!(p.schematic_packages.definitions.len(), 1);
 }
 
+/// A package chosen by placing its footprint is reported like an assigned one, so Copy carries
+/// it too: the pasted part keeps the package and mapping in another project and on the board.
+#[test]
+fn copied_placed_footprints_keep_their_package() {
+    let mut source = fixture();
+    source.apply(crate::board::identity::CREATE_BOARD, &json!({"expected_revision":source.revision()})).unwrap();
+    let symbol = source.project().unwrap().symbols()[0].id();
+    source
+        .apply(
+            crate::PLACE_FOOTPRINT,
+            &json!({"symbol":symbol,"definition":"resistor-0805","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":source.revision()}),
+        )
+        .unwrap();
+    assert!(source.project().unwrap().board.assignments.is_empty());
+    let items = Selection { symbols: BTreeSet::from([symbol]), ..Default::default() };
+    let text = Fragment::capture(source.project().unwrap(), &items).unwrap().to_text().unwrap();
+    let mut target = Session::default();
+    target.apply("project.new", &Value::Null).unwrap();
+    target.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":0,"expected_revision":target.revision()})).unwrap();
+    let p = target.project().unwrap();
+    assert_eq!(p.schematic_packages.assignments.len(), 1);
+    let assignment = p.schematic_packages.assignments.values().next().unwrap();
+    assert_eq!(assignment.definition, "resistor-0805");
+    assert_eq!(assignment.mapping, BTreeMap::from([("1".into(), "2".into()), ("2".into(), "1".into())]));
+    source.apply(PASTE, &json!({"text":text,"x_nm":0,"y_nm":20*GRID_NM,"expected_revision":source.revision()})).unwrap();
+    assert_eq!(source.project().unwrap().footprint_assignments().len(), 2);
+}
+
 /// A clipboard cannot replace an existing pinned library identity/revision with different content.
 #[test]
 fn conflicting_definition_content_cannot_be_pasted() {

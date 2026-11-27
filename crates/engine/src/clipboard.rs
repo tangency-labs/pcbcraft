@@ -209,7 +209,7 @@ impl Fragment {
             }
         }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
-        let assignments = project
+        let mut assignments = project
             .board
             .assignments
             .iter()
@@ -217,6 +217,10 @@ impl Fragment {
             .filter(|(id, _)| components.contains(id))
             .map(|(id, assignment)| (*id, assignment.clone()))
             .collect::<BTreeMap<_, _>>();
+        // A package chosen by placing its footprint travels like an assigned one, as inspection reports it.
+        for assignment in project.placed_package_assignments().filter(|a| components.contains(&a.component)) {
+            assignments.entry(assignment.component).or_insert(assignment);
+        }
         let definitions = assignments.values().filter_map(|a| project.assignment_definition(&a.key()).map(|d| (a.key(), d.clone()))).collect();
         fragment.schematic_packages = Arc::new(crate::board::assignment::SchematicPackages { assignments, definitions });
         fragment.named_graph = Arc::default();

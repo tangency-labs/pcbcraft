@@ -250,19 +250,26 @@ impl Project {
     /// their saved bytes. Marker-only legacy placements remain outside the physical catalog.
     pub fn footprint_assignments(&self) -> Vec<Value> {
         let mut assignments = self.package_assignments().clone();
-        for f in self.board.footprints() {
-            if let (Some(library), Some(mapping)) = (&f.library, &f.mapping) {
-                assignments.entry(f.component).or_insert_with(|| Assignment {
-                    unconnected_pads: f.unconnected_pads.clone(),
-                    component: f.component,
-                    library: library.clone(),
-                    definition: f.definition.clone(),
-                    definition_revision: f.definition_revision,
-                    mapping: mapping.clone(),
-                });
-            }
+        for assignment in self.placed_package_assignments() {
+            assignments.entry(assignment.component).or_insert(assignment);
         }
         assignments.values().map(|a| a.inspect(self)).collect()
+    }
+
+    /// Read each physical placement's pinned package and pad map as an assignment. Marker-only
+    /// legacy placements have neither and are skipped; explicit choices win over these.
+    pub(crate) fn placed_package_assignments(&self) -> impl Iterator<Item = Assignment> + '_ {
+        self.board.footprints().iter().filter_map(|f| match (&f.library, &f.mapping) {
+            (Some(library), Some(mapping)) => Some(Assignment {
+                unconnected_pads: f.unconnected_pads.clone(),
+                component: f.component,
+                library: library.clone(),
+                definition: f.definition.clone(),
+                definition_revision: f.definition_revision,
+                mapping: mapping.clone(),
+            }),
+            _ => None,
+        })
     }
 }
 
