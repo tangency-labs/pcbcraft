@@ -60,7 +60,7 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 | **Ctrl+,** | Opens Preferences. Runs even while the Assistant owns input. |
 | **Ctrl+S** | Publishes the active document — opens the Publish dialog (desktop). In the browser build it triggers the save/export path instead. Modifier matching ignores extra Shift, so **Ctrl+Shift+S** reaches the same binding. |
 | **Ctrl+Z** | Undoes the active document's last committed edit — the library document's own history, not the project's. |
-| **Ctrl+Y** / **Ctrl+Shift+Z** | Redoes the active document's edit. |
+| **Ctrl+Y** / **Ctrl+Shift+Z** | Redoes the active document's edit. Does nothing when there is nothing to redo. |
 | **Ctrl+Q** | Closes the project — offers to review or discard unsaved library edits first (desktop only). |
 | **Ctrl+Shift+A** | Toggles the Assistant panel (desktop only). Unlike the other rows it is handled before the frame's `enabled` gate — it still fires while a file or publish operation is busy — but only in the main host, not in a detached library window, and only when no dialog is open and the Assistant is enabled. |
 

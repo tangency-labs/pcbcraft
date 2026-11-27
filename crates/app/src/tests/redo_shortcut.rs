@@ -30,6 +30,7 @@ fn ctrl_shift_z_redoes_project_edits() {
 }
 
 /// The symbol and footprint editors take Ctrl+Shift+Z as Redo for their own document history.
+/// Both Redo chords stay silent once the redo history is empty, as in the project editors.
 #[test]
 fn ctrl_shift_z_redoes_library_edits() {
     for kind in [Kind::Symbol, Kind::Footprint] {
@@ -54,8 +55,12 @@ fn ctrl_shift_z_redoes_library_edits() {
         h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
         h.run();
         assert_eq!(objects(&h), edited, "{kind:?}: Ctrl+Shift+Z redoes the second move");
-        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
-        h.run();
-        assert_eq!(objects(&h), edited, "{kind:?}: Ctrl+Shift+Z with nothing to redo changes nothing");
+        let notice = h.state().library_editors.inspect()["notice"].clone();
+        for (modifiers, key) in [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Y)] {
+            h.key_press_modifiers(modifiers, key);
+            h.run();
+            assert_eq!(objects(&h), edited, "{kind:?}: {key:?} with nothing to redo changes nothing");
+            assert_eq!(h.state().library_editors.inspect()["notice"], notice, "{kind:?}: {key:?} with nothing to redo stays silent");
+        }
     }
 }

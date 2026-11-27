@@ -841,7 +841,9 @@ impl PcbApp {
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
                 intents.borrow_mut().push(Intent::Undo);
             }
-            if redo || ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y)) {
+            // With nothing to redo both chords stay silent, as in the project editors.
+            let redoable = active.and_then(|id| self.library_editors.documents.get(&id)).is_some_and(|doc| doc.session.can_redo());
+            if (redo || ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y))) && redoable {
                 intents.borrow_mut().push(Intent::Redo);
             }
             if !IN_BROWSER && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Q)) {
