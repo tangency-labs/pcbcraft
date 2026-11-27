@@ -43,7 +43,7 @@ pub mod review;
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
 /// Silkscreen strokes without an authored width use 0.12 mm.
-const DEFAULT_SILK_NM: i64 = 120_000;
+pub(super) const DEFAULT_SILK_NM: i64 = 120_000;
 /// The outline is drawn with a thin 0.1 mm line, the conventional profile width.
 const OUTLINE_NM: i64 = 100_000;
 /// Segments per corner for rounded pads that cannot use a macro.

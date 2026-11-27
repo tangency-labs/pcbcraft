@@ -10,6 +10,7 @@
 use super::{
     Footprint,
     definition::{CopperBinding, FootprintDefinition, GraphicPurpose, Key, PadShape, RectPad},
+    fabrication::DEFAULT_SILK_NM,
     silkscreen::{self, Settings},
     view::BoardView,
 };
@@ -185,8 +186,8 @@ fn path(points: &[Doubled], closed: bool, marks: &mut Vec<Mark>) {
 /// Layer, stroke width and fill of a piece of drawing. The layer is 0 for silkscreen and 1 for
 /// fabrication, so a mark on one is never matched by the other. Centerline silkscreen paths
 /// carry the board's effective silkscreen stroke width so they compare equal to silkscreen
-/// artwork drawn at the same width; legacy technical rectangles have no stroke of their own
-/// and use zero.
+/// artwork drawn at the same width. Legacy silkscreen rectangles use Gerber's fallback
+/// width; legacy fabrication rectangles still use zero.
 type Ink = (u8, i64, u8);
 
 /// The layer number of a drawing that can mark a part, or none for the courtyard, which bounds
@@ -296,7 +297,8 @@ fn marks(definition: &FootprintDefinition, frame: &Frame, q: u8, style: Settings
             let form = rectangle_form(rect.width_nm, rect.height_nm, u32::from(rect.rotation) + 90 * u32::from(q));
             marks.push(Mark::Rectangle(turn(center, q), form));
         }
-        inked.extend(marks.into_iter().map(|mark| ((layer, 0, 0), mark)));
+        let stroke_nm = if rect.purpose == GraphicPurpose::Silkscreen { DEFAULT_SILK_NM } else { 0 };
+        inked.extend(marks.into_iter().map(|mark| ((layer, stroke_nm, 0), mark)));
     }
     let angle = |degrees: i32| (degrees + 90 * i32::from(q)).rem_euclid(360);
     for artwork in &definition.artwork {

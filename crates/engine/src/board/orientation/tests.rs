@@ -287,6 +287,33 @@ fn centerline_silkscreen_uses_effective_board_stroke_width() {
     assert_eq!(updated, vec!["match-custom-width"]);
 }
 
+/// Half-turned silkscreen rectangles leave orientation ambiguous only when their printed
+/// widths match: the legacy rectangle uses Gerber's 0.12 mm fallback, not the board setting.
+#[test]
+fn legacy_silkscreen_rectangle_uses_gerber_fallback_width() {
+    let make_pair = |id: &str, artwork_stroke_nm: i64| {
+        let mut diode = package("resistor-0402", id, Some(json!({"polarized":true})));
+        diode["silkscreen"] = json!([]);
+        diode["graphics"] = json!([{
+            "purpose": "silkscreen", "center": {"x_nm": 0, "y_nm": 2 * MM},
+            "width_nm": 800_000, "height_nm": 400_000, "rotation": 0,
+        }]);
+        diode["artwork"] = json!([{
+            "purpose": "silkscreen",
+            "graphic": {
+                "geometry": {"type": "rectangle", "min": {"x_nm": -400_000, "y_nm": -2_200_000}, "max": {"x_nm": 400_000, "y_nm": -1_800_000}},
+                "stroke_nm": artwork_stroke_nm,
+                "fill": "none",
+            }
+        }]);
+        diode
+    };
+    let mut s = fixture(&[make_pair("gerber-width", 120_000), make_pair("board-width", 150_000)]);
+    let found = findings(&mut s);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0]["package"]["id"], "gerber-width");
+}
+
 /// Silkscreen counts only as the board prints it. A stroke lying wholly inside pad 1 is clipped
 /// away by pad clearance, so it cannot clear the warning; the same stroke beyond the clearance
 /// does. The board's own setting decides: a stroke just outside pad 1 is clipped by the default
