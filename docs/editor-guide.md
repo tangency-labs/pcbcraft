@@ -454,7 +454,9 @@ right and **Y** flips it top to bottom. The same actions are in the symbol's
 right-click menu and in **Capture → Mirror X**/**Mirror Y**. Mirroring composes
 with the current rotation, rotating afterwards turns the mirrored drawing, and
 applying the same axis twice restores the original pose. Attached wires stay on
-their terminals, and reference/value text remains upright and editable. With
+their terminals, and reference/value text remains upright and editable. Net
+labels stay where they are; a rotation or mirror that would leave a label on
+another pin of the part is refused with a message naming the label and the pin. With
 several items selected, for example by a box selection, **X**, **Y** and the
 ribbon buttons mirror the whole selection as one undo step about its center.
 The center is snapped so pins and wire corners stay on the grid; symbols

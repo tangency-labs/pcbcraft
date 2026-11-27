@@ -169,11 +169,43 @@ impl Project {
     /// Set a current-sheet pose while preserving naming-terminal contacts. Existing explicit
     /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
     /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically,
-    /// as does a pose whose attached wires would follow their pins over another net's label.
+    /// as does a pose that would leave another net's label on a pin or a following wire.
     pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, mirrored: bool, revision: u64) -> Result<Self, CommandError> {
         let next = self.retained_symbol_poses(&[(index, to, rotation, mirrored)], revision, &BTreeSet::new())?;
-        next.check_followed_wires(self, &BTreeSet::new())?;
+        let unchanged = BTreeSet::new();
+        next.check_label_contacts(self, &[index], &unchanged)?;
+        next.check_followed_wires(self, &unchanged)?;
         Ok(next)
+    }
+
+    /// Refuse a turn or mirror that leaves a net label on a pin of a posed symbol it did not touch
+    /// before. Labels do not follow a symbol that turns or mirrors in place, so a label left on one
+    /// pin's old position can land on another pin of the same part and join two nets without
+    /// warning. Labels in `moved` move with the edit; a label that already names the pin's net in
+    /// `before` changes nothing and is allowed. `posed` lists symbol indices shared by both snapshots.
+    pub(crate) fn check_label_contacts(&self, before: &Project, posed: &[usize], moved: &BTreeSet<String>) -> Result<(), CommandError> {
+        let nets = before.connectivity();
+        for &index in posed {
+            let (Some(symbol), Some(old)) = (self.symbols().get(index), before.symbols().get(index)) else { continue };
+            for ((terminal, at), from) in symbol.terminals().into_iter().zip(symbol.pins()).zip(old.pins()) {
+                let net = nets.net_index_for_endpoint(WireEndpoint::Terminal(terminal));
+                let landed = self.net_labels().iter().find(|label| {
+                    label.at == at
+                        && at != from
+                        && !moved.contains(&label.object_id())
+                        && nets.net_index_for_endpoint(WireEndpoint::NetLabel(label.id)).is_none_or(|label| Some(label) != net)
+                });
+                if let Some(label) = landed {
+                    return Err(CommandError::InvalidParams(format!(
+                        "Label {} would land on pin {} of {} and join two nets. Move the label first.",
+                        label.name,
+                        terminal.number(),
+                        self.reference(symbol)
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Apply several current-sheet poses as one rigid batch with the same contact retention as
