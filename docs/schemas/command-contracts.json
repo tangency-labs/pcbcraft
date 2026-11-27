@@ -6160,6 +6160,9 @@
               }
             },
             "type": "object"
+          },
+          "preserve_contacts": {
+            "type": "boolean"
           }
         },
         "required": [

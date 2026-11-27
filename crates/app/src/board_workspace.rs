@@ -722,6 +722,7 @@ impl PcbApp {
         let enabled = navigation_enabled && self.views.active.id() == id;
         let owner_enabled = enabled;
         let enabled = enabled && !egui::Popup::is_any_open(ui.ctx());
+        self.board_nudge(ui, id, enabled);
         if self.session.project().is_some_and(|project| project.board_target().is_none())
             && self.views.view(id).is_some_and(|view| !view.unavailable())
         {

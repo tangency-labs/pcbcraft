@@ -1,6 +1,6 @@
 //! One immutable source and atomic translation for an explicit mixed board selection.
 use super::{clipboard::BoardSelection, drawing::Drawings, view::BoardTarget};
-use crate::{CommandError, Project, Session, schematic::Point};
+use crate::{CommandError, HistoryEntry, Project, Session, schematic::Point};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,8 +8,20 @@ use std::{
 };
 use uuid::Uuid;
 
+mod nudge;
+mod segment;
+pub use segment::{dragged_ends, track_projection};
+
 /// Translate selected footprints, graphics, zones, tracks and vias in one revision-checked edit.
 pub const MOVE_ITEMS: &str = "pcb.move_items";
+
+/// The optional canvas-nudge mode of [`MOVE_ITEMS`], declared beside the command it extends.
+pub(crate) const PRESERVE_CONTACTS: crate::Param = crate::Param {
+    name: "preserve_contacts",
+    required: false,
+    kind: crate::ParamKind::CreateBoard,
+    summary: "Reshape attached track legs and refuse a move that would break a direct pad, track or via contact; zone fills are not checked",
+};
 
 /// Immutable geometry authority for a translation preview. Pad contacts are captured once;
 /// previews are disposable and do not certify copper validity or publish history.
@@ -108,6 +120,49 @@ impl MovePlan {
         Ok(Arc::new(next))
     }
 }
+/// The original undo entry of successive canvas nudge steps. Kept by the input owner;
+/// the session still checks revision and undo-tip identity on every attempted repeat.
+#[derive(Debug)]
+pub struct NudgeBurst {
+    origin: Arc<Project>,
+    revision: u64,
+}
+
+impl NudgeBurst {
+    /// Apply the ordinary board move (or reference-offset) command, extending only this burst's
+    /// exact undo tip. Keep the original below the history bound, even when a repeat is refused.
+    pub fn step(state: &mut Option<Self>, session: &mut Session, command: &str, params: &Value) -> Result<u64, CommandError> {
+        if !matches!(command, MOVE_ITEMS | crate::SET_FOOTPRINT_REFERENCE_OFFSET) {
+            return Err(invalid("Not a board nudge command."));
+        }
+        let before = session.revision();
+        let origin = if let Some(burst) = state.take()
+            && burst.revision == before
+            && session.redo.is_empty()
+            && matches!(session.undo.last(), Some(HistoryEntry::Project(Some(tip))) if Arc::ptr_eq(tip, &burst.origin))
+        {
+            session.undo.pop()
+        } else {
+            None
+        };
+        let continued = origin.is_some();
+        let result = session.apply(command, params);
+        let changed = session.revision() != before;
+        if let Some(origin) = origin {
+            if changed {
+                session.undo.pop();
+            }
+            session.undo.push(origin);
+        }
+        if (changed || continued)
+            && let Some(HistoryEntry::Project(Some(origin))) = session.undo.last()
+        {
+            *state = Some(Self { origin: origin.clone(), revision: session.revision() });
+        }
+        result
+    }
+}
+
 impl Session {
     /// Rebuild against the requested revision and validate the complete translated candidate,
     /// including locked geometry, references and shorts, before one shared history publication.
@@ -126,10 +181,22 @@ impl Session {
             return Ok(());
         }
         let mut next = candidate.as_ref().clone();
+        let preserve_contacts = params["preserve_contacts"].as_bool() == Some(true);
+        let reshaped = if preserve_contacts { plan.reshape_tracks(&mut next, delta)? } else { BTreeSet::new() };
+        if preserve_contacts && next.board == source.board {
+            return Ok(());
+        }
         let (mut tracks, mut vias) = (next.board.tracks.clone(), next.board.vias.clone());
         super::track::validate(&next, &mut tracks, &mut vias).map_err(invalid)?;
         super::track::protect_locked(&source, &next)?;
-        let affected: BTreeSet<_> = plan.items.tracks.union(&plan.items.vias).copied().chain(plan.carried.keys().copied()).collect();
+        let affected: BTreeSet<_> = plan.items.tracks.union(&plan.items.vias).copied().chain(plan.carried.keys().copied()).chain(reshaped).collect();
+        if preserve_contacts && (!affected.is_empty() || !plan.items.footprints.is_empty()) {
+            let before = source.board_view(target).ok_or_else(|| invalid("Board is unavailable."))?;
+            let after = next.board_view(target).ok_or_else(|| invalid("Board is unavailable."))?;
+            if super::track::loses_contact(before, after, &affected, &plan.items.footprints) {
+                return Err(invalid("This move would detach existing copper. Move the anchor with the selection or choose a different direction."));
+            }
+        }
         if (!affected.is_empty() || !plan.items.footprints.is_empty())
             && let Some((a, b)) = super::track::short_for_copper_edit(&next, &affected, &plan.items.footprints).map_err(invalid)?
         {

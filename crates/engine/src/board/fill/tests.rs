@@ -161,6 +161,30 @@ fn thermal_spokes_connect_and_no_connect_style_does_not() {
     assert_eq!(v.ratsnest_with_copper(&filled.copper).unwrap().lines.len(), v.ratsnest().unwrap().lines.len());
 }
 
+/// A contact-preserving move checks only direct pad, track and via contacts. Pour connectivity
+/// is derived from a fill, so a move that takes the zone off pads it joined is accepted as one
+/// edit, and the next refill shows the pads unjoined again.
+#[test]
+fn contact_preserving_move_leaves_pour_connectivity_to_refill() {
+    let mut s = fixture(Connection::Solid, 0);
+    let unfilled = view(&s).ratsnest().unwrap().lines.len();
+    let refilled = |s: &Session| {
+        let v = view(s);
+        v.ratsnest_with_copper(&compute(v).unwrap().copper).unwrap().lines.len()
+    };
+    assert!(refilled(&s) < unfilled, "the pour joins same-net pads");
+    let (board, zone) = (view(&s).target.board, view(&s).zones()[0].id);
+    let revision = s.revision();
+    // The pads sit at y = 2 mm; 30 mm up leaves the zone over none of them.
+    let moved = s.apply(
+        crate::board::movement::MOVE_ITEMS,
+        &json!({"board":board,"items":{"zones":[zone]},"dx_nm":0,"dy_nm":30_000_000,"preserve_contacts":true,"expected_revision":revision}),
+    );
+    assert!(moved.is_ok(), "{moved:?}");
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(refilled(&s), unfilled, "the refill no longer joins the pads");
+}
+
 #[test]
 fn dropping_material_does_not_prove_connections_and_saved_intent_is_unchanged() {
     let s = fixture(Connection::Solid, 5_000_000_000_000_000);
