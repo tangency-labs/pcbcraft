@@ -42,10 +42,14 @@
 - Explicit plain-text conversion to local/global net-label groups.
 - Complete hierarchical subtree/interface clipboard, independent duplication or explicitly selected
   cut relocation, stable cached previews and pan/zoom.
+- A read-only list of nets that cross sheets, with pages and how each arrives (Net Inspector
+  **Across sheets**, `nets.sheet_overview`).
 
 ### Remaining scope
 
 - Repeated child instances remain deferred.
+- Drawing that inter-sheet flow on the root sheet:
+  [#287](https://github.com/tangency-labs/pcbcraft/issues/287).
 - Remaining group G-drag: [#44](https://github.com/tangency-labs/pcbcraft/issues/44).
 - Template editing and logos: [#46](https://github.com/tangency-labs/pcbcraft/issues/46).
 

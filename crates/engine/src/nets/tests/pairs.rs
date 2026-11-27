@@ -283,19 +283,16 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
             assert!(error.contains(&format!("differential pairs not allowed in {project_format}")), "{error}");
         }
         if board {
-            for version in [
-                "pcbcraft-instances/1",
-                "pcbcraft-instances/4",
-                "pcbcraft-instances/5",
-                "pcbcraft-instances/6",
-                "pcbcraft-instances/7",
-                "pcbcraft-instances/999",
-            ] {
+            for version in ["pcbcraft-instances/1", "pcbcraft-instances/4", "pcbcraft-instances/5", "pcbcraft-instances/6", "pcbcraft-instances/7"] {
                 let mut instance = original.clone();
                 instance["format"] = json!(version);
                 let error = decode_documents(&replaced(&docs, &path, &instance)).unwrap_err();
                 assert!(error.contains("unsupported instances format"), "{error}");
             }
+            let mut newer = original.clone();
+            newer["format"] = json!("pcbcraft-instances/999");
+            let error = decode_documents(&replaced(&docs, &path, &newer)).unwrap_err();
+            assert!(error.contains("saved by a newer PCBCraft in format pcbcraft-instances/999"), "{error}");
             let mut foreign = original.clone();
             foreign["board"] = json!(Uuid::nil());
             let error = decode_documents(&replaced(&docs, &path, &foreign)).unwrap_err();

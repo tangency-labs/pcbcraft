@@ -1,0 +1,96 @@
+name: Triage labels
+
+on:
+  issues:
+    types: [opened, reopened]
+  # Run from the base workflow for fork PRs. Never check out the PR branch.
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Add matching triage labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          kinds = {
+              "bug": r"^(?:\[bug\]|(?:bug|fix)(?:\([^)]*\))?\s*:)",
+              "enhancement": r"^(?:\[(?:feature|enhancement)\]|(?:feature|enhancement|feat)(?:\([^)]*\))?\s*:)",
+              "documentation": r"^(?:\[docs?\]|docs?(?:\([^)]*\))?\s*:)",
+              "question": r"^(?:\[question\]|question\s*:)",
+          }
+          areas = {
+              "area: agents": r"\bmcp\b",
+              "area: checks": r"\b(?:drc|erc)\b",
+              "area: interchange": r"\b(?:kicad|altium|eagle)\b.*\b(?:import|export)\w*\b|\b(?:import|export)\w*\b.*\b(?:kicad|altium|eagle)\b",
+              "area: libraries": r"\b(?:parts library|library browser|symbol editor|footprint editor)\b",
+              "area: pcb layout": r"\b(?:update pcb|pcb layout|board editor)\b",
+              "area: schematic": r"\b(?:schematics?|sheet editor)\b",
+          }
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as source:
+              event = json.load(source)
+          pr = event.get("pull_request")
+          item = pr if pr is not None else event["issue"]
+          number = int(item["number"])
+          repository = os.environ["GITHUB_REPOSITORY"]
+          title = item["title"].lower()
+          existing = {label["name"] for label in item["labels"]}
+          linked = set()
+
+          if pr is not None:
+              owner, name = repository.split("/", 1)
+              query = """
+                query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $number) {
+                      closingIssuesReferences(first: 20) {
+                        nodes { repository { nameWithOwner } labels(first: 50) { nodes { name } } }
+                      }
+                    }
+                  }
+                }
+              """
+              result = subprocess.check_output(
+                  ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}",
+                   "-f", f"name={name}", "-F", f"number={number}"],
+                  text=True,
+              )
+              issues = json.loads(result)["data"]["repository"]["pullRequest"]["closingIssuesReferences"]["nodes"]
+              for issue in issues:
+                  if issue["repository"]["nameWithOwner"].lower() == repository.lower():
+                      linked.update(label["name"] for label in issue["labels"]["nodes"])
+
+          labels = {label for label, pattern in areas.items() if re.search(pattern, title)}
+          labels.update(label for label in linked if label.startswith("area: "))
+          if not existing.intersection(kinds):
+              explicit = next((label for label, pattern in kinds.items() if re.search(pattern, title)), None)
+              inherited = linked.intersection(kinds)
+              if explicit:
+                  labels.add(explicit)
+              elif len(inherited) == 1:
+                  labels.update(inherited)
+
+          missing = sorted(labels - existing)
+          if missing:
+              subprocess.run(
+                  ["gh", "api", "--method", "POST", f"repos/{repository}/issues/{number}/labels",
+                   "--input", "-", "--jq", ".[].name"],
+                  input=json.dumps({"labels": missing}),
+                  text=True,
+                  check=True,
+              )
+          PY

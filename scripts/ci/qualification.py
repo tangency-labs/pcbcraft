@@ -5,7 +5,7 @@ import re
 import time
 from urllib.request import Request, urlopen
 
-PR_JOBS = {"changes", "documentation-links", "library-schemas", "native-tests", "checks"}
+PR_JOBS = {"changes", "documentation-links", "library-schemas", "linux-tests", "checks"}
 
 
 def api(path: str):

@@ -18,8 +18,8 @@ send it to window 0 instead.
 
 Enable the connection through **Help → Connect AI assistants…**, as described in
 [the MCP guide](../mcp.md#live-mcp-in-the-desktop-editor). Use `inspect_editor` to
-find the intended window ID, then `list_commands` with `filter: "ui."` and `detail: true`
-to discover the schemas. These commands run through the existing MCP `execute` tool and
+find the intended window ID, then `list_commands` with `filter: "ui."` to discover
+the schemas. These commands run through the existing MCP `execute` tool and
 require the existing local connection token. Geometry is collected only after a
 UI query opts in; if the first call reports that geometry is not ready, wait for
 the window to paint and retry the query.

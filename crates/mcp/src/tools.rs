@@ -35,8 +35,8 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "list_commands",
             "List commands",
-            "Every available command's id and the first sentence of its summary. `describe_command` gives one command's full summary and parameters; set `detail` to true to list full descriptors instead. `filter` keeps those whose id or summary contains it. A second part gives the command API version, the catalog revision and the optional features this build offers.",
-            json!({"filter": {"type": "string"}, "detail": {"type": "boolean", "default": false}}),
+            "Every available command, with its summary and parameters. Set `detail` to false for a compact list of IDs and opening summary sentences. `describe_command` gives the full descriptor for one command. `filter` keeps those whose id or summary contains it. A second part gives the command API version, the catalog revision and the optional features this build offers.",
+            json!({"filter": {"type": "string"}, "detail": {"type": "boolean", "default": true}}),
             &[],
             Effect::ReadOnly,
         ),
@@ -210,7 +210,7 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
                         let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
                         field("id").contains(&filter) || field("summary").contains(&filter)
                     };
-                    let detail = args["detail"].as_bool().unwrap_or(false);
+                    let detail = args["detail"].as_bool().unwrap_or(true);
                     let listed = all.iter().filter(keeps).map(|command| if detail { command.clone() } else { brief(command) }).collect();
                     listing(&Value::Array(listed), &all, metadata, backend.scope())
                 }

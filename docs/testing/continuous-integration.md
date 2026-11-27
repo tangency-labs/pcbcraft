@@ -2,9 +2,9 @@
 
 PRs use staged validation so development pushes do not repeat the complete suite.
 Drafts skip CI jobs. Ready code PRs run repository checks, formatting and a quick
-native workspace compile. Adding `approved-for-ci` enables Clippy and native tests
-for the affected packages and their dependents. A passing selected stage reports
-`checks` as successful; missing approval is not an error.
+native workspace compile. Adding `approved-for-ci` enables the `linux-tests` job
+with Clippy and tests for the affected packages and their dependents. The
+aggregate `checks` result reports whether the selected stage passed.
 
 ## What runs when
 
@@ -83,10 +83,13 @@ still require a separate run.
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping
 release and ordinary development profiles are unchanged. Platforms have separate
-cache keys, and only main saves caches. The Windows cache keeps dependencies
-under a new key. Its first build is cold, so the job has a 75-minute timeout.
-The Linux native job has 45 minutes to let cold tests finish and save their
-cache. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
+cache keys, and only main saves caches. Linux quick and native checks share a
+cache. The native, browser, and WASI jobs cache compiled dependencies and omit
+workspace crate outputs so more targets can fit in the repository's cache
+storage. The first run under a new key builds cold. The Linux and Windows test
+jobs have 45 and 75 minutes, respectively, to allow cold builds to finish and
+save a cache. The defaults are `ubuntu-latest`, `windows-latest` and
+`macos-latest`.
 `CI_RUNNER`, `CI_RUNNER_WINDOWS` and `CI_RUNNER_MACOS` select provisioned runners.
 Custom Windows builds must be x64 MSVC executables compatible with the presenting
 `windows-latest` desktop. `CI_BUILD_JOBS` defaults to four on Linux, and

@@ -19,6 +19,7 @@ mod board_drawing;
 mod board_fill;
 pub(crate) use board_fill::board as fill_harness;
 mod board_layers;
+mod board_nudge;
 mod board_properties;
 mod board_ratsnest;
 mod board_tracks;
@@ -50,6 +51,7 @@ mod optional_board;
 mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod redo_shortcut;
 mod ribbon;
 mod save_changes;
 mod selection_filters;
@@ -1892,12 +1894,14 @@ mod live_mcp {
         let connection = (port, token);
         // The whole live catalog, the largest one, stays readable by agents whose clients move a
         // text result over 50,000 characters to a file they cannot open (#636).
-        let listed = tool(&mut harness, connection, "list_commands", json!({}));
+        let listed = tool(&mut harness, connection, "list_commands", json!({"detail": false}));
         let size: usize = listed["content"].as_array().unwrap().iter().map(|part| part["text"].as_str().unwrap().chars().count()).sum();
-        assert!(size < 40_000, "list_commands without a filter returned {size} characters");
+        assert!(size < 40_000, "compact list_commands without a filter returned {size} characters");
         let commands = payload(listed);
         let ids: Vec<&str> = commands.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
-        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len() + crate::ui_automation::catalog().len());
+        let live_engine = pcbcraft_engine::catalog().iter().filter(|command| !pcbcraft_engine::headless_only(command.id)).count();
+        assert_eq!(ids.len(), live_engine + window_commands::window_catalog().len() + crate::ui_automation::catalog().len());
+        assert!(!ids.contains(&pcbcraft_engine::kicad_import::IMPORT));
         for id in [
             MOVE_SYMBOL,
             pcbcraft_engine::DELETE_WIRE,

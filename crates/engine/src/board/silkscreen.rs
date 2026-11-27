@@ -186,9 +186,14 @@ pub(super) fn clipped(paths: Vec<Vec<Point>>, pads: &[super::definition::RectPad
         .map(|pad| {
             let half_w = pad.width_nm as f64 / 2.;
             let half_h = pad.height_nm as f64 / 2.;
-            let angle = f64::from(pad.rotation).to_radians();
-            let dx = half_w * angle.cos().abs() + half_h * angle.sin().abs() + margin;
-            let dy = half_h * angle.cos().abs() + half_w * angle.sin().abs() + margin;
+            let circular = matches!(pad.shape, super::definition::PadShape::Circle)
+                || (matches!(pad.shape, super::definition::PadShape::Oval) && pad.width_nm == pad.height_nm);
+            let (dx, dy) = if circular {
+                (half_w + margin, half_h + margin)
+            } else {
+                let angle = f64::from(pad.rotation).to_radians();
+                (half_w * angle.cos().abs() + half_h * angle.sin().abs() + margin, half_h * angle.cos().abs() + half_w * angle.sin().abs() + margin)
+            };
             [pad.center.x_nm as f64 - dx, pad.center.y_nm as f64 - dy, pad.center.x_nm as f64 + dx, pad.center.y_nm as f64 + dy]
         })
         .collect();

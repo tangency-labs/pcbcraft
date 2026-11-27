@@ -24,20 +24,16 @@ of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
 
 They come from `https://github.com/tangency-labs/solidcraft.git` at
-`73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision the workspace already
+`de3c68956eebed3aa0ac0ba26e91492fa6adaea8`, the revision the workspace already
 pins for the Craft UI crates. `solidcore` is developed in that repository's
 `solidcore/` folder; `tangency-labs/solidcore` is a read-only mirror of it.
 Taking the crates from the mirror would put a second copy of the kernel in the
 build with types that do not match, and would need another `allow-git` entry in
 `deny.toml`.
 
-The workspace applies a narrow local `solidcore-ops` backport for STEP transform
-composition, described in [its patch record](../../vendor/solidcore-ops/PATCH.md).
-The three matrix products follow the already-merged upstream correction while
-the remaining kernel and toolkit sources stay at the qualified revision. Only
-geometry's dependency closure uses this ops layer; it introduces no UI change or second
-kernel copy. The non-conformant transformation-item detection from the upstream
-PR is outside this backport.
+STEP transform composition uses the upstream correction from
+[SolidCraft #17776](https://github.com/tangency-labs/solidcraft/pull/17776), which the
+pinned revision includes; the earlier local `solidcore-ops` backport has been removed.
 
 The pin moves only with the workspace's SolidCraft revision. A bump is its own
 change that re-runs the qualification below and lists the kernel changes since

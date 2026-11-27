@@ -246,7 +246,8 @@ impl Selection {
     /// Disconnected moves cut contacts at the selection boundary before translating, keeping
     /// unselected routes fixed and contacts within the selection intact. Connected grabs retain
     /// the existing stretching behavior. Zero displacement never detaches or allocates IDs.
-    /// Validation, attachment checks and optional healing finish before a candidate is returned.
+    /// Validation, attachment checks and optional healing finish before a candidate is returned;
+    /// a candidate whose unselected wires would follow their pins over another net's label is refused.
     /// This disposable geometric candidate retains source identity records; publication through
     /// the shared session command reconciles net identities and numbers as one transaction.
     pub fn transformed(&self, project: &Project, delta: Point, disconnect: bool, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
@@ -256,7 +257,9 @@ impl Selection {
             return Ok(project.clone());
         }
         let base = if disconnect { project.detached_selection(self, revision)? } else { project.clone() };
-        self.moved(&base, delta)?.healed(&base, revision, auto_heal)
+        let next = self.moved(&base, delta)?.healed(&base, revision, auto_heal)?;
+        next.check_followed_wires(project, &self.wires)?;
+        Ok(next)
     }
 
     /// Free points and shared junctions owned by the selected wire routes.
@@ -305,7 +308,9 @@ impl Selection {
     /// routes whose ends both move with the group reflect their authored bends, and every other
     /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
     /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
-    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection.
+    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection,
+    /// refuse to leave an unselected label on another pin of a mirrored symbol, and refuse
+    /// when a wire following its pins would run over a label or power pin of another net.
     pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
         self.validate(project)?;
         self.validate_marker_owners(project)?;
@@ -389,6 +394,8 @@ impl Selection {
         }
         let next = next.healed(&base, revision, false)?;
         self.check_stationary_power_contacts(project, &next)?;
+        next.check_label_contacts(project, &poses.iter().map(|&(index, ..)| index).collect::<Vec<_>>(), &self.net_labels)?;
+        next.check_followed_wires(project, &self.wires)?;
         Ok(next)
     }
 

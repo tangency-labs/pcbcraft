@@ -2,17 +2,13 @@
 
 ## Command API version
 
-`list_commands` keeps returning the command array as its first text part. Each
-entry gives the command's `id`, the first sentence of its `summary` and, for a
-window command, its `scope`, which keeps the whole live catalog readable by
-agents whose clients move long tool results to a file. `describe_command`
-returns one command's full descriptor, with its title, summary and `params`
-schema; `list_commands` with `detail: true` lists full descriptors. Entries
-without `params` mark the brief list, so a client that read schemas from
-`list_commands` can tell it needs `detail: true` or `describe_command`; builds
-before `detail` refuse it as an unknown argument. The brief list changes only
-the MCP tool reply, not any command's contract, so `command_api_version` stays
-the same. A
+`list_commands` returns full command descriptors, including titles, summaries
+and parameter schemas, as its first text part. Use `detail: false` for a
+compact list of command IDs, opening summary sentences and window scopes.
+The built-in Assistant requests the compact list to stay within its tool
+output limit and uses `describe_command` to get an individual command's full
+descriptor. Builds from before the `detail` option was added reject that
+argument, so omit it when requesting full descriptors from those builds. A
 second text part, also given as the result's `structuredContent`, reads
 `{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
@@ -26,9 +22,9 @@ These are three separate things:
   included. It changes whenever a command is added or removed or a description
   changes, so a client can drop cached discovery data; a new revision alone
   does not mean existing callers are incompatible. It covers the whole catalog
-  of full descriptors, as `detail: true` lists them, whatever `filter` keeps
-  and whether or not the list is brief. A live editor (project, window and `ui.` commands)
-  and a headless session (project commands) describe different catalogs, and
+  of full descriptors regardless of `filter` or `detail`. A live editor
+  (project, window and `ui.` commands) and a headless session (project commands)
+  describe different catalogs, and
   builds differ, so each reports its own revision; it is computed when asked,
   not stored.
 - `capabilities` names the optional protocol features this build offers; a
@@ -100,9 +96,9 @@ whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
 a rewritten snapshot passes them. When the pull request’s target commit has a snapshot, CI on
 a pull request also compares that `command-contracts.json` with the pull
-request's checked-out merge result, with the same classifier (the `command_contracts_against_base`
-example of `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
-command_contracts_against_base -- BASE.json HEAD.json`): it fails when the
+request's checked-out merge result as part of the engine tests. The same
+classifier is available locally with `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`. The comparison fails when the
 classifier detects a breaking difference in either section without a raised
 `command_api_version`, or when the version falls. If the target commit has no
 snapshot, the workspace tests check the first snapshot against discovery
@@ -189,7 +185,7 @@ a malformed reply from another editor may omit the facts it describes.
 | --- | --- |
 | `unknown_command` | No command has the requested id. |
 | `invalid_params` | The parameters are a non-null scalar or array, name a parameter the command does not describe, leave out a required one, have the wrong type or range, or fail the command's own checks. |
-| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
+| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar; also a headless-only command sent to an open editor. |
 | `stale_revision` | The request was prepared against an earlier revision. `details.current_revision` gives the current one. For annotation, `details.part_instances` names affected parts; preview again instead of retrying a stale token. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
 | `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |

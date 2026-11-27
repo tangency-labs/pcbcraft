@@ -215,3 +215,102 @@ fn group_mirror_refuses_to_detach_a_label_from_an_unselected_pin() {
     assert_eq!(session.revision(), revision);
     assert_eq!((session.undo.len(), session.redo.len()), history);
 }
+
+/// R1 wired to D1 pin 1 and a global GND label on D1 pin 2: turning or moving D1 can sweep the
+/// wire that follows pin 1 over the label.
+fn led_with_ground_label() -> Session {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Followed wire"})).unwrap();
+    for (definition, x, y) in [("resistor", 70, 80), ("led", 95, 95)] {
+        apply(&mut session, PLACE_SYMBOL, json!({"definition":definition,"x_nm":x * MM,"y_nm":y * MM}));
+    }
+    let [resistor, led] = [0, 1].map(|index| session.project().unwrap().symbols()[index].id());
+    apply(&mut session, CONNECT_PINS, json!({"from":{"symbol":resistor,"terminal":"2"},"to":{"symbol":led,"terminal":"1"}}));
+    let pin = session.project().unwrap().symbols()[1].pins()[1];
+    apply(&mut session, net_labels::ADD, json!({"name":"GND","style":"global","x_nm":pin.x_nm,"y_nm":pin.y_nm}));
+    session
+}
+
+/// One millimetre in schematic units.
+const MM: i64 = 1_000_000;
+
+/// A wire to an unselected part follows its pin. When its new route would run over a label of
+/// another net the edit is refused instead of silently joining the nets: group mirror, group move,
+/// Mirror Symbol and a single symbol move share the rule, and each refusal leaves revision,
+/// snapshot and history.
+/// A move whose followed wire stays clear still commits with the netlist unchanged.
+#[test]
+fn followed_wires_never_run_over_another_net_label() {
+    let mut session = led_with_ground_label();
+    let before = session.snapshot().unwrap();
+    let connectivity = before.connectivity();
+    let label = WireEndpoint::NetLabel(before.net_labels()[0].id);
+    assert_ne!(connectivity.net_index_for_endpoint(label), connectivity.net_index_for_endpoint(before.wires()[0].endpoints()[0]));
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let led = before.symbols()[1].id();
+    let group = json!({"symbols":[led],"wires":[],"net_labels":[before.net_labels()[0].object_id()]});
+    for (command, mut params) in [
+        (MIRROR_ITEMS, json!({"items":group,"axis":"horizontal"})),
+        (MIRROR_ITEMS, json!({"items":{"symbols":[led],"wires":[]},"axis":"horizontal"})),
+        (MOVE_ITEMS, json!({"items":group,"dx_nm":-50 * MM,"dy_nm":0})),
+        (MIRROR_SYMBOL, json!({"symbol":led,"axis":"horizontal"})),
+        (MOVE_SYMBOL, json!({"symbol":led,"x_nm":120 * MM,"y_nm":95 * MM})),
+    ] {
+        params["expected_revision"] = json!(revision);
+        let result = session.apply(command, &params);
+        assert!(matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains("join two nets")), "{command} {params}: {result:?}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()), "{command} {params}");
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+    }
+    apply(&mut session, MOVE_ITEMS, json!({"items":group,"dx_nm":10 * MM,"dy_nm":0}));
+    assert_eq!(session.revision(), revision + 1);
+    assert_eq!(before.inspect_schematic()["netlist"], session.project().unwrap().inspect_schematic()["netlist"]);
+}
+
+/// A label can move onto a leg shared by the old and new wire routes. Refuse only if that
+/// contact joins nets that were separate before the move.
+#[test]
+fn followed_wire_checks_labels_moved_onto_a_shared_leg() {
+    let target = Point { x_nm: 78 * MM, y_nm: 80 * MM };
+    for same_net in [false, true] {
+        let mut session = led_with_ground_label();
+        if same_net {
+            let project = session.project().unwrap();
+            let start = project.wire_path(&project.wires()[0])[0];
+            apply(&mut session, net_labels::ADD, json!({"name":"ALT","style":"global","x_nm":start.x_nm,"y_nm":start.y_nm}));
+        }
+        let start = Point { x_nm: target.x_nm, y_nm: target.y_nm - 10 * MM };
+        apply(&mut session, net_labels::ADD, json!({"name":"ALT","style":"global","x_nm":start.x_nm,"y_nm":start.y_nm}));
+        let before = session.snapshot().unwrap();
+        let led = before.symbols()[1].id();
+        let label = before.net_labels().iter().find(|label| label.at == start).unwrap();
+        let label_end = WireEndpoint::NetLabel(label.id);
+        let wire = &before.wires()[0];
+        let old_path = before.wire_path(wire);
+        let nets = before.connectivity();
+        assert!(crate::wire::path_contains_point(&old_path, target));
+        assert!(!crate::wire::path_contains_point(&old_path, start));
+        assert_eq!(nets.net_index_for_endpoint(label_end) == nets.net_index_for_endpoint(wire.endpoints()[0]), same_net);
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        let result = session.apply(
+            MOVE_ITEMS,
+            &json!({"items":{"symbols":[led],"wires":[],"net_labels":[label.object_id()]},"dx_nm":0,"dy_nm":10 * MM,"expected_revision":revision}),
+        );
+        if same_net {
+            assert!(result.is_ok(), "same-net contact should be allowed: {result:?}");
+            let after = session.project().unwrap();
+            let new_path = after.wire_path(&after.wires()[0]);
+            assert_ne!(new_path, old_path);
+            assert!(crate::wire::path_contains_point(&new_path, target));
+            assert_eq!(after.endpoint_position(label_end), Some(target));
+        } else {
+            assert!(matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains("join two nets")), "{result:?}");
+            assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+        }
+    }
+}

@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/tmp/pcbcraft-503-fixtures.Oqn5rM/divider-kicad10.kicad_sch</source>
+    <date>2026-11-23T01:01:38</date>
+    <tool>Eeschema 10.0.8-unknown-1000.20261030gitf38aee7.fc44</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>divider-kicad10.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="R1">
+      <value>10k</value>
+      <footprint>Resistor_SMD:R_0603_1608Metric</footprint>
+      <fields>
+        <field name="Tolerance">1%</field>
+        <field name="Footprint">Resistor_SMD:R_0603_1608Metric</field>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description=""/>
+      <property name="Tolerance" value="1%"/>
+      <property name="Sheetname" value="Root"/>
+      <property name="Sheetfile" value="divider-kicad10.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>0d1e0000-0000-4000-8000-000000000501</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+    <comp ref="R2">
+      <value>10k</value>
+      <footprint>Resistor_SMD:R_0603_1608Metric</footprint>
+      <fields>
+        <field name="Footprint">Resistor_SMD:R_0603_1608Metric</field>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description=""/>
+      <property name="Sheetname" value="Root"/>
+      <property name="Sheetfile" value="divider-kicad10.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>0d1e0000-0000-4000-8000-000000000502</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+    <comp ref="U1">
+      <value>Buffer2</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Sample" part="Buffer2" description=""/>
+      <property name="Sheetname" value="Root"/>
+      <property name="Sheetfile" value="divider-kicad10.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>0d1e0000-0000-4000-8000-000000000506 0d1e0000-0000-4000-8000-000000000505</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="5"/>
+            <pin num="6"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+        <unit name="B">
+          <pins>
+            <pin num="3"/>
+            <pin num="5"/>
+            <pin num="6"/>
+            <pin num="4"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="R">
+      <fields>
+        <field name="Reference">R</field>
+        <field name="Value">R</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+    <libpart lib="Sample" part="Buffer2">
+      <fields>
+        <field name="Reference">U</field>
+        <field name="Value">Buffer2</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="1" name="A" type="input"/>
+        <pin num="2" name="Y" type="output"/>
+        <pin num="3" name="A" type="input"/>
+        <pin num="4" name="Y" type="output"/>
+        <pin num="5" name="VCC" type="power_in"/>
+        <pin num="6" name="GND" type="power_in"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries/>
+  <nets>
+    <net code="1" name="+3V3" class="Default">
+      <node ref="R1" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/VOUT" class="Default">
+      <node ref="R1" pin="2" pintype="passive"/>
+      <node ref="R2" pin="1" pintype="passive"/>
+    </net>
+    <net code="3" name="GND" class="Default">
+      <node ref="R2" pin="2" pintype="passive"/>
+    </net>
+    <net code="4" name="IN" class="Default">
+      <node ref="U1" pin="1" pinfunction="A_1" pintype="input"/>
+    </net>
+    <net code="5" name="unconnected-(U1A-GND-Pad6)" class="Default">
+      <node ref="U1" pin="6" pinfunction="GND_6" pintype="power_in"/>
+    </net>
+    <net code="6" name="unconnected-(U1A-VCC-Pad5)" class="Default">
+      <node ref="U1" pin="5" pinfunction="VCC_5" pintype="power_in"/>
+    </net>
+    <net code="7" name="unconnected-(U1A-Y-Pad2)" class="Default">
+      <node ref="U1" pin="2" pinfunction="Y_2" pintype="output+no_connect"/>
+    </net>
+    <net code="8" name="unconnected-(U1B-A-Pad3)" class="Default">
+      <node ref="U1" pin="3" pinfunction="A_3" pintype="input"/>
+    </net>
+    <net code="9" name="unconnected-(U1B-GND-Pad6)" class="Default">
+      <node ref="U1" pin="6" pinfunction="GND_6" pintype="power_in"/>
+    </net>
+    <net code="10" name="unconnected-(U1B-VCC-Pad5)" class="Default">
+      <node ref="U1" pin="5" pinfunction="VCC_5" pintype="power_in"/>
+    </net>
+    <net code="11" name="unconnected-(U1B-Y-Pad4)" class="Default">
+      <node ref="U1" pin="4" pinfunction="Y_4" pintype="output"/>
+    </net>
+  </nets>
+</export>

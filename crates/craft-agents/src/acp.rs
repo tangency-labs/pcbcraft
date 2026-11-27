@@ -286,7 +286,7 @@ pub fn wsl_path(path: &std::path::Path) -> std::path::PathBuf {
 pub const SYSTEM_NOTE: &str = "You are running inside PCBCraft, an electronics design application, as the user's assistant. \
 The open project is reachable through the PCBCraft MCP server, whose name starts with `pcbcraft-app`: use its tools (list_commands, describe_command, execute, \
 inspect_project, inspect_editor, cross_probe) to read and change the project and the editor windows the user is looking at. \
-list_commands gives each command's id and first summary sentence; describe_command gives one command's full summary and parameters. \
+Call list_commands with {\"detail\": false} to keep the command catalog within tool output limits. Use describe_command for a command's full summary and parameters. \
 Inspect the project for its current revision and IDs before an edit, and inspect again to verify. Project commands are undoable \
 with edit.undo; view., window., arrangement., app. and file. commands change the editor's views, windows, arrangements and \
 settings, using IDs from inspect_editor. Unless the user requests otherwise, keep the area you are editing visible in the appropriate editor pane. \
@@ -784,6 +784,7 @@ mod tests {
         assert_eq!(name, "pcbcraft-app-0123456789ab");
         assert!(SYSTEM_NOTE.contains(&format!("name starts with `{BRIDGE_PREFIX}`")), "{SYSTEM_NOTE}");
         assert!(!SYSTEM_NOTE.contains("`pcbcraft` MCP server"));
+        assert!(SYSTEM_NOTE.contains(r#"list_commands with {"detail": false}"#));
         // The panel recognises this chat's tools by its server's whole name.
         assert!(is_bridge_tool(&format!("mcp__{name}__execute"), Some("other"), &name));
     }

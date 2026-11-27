@@ -6,6 +6,7 @@ pub(super) mod editing;
 mod export_tests;
 mod form;
 mod io;
+pub(super) mod pin_table;
 pub(super) mod publishing;
 pub(super) mod remap;
 #[cfg(test)]
@@ -60,6 +61,9 @@ struct Document {
     show_courtyard: bool,
     selected_vertex: Option<usize>,
     draft: Option<form::Draft>,
+    /// Validated pin-table plan and source state staged in memory by the preview dialog for symbol
+    /// generation in units (next slice of #78); not saved with the symbol.
+    staged_pin_table: Option<pin_table::StagedPinTable>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
     tool: canvas::Tool,
@@ -246,7 +250,14 @@ impl Editors {
             .documents
             .iter()
             .map(|(id, doc)| {
-                let mut entry = json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}});
+                let staged_pin_table = doc.staged_pin_table.as_ref().map(|staged| {
+                    json!({
+                        "base_revision": staged.plan.base_revision,
+                        "pin_count": staged.plan.pins.len(),
+                        "unit_count": staged.plan.units.len(),
+                    })
+                });
+                let mut entry = json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"staged_pin_table":staged_pin_table,"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}});
                 if let Some(change) = &doc.last_change
                     && let Some(object) = entry.as_object_mut()
                 {
@@ -294,6 +305,7 @@ impl Editors {
                 show_courtyard: true,
                 selected_vertex: None,
                 draft: None,
+                staged_pin_table: None,
                 camera,
                 collapsed: [false, false],
                 tool: canvas::Tool::Select,
@@ -737,6 +749,7 @@ impl PcbApp {
             Publish,
             Copy,
             Remap,
+            PinTable,
             Undo,
             Redo,
             Focus(u64),
@@ -780,6 +793,12 @@ impl PcbApp {
                     }
                 });
                 menu::library(ui, |ui| {
+                    if pcbcraft_chrome::MenuItem::new("Preview pin table…")
+                        .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
+                        .show(ui)
+                    {
+                        intents.borrow_mut().push(Intent::PinTable);
+                    }
                     if pcbcraft_chrome::MenuItem::new("Remap pins…")
                         .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
                         .show(ui)
@@ -836,10 +855,13 @@ impl PcbApp {
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_S)) {
                 intents.borrow_mut().push(if IN_BROWSER { Intent::Save(false) } else { Intent::Publish });
             }
+            // Ctrl+Shift+Z also redoes. Read it before Undo: an unshifted pattern also matches a shifted key.
+            let redo = ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_SHIFT_Z));
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
                 intents.borrow_mut().push(Intent::Undo);
             }
-            if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y)) {
+            let redo_with_y = ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y));
+            if redo || redo_with_y {
                 intents.borrow_mut().push(Intent::Redo);
             }
             if !IN_BROWSER && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Q)) {
@@ -857,7 +879,10 @@ impl PcbApp {
                 Intent::Publish => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_publish(id)),
                 Intent::Copy => active.ok_or("No active library item.".into()).and_then(|id| self.copy_library_document(&ctx, id)),
                 Intent::Remap => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_remap(id)),
+                Intent::PinTable => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_table(id)),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
+                // Undo earlier in this frame may have made Redo available. An empty history stays silent.
+                Intent::Redo if !active.and_then(|id| self.library_editors.documents.get(&id)).is_some_and(|doc| doc.session.can_redo()) => Ok(()),
                 history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
                     let action = if matches!(history, Intent::Undo) { Action::Undo } else { Action::Redo };
@@ -971,6 +996,7 @@ impl PcbApp {
                         (ToolIcon::Shared("copy"), "Edit copy", "Edit under a new item identity", can_save),
                         (ToolIcon::Sheet, "Save copy", "Save unfinished draft; does not publish to the catalog", can_save),
                         (ToolIcon::Sheet, "Export", "Export native definition", can_save),
+                        (ToolIcon::Sheet, "Pin table", "Preview and validate a CSV or TSV pin table", can_save && kind == Kind::Symbol),
                     ]
                     .map(|(icon, label, description, enabled)| RibbonTool {
                         icon,
@@ -1009,6 +1035,7 @@ impl PcbApp {
                 1 => self.open_library_picker(ui.ctx()).err(),
                 2 => self.begin_library_publish(id).err(),
                 3 => self.copy_library_document(ui.ctx(), id).err(),
+                6 => self.begin_library_pin_table(id).err(),
                 _ => self.library_editors.save(ui.ctx(), id, action == 5).err(),
             };
         }
