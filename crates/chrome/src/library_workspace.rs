@@ -147,6 +147,10 @@ fn card(
                     }
                     let (_, rect) = ui.allocate_space(vec2(Tokens::get().space_24, Tokens::get().space_24));
                     let more = kit::quiet_icon_button_at(ui, rect, "dots", "Browser tree actions");
+                    // The quiet icon button changes its ink on focus but paints no outline.
+                    if more.enabled() && more.has_focus() {
+                        kit::app_bar::paint_focus(ui.painter(), more.rect, solidcraft_theme::Tokens::get().control_radius);
+                    }
                     egui::Popup::menu(&more).frame(crate::menu::frame()).show(|ui| {
                         for (label, choice) in [("Expand all", TreeAction::ExpandAll), ("Collapse all", TreeAction::CollapseAll)] {
                             if crate::MenuItem::new(label).show(ui) {
