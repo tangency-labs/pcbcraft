@@ -61,6 +61,8 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
+/// Optional project-owned lifecycle assessments; only the current project format carries them.
+const LIFECYCLE_PATH: &str = "library/lifecycle.json";
 // Read-only recipe envelopes from earlier builds.
 const OUTPUT_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/47";
 const RECIPE_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/57";
@@ -419,7 +421,7 @@ struct BoardDocument {
 
 /// Accept only paths owned by this format. Pinned item identities must match their files on decode.
 pub fn is_document_path(path: &str) -> bool {
-    if path == ENTRY_POINT || path == "board.json" || layout::is_board_path(path) || layout::is_instances_path(path) {
+    if matches!(path, ENTRY_POINT | "board.json" | LIFECYCLE_PATH) || layout::is_board_path(path) || layout::is_instances_path(path) {
         return true;
     }
     let pieces: Vec<_> = path.split('/').collect();
@@ -470,6 +472,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// The older recipe envelopes stay readable and require recipes: project/47 follows project/36
 /// without requiring profiles, project/57 follows project/51, and project/60 follows project/56
 /// with optional designator locks.
+/// Only the current project header accepts optional lifecycle assessments in
+/// `library/lifecycle.json`; older headers refuse that document.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -479,6 +483,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
+    let lifecycle = match documents.get(LIFECYCLE_PATH) {
+        Some(bytes) if current_format => {
+            crate::library::sources::lifecycle::Assessments::decode(bytes).map_err(|error| format!("{LIFECYCLE_PATH}: {error}"))?
+        }
+        Some(_) => return Err(format!("{LIFECYCLE_PATH} requires {CURRENT_PROJECT_FORMAT}.")),
+        None => Default::default(),
+    };
     let legacy_appearance = project.format == LEGACY_APPEARANCE_PROJECT_FORMAT;
     let pre_intent = project.format == PRE_INTENT_PROJECT_FORMAT;
     let supports_appearance = current_format || pre_intent || legacy_appearance;
@@ -730,6 +741,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut sheet_ids = BTreeSet::from([project.id]);
     let mut sheet_names = BTreeSet::new();
     let mut used = BTreeSet::from([ENTRY_POINT.to_owned()]);
+    if !lifecycle.is_empty() {
+        used.insert(LIFECYCLE_PATH.to_owned());
+    }
     let instance_records = if occurrences {
         match (project_instances_path(&documents[ENTRY_POINT])?, project.schematic_instances.clone()) {
             (Some(path), None) => {
@@ -982,6 +996,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        lifecycle: Arc::default(),
         output_recipes: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
@@ -1578,6 +1593,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         Arc::make_mut(&mut project_data.schematic_packages).definitions = std::mem::take(&mut Arc::make_mut(&mut project_data.board).definitions);
     }
     project_data.numeric_id_high_water = numeric_id_high_water;
+    project_data.lifecycle = Arc::new(lifecycle);
     project_data.layout = storage_layout;
     project_data.prefer_compact_part_groups = compact_part_groups;
     let sheets = layouts
@@ -1996,6 +2012,9 @@ impl DocumentsEncoder {
                             })
                         })
                         .collect::<Result<Vec<_>, String>>()?;
+                    if !p.lifecycle.is_empty() {
+                        self.documents.insert(LIFECYCLE_PATH.into(), p.lifecycle.encode()?);
+                    }
                     write!(self.bytes, "{{\n  \"format\": \"{CURRENT_PROJECT_FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?)
                         .map_err(|e| e.to_string())?;
                     let high_water = p.numeric_id_high_water.ok_or("missing numeric ID watermark")?;

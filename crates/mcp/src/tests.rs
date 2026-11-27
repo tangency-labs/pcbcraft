@@ -902,6 +902,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     for id in [
         "library.apply_adoption",
         "library.available_revisions",
+        pcbcraft_engine::library::sources::lifecycle::LOOKUP,
         "library.list_sources",
         "library.load_source",
         "library.parse_quantity",
@@ -1110,14 +1111,13 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
 }
 
-/// Net appearance commands are backward-compatible catalog additions: discovery keeps API version
-/// 1, publishes their full patch schema, and the catalog revision still changes when they are absent.
+/// Discovery publishes the net appearance commands and their patch schema at the current
+/// API version, and the catalog revision changes if those commands are absent.
 #[test]
-fn net_appearance_commands_are_version_one_catalog_additions() {
+fn net_appearance_commands_are_catalog_additions() {
     use pcbcraft_engine::command_api::{COMMAND_API_VERSION, catalog_revision};
     use pcbcraft_engine::nets::{INSPECT_APPEARANCE, MAX_PROPERTY_TARGETS, SET_APPEARANCE, SET_PROPERTIES};
 
-    assert_eq!(COMMAND_API_VERSION, 1);
     let mut s = server();
     let listed = call(&mut s, "list_commands", json!({}));
     assert_eq!(listed["structuredContent"]["command_api_version"], json!(COMMAND_API_VERSION));
@@ -1175,6 +1175,72 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     assert_eq!(query["revision"], before["revision"]);
     assert!(query["netlist"].is_object());
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+}
+
+/// A read-only headless session reports an adopted assessment offline and admits the exact
+/// source lookup, while adoption is refused in both return modes. Project and history stay unchanged.
+#[test]
+fn headless_read_only_runs_lifecycle_reads_and_refuses_adoption() {
+    use pcbcraft_engine::library::{
+        parts::Reference,
+        sources::{
+            Key, Kind, LOAD,
+            lifecycle::{ADOPT, Assertion, FORMAT, INSPECT, LOOKUP, Policy, Provenance},
+        },
+    };
+    let assertion = Assertion {
+        format: FORMAT.into(),
+        address: Reference { library: "parts-demo".into(), id: "resistor-assessment".into(), revision: 1 },
+        target: Key { library: "parts-demo".into(), kind: Kind::Symbol, id: "resistor".into(), revision: 1 },
+        scheme: Policy::standard().scheme,
+        state: "released".into(),
+        reason: "Drawing review completed".into(),
+        provenance: Provenance { publisher: "Native Parts Demo".into() },
+    };
+    let documents = json!({
+        "library.json":include_str!("../../../examples/native-parts/library.json"),
+        "symbols/resistor.json":include_str!("../../../examples/native-parts/symbols/resistor.json"),
+        "footprints/resistor-0603.json":include_str!("../../../examples/native-parts/footprints/resistor-0603.json"),
+        "categories/resistor.json":include_str!("../../../examples/native-parts/categories/resistor.json"),
+        "parts/resistor.json":include_str!("../../../examples/native-parts/parts/resistor.json"),
+        "lifecycle-assertions/resistor-assessment.r1.json":assertion.encode().unwrap()
+    });
+    let address = json!({"library":"parts-demo","assertion":"resistor-assessment","assertion_revision":1});
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture"})).unwrap();
+    editor.execute(LOAD, &json!({"source":"demo","documents":documents})).unwrap();
+    let mut adopt = address.clone();
+    adopt["digest"] = json!(assertion.digest().unwrap());
+    adopt["expected_revision"] = json!(editor.revision());
+    editor.apply(ADOPT, &adopt).unwrap();
+    let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    let inspected = body(&call(&mut s, "execute", json!({"command":INSPECT,"inspect":false,"params":{}})));
+    assert_eq!(inspected["revision"], before["revision"]);
+    assert_eq!(inspected["assessments"], json!([{"assertion":assertion,"disposition":"released"}]));
+    // This host loaded no publisher source, so the admitted lookup reports the absent revision.
+    let lookup = call(&mut s, "execute", json!({"command":LOOKUP,"inspect":false,"params":address}));
+    assert_eq!(lookup["isError"], true);
+    assert_eq!(lookup["structuredContent"]["error"]["code"], "invalid_params");
+    adopt["expected_revision"] = before["revision"].clone();
+    for inspect in [true, false] {
+        let refused = call(&mut s, "execute", json!({"command":ADOPT,"params":adopt,"inspect":inspect}));
+        assert_eq!(refused["isError"], true);
+        assert_eq!(refused["structuredContent"]["error"]["code"], "out_of_scope");
+        assert_eq!(refused["structuredContent"]["error"]["details"], json!({"command":ADOPT,"scope":"read_only"}));
+    }
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+    // The same MCP session dispatch returns the exact content when the read-only host holds the source.
+    let mut reader = Session::with_scope(pcbcraft_engine::SessionScope::ReadOnly);
+    reader.open_snapshot(editor.snapshot().unwrap());
+    let source = pcbcraft_engine::library::sources::NativeSource::load(&serde_json::from_value(documents).unwrap()).unwrap();
+    reader.install_library_source("demo", std::sync::Arc::new(source)).unwrap();
+    let inspected = reader.inspect();
+    let request = json!({"command":LOOKUP,"params":address,"inspect":false});
+    let found = crate::backend::call_session(&mut reader, "engine.execute", &request).unwrap();
+    assert_eq!(found, json!({"assertion":assertion,"digest":assertion.digest().unwrap()}));
+    assert_eq!(reader.inspect(), inspected);
 }
 
 /// A read-only headless session runs the layer-group query without changing the revision,

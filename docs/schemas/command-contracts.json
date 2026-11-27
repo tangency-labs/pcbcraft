@@ -1,5 +1,5 @@
 {
-  "command_api_version": 1,
+  "command_api_version": 2,
   "commands": {
     "annotate.apply": {
       "params": {
@@ -397,6 +397,34 @@
         "additionalProperties": false,
         "properties": {},
         "required": [],
+        "type": "object"
+      }
+    },
+    "library.lifecycle_assertion": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "assertion": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "assertion_revision": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "library": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "library",
+          "assertion",
+          "assertion_revision"
+        ],
         "type": "object"
       }
     },
@@ -1556,34 +1584,6 @@
               },
               {
                 "additionalProperties": false,
-                "properties": {
-                  "clear": {
-                    "items": {
-                      "enum": [
-                        "color",
-                        "width_cp"
-                      ],
-                      "type": "string"
-                    },
-                    "minItems": 1,
-                    "type": "array"
-                  },
-                  "color": {
-                    "items": {
-                      "maximum": 255,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "maxItems": 3,
-                    "minItems": 3,
-                    "type": "array"
-                  },
-                  "width_cp": {
-                    "maximum": 800,
-                    "minimum": 50,
-                    "type": "integer"
-                  }
-                },
                 "allOf": [
                   {
                     "not": {
@@ -1628,6 +1628,34 @@
                     }
                   }
                 ],
+                "properties": {
+                  "clear": {
+                    "items": {
+                      "enum": [
+                        "color",
+                        "width_cp"
+                      ],
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "color": {
+                    "items": {
+                      "maximum": 255,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxItems": 3,
+                    "minItems": 3,
+                    "type": "array"
+                  },
+                  "width_cp": {
+                    "maximum": 800,
+                    "minimum": 50,
+                    "type": "integer"
+                  }
+                },
                 "type": "object"
               }
             ]
@@ -10380,6 +10408,119 @@
         "type": "object"
       }
     },
+    "project.adopt_lifecycle": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "assertion": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "assertion_revision": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "library": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "policy": {
+            "additionalProperties": false,
+            "properties": {
+              "scheme": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "library": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "library",
+                  "id",
+                  "revision"
+                ],
+                "type": "object"
+              },
+              "states": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "disposition": {
+                      "enum": [
+                        "draft",
+                        "released",
+                        "deprecated",
+                        "obsolete"
+                      ]
+                    },
+                    "id": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])",
+                      "type": "string"
+                    },
+                    "label": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[^\\s﻿\\x00-\\x1f\\x7f-\\x9f](?:[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s﻿\\x00-\\x1f\\x7f-\\x9f])?(?![\\s\\S])",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "label",
+                    "disposition"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "scheme",
+              "states"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "library",
+          "assertion",
+          "assertion_revision",
+          "expected_revision",
+          "digest"
+        ],
+        "type": "object"
+      }
+    },
     "project.compare_netlist": {
       "params": {
         "additionalProperties": false,
@@ -10403,6 +10544,14 @@
             "type": "boolean"
           }
         },
+        "required": [],
+        "type": "object"
+      }
+    },
+    "project.inspect_lifecycle": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
         "required": [],
         "type": "object"
       }
@@ -13870,8 +14019,8 @@
           }
         },
         "required": [
-          "action",
-          "view"
+          "view",
+          "action"
         ],
         "type": "object"
       },
@@ -14511,8 +14660,8 @@
           }
         },
         "required": [
-          "path",
-          "view"
+          "view",
+          "path"
         ],
         "type": "object"
       },
@@ -14751,8 +14900,8 @@
           }
         },
         "required": [
-          "filename",
           "view",
+          "filename",
           "visible"
         ],
         "type": "object"
@@ -14992,8 +15141,8 @@
           }
         },
         "required": [
-          "board",
-          "view"
+          "view",
+          "board"
         ],
         "type": "object"
       },
@@ -15241,80 +15390,6 @@
         "required": [
           "window",
           "handle"
-        ],
-        "type": "object"
-      },
-      "scope": "window"
-    },
-    "ui.project": {
-      "params": {
-        "additionalProperties": false,
-        "properties": {
-          "at": {
-            "additionalProperties": false,
-            "properties": {
-              "x_nm": {
-                "maximum": 1000000000,
-                "minimum": -1000000000,
-                "type": "integer"
-              },
-              "y_nm": {
-                "maximum": 1000000000,
-                "minimum": -1000000000,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "x_nm",
-              "y_nm"
-            ],
-            "type": "object"
-          },
-          "view": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "view",
-          "at"
-        ],
-        "type": "object"
-      },
-      "scope": "window"
-    },
-    "ui.window": {
-      "params": {
-        "additionalProperties": false,
-        "properties": {
-          "window": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "window"
-        ],
-        "type": "object"
-      },
-      "scope": "window"
-    },
-    "ui.resize": {
-      "params": {
-        "additionalProperties": false,
-        "properties": {
-          "height": {
-            "type": "number"
-          },
-          "width": {
-            "type": "number"
-          },
-          "window": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "window",
-          "width",
-          "height"
         ],
         "type": "object"
       },
@@ -15642,6 +15717,65 @@
       },
       "scope": "window"
     },
+    "ui.project": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "additionalProperties": false,
+            "properties": {
+              "x_nm": {
+                "maximum": 1000000000,
+                "minimum": -1000000000,
+                "type": "integer"
+              },
+              "y_nm": {
+                "maximum": 1000000000,
+                "minimum": -1000000000,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "x_nm",
+              "y_nm"
+            ],
+            "type": "object"
+          },
+          "view": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "view",
+          "at"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "ui.resize": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "window": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
     "ui.scroll": {
       "params": {
         "additionalProperties": false,
@@ -15737,6 +15871,21 @@
         },
         "required": [
           "text",
+          "window"
+        ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "ui.window": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "window": {
+            "type": "integer"
+          }
+        },
+        "required": [
           "window"
         ],
         "type": "object"

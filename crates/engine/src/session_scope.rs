@@ -53,8 +53,9 @@ impl Session {
 /// returns data without setting a system clipboard. Export/publication preparation does
 /// not write files, and netlist comparison only reads the text it is given. Annotation
 /// preview keeps its proposal and Apply token only in the session; sheet split preview
-/// caches no proposal. Applying annotation, splitting a sheet, loading/removing library
-/// sources, and Cut are not reads.
+/// caches no proposal. Lifecycle lookup and inspection only read exact pinned or loaded
+/// content. Applying annotation, splitting a sheet, loading/removing library sources,
+/// lifecycle adoption and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -98,6 +99,8 @@ fn is_read_command(id: &str) -> bool {
             | sources::PREVIEW_FOOTPRINT_REVISION
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION
+            | sources::lifecycle::LOOKUP
+            | sources::lifecycle::INSPECT
     )
 }
 

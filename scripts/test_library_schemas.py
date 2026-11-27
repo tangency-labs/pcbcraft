@@ -79,6 +79,39 @@ class LibrarySchemaTests(unittest.TestCase):
                 checker.validate([], [source])
             checker.validate([path], [])
 
+    def test_lifecycle_assertions_are_discovered_and_validated(self):
+        assertion = {"format": "pcbcraft-lifecycle-assertion/1",
+                     "address": {"library": "lifecycle-demo", "id": "drawing-assessment", "revision": 1},
+                     "target": {"library": "lifecycle-demo", "kind": "symbol", "id": "resistor", "revision": 1},
+                     "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+                     "state": "released", "reason": "Drawing review completed",
+                     "provenance": {"publisher": "Lifecycle demo"}}
+        validator = self.checks[checker.FORMATS[assertion["format"]]]
+        validator.validate(assertion)
+        validator.validate({"assertions": [assertion], "policies": [{"scheme": assertion["scheme"], "states": [
+            {"id": "released", "label": "Released", "disposition": "released"}]}]})
+        for change in [{"format": "pcbcraft-lifecycle-assertion/2"}, {"reason": None}, {"unexpected_field": True},
+                       {"state": "Released"}, {"address": {**assertion["address"], "revision": 0}}]:
+            with self.subTest(change=change):
+                self.assertFalse(validator.is_valid({**assertion, **change}))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            path = source / "lifecycle-assertions" / "drawing-assessment.r1.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(assertion))
+            checker.validate([], [source])
+            path.write_text(json.dumps({**assertion, "unknown": 1}))
+            with self.assertRaisesRegex(ValueError, "drawing-assessment.r1.json"):
+                checker.validate([], [source])
+            path.write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in lifecycle-assertions/"):
+                checker.validate([], [source])
+
+    def test_every_published_schema_has_an_identifier(self):
+        for path in sorted((ROOT / "docs/schemas").glob("*.schema.json")):
+            with self.subTest(path=path.name):
+                self.assertIsInstance(checker.read_json(path).get("$id"), str)
+
     def test_symbol_binding_is_explicit_and_versioned(self):
         validator = self.checks[checker.FORMATS["pcbcraft-symbol/3"]]
         validator.validate(self.symbol)
@@ -225,6 +258,73 @@ class LibrarySchemaTests(unittest.TestCase):
             cases.append({"pattern": pattern, "text": value, "expected": validator.is_valid(value)})
         program = "const cases=JSON.parse(require('fs').readFileSync(0,'utf8'));for(const c of cases){if(new RegExp(c.pattern).test(c.text)!==c.expected)throw new Error(JSON.stringify(c));}"
         subprocess.run(["node", "-e", program], input=json.dumps(cases), text=True, check=True, capture_output=True)
+
+    def test_lifecycle_text_rules_match_runtime_and_cross_language_regex(self):
+        validator = self.checks["urn:pcbcraft:schema:lifecycle:1"]
+        assertion = {
+            "format": "pcbcraft-lifecycle-assertion/1",
+            "address": {"library": "lifecycle-demo", "id": "drawing-assessment", "revision": 1},
+            "target": {"library": "lifecycle-demo", "kind": "symbol", "id": "resistor", "revision": 1},
+            "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+            "state": "draft",
+            "reason": "é" * 4096,
+            "provenance": {"publisher": "é" * 256},
+        }
+        validator.validate(assertion)
+        policy = {
+            "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+            "states": [{"id": "draft", "label": "é" * 256, "disposition": "draft"}],
+        }
+        assessments = {"assertions": [assertion], "policies": [policy]}
+        validator.validate(assessments)
+        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "Drawing review\n", "Drawing review\r\n", "\ufeffA", "A\ufeff", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
+            changed = copy.deepcopy(assertion)
+            changed["reason"] = bad_reason
+            self.assertFalse(validator.is_valid(changed), repr(bad_reason))
+        for bad_short in ["", " ", " Released", "Released ", "Released\n", "Released\r\n", "\ufeffA", "A\ufeff", "Re\nleased", "A\x7fB", "é" * 257]:
+            changed = copy.deepcopy(assertion)
+            changed["provenance"]["publisher"] = bad_short
+            self.assertFalse(validator.is_valid(changed), repr(bad_short))
+            changed_assessments = copy.deepcopy(assessments)
+            changed_assessments["policies"][0]["states"][0]["label"] = bad_short
+            self.assertFalse(validator.is_valid(changed_assessments), repr(bad_short))
+        for bad_id in ["lifecycle-demo\n", "lifecycle-demo\r\n", "a\n"]:
+            for section in ("address", "target", "scheme"):
+                for field in ("library", "id"):
+                    changed = copy.deepcopy(assertion)
+                    changed[section][field] = bad_id
+                    self.assertFalse(validator.is_valid(changed), f"{section}.{field}={bad_id!r}")
+        for bad_state in ["draft\n", "draft\r\n", "released\n"]:
+            changed = copy.deepcopy(assertion)
+            changed["state"] = bad_state
+            self.assertFalse(validator.is_valid(changed), f"state={bad_state!r}")
+            changed_assessments = copy.deepcopy(assessments)
+            changed_assessments["policies"][0]["states"][0]["id"] = bad_state
+            self.assertFalse(validator.is_valid(changed_assessments), f"policy.state.id={bad_state!r}")
+        if shutil.which("node"):
+            lifecycle = json.loads((ROOT / "docs/schemas/lifecycle-v1.schema.json").read_text())
+            pattern = lifecycle["$defs"]["singleLineText"]["pattern"]
+            native_id = lifecycle["$defs"]["nativeId"]["pattern"]
+            state_id = lifecycle["$defs"]["stateId"]["pattern"]
+            cases = [
+                {"pattern": pattern, "text": value, "expected": ok}
+                for value, ok in [
+                    ("A", True), ("Drawing review", True), ("é" * 4096, True),
+                    ("", False), (" ", False), (" A", False), ("A ", False),
+                    ("A\n", False), ("Drawing review\n", False), ("Drawing review\r\n", False),
+                    ("\ufeffA", False), ("A\ufeff", False),
+                    ("A\nB", False), ("A\tB", False), ("A\x00B", False), ("A\x7fB", False),
+                ]
+            ] + [
+                {"pattern": pat, "text": value, "expected": ok}
+                for pat in (native_id, state_id)
+                for value, ok in [
+                    ("a", True), ("lifecycle-demo", True),
+                    ("a\n", False), ("lifecycle-demo\n", False), ("lifecycle-demo\r\n", False),
+                ]
+            ]
+            program = "const cases=JSON.parse(require('fs').readFileSync(0,'utf8'));for(const c of cases){if(new RegExp(c.pattern).test(c.text)!==c.expected)throw new Error(JSON.stringify(c));}"
+            subprocess.run(["node", "-e", program], input=json.dumps(cases), text=True, check=True, capture_output=True)
 
     def test_missing_checker_dependency_has_an_installation_hint(self):
         result = subprocess.run([sys.executable, "-S", str(ROOT / "scripts/check-library-schemas.py")], capture_output=True, text=True)

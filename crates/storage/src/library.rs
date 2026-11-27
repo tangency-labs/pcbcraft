@@ -25,7 +25,7 @@ fn read_documents(root: &Path) -> Result<(Documents, Vec<String>), String> {
     let mut problems = recovery_problems(root)?;
     let mut total = documents["library.json"].len();
     let mut count = 1;
-    for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts"] {
+    for directory in ["symbols", "footprints", "categories", "parts", "manufacturer-parts", "lifecycle-assertions"] {
         let path = root.join(directory);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -176,6 +176,32 @@ mod tests {
         assert_eq!(again.items()[0].key, loaded.items()[0].key);
         assert_eq!(bytes, fs::read(moved.join("symbols/resistor.json")).unwrap());
         assert!(load(&original).is_err());
+    }
+
+    /// The folder adapter reads publisher assertions; invalid ones are diagnosed without hiding items or valid assertions.
+    #[test]
+    fn folder_loading_reads_lifecycle_assertions() {
+        use pcbcraft_engine::library::{parts::Reference, sources::Catalog};
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        fixture(root.path());
+        fs::create_dir(root.path().join("lifecycle-assertions")).unwrap();
+        fs::write(
+            root.path().join("lifecycle-assertions/resistor-review.json"),
+            r#"{"format":"pcbcraft-lifecycle-assertion/1","address":{"library":"local-demo","id":"resistor-review","revision":1},
+"target":{"library":"local-demo","kind":"symbol","id":"resistor","revision":3},"scheme":{"library":"pcbcraft","id":"lifecycle","revision":1},
+"state":"released","reason":"Drawing review completed","provenance":{"publisher":"Local demo"}}"#,
+        )
+        .unwrap();
+        fs::write(root.path().join("lifecycle-assertions/bad.json"), "bad").unwrap();
+        let loaded = load(root.path()).unwrap();
+        assert_eq!(loaded.items().len(), 1);
+        assert_eq!(loaded.problems().len(), 1, "{:?}", loaded.problems());
+        assert!(loaded.problems()[0].starts_with("lifecycle-assertions/bad.json"));
+        let mut catalog = Catalog::default();
+        catalog.install("local", Arc::new(loaded)).unwrap();
+        let address = Reference { library: "local-demo".into(), id: "resistor-review".into(), revision: 1 };
+        assert_eq!(catalog.lifecycle_assertion(&address).unwrap().state, "released");
     }
 
     /// A symlink cannot make a source quietly ingest another folder's files.

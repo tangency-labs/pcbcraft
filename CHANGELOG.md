@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+Native libraries can ship revision-specific lifecycle assertions under
+`lifecycle-assertions/`, and projects can pin exact assertion revisions and
+scheme policies through `library.lifecycle_assertion`, `project.adopt_lifecycle`
+and `project.inspect_lifecycle`. Adopted assessments are saved as the optional
+`library/lifecycle.json` document under the current `pcbcraft-project/68`
+header, with no format change: projects without adopted assessments write no
+lifecycle document and keep their byte reuse, removing the last adopted
+assessment removes the document, and an older project header that carries it is
+refused.
+
 - A multi-item schematic selection (symbols, wires and net labels) now mirrors with **X**, **Y** or the Capture ribbon's Mirror buttons as one undo step, through the shared `schematic.mirror_items` command. The group is reflected about its center, snapped so pins and wire corners stay on the grid; symbols compose the mirror with their rotation as single-symbol mirroring does, net labels flip their text direction, and wires to unselected parts stay on their pins. Mirroring twice on the same axis restores the saved project. A single selected symbol keeps using `schematic.mirror_symbol`.
 - `pcbcraft-cli --help` reports the [oldest readable split project entry-point format](docs/formats/native-project-storage.md#compatibility-and-fixtures), `pcbcraft-project/5`.
 - **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Native saves use `pcbcraft-project/68` and, for registered boards, `pcbcraft-instances/12` whether or not a declaration is present. Files using the previous headers still open and migrate on save. Declarations are optional `authored_intent` fields, and the project envelope versions those fields inside the unchanged `pcbcraft-net-classes/1` catalog.
@@ -41,6 +51,13 @@ accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
 See [stating a version](docs/automation/command-api.md#stating-a-version).
+
+The command API intentionally moves from v1 to v2 because the published
+lifecycle policy schema is stricter. A v2 server refuses a v1 pin with
+`version_mismatch`. Clients using v1 pins must refresh discovery from the
+serving session, adapt their calls to the v2 contract, and re-pin to the
+reported version before retrying. Unpinned requests still use the serving
+session's current API.
 
 `pcb.merge_tracks` tidies routed copper: it merges the listed collinear segments
 on the same layer and width that meet at a free end, and absorbs stacked

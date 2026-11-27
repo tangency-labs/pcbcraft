@@ -813,6 +813,13 @@ address (replace these example values with your library item's address):
 See [where-used](libraries/native-library-sources.md#find-where-a-revision-is-used) for
 what counts as a use and how to distinguish assignments from board placements.
 
+If a loaded source has a publisher lifecycle assertion, use
+[`library.lifecycle_assertion`](libraries/native-library-sources.md#lifecycle-assertions)
+with its exact assertion revision. Pass the returned digest and the project
+revision to `project.adopt_lifecycle`; `dry_run: true` previews the assessment
+without editing. `project.inspect_lifecycle` works offline after adoption. This
+changes lifecycle metadata, not the definition selected by the placed part.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and

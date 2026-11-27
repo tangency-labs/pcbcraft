@@ -18,9 +18,24 @@ fn fixture() -> Session {
     editor
 }
 
-/// Load the same validated native source into both hosts before testing the part reader.
+/// A publisher assertion for the demo resistor symbol, built through the native assertion codec.
+fn resistor_assertion() -> sources::lifecycle::Assertion {
+    use sources::lifecycle::{Assertion, FORMAT, Policy, Provenance};
+    Assertion {
+        format: FORMAT.into(),
+        address: Reference { library: "parts-demo".into(), id: "resistor-assessment".into(), revision: 1 },
+        target: sources::Key { library: "parts-demo".into(), kind: sources::Kind::Symbol, id: "resistor".into(), revision: 1 },
+        scheme: Policy::standard().scheme,
+        state: "released".into(),
+        reason: "Drawing review completed".into(),
+        provenance: Provenance { publisher: "Native Parts Demo".into() },
+    }
+}
+
+/// Load the same validated native source into both hosts before testing the part and lifecycle readers.
 fn add_native_part(reader: &mut Session, control: &mut Session) {
     let docs = sources::Documents::from([
+        ("lifecycle-assertions/resistor-assessment.r1.json".into(), resistor_assertion().encode().unwrap()),
         ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
         ("symbols/resistor.json".into(), include_str!("../../../../examples/native-parts/symbols/resistor.json").into()),
         ("footprints/resistor-0603.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
@@ -140,6 +155,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             | INSPECT_LAYER_GROUPS
             | sources::LIST
             | sources::AVAILABLE_REVISIONS
+            | sources::lifecycle::INSPECT
             | EXPORT_FABRICATION => json!({}),
             clipboard_text::LABELS => json!({"text":"N1","style":"local","spacing_nm":2_540_000,"expected_revision":revision}),
             clipboard_text::OUTLINE => json!({"text":"0,0\n10,0\n10,10","units":"mm","closed":true,"expected_revision":revision}),
@@ -204,6 +220,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             }
             sources::PREPARE_PART_PUBLICATION => part_publication.clone(),
             sources::PREPARE_PUBLICATION => item_publication.clone(),
+            sources::lifecycle::LOOKUP => json!({"library":"parts-demo","assertion":"resistor-assessment","assertion_revision":1}),
             _ => {
                 let invalid = json!({"expected_revision":revision + 1,"extra":true});
                 let executed = reader.execute(id, &invalid).unwrap_err();

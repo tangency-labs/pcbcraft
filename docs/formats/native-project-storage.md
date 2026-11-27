@@ -18,6 +18,10 @@ in the entry point.
 [Designator locks](#designator-locks) were added in project/51 and combined in
 project/56 with [alternate pin functions](#alternate-pin-function-records), retaining the
 optional records and membership representations of the earlier envelopes.
+Adopted [lifecycle assessments](#adopted-lifecycle-assessments) are stored in the
+optional `library/lifecycle.json` document under the current project format, with
+no format number of their own; projects without adopted assessments write no
+lifecycle document and keep their byte reuse.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
 Project/24 adds the [part-group catalog](part-groups.md); its expanded
@@ -598,6 +602,7 @@ advance the footprint format.
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/59` (also reads `/1`–`/26`, `/34`, `/35`, `/37`, `/41`, `/42` and `/43`) | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; version 42 consolidates the vocabulary with optional records; version 43 adds optional test-point marks; version 59 adds the explicit zone island-removal policy |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [Footprint versions](../libraries/footprint-schema.md#compatibility-and-versioning) | One full pinned physical footprint copy, including provenance, copper lands and finished holes |
+| `library/lifecycle.json` | No own `format` field; optional, and accepted only with `project.json` format `pcbcraft-project/68` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](../schemas/lifecycle-v1.schema.json) |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
@@ -630,6 +635,39 @@ the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
 component metadata, field appearance, mirrored placements, live generated
 named-contact legs and adopted occurrence identities rather than discarding them.
+
+### Adopted lifecycle assessments
+
+Split saves write the optional `library/lifecycle.json` document only when the
+project stores at least one adopted lifecycle assessment. It is an optional
+record under the current `pcbcraft-project/68` header and adds no format number,
+so adopting an assessment does not change `project.json` and ordinary edits keep
+desktop byte reuse. Removing the last adopted assessment (for example by undoing
+the first adoption) omits `library/lifecycle.json` and restores the exact prior
+documents.
+
+A lifecycle document is accepted only with `pcbcraft-project/68`; every earlier
+project header refuses it, and an empty document (no assessment or policy) is
+refused. Older builds do not know the document and refuse it as an unexpected
+project document rather than discarding it. Alternate pin functions, designator
+locks and the other optional project records combine with it under their
+existing validation rules, and its presence does not change where instance
+records are stored.
+
+The [lifecycle schema](../schemas/lifecycle-v1.schema.json) defines the required
+`assertions` and `policies` arrays (never null). Assertions contain the complete
+immutable publisher revision, keyed by exact definition address, so no source is
+required to reopen. Each policy maps state IDs for one exact scheme revision to
+a project disposition. There is at most one assertion per target revision and
+one policy per pinned scheme revision. An absent mapping is unknown. The
+document is bounded to 128 assertions, 32 policies and 4 MiB. It is written in
+stable target and scheme address order. Unknown fields, inconsistent ownership
+and duplicate keys are refused. Legacy single-document export refuses projects
+with adopted assessments rather than silently discarding them.
+
+See [native library lifecycle metadata](../libraries/native-library-sources.md#lifecycle-assertions)
+for the publisher record and shared commands. Neither a source refresh nor an
+assessment adoption changes the pinned definition bytes or placements.
 
 ### Component fields and text appearance
 

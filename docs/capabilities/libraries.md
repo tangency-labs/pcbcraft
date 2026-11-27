@@ -141,6 +141,12 @@ physical placements and showing whether a newer loaded revision exists. See
 [where-used](../libraries/native-library-sources.md#find-where-a-revision-is-used) for the
 read-only result and its limits.
 
+[Lifecycle assertions](../libraries/native-library-sources.md#lifecycle-assertions) are separate
+publisher records. With the publishing source loaded, projects can preview, adopt
+and undo an exact assessment through shared commands; inspecting an adopted
+assessment works offline. There is no lifecycle-specific
+editor, finding or placement gate.
+
 Generic-part authoring supports independently optional symbols and footprints in
 `pcbcraft-part/2`, or `pcbcraft-part/5` when the definition carries a
 description, keywords and labeled links, including footprint-only definitions

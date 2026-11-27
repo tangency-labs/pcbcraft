@@ -335,3 +335,42 @@ fn restored_sources_capture_applied_builtin_preferences() {
     assert!(Arc::ptr_eq(&project, &app.session.snapshot().unwrap()));
     assert_eq!(app.session.revision(), revision);
 }
+
+/// Unsupported assertion filenames (dotfiles, nested paths, backslashes, control chars, or
+/// overlong names) are diagnosed as adapter problems before loading the document map so valid
+/// symbols and lifecycle assertions in the same folder still load cleanly.
+#[test]
+fn folder_documents_diagnose_unsupported_assertion_filenames_before_loading() {
+    use pcbcraft_engine::library::{parts::Reference, sources::Catalog};
+
+    let mut docs = documents();
+    let valid_assertion = r#"{"format":"pcbcraft-lifecycle-assertion/1","address":{"library":"workshop","id":"resistor-review","revision":1},
+"target":{"library":"workshop","kind":"symbol","id":"resistor","revision":2},"scheme":{"library":"pcbcraft","id":"lifecycle","revision":1},
+"state":"released","reason":"Drawing review completed","provenance":{"publisher":"Workshop"}}"#;
+    docs.insert("lifecycle-assertions/resistor-review.json".into(), valid_assertion.into());
+    let overlong = format!("lifecycle-assertions/{}.json", "a".repeat(124));
+    let unsupported = [
+        "lifecycle-assertions/.review.json",
+        "lifecycle-assertions/nested/review.json",
+        "lifecycle-assertions/bad\\review.json",
+        "lifecycle-assertions/bad\x07.json",
+        overlong.as_str(),
+    ];
+    for path in unsupported {
+        docs.insert(path.into(), valid_assertion.into());
+    }
+    assert!(NativeSource::load(&docs).is_err(), "raw NativeSource::load must reject unsupported paths");
+
+    let preexisting = "lifecycle-assertions/notes.txt: unsupported native item path";
+    let loaded = load_folder_documents(docs, vec![preexisting.into()]).unwrap();
+    assert_eq!(loaded.items().len(), 1);
+    assert!(loaded.problems().iter().any(|problem| problem == preexisting), "{:?}", loaded.problems());
+    for path in unsupported {
+        let expected = format!("{path}: unsupported native item path");
+        assert!(loaded.problems().iter().any(|problem| problem == &expected), "missing {expected} in {:?}", loaded.problems());
+    }
+    let mut catalog = Catalog::default();
+    catalog.install("workshop-folder", Arc::new(loaded)).unwrap();
+    let address = Reference { library: "workshop".into(), id: "resistor-review".into(), revision: 1 };
+    assert_eq!(catalog.lifecycle_assertion(&address).unwrap().state, "released");
+}
