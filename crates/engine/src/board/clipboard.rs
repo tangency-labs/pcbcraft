@@ -793,6 +793,8 @@ impl BoardFragment {
                 if self.footprints.iter().any(|f| f.library.is_none()) {
                     return Err(invalid("assign physical native packages before duplicating legacy markers into an accepted board"));
                 }
+                // Pasted labels and wires may join or split nets; reconcile as publication does.
+                next.reconcile_nets(Some(destination))?;
                 let source = super::update::capture_source(&next)?;
                 let proposed = super::update::Baseline::proposed(&next, &super::update::Baseline::current_choices(&next), source).map_err(invalid)?;
                 next = super::update::apply_candidate(&next, accepted, &proposed).map_err(invalid)?.0;
