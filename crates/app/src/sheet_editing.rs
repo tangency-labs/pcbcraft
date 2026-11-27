@@ -56,7 +56,7 @@ impl PcbApp {
         let closing = shell::dialog(ctx, "sheet_dialog", title, |ui| {
             if deletion {
                 ui.label(format!("Delete sheet “{}”?", edit.text));
-                ui.label("Its symbols, wires and connections to parent pins will be removed. Board footprints are removed too; footprints the board has accepted stay until Update PCB removes them. Child sheets become top-level sheets. Undo restores them.");
+                ui.label("This removes the sheet’s symbols, wires and connections to parent pins. For parts that lose their last placed symbol, footprints are removed now or, if already accepted, when you apply Update PCB. Child sheets become top-level sheets. You can undo the deletion.");
             } else {
                 let label = ui.label("Name");
                 let field = ui.add(egui::TextEdit::singleline(&mut edit.text).desired_width(f32::INFINITY)).labelled_by(label.id);

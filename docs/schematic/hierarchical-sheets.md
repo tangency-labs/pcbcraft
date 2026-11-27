@@ -41,10 +41,11 @@ child without changing paths or references.
 **Remove Sheet Symbol** detaches the child to the project root and removes parent
 wires directly attached to its pins, preserving everything inside the child.
 **Delete Hierarchical Label** removes that label, its parent pin and wires
-directly attached to either. Deleting the child through the Browser also removes
-its placements and their board footprints, except accepted footprints, which stay
-pending a [reviewed PCB update](../pcb/single-board-update.md#initializing-accepted-state);
-its own children become roots.
+directly attached to either. Deleting the child through the Browser removes
+its placements, and its children become top-level sheets. Parts with symbols on
+remaining sheets keep their footprints. When a part loses its last placed symbol,
+its footprint is removed immediately if it is outside the board’s accepted state.
+Accepted footprints stay pending a [reviewed PCB update](../pcb/single-board-update.md#initializing-accepted-state).
 Each operation is atomic and undoable. Save/reopen preserves hierarchy and
 connectivity in folders and packed projects; see the [storage contract](../formats/native-project-storage.md#hierarchical-sheet-records).
 

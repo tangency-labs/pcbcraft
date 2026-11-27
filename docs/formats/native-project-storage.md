@@ -608,9 +608,11 @@ reference allocation and board placements remain shared project data. The existi
 project-wide object and geometry bounds apply across all sheets.
 
 `sheet.create`, `sheet.rename` and `sheet.delete` are revision-checked project
-commands. Deletion removes the sheet’s components atomically and cannot remove the last
-sheet; their board footprints are removed too, unless an accepted baseline
-retains them pending a [reviewed update](../pcb/single-board-update.md#initializing-accepted-state). Schematic editing commands and
+commands. Deletion removes the sheet’s placements and retires components that
+have no placements on remaining sheets. The board removes footprints for those
+components immediately if they are outside the accepted baseline. Accepted
+footprints stay pending a [reviewed update](../pcb/single-board-update.md#initializing-accepted-state).
+The project must retain at least one sheet. Schematic editing commands and
 footprint placement take an explicit `sheet` UUID when more than one sheet exists;
 unknown or ambiguous targets never fall back to another sheet. A view’s active
 sheet belongs to user-local presentation state and is never saved in `project.json`.

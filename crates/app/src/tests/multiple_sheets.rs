@@ -7,9 +7,9 @@ use pcbcraft_engine::{
     sheets::{CREATE_SHEET, DELETE_SHEET},
 };
 
-/// The confirmation must hold for boards with and without an accepted baseline: accepted
-/// footprints stay for review in Update PCB, unaccepted ones are removed with the sheet.
-const DELETE_SHEET_NOTE: &str = "Its symbols, wires and connections to parent pins will be removed. Board footprints are removed too; footprints the board has accepted stay until Update PCB removes them. Child sheets become top-level sheets. Undo restores them.";
+/// The confirmation limits footprint removal to parts that lose their last placed symbol.
+/// Accepted footprints for those parts stay for review in Update PCB.
+const DELETE_SHEET_NOTE: &str = "This removes the sheet’s symbols, wires and connections to parent pins. For parts that lose their last placed symbol, footprints are removed now or, if already accepted, when you apply Update PCB. Child sheets become top-level sheets. You can undo the deletion.";
 
 /// Start with one original resistor and the common Browser visible.
 fn sheet_harness(width: f32) -> Harness<'static, PcbApp> {
