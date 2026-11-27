@@ -994,12 +994,18 @@ fn rewriting_the_snapshot_cannot_hide_a_breaking_change_from_the_base() {
     assert_eq!(accepted, vec![problems[0].clone()]);
 }
 
-/// The committed snapshot compared with itself passes: what the CI step checks on an unchanged
-/// snapshot.
+/// Compare the checked-out snapshot with the PR baseline when CI provides one.
+/// On local runs and unchanged snapshots, check that the snapshot is valid by comparing it with itself.
 #[test]
-fn the_committed_snapshot_matches_itself_as_base() {
-    let snapshot: Value = serde_json::from_str(SNAPSHOT).unwrap();
-    assert_eq!(compare_snapshots(&snapshot, &snapshot), Ok(vec![]));
+fn the_committed_snapshot_preserves_base_contracts() {
+    let head: Value = serde_json::from_str(SNAPSHOT).unwrap();
+    let base: Option<Value> = std::env::var_os("PCBCRAFT_COMMAND_CONTRACT_BASE").map(|path| {
+        let text = std::fs::read_to_string(path).expect("read the target branch's command contract snapshot");
+        serde_json::from_str(&text).expect("parse the target branch's command contract snapshot")
+    });
+    if let Err(problems) = compare_snapshots(base.as_ref().unwrap_or(&head), &head) {
+        panic!("command contracts:\n{}", problems.join("\n"));
+    }
 }
 
 /// The conditional shove bound accepts the whole older reshape contract, whose closed schema
