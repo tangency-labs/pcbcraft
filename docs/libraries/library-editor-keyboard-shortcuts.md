@@ -1,8 +1,7 @@
 # Library editor keyboard shortcuts
 
-This page inventories the keys answered by the **Symbol Editor** and
-**Footprint Editor** workspaces, plus the one chord handled by the **Parts
-Library** workspace. It describes observed behavior, not a shortcut policy.
+This page covers keyboard shortcuts in the **Symbol Editor**, **Footprint
+Editor**, and **Parts Library**.
 For the shared input gates and the application-level chord notation, see
 [Schematic keyboard shortcuts](../schematic/keyboard-shortcuts.md); for board bindings, see
 [Board keyboard shortcuts](../pcb/board-keyboard-shortcuts.md).
@@ -24,10 +23,10 @@ operations separately. Plain Ctrl+C/X/V use the real `egui_winit` translation bo
 the vendored translator emits for empty and image-only clipboards into the
 harness, and `clipboard_translation_tests` inside `vendor/egui-winit` checks
 the emission itself.
-macOS and Windows have not been tested; for command
-chords, macOS uses **⌘** where **Ctrl** is shown. The browser build differs in
-three rows — **Ctrl+S** uses the save/export path, and **Ctrl+Q** and
-**Ctrl+Shift+A** are desktop-only — and has not been separately verified.
+macOS and Windows have not been tested. For command chords, macOS uses **⌘**
+where **Ctrl** is shown. In the browser, the Symbol and Footprint editors use
+**Ctrl+S** for save or export. **Ctrl+Q** and **Ctrl+Shift+A** are desktop-only.
+The browser build has not been separately verified.
 
 ## How keys reach these workspaces
 
@@ -40,10 +39,9 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 - Schematic and board bindings (W, A, S, H, X, D, Ctrl+A on schematic,
   layer keys, net labels) are **not dispatched at all** in these workspaces —
   they do not fire dormant schematic handlers.
-- Application file keys other than the handled chords do not reach the
-  library workspaces: **Ctrl+N**, **Ctrl+O**, **Ctrl+U** and
-  **N**/**Shift+N** are dead here. Opening another library document uses the
-  Library tab instead.
+- In the Symbol and Footprint editors, **Ctrl+N**, **Ctrl+O**, **Ctrl+U**,
+  and **N**/**Shift+N** have no binding. To open a definition from disk, use
+  **File → Open Library Item…**.
 - Losing window focus resets the canvas tool to Select; switching the active
   document does the same to the document losing focus. No canvas keyboard
   command runs from an unfocused viewport's input batch, so **M**, **E**,
@@ -58,7 +56,14 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
-## Workspace-level chords (library editor frame)
+## Parts Library shortcuts
+
+On desktop, Parts Library uses the project File shortcuts. **Ctrl+N** starts a
+new project, **Ctrl+O** opens the project picker, and **Ctrl+Q** requests Quit.
+With a project open, **Ctrl+S** saves it and **Ctrl+Shift+S** opens Save As.
+**Ctrl+,** opens Preferences on desktop and in the browser.
+
+## Symbol and Footprint editor shortcuts
 
 | Keys | Action |
 | --- | --- |

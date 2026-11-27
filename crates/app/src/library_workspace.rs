@@ -140,6 +140,7 @@ impl PcbApp {
         Ok(())
     }
     /// Share the project File menu and title while the catalog retains its own canvas input.
+    /// A new dialog hosted elsewhere asks its owner window to take focus.
     pub(super) fn library_workspace_frame(&mut self, ui: &mut egui::Ui, integrated: bool) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let ctx = ui.ctx().clone();
@@ -151,7 +152,8 @@ impl PcbApp {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = main;
-        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        let had_dialog = !matches!(self.dialog, Dialog::None);
+        let enabled = !had_dialog && !self.files.busy() && !self.project_action_pending();
         let project = self.project_title();
         let title = project.as_ref().map_or(("Parts Library", false), |(name, dirty)| (name.as_str(), *dirty));
         let mut home = false;
@@ -211,6 +213,8 @@ impl PcbApp {
         let dialog_host = self.arrangement_dialog_host().or_else(|| self.rule_dialog_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
+        } else if !had_dialog && !matches!(self.dialog, Dialog::None) {
+            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
     }
     /// Shared ribbon metrics and source-qualified availability match the existing workspaces.

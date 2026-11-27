@@ -2264,3 +2264,30 @@ fn library_main_does_not_claim_detached_rule_pages() {
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// Save As from a detached Parts Library opens in the main host and requests focus there.
+#[test]
+fn detached_parts_save_as_focuses_project_dialog_owner() {
+    let (mut h, peer) = multi_window();
+    let ctx = h.ctx.clone();
+    h.state_mut().place_library_workspace(&ctx, pcbcraft_chrome::workspace::Placement::Window).unwrap();
+    focus(&mut h, &peer, true);
+    peer.borrow_mut().events.push(Event::Key {
+        key: Key::S,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND.plus(Modifiers::SHIFT),
+    });
+    let focuses_root =
+        |output: &egui::FullOutput| output.viewport_output.get(&ViewportId::ROOT).is_some_and(|root| root.commands.contains(&ViewportCommand::Focus));
+    let mut requested_focus = false;
+    for _ in 0..4 {
+        h.step();
+        requested_focus |= focuses_root(h.output()) || focuses_root(&peer.borrow().output);
+    }
+    assert!(matches!(h.state().dialog, Dialog::SaveEncoding));
+    assert!(requested_focus, "Save As is open in the main window without a focus request");
+    h.step();
+    assert!(!focuses_root(h.output()) && !focuses_root(&peer.borrow().output), "an open dialog should not keep requesting focus");
+}
