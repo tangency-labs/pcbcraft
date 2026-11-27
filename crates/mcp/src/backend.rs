@@ -241,6 +241,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                         | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+                        | pcbcraft_engine::library::sources::PREVIEW_PIN_TABLE
                         | pcbcraft_engine::kicad_import::IMPORT
                 )
             {

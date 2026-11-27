@@ -4,6 +4,7 @@ pub mod ball_grid;
 mod basics_tests;
 pub mod courtyard;
 mod operations;
+pub mod pin_table;
 pub mod publishing;
 #[cfg(test)]
 mod publishing_tests;

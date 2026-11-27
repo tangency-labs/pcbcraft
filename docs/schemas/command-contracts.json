@@ -649,6 +649,64 @@
         "type": "object"
       }
     },
+    "library.preview_pin_table": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "delimiter": {
+            "enum": [
+              "auto",
+              "comma",
+              "tab",
+              "semicolon"
+            ],
+            "type": "string"
+          },
+          "has_header": {
+            "type": "boolean"
+          },
+          "mapping": {
+            "additionalProperties": false,
+            "properties": {
+              "electrical_type": {
+                "maximum": 63,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "maximum": 63,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "number": {
+                "maximum": 63,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "side": {
+                "maximum": 63,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unit": {
+                "maximum": 63,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "text": {
+            "maxLength": 262144,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      }
+    },
     "library.remove_source": {
       "params": {
         "additionalProperties": false,
