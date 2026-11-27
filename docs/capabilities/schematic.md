@@ -22,6 +22,8 @@
   edits for selected symbols, attached-wire movement and read-only terminal/library details.
 - place, rotate, mirror horizontally or vertically about the symbol center with attached wires, edit
   standard/custom component fields and population/exclusion attributes, move/delete symbols.
+- mirror a multi-item selection (symbols, wires and net labels) as one undoable edit about the
+  selection center, snapped so pins stay on the grid.
 - Independently drag reference/value/custom text with per-unit visibility, name display, physical
   size/alignment/rotation, offsets and automatic-layout reset.
 - Local/global net labels with automatic orientation away from snapped pins and upright default

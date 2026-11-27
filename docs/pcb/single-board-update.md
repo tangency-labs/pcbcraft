@@ -78,6 +78,9 @@ history. This query returns its requested data even when MCP uses `inspect:false
 Ordinary project inspection includes a smaller cached-preview summary.
 `can_apply` means the blocker list is empty, including for a no-op; native views
 use `changes.is_noop()` separately when showing whether anything needs acceptance.
+Nets compare by membership, authored names, origin and the name the board shows.
+A baseline saved before `/4` shows each net under its smallest authored name, so a
+named net whose membership is unchanged is not proposed again after reopening.
 
 `pcb.apply_update` takes the same board, current `expected_revision` and the
 preview's `plan_token`. It revalidates the immutable input, constructs the complete

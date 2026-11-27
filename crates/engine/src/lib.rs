@@ -1107,9 +1107,13 @@ const AUTO_HEAL: Param = Param {
 
 /// Move a group of symbols and wire routes as one revision and undo step.
 pub const MOVE_ITEMS: &str = "schematic.move_items";
+/// Reflect a group about its grid-snapped center as one revision and undo step.
+pub const MIRROR_ITEMS: &str = "schematic.mirror_items";
 /// Delete a group and its incident connections as one revision and undo step.
 pub const DELETE_ITEMS: &str = "schematic.delete_items";
 const ITEMS: Param = Param { required: true, name: "items", summary: "Symbol and wire IDs from project inspection", kind: ParamKind::Selection };
+const MIRROR_AXIS: Param =
+    Param { required: true, name: "axis", summary: "horizontal flips left and right; vertical flips top and bottom", kind: ParamKind::MirrorAxis };
 
 const APPEARANCE: Param = Param {
     required: true,
@@ -1801,16 +1805,7 @@ const CATALOG: &[Command] = &[
         id: MIRROR_SYMBOL,
         title: "Mirror Symbol",
         summary: "Reflect a symbol about its center across the screen's horizontal or vertical axis, composing with its quarter-turn rotation. Attached wires follow its pins. Undoable.",
-        params: &[
-            SYMBOL,
-            Param {
-                required: true,
-                name: "axis",
-                summary: "horizontal flips left and right; vertical flips top and bottom",
-                kind: ParamKind::MirrorAxis,
-            },
-            EXPECTED_REVISION,
-        ],
+        params: &[SYMBOL, MIRROR_AXIS, EXPECTED_REVISION],
     },
     Command {
         id: DELETE_SYMBOL,
@@ -2078,6 +2073,12 @@ const CATALOG: &[Command] = &[
             EXPECTED_REVISION,
             AUTO_HEAL,
         ],
+    },
+    Command {
+        id: MIRROR_ITEMS,
+        title: "Mirror Selected Items",
+        summary: "Reflect symbols, named-net anchors and wire routes together across the screen's horizontal or vertical axis through the selection's center, snapped so grid points stay on the grid. Symbols compose the reflection with their rotation; attached wires follow their pins. One undoable edit.",
+        params: &[ITEMS, MIRROR_AXIS, EXPECTED_REVISION],
     },
     Command {
         id: DELETE_ITEMS,
@@ -2495,7 +2496,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align footprints by bounds, distribute by equal gaps with fixed outer bounds, or set an exact origin-to-origin pitch along X or Y. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
+        summary: "Align footprints by bounds, optionally to a fixed reference footprint; distribute by equal gaps with fixed outer bounds or by exact origin pitch. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
@@ -2506,6 +2507,12 @@ const CATALOG: &[Command] = &[
                 name: "pitch_nm",
                 summary: "Positive origin spacing for distribute_x or distribute_y (two or more footprints), starting at the smallest axis coordinate. Ties follow footprint request order. Omit for equal gaps by bounds (three or more).",
                 kind: ParamKind::FootprintPitch,
+            },
+            Param {
+                required: false,
+                name: "reference_footprint",
+                summary: "Fixed footprint ID for edge or center alignment only. A locked reference is allowed and is never moved, even if listed in footprints. Select at least one other footprint.",
+                kind: ParamKind::FootprintId,
             },
         ],
     },
@@ -3904,6 +3911,7 @@ impl Session {
             | ATTACH_JUNCTION
             | HEAL_WIRES
             | MOVE_ITEMS
+            | MIRROR_ITEMS
             | clipboard::COPY
             | clipboard::CUT
             | clipboard::PASTE
@@ -4453,6 +4461,7 @@ impl Session {
                 | ATTACH_JUNCTION
                 | HEAL_WIRES
                 | MOVE_ITEMS
+                | MIRROR_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
@@ -4636,6 +4645,7 @@ impl Session {
             clipboard::CUT => self.cut_schematic(params)?,
             clipboard::PASTE => self.paste_schematic(params)?,
             MOVE_ITEMS => self.move_items(params)?,
+            MIRROR_ITEMS => self.mirror_items(params)?,
             DELETE_ITEMS => self.delete_items(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
             MIRROR_SYMBOL => self.mirror_symbol(params)?,
@@ -5972,6 +5982,8 @@ mod wiring_tests {
     }
 }
 
+#[cfg(test)]
+mod group_mirror_tests;
 #[cfg(test)]
 mod mirror_tests;
 #[cfg(test)]

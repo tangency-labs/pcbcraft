@@ -969,6 +969,22 @@ impl PcbApp {
         }
     }
 
+    /// Mirror a multi-item selection as one group edit about its center; a lone selected symbol
+    /// keeps the single-symbol command. Both are revision-checked and failures show in status.
+    fn mirror_selected(&mut self, axis: pcbcraft_engine::schematic::MirrorAxis) {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
+        if self.views.active.schematic.selection.len() > 1 {
+            self.run(
+                pcbcraft_engine::MIRROR_ITEMS,
+                &json!({"items":self.views.active.schematic.selection,"axis":axis.as_str(),"expected_revision":self.session.revision()}),
+            );
+        } else {
+            self.edit_selected(SymbolAction::Mirror(axis));
+        }
+    }
+
     /// Delete the selected segment, or the complete item selection when there is no segment.
     /// Both paths use revision-checked shared commands; failures retain the valid selection.
     fn delete_selection(&mut self) {
@@ -1748,6 +1764,16 @@ impl PcbApp {
                             self.view_click(source, Click::MoveItems { items, origin, pickup: true, disconnect: true });
                         }
                     }
+                    // X/Y on a group mirror it about its center; a lone symbol keeps the hover path.
+                    let mirroring = match mirroring {
+                        Some(axis)
+                            if input_enabled && self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 =>
+                        {
+                            self.mirror_selected(axis);
+                            None
+                        }
+                        other => other,
+                    };
                     if (moving || rotating || mirroring.is_some())
                         && input_enabled
                         && self.views.active.schematic.tool.is_none()
