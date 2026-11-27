@@ -132,21 +132,26 @@ jobs:
           cache-workspace-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - run: cargo fmt --all --check
-      - name: Check affected native packages (full workspace outside PRs)
-        run: python -B scripts/ci/native.py
-        env:
-          CI_MODE: ${{ needs.changes.outputs.mode }}
-      - name: Compare command contracts with the base branch
+      - name: Read command contract baseline
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git cat-file -e "$BASE_SHA:docs/schemas/command-contracts.json" 2>/dev/null; then
-            git show "$BASE_SHA:docs/schemas/command-contracts.json" > "$RUNNER_TEMP/base-command-contracts.json"
-            cargo run --locked --profile ci -q -p pcbcraft-engine --example command_contracts_against_base -- "$RUNNER_TEMP/base-command-contracts.json" docs/schemas/command-contracts.json
+          snapshot=docs/schemas/command-contracts.json
+          git cat-file -e "$BASE_SHA^{commit}"
+          if git cat-file -e "$BASE_SHA:$snapshot" 2>/dev/null; then
+            baseline="$RUNNER_TEMP/base-command-contracts.json"
+            git show "$BASE_SHA:$snapshot" > "$baseline"
+            if ! cmp -s "$baseline" "$snapshot"; then
+              printf 'PCBCRAFT_COMMAND_CONTRACT_BASE=%s\n' "$baseline" >> "$GITHUB_ENV"
+            fi
           else
             echo "No command contract snapshot on the base branch; checking the first snapshot against the catalog in workspace tests."
           fi
+      - name: Check affected native packages (full workspace outside PRs)
+        run: python -B scripts/ci/native.py
+        env:
+          CI_MODE: ${{ needs.changes.outputs.mode }}
       - name: Test command-contract workflow baseline
         run: python -B -m unittest discover -s scripts -p 'test_command_contract_workflow.py'
 

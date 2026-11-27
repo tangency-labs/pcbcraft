@@ -89,9 +89,9 @@ whether a new default keeps the old behaviour. They also compare the code with
 the snapshot in the same commit, so a breaking change committed together with
 a rewritten snapshot passes them. When the pull request’s target commit has a snapshot, CI on
 a pull request also compares that `command-contracts.json` with the pull
-request's checked-out merge result, with the same classifier (the `command_contracts_against_base`
-example of `pcbcraft-engine`, run as `cargo run -p pcbcraft-engine --example
-command_contracts_against_base -- BASE.json HEAD.json`): it fails when the
+request's checked-out merge result as part of the engine tests. The same
+classifier is available locally with `cargo run -p pcbcraft-engine --example
+command_contracts_against_base -- BASE.json HEAD.json`. The comparison fails when the
 classifier detects a breaking difference in either section without a raised
 `command_api_version`, or when the version falls. If the target commit has no
 snapshot, the workspace tests check the first snapshot against discovery
