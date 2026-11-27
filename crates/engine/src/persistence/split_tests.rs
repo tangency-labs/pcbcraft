@@ -579,14 +579,27 @@ fn newer_document_formats_are_refused_as_newer() {
     edit(&mut skipped, &board, |value| value["format"] = json!("pcbcraft-board/30"));
     assert!(!decode_documents(&skipped).unwrap_err().contains("newer"));
 
-    // A packed project from a newer release names its container format the same way.
+    // A packed project from a newer release names its container format the same way, whether
+    // its files sit at the archive root or under one top-level folder, and when the newer
+    // manifest also adds a field.
     let packed = encode_packed_documents(saved.clone()).unwrap();
     let mut zip = zip::ZipArchive::new(Cursor::new(&packed)).unwrap();
     let mut text = String::new();
     zip.by_name("manifest.json").unwrap().read_to_string(&mut text).unwrap();
-    let mut manifest: Value = serde_json::from_str(&text).unwrap();
-    manifest["format"] = json!("pcbcraft-container/99");
-    let mut raised = saved;
-    raised.insert("manifest.json".to_owned(), serde_json::to_vec(&manifest).unwrap());
-    assert_eq!(decode_packed(&zip_files(&raised, "", false)).err().unwrap(), newer("manifest.json", "pcbcraft-container/99", "pcbcraft-container/3"));
+    let current: Value = serde_json::from_str(&text).unwrap();
+    let mut packed_refusals = (Vec::new(), Vec::new());
+    for prefix in ["", "bundle/"] {
+        for added_field in [false, true] {
+            let mut manifest = current.clone();
+            manifest["format"] = json!("pcbcraft-container/99");
+            if added_field {
+                manifest["field_from_the_future"] = json!(true);
+            }
+            let mut raised = saved.clone();
+            raised.insert("manifest.json".to_owned(), serde_json::to_vec(&manifest).unwrap());
+            packed_refusals.0.push(decode_packed(&zip_files(&raised, prefix, false)).err().unwrap_or_default());
+            packed_refusals.1.push(newer("manifest.json", "pcbcraft-container/99", "pcbcraft-container/3"));
+        }
+    }
+    assert_eq!(packed_refusals.0, packed_refusals.1);
 }
