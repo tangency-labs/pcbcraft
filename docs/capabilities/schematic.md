@@ -4,7 +4,8 @@
 
 ### Available
 
-- Up to 64 flat or hierarchical sheets with create/rename/delete and A4–A0 landscape/portrait paper
+- Up to 64 flat or hierarchical sheets holding 8,192 symbols and 16,384 wires in all and 4,096 net
+  labels each, with create/rename/delete and A4–A0 landscape/portrait paper
   (sheet Properties, Browser **Paper** menu or `sheet.set_page`), drawn on a uniform theme-following
   canvas by default with a frame (sheet Properties, Browser **Frame** menu or `sheet.set_template`):
   the Default border, zone markers and parameter-filled title block, or a plain border.

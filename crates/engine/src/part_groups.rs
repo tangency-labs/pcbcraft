@@ -142,8 +142,11 @@ fn check_memberships(
 /// (sorted, unique, never empty) is its own shared allocation, so an edit to one part instance
 /// copies this index (one key and one pointer per grouped part instance) and builds only that
 /// instance's set; every other set stays shared with the previous snapshot. Each Undo step
-/// therefore keeps one copy of this index (at most 4,096 entries of 24 bytes) plus the edited
-/// set, not a copy of every membership.
+/// therefore keeps one copy of this index, bounded by the project's symbol limit, plus the
+/// edited set, not a copy of every membership. At the 8,192-symbol limit the index has at most
+/// 8,192 entries of 24 bytes, about 192 KiB per Undo step. Loading expanded memberships first
+/// builds a transient list of up to `MAX_MEMBERSHIPS` (2,097,152) 24-byte entries, about 48 MiB,
+/// before it is grouped into this index.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Memberships {
     by_part_instance: Vec<(PartInstanceKey, Arc<[Uuid]>)>,

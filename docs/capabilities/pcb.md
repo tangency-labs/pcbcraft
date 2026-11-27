@@ -253,7 +253,7 @@ repeated instances and system registries remain separate work.
 [Part groups](../formats/part-groups.md) collect part instances by stable part-instance
 ID through shared headless/live MCP commands, with a project-wide catalog,
 explicit membership, protected removal, undo and save/reopen. Dense membership
-uses compact native storage without reducing the supported set of 4,096 part
+uses compact native storage without reducing the supported set of 8,192 part
 instances in 256 groups. Copy/Cut leave groups project-owned; pasted independent
 parts start ungrouped. Rules that consume groups are later work.
 

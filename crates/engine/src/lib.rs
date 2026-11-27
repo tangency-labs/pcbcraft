@@ -269,7 +269,7 @@ impl ParamKind {
             }
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
-                "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
+                "footprints":{"type":"array","maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
                 "drawings":{"type":"array","maxItems":512,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
                 "tracks":{"type":"array","maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
                 "vias":{"type":"array","maxItems":board::track::MAX_VIAS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},

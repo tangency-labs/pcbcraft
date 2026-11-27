@@ -85,7 +85,8 @@ them by UUID, as for net classes:
 Memberships live in the project's instance home beside the sheet occurrences and
 any net registry: `schematic_instances` in `project.json` when there is no board,
 or the board folder's [instances.json](native-project-storage.md#board-instance-records).
-Both representations use instances/9 in board projects. Expanded records sort by part instance and
+In a board project both representations are written at the current instances/12, with
+`project.json` at project/68. Expanded records sort by part instance and
 then group, unique, and one per line:
 
 ```json
@@ -108,8 +109,8 @@ membership omits its field and keeps the current project and instance headers.
 
 ### Dense membership
 
-Every supported part instance may belong to all 256 groups: up to 4,096 instances
-and 1,048,576 memberships. If the expanded representation exceeds the existing
+Every supported part instance may belong to all 256 groups: up to 8,192 instances
+and 2,097,152 memberships. If the expanded representation exceeds the existing
 16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
 once with compact memberships while keeping the same headers. The model
 capacity and file-size limits apply to both representations.
@@ -122,7 +123,8 @@ and a sorted, nonempty `groups` array of zero-based integer dictionary reference
 The dictionary contains exactly the UUIDs used by the rows. Positions
 are local compression references, not object identities or catalog positions;
 loading expands them back into ordinary UUID memberships before model validation.
-At the supported maximum the compact membership payload is below 4 MiB.
+At 4,096 fully grouped instances, the former limit, the compact membership payload is below 4 MiB;
+at the supported 8,192-instance maximum it is below 8 MiB.
 
 Both storage homes validate the dictionary, row ordering, uniqueness, integer
 reference range, bounded expansion and existing part/group identities. Compact

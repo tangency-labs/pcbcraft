@@ -210,7 +210,7 @@ while any placement, assignment or accepted record references them.
 Proposed inputs may have unresolved package choices so a preview can report
 blockers; persisted accepted board records require a package for every component.
 
-The baseline has at most 4096 component records with at most 1,024 terminal tokens
+The baseline has at most 8,192 component records with at most 1,024 terminal tokens
 per component, within a 16 MiB serialized bound and the existing project/document
 budgets. Validation rejects duplicate/noncanonical numeric keys, foreign owners,
 unknown or multiply assigned terminals, invalid capture addresses and incompatible

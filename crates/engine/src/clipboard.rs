@@ -373,7 +373,9 @@ impl Fragment {
         Ok((next, selected))
     }
 
-    /// A hierarchy paste shares the remap across sheets so a multi-unit part is copied once.
+    /// A hierarchy paste shares this remap across sheets so a multi-unit part is copied once.
+    /// Symbol and wire bounds apply across the project; named labels count only on the
+    /// destination sheet.
     /// Report whether this placement inserted any locked owners, excluding reused owners.
     fn placed_with_parts(
         &self,
@@ -389,7 +391,7 @@ impl Fragment {
 
         if destination.all_symbols().count() + self.project.all_symbols().count() > crate::schematic::MAX_SYMBOLS
             || destination.sheets.iter().map(|s| s.wires.len()).sum::<usize>() + self.project.wires().len() > crate::schematic::wiring::MAX_WIRES
-            || destination.sheets.iter().map(|s| s.net_labels.len()).sum::<usize>() + self.project.net_labels().len() > crate::net_labels::MAX_LABELS
+            || destination.net_labels().len() + self.project.net_labels().len() > crate::net_labels::MAX_LABELS
         {
             return Err(CommandError::CapExceeded("pasted objects exceed project limits".into()));
         }
