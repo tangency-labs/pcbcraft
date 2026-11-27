@@ -738,9 +738,7 @@ impl Document {
         let path_cancelled = matches!(self.tool, Tool::EditPath { revision, .. } if revision != self.session.revision()
             || !active || !ui.is_enabled()
             || ui.input(|input| input.key_pressed(egui::Key::Escape) || input.pointer.secondary_pressed()));
-        if path_cancelled {
-            self.tool = Tool::Select;
-        }
+        let cancelled_path = path_cancelled.then(|| std::mem::take(&mut self.tool));
         self.show_vertex_menu(&response, &item, area, over && !path_cancelled, active && ui.is_enabled());
         let drawing_fill = self.drawing_fill;
         let graphic_object = |points: Vec<Point>, closed: bool, purpose, stroke_nm| {
@@ -798,10 +796,12 @@ impl Document {
         // including the destructive M/E/Delete/Enter keys and Escape — may read key_pressed.
         let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.focused);
         let escape_pressed = keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape));
-        let selecting_before_escape = selecting_at_start && matches!(self.tool, Tool::Select);
         // Cancel before pointer release can commit a drag. Keyboard actions below still
         // see the tool that was active before Escape until they reach that key event.
-        let tool_before_escape = escape_pressed.then(|| std::mem::take(&mut self.tool));
+        let tool_before_escape = escape_pressed.then(|| {
+            let tool = std::mem::take(&mut self.tool);
+            cancelled_path.unwrap_or(tool)
+        });
         let mut preview = Vec::new();
         let mut drag_invalid: Option<Point> = None;
         let mut path_preview = None;
@@ -1099,14 +1099,15 @@ impl Document {
             if let Some(tool) = tool_before_escape {
                 self.tool = tool;
             }
-            let mut selecting = matches!(self.tool, Tool::Select) && (!escape_pressed || selecting_before_escape);
-            let mut backspace_allowed = selecting_at_start;
+            // A pointer action can finish a tool and leave its selection in place. Backspace
+            // can act on that selection after a keyboard cancellation or transition to Select.
+            let mut backspace_blocked = !selecting_at_start && matches!(self.tool, Tool::Select);
             for (key, modifiers) in keys {
+                let selecting = matches!(self.tool, Tool::Select);
                 match key {
                     egui::Key::Escape => {
                         self.tool = Tool::Select;
-                        selecting = true;
-                        backspace_allowed = true;
+                        backspace_blocked = false;
                     }
                     egui::Key::P if !modifiers.command => self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad }),
                     egui::Key::L if !modifiers.command => self.start_tool(Place::Line),
@@ -1122,10 +1123,12 @@ impl Document {
                     egui::Key::V if modifiers.command => self.paste(ui.ctx()),
                     egui::Key::D if modifiers.command => self.duplicate(),
                     egui::Key::Delete if selecting => self.delete(),
-                    egui::Key::Backspace if selecting && backspace_allowed && modifiers.is_none() => self.backspace_in_select(),
+                    egui::Key::Backspace if selecting && !backspace_blocked && modifiers.is_none() => self.backspace_in_select(),
                     _ => {}
                 }
-                selecting &= matches!(self.tool, Tool::Select);
+                if !selecting && matches!(self.tool, Tool::Select) {
+                    backspace_blocked = false;
+                }
             }
             if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                 self.details_requested = true;

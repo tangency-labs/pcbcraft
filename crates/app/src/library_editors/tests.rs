@@ -1991,3 +1991,43 @@ fn library_rotation_uses_the_tool_active_at_the_press() {
         }
     }
 }
+
+/// A rotation that commits the selection exits outline drawing before the next delete key.
+#[test]
+fn library_delete_keys_see_the_select_tool_after_rotation() {
+    use egui::Key::{Backspace, Delete, R};
+    use pcbcraft_engine::schematic::Point;
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [Delete, Backspace] {
+            for (batch, deleted) in [([R, key], true), ([key, R], false)] {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+                let object = *doc.session.snapshot().objects.keys().next().unwrap();
+                doc.select(Some(object)).unwrap();
+                let revision = doc.session.revision();
+                doc.tool = canvas::Tool::Polyline { points: vec![Point { x_nm: 0, y_nm: 0 }], revision };
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                for key in batch {
+                    h.input_mut().events.push(egui::Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.run();
+                let doc = &h.state().library_editors.documents[&id];
+                assert!(matches!(doc.tool, canvas::Tool::Select), "{kind:?} {batch:?}");
+                assert_eq!(doc.session.snapshot().objects.contains_key(&object), !deleted, "{kind:?} {batch:?}");
+                assert_eq!(doc.session.revision(), revision + if deleted { 2 } else { 1 }, "{kind:?} {batch:?}");
+            }
+        }
+    }
+}
