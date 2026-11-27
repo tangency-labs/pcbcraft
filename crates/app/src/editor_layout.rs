@@ -272,12 +272,14 @@ pub(super) struct ViewHost {
     pub(super) parked: Vec<ViewId>,
     pub(super) collapsed: Option<Layout>,
     pub(super) rects: Vec<(ViewId, Rect)>,
+    /// Shared project cards from the previous frame, in host coordinates.
+    pub(super) project_cards: Vec<Rect>,
 }
 
 impl ViewHost {
     /// Start a host with one visible view and no cached pane geometry.
     pub(super) fn new(id: ViewId) -> Self {
-        Self { layout: Layout::View(id), focused: id, parked: Vec::new(), collapsed: None, rects: Vec::new() }
+        Self { layout: Layout::View(id), focused: id, parked: Vec::new(), collapsed: None, rects: Vec::new(), project_cards: Vec::new() }
     }
 
     /// Whether this host currently displays more than one pane.

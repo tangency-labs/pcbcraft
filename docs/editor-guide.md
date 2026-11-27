@@ -512,8 +512,12 @@ pins; inspecting them does not change the project. Each ribbon group's caption, 
 
 A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
 to create a sheet, or use **Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
-Deleting a sheet removes its symbols, wires and associated board footprints in
-one undo step, and the project always retains at least one sheet. Each pane keeps
+Deleting a sheet removes its symbols and wires in one undo step. Parts with
+symbols on other sheets keep their footprints. When a part loses its last
+placed symbol, its footprint is removed immediately if it is outside the
+board’s accepted state. Accepted footprints stay until you review and apply
+[Update PCB](pcb/single-board-update.md#initializing-accepted-state).
+The project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
 New sheets use A4 landscape paper with the Default frame. With nothing selected,

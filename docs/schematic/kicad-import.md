@@ -46,6 +46,7 @@ replaces anything. There is no desktop menu entry yet.
 | Power symbols | Parts whose power terminal joins the global net their Value names. A local power symbol (KiCad 10's `(power local)`) imports as a global one, reported: on the single sheet this slice imports, both reach the same pins. Importing sub-sheets will have to keep the local scope or refuse such files. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
 | Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
+| The paper (`paper`), A4 to A1, landscape or portrait | The sheet's paper and orientation, its top-left corner at the origin the file measures from, so the drawing sits on the paper as in KiCad |
 
 ## What refuses a file
 
@@ -132,6 +133,12 @@ which use the native defaults; global label shapes; alternate (De Morgan) body
 styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not
 on a pin or wire end; and drawing details the native format holds differently.
+For other sizes, including A5, US and custom sizes, and A0, which extends past
+the schematic range when placed at the origin, the importer fits a replacement
+around the drawing and reports the substitution. Files without a paper size
+also get a fitted page. Near the coordinate limit, the importer shifts the
+replacement page’s corner into range and reports any drawing that still
+extends beyond the paper.
 Field values are kept up to 2,048 characters without control characters; a value
 changed to fit is reported. Curves are drawn
 as polylines, fills are kept only on convex outlines, and very long pin names are

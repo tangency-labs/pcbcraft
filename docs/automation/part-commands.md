@@ -61,6 +61,9 @@ ID. The reply is `{revision, changes}`: each change names `component`, its
 `reference` before the edit, `field` (`reference`, `value`, a field ID or
 `footprint`) and `old` and `new`, null when absent. `dry_run: true` validates the
 same edit and returns the same list without changing the revision, history or
-saved files. A request that changes nothing adds no undo step. A read-only
-session refuses both modes. Rows address the project's single circuit use;
+saved files. Both modes check the native save limits. If the change report would
+exceed the 16 MiB live reply limit, the editor refuses the request before
+applying any edits. Use fewer rows or a headless session for a large report.
+A request that changes nothing adds no undo step. A read-only session refuses
+both modes. Rows address the project's single circuit use;
 references per repeated sheet occurrence are not part of this command.

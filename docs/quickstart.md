@@ -319,8 +319,12 @@ The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets → New sheet**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
 The breadcrumb uses the actual sheet name and its position in the sheet count.
-Deletion asks for confirmation and removes its symbols, wires and associated
-footprints together; Undo restores them. Other views of a deleted sheet become
+Deletion asks for confirmation and removes the sheet’s symbols and wires.
+Parts with symbols on other sheets keep their footprints. When a part loses its
+last placed symbol, its footprint is removed immediately if it is outside the
+board’s accepted state. Accepted footprints stay until you review and apply
+[Update PCB](pcb/single-board-update.md#initializing-accepted-state). You can undo
+the deletion. Other views of a deleted sheet become
 unavailable until it is restored or another document is opened.
 
 To add a subsheet, press **S** or choose **Sheets → Subsheet**, click its parent canvas and give the child a name,

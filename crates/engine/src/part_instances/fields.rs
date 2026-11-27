@@ -121,19 +121,40 @@ impl Session {
     /// publishes nothing. Returns the revision and every changed `{component, reference, field,
     /// old, new}` in row order; `reference` is the component's reference before the edit.
     pub(crate) fn set_part_fields(&mut self, params: &Value) -> Result<Value, CommandError> {
+        self.set_part_fields_with_commit(params, |_, _| Ok(()))
+    }
+
+    /// Validate the candidate and its native save before giving the host the exact reply to
+    /// check. The host may refuse the reply or publication, leaving revision and history intact.
+    /// The Boolean passed to `check_reply` indicates whether publication would change the project.
+    pub fn set_part_fields_with_commit<E: From<CommandError>>(
+        &mut self,
+        params: &Value,
+        check_reply: impl FnOnce(&Value, bool) -> Result<(), E>,
+    ) -> Result<Value, E> {
         self.authorize_command(SET_FIELDS)?;
         self.refuse_stale(SET_FIELDS, params)?;
         self.validate_project_command(SET_FIELDS, params)?;
         let edits = parse_edits(&params["edits"]).map_err(|message| CommandError::InvalidParams(format!("`edits` {message}")))?;
-        let before = self.open_project()?.clone();
-        let candidate = self.edited_components(&before, &edits)?;
-        let changes = changes(&before, &candidate, &edits);
-        if params["dry_run"].as_bool() == Some(true) || changes.is_empty() {
-            return Ok(json!({"revision": self.revision, "changes": changes}));
+        let before = self.open_project()?;
+        let candidate = self.edited_components(before, &edits)?;
+        let changes = changes(before, &candidate, &edits);
+        let prepared = if changes.is_empty() {
+            None
+        } else {
+            let (candidate, highest) = self.prepare_change(candidate)?;
+            let candidate = self.retain_allocation_watermark(Arc::new(candidate));
+            crate::persistence::encode_documents(candidate.clone()).map_err(CommandError::InvalidParams)?;
+            (params["dry_run"].as_bool() != Some(true)).then_some((candidate, highest))
+        };
+        let revision = prepared.as_ref().map_or(self.revision, |(_, highest)| (self.revision + 1).max(*highest));
+        let reply = json!({"revision": revision, "changes": changes});
+        check_reply(&reply, prepared.is_some())?;
+        if let Some((candidate, highest)) = prepared {
+            self.publish_change(candidate, highest);
+            self.report_committed(SET_FIELDS, params);
         }
-        self.change(candidate)?;
-        self.report_committed(SET_FIELDS, params);
-        Ok(json!({"revision": self.revision, "changes": changes}))
+        Ok(reply)
     }
 
     /// Build the edited project. Reference, value and field rules match the symbol inspector;
@@ -211,7 +232,6 @@ impl Session {
         }
         let candidate = transaction.open_project()?.clone();
         super::storage::validate_project(&candidate).map_err(CommandError::InvalidParams)?;
-        crate::persistence::encode_documents(Arc::new(candidate.clone())).map_err(CommandError::InvalidParams)?;
         Ok(candidate)
     }
 }
