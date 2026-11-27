@@ -3066,6 +3066,9 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "remove_unconnected_islands": {
+                "type": "boolean"
+              },
               "spoke_width_nm": {
                 "maximum": 10000000,
                 "minimum": 10000,
@@ -10122,6 +10125,9 @@
                 "maximum": 1000,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "remove_unconnected_islands": {
+                "type": "boolean"
               },
               "spoke_width_nm": {
                 "maximum": 10000000,

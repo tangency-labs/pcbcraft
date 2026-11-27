@@ -15,6 +15,7 @@ expose both placement scopes.
 
 - Live MCP UI input (`ui.click`, `ui.drag`, `ui.key`, `ui.text`, `ui.move`, `ui.scroll`) now works in detached editor windows as well as the main window. Input needs the addressed window's focus and current layout, and is cancelled on focus loss, physical input, a resize, redocking, closing the window or a revoked connection. See [UI automation](docs/automation/ui-automation.md).
 - Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
+- Copper zones can remove islands that touch no pad, via or track of their net (**Remove unconnected islands** in zone Properties, `remove_unconnected_islands` in zone options). Fill inspection now lists each removed island with its reason, area and bounds (#232). Normal board saves and packed exports use `pcbcraft-board/59`, even without zones. Each saved zone records the option explicitly; boards in format 43 or earlier supported formats load with it off.
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -25,10 +26,11 @@ project edits and reopened documents do not restore stale inspection selections.
 
 `pcb.set_test_point` marks individual placed pads and vias for assembly or
 bare-board fabrication testing. The two marks are independent, name the board
-face, and survive Undo/Redo and native save/reopen. Saved boards now use board
-format 43: the format 42 records plus optional marks. Format 42 boards still
-open and refuse marks, and earlier releases refuse format 43. Clearing the last
-mark keeps format 43. This change does not add reports.
+face, and survive Undo/Redo and native save/reopen. Board format 43 introduced
+optional marks alongside the format 42 records, and format 59 retains those
+marks. Format 42 boards still open but reject stored marks. Releases predating
+format 43 cannot read it. Clearing the last mark omits the list without
+changing the current save format. This change does not add reports.
 
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the

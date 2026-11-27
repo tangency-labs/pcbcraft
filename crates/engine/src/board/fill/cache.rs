@@ -155,7 +155,7 @@ impl Session {
                 None => serde_json::json!({"state":"pending"}),
                 Some(Err(message)) => serde_json::json!({"state":"unavailable","message":message}),
                 Some(Ok(fill)) => {
-                    serde_json::json!({"state":"ready","zones":fill.zones.iter().map(|z|serde_json::json!({"id":z.id,"net":z.net,"layer":z.layer,"islands":z.islands.len(),"dropped":z.dropped})).collect::<Vec<_>>(),"problems":fill.problems})
+                    serde_json::json!({"state":"ready","zones":fill.zones.iter().map(|z|serde_json::json!({"id":z.id,"net":z.net,"layer":z.layer,"islands":z.islands.len(),"dropped":z.dropped,"removed":z.removed})).collect::<Vec<_>>(),"problems":fill.problems})
                 }
             }
         };

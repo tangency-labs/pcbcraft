@@ -89,7 +89,11 @@ class or zone minimum, with a 2 nm numerical reserve. Higher-priority zones are
 filled first; equal-priority foreign zones clear each other's authored outlines.
 Thermal connections use up to four board-axis spokes, retaining only spokes that
 reach the remaining material. Solid connects pads directly; None leaves gaps.
-Minimum-area removal reports affected pad islands in DRC. Retired or ambiguous
+Minimum-area removal reports affected pad islands in DRC. **Remove unconnected
+islands** in zone Properties also removes any island that touches no pad, via or
+track of the zone's net, whatever its size; it is off by default. Fill inspection
+lists every removed island with its reason (`minimum_area` or `unconnected`),
+area and bounds. Retired or ambiguous
 net identities produce no conductive fill and remain explicit findings.
 
 Connectivity and airwires use actual retained islands, so disconnected pieces of
@@ -146,9 +150,10 @@ path. Unknown/foreign targets, malformed geometry and stale requests leave the
 snapshot and history unchanged.
 
 Options contain `priority`, optional `clearance_nm`, `thermal_gap_nm`,
-`spoke_width_nm`, `connection` (`thermal`, `solid`, `none`) and
-`min_island_area_nm2`. Omitted options on creation use priority 0, inherited
-clearance, 0.3 mm gap/spoke width, thermal connections and zero minimum area.
+`spoke_width_nm`, `connection` (`thermal`, `solid`, `none`),
+`min_island_area_nm2` and optional `remove_unconnected_islands`. Omitted options
+on creation use priority 0, inherited clearance, 0.3 mm gap/spoke width, thermal
+connections, zero minimum area and no unconnected island removal.
 An omitted `clearance_nm` within a replacement options object restores inherited
 clearance. Explicit stored null is not an alternate encoding.
 
@@ -156,13 +161,17 @@ clearance. Explicit stored null is not an alternate encoding.
 deleting zone records. `pcb.refill_zones` accepts an optional explicit `board` and replaces only derived
 fill. Headless execution completes synchronously; the live editor schedules work
 and returns its pending state. `pcb.inspect_zone_fill` reports pending, ready, unfilled or
-unavailable without starting work. Neither command dirties native files or adds
+unavailable without starting work. A ready result lists, for each zone, its
+retained island count, `dropped` count and `removed` islands (`reason`,
+`area_nm2`, `bounds_nm` as minimum x, minimum y, maximum x, maximum y). Neither command dirties native files or adds
 a document undo entry.
 
 ## Storage and limits
 
-Current board files use [format 43](../formats/native-project-storage.md#current-board-records).
-Each zone is one JSON line in UUID order and contains only authored intent.
+Current board files use [format 59](../formats/native-project-storage.md#current-board-records).
+Each zone is one JSON line in UUID order and contains only authored intent,
+including whether to remove unconnected islands. Older boards load with that
+option off.
 Removing the final zone omits the array. Historical format 20 requires a
 nonempty `zones` array. Folder and archive codecs, recovery, and Undo/Redo
 use the authored records. Fill and preview are derived in memory.

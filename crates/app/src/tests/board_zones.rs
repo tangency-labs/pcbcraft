@@ -746,3 +746,25 @@ fn board_group_ribbon_move_places_the_whole_zone_selection() {
         assert_eq!(new.points[0], Point { x_nm: old.points[0].x_nm + 5_080_000, y_nm: old.points[0].y_nm + 2_540_000 });
     }
 }
+
+/// The island policy checkbox commits one authored edit, and Undo restores the exact bytes.
+#[test]
+fn zone_unconnected_island_checkbox_commits_once_and_undoes() {
+    let mut h = fixture();
+    draw(&mut h, true);
+    let edge = at(&h, 5_080_000, 0);
+    click_canvas_at(&mut h, edge);
+    h.state_mut().views.active.board.properties_collapsed = false;
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.get_by_role_and_label(Role::CheckBox, "Remove unconnected islands").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(Role::CheckBox, "Remove unconnected islands").click();
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().zones()[0].options.remove_unconnected_islands);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
