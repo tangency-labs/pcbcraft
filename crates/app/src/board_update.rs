@@ -1,4 +1,6 @@
 //! Review one captured schematic-to-board change set without granting stale approval authority.
+use std::collections::BTreeSet;
+
 use crate::{Dialog, PcbApp, ViewId, ViewInput, editor_view::DocumentTarget};
 use pcbcraft_chrome::{pcb_update as form, shell};
 use pcbcraft_engine::{
@@ -33,7 +35,27 @@ pub(super) struct Edit {
     error: Option<String>,
     place_new_footprints: bool,
     filters: form::Filters,
-    report: Vec<(Option<u64>, form::Message)>,
+    report: Vec<ReportRow>,
+}
+
+/// Frozen report text and the part instances it describes, independently of approval.
+#[derive(Debug)]
+struct ReportRow {
+    parts: BTreeSet<u64>,
+    assignment: Option<u64>,
+    message: form::Message,
+}
+
+impl ReportRow {
+    /// Keep canonical part IDs beside the display string, without parsing labels on a click.
+    fn new(kind: form::Kind, text: String, parts: impl IntoIterator<Item = u64>, assignment: Option<(u64, String)>) -> Self {
+        let parts: BTreeSet<_> = parts.into_iter().collect();
+        Self {
+            message: form::Message { kind, text, probe: !parts.is_empty(), action: assignment.as_ref().map(|(_, label)| label.clone()) },
+            parts,
+            assignment: assignment.map(|(id, _)| id),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -45,6 +67,7 @@ enum Action {
     Review,
     Apply,
     Assign(u64),
+    Probe(usize),
     PlaceAll,
 }
 
@@ -215,7 +238,7 @@ impl PcbApp {
                     Phase::Review => {
                         if let Some(preview) = preview.as_ref().filter(|_| current_plan) {
                             form::options(ui, &mut edit.place_new_footprints);
-                            draw_report(ui, &edit.report, &mut edit.filters, &mut action, preview.changes.is_noop());
+                            draw_report(ui, &edit.report, &mut edit.filters, &mut action, preview.changes.is_noop(), true);
                             if preview.changes.is_noop()
                                 && let Some(project) = project.as_ref()
                             {
@@ -228,7 +251,7 @@ impl PcbApp {
                     Phase::Applied => {
                         ui.add_enabled_ui(false, |ui| form::options(ui, &mut edit.place_new_footprints));
                         ui.label("PCB updated.");
-                        draw_report(ui, &edit.report, &mut edit.filters, &mut action, true);
+                        draw_report(ui, &edit.report, &mut edit.filters, &mut action, true, source_current);
                         if source_current {
                             if let Some(project) = project.as_ref() {
                                 draw_unplaced(ui, project, &mut action);
@@ -261,6 +284,16 @@ impl PcbApp {
             return;
         }
         if !context || matches!(action, Action::None) {
+            self.dialog = Dialog::BoardUpdate(edit);
+            return;
+        }
+        if let Action::Probe(index) = action {
+            if (current_plan || (edit.phase == Phase::Applied && source_current))
+                && let (Some(board), Some(row)) = (edit.board, edit.report.get(index))
+            {
+                self.views.probe_update_parts(edit.source.view(), board, &row.parts, &self.session);
+                self.repaint_editors(ctx);
+            }
             self.dialog = Dialog::BoardUpdate(edit);
             return;
         }
@@ -443,19 +476,17 @@ fn mapping_label(package: Option<&Package>) -> String {
     )
 }
 
-/// Project typed changes into report text without creating another mutable update plan. Missing
-/// package rows carry canonical component IDs; report filters cannot change approval or mutations.
-fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<(Option<u64>, form::Message)> {
+/// Project typed changes into navigable report rows without creating another mutable plan.
+/// Connection rows address their participating part instances, not a guessed live net ID.
+fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<ReportRow> {
     let mut rows = Vec::new();
     for Blocker::MissingPackage { component } in &preview.changes.blockers {
         let label = component_label(preview, *component);
-        rows.push((
-            Some(*component),
-            form::Message {
-                kind: form::Kind::Error,
-                text: format!("{label}: no footprint assigned."),
-                action: Some(format!("Assign footprint to {label}")),
-            },
+        rows.push(ReportRow::new(
+            form::Kind::Error,
+            format!("{label}: no footprint assigned."),
+            [*component],
+            Some((*component, format!("Assign footprint to {label}"))),
         ));
     }
     for change in &preview.changes.components {
@@ -470,69 +501,65 @@ fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<(Option<u64>, form::M
         let old = preview.accepted_component(id);
         let new = preview.proposed_component(id);
         let package = new.or(old).and_then(|part| part.package.as_ref());
-        rows.push((None, form::Message { kind: form::Kind::Action, text: format!("{verb} {label}: {}.", package_label(package)), action: None }));
+        rows.push(ReportRow::new(form::Kind::Action, format!("{verb} {label}: {}.", package_label(package)), [id], None));
         if matches!(change, ComponentChange::Removed { .. }) {
-            rows.push((None, form::Message { kind: form::Kind::Warning, text: format!("{label} will be removed from the PCB."), action: None }));
+            rows.push(ReportRow::new(form::Kind::Warning, format!("{label} will be removed from the PCB."), [id], None));
         } else {
             let mapping = new.and_then(|part| part.package.as_ref());
             if mapping.is_some() {
-                rows.push((
-                    None,
-                    form::Message { kind: form::Kind::Info, text: format!("{label} pin mapping: {}.", mapping_label(mapping)), action: None },
-                ));
+                rows.push(ReportRow::new(form::Kind::Info, format!("{label} pin mapping: {}.", mapping_label(mapping)), [id], None));
             }
             if let Some(old) = old {
-                rows.push((
+                rows.push(ReportRow::new(
+                    form::Kind::Info,
+                    format!(
+                        "Previous footprint for {label}: {}. Previous mapping: {}.",
+                        package_label(old.package.as_ref()),
+                        mapping_label(old.package.as_ref())
+                    ),
+                    [id],
                     None,
-                    form::Message {
-                        kind: form::Kind::Info,
-                        text: format!(
-                            "Previous footprint for {label}: {}. Previous mapping: {}.",
-                            package_label(old.package.as_ref()),
-                            mapping_label(old.package.as_ref())
-                        ),
-                        action: None,
-                    },
                 ));
             }
             if matches!(change, ComponentChange::Definition { .. }) {
                 let symbol =
                     |part: &pcbcraft_engine::board::update::PartInstanceState| format!("{} / {} · r{}", part.library, part.definition, part.revision);
-                rows.push((
+                rows.push(ReportRow::new(
+                    form::Kind::Info,
+                    format!("{label} symbol: {} → {}.", old.map_or_else(|| "None".into(), symbol), new.map_or_else(|| "None".into(), symbol)),
+                    [id],
                     None,
-                    form::Message {
-                        kind: form::Kind::Info,
-                        text: format!(
-                            "{label} symbol: {} → {}.",
-                            old.map_or_else(|| "None".into(), symbol),
-                            new.map_or_else(|| "None".into(), symbol)
-                        ),
-                        action: None,
-                    },
                 ));
             }
         }
     }
     for (nets, verb) in [(&preview.changes.removed_nets, "Remove previous connections"), (&preview.changes.added_nets, "Update connections")] {
         for net in nets {
-            rows.push((None, form::Message { kind: form::Kind::Info, text: format!("{verb} — {}.", net_label(preview, net)), action: None }));
+            rows.push(ReportRow::new(
+                form::Kind::Info,
+                format!("{verb} — {}.", net_label(preview, net)),
+                net.terminals.iter().map(|terminal| terminal.component),
+                None,
+            ));
         }
     }
     if rows.is_empty() {
-        rows.push((None, form::Message { kind: form::Kind::Info, text: "PCB is up to date.".into(), action: None }));
+        rows.push(ReportRow::new(form::Kind::Info, "PCB is up to date.".into(), [], None));
     }
     rows
 }
 
-/// Keep report selection and clipboard export separate from domain changes and plan authority.
-fn draw_report(ui: &mut egui::Ui, rows: &[(Option<u64>, form::Message)], filters: &mut form::Filters, action: &mut Action, trailing_actions: bool) {
-    let messages: Vec<_> = rows.iter().map(|(_, message)| message).collect();
-    let selected = form::report(ui, &messages, filters, trailing_actions);
-    if let Some(component) = selected.row.and_then(|index| rows.get(index)).and_then(|row| row.0) {
+/// Keep navigation, explicit assignment and clipboard export separate from plan authority.
+fn draw_report(ui: &mut egui::Ui, rows: &[ReportRow], filters: &mut form::Filters, action: &mut Action, trailing_actions: bool, current: bool) {
+    let messages: Vec<_> = rows.iter().map(|row| &row.message).collect();
+    let selected = form::report(ui, &messages, filters, trailing_actions, current);
+    if let Some(component) = selected.row.and_then(|index| rows.get(index)).and_then(|row| row.assignment) {
         *action = Action::Assign(component);
+    } else if let Some(index) = selected.probe {
+        *action = Action::Probe(index);
     }
     if selected.copy {
-        ui.ctx().copy_text(rows.iter().map(|(_, message)| message.text.as_str()).collect::<Vec<_>>().join("\n"));
+        ui.ctx().copy_text(rows.iter().map(|row| row.message.text.as_str()).collect::<Vec<_>>().join("\n"));
     }
 }
 

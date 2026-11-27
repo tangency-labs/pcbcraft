@@ -148,6 +148,18 @@ removal is not performed by calling initialization again. Ordinary explicit PCB
 footprint deletion remains available
 and undoable; accepted history and its package assets remain until reconciled.
 
+## Reveal parts from the review
+
+Activate a change message to highlight its affected symbols and existing
+footprints in open editors without selecting them for editing. Connection
+messages reveal the parts at their ends, not the net itself. A proposed
+addition has no board geometry before it is placed. Another schematic pane
+can reveal the owning sheet; the pane that opened the review stays on its
+original document. The frozen plan remains open and **Assign footprint**
+is still a separate action. If the design changes while the applied report
+is open, its rows can still be read, filtered and copied. Choose **Review
+again** before navigating from a report on the changed design.
+
 ## Physical membership and exclusion
 
 This single-board slice forwards all live components except those with

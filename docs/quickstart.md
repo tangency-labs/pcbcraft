@@ -589,8 +589,11 @@ Cancellation retains accepted assignments; reopen Update PCB and choose
 Compatible pad mappings are preselected, including named terminals. The starter
 LED defaults to terminal 1 (Anode) → pad 2 and terminal 2 (Cathode) → pad 1 from
 revision-qualified library data. Saved package mappings take precedence, and
-you can change any default before assigning. The report includes full mapping and connection changes;
-Show filters control visibility while totals always count every warning/error.
+you can change any default before assigning. Click a change message to reveal its
+parts in open schematic and PCB panes without approving the update. Only existing
+footprints can be highlighted on the PCB. The report includes full mapping and
+connection changes; Show filters control visibility while totals always count
+every warning/error.
 Turn off **Place new footprints after updating** to keep the updated report open
 and place later. **Copy report** includes all message categories.
 **Close** leaves an unapplied review unchanged, while board creation/current-state
@@ -663,7 +666,10 @@ see the [consumer contract](formats/net-class-consumers.md).
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops
 unfinished work; **Run again** replaces it with a check of the current revision.
-Edits and project reopening invalidate unfinished reports.
+Edits and project reopening invalidate unfinished reports. Click a current finding
+to center its marker; if it names pads or footprints, their parts are also
+highlighted in open PCB and schematic views. Run the check again before navigating
+from an out-of-date result.
 
 Pad clearance is measured against the
 resolved circular, oval, rounded-rectangle or rectangular copper contour, including

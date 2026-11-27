@@ -1818,7 +1818,7 @@ impl PcbApp {
                         if self.schematic_clipboard_canvas(ui, project, &label, input_enabled) {
                             return None;
                         }
-                        let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
+                        let highlight = self.views.schematic_paint_highlight(self.views.active.id(), &self.session);
                         let edited = self.views.active.schematic.text_edit.as_ref().map(|edit| edit.target.clone());
                         let click = schematic_canvas::show(
                             ui,
