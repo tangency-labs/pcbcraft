@@ -268,3 +268,49 @@ fn followed_wires_never_run_over_another_net_label() {
     assert_eq!(session.revision(), revision + 1);
     assert_eq!(before.inspect_schematic()["netlist"], session.project().unwrap().inspect_schematic()["netlist"]);
 }
+
+/// A label can move onto a leg shared by the old and new wire routes. Refuse only if that
+/// contact joins nets that were separate before the move.
+#[test]
+fn followed_wire_checks_labels_moved_onto_a_shared_leg() {
+    let target = Point { x_nm: 78 * MM, y_nm: 80 * MM };
+    for same_net in [false, true] {
+        let mut session = led_with_ground_label();
+        if same_net {
+            let project = session.project().unwrap();
+            let start = project.wire_path(&project.wires()[0])[0];
+            apply(&mut session, net_labels::ADD, json!({"name":"ALT","style":"global","x_nm":start.x_nm,"y_nm":start.y_nm}));
+        }
+        let start = Point { x_nm: target.x_nm, y_nm: target.y_nm - 10 * MM };
+        apply(&mut session, net_labels::ADD, json!({"name":"ALT","style":"global","x_nm":start.x_nm,"y_nm":start.y_nm}));
+        let before = session.snapshot().unwrap();
+        let led = before.symbols()[1].id();
+        let label = before.net_labels().iter().find(|label| label.at == start).unwrap();
+        let label_end = WireEndpoint::NetLabel(label.id);
+        let wire = &before.wires()[0];
+        let old_path = before.wire_path(wire);
+        let nets = before.connectivity();
+        assert!(crate::wire::path_contains_point(&old_path, target));
+        assert!(!crate::wire::path_contains_point(&old_path, start));
+        assert_eq!(nets.net_index_for_endpoint(label_end) == nets.net_index_for_endpoint(wire.endpoints()[0]), same_net);
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        let result = session.apply(
+            MOVE_ITEMS,
+            &json!({"items":{"symbols":[led],"wires":[],"net_labels":[label.object_id()]},"dx_nm":0,"dy_nm":10 * MM,"expected_revision":revision}),
+        );
+        if same_net {
+            assert!(result.is_ok(), "same-net contact should be allowed: {result:?}");
+            let after = session.project().unwrap();
+            let new_path = after.wire_path(&after.wires()[0]);
+            assert_ne!(new_path, old_path);
+            assert!(crate::wire::path_contains_point(&new_path, target));
+            assert_eq!(after.endpoint_position(label_end), Some(target));
+        } else {
+            assert!(matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains("join two nets")), "{result:?}");
+            assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+        }
+    }
+}
