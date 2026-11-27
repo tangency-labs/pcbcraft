@@ -42,7 +42,9 @@ child without changing paths or references.
 wires directly attached to its pins, preserving everything inside the child.
 **Delete Hierarchical Label** removes that label, its parent pin and wires
 directly attached to either. Deleting the child through the Browser also removes
-its placements and associated board footprints; its own children become roots.
+its placements and their board footprints, except accepted footprints, which stay
+pending a [reviewed PCB update](../pcb/single-board-update.md#initializing-accepted-state);
+its own children become roots.
 Each operation is atomic and undoable. Save/reopen preserves hierarchy and
 connectivity in folders and packed projects; see the [storage contract](../formats/native-project-storage.md#hierarchical-sheet-records).
 

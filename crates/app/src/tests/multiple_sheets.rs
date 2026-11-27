@@ -7,6 +7,10 @@ use pcbcraft_engine::{
     sheets::{CREATE_SHEET, DELETE_SHEET},
 };
 
+/// The confirmation must hold for boards with and without an accepted baseline: accepted
+/// footprints stay for review in Update PCB, unaccepted ones are removed with the sheet.
+const DELETE_SHEET_NOTE: &str = "Its symbols, wires and connections to parent pins will be removed. Board footprints are removed too; footprints the board has accepted stay until Update PCB removes them. Child sheets become top-level sheets. Undo restores them.";
+
 /// Start with one original resistor and the common Browser visible.
 fn sheet_harness(width: f32) -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
@@ -74,6 +78,7 @@ fn browser_sheet_lifecycle_and_local_canvas_selection() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         menu(&mut h, "Supply");
         click(&mut h, "Delete Sheet…");
+        h.get_by_label(DELETE_SHEET_NOTE);
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Delete Sheet").click();
         h.run();
         assert_eq!(h.state().session.project().unwrap().sheets().len(), 1);
