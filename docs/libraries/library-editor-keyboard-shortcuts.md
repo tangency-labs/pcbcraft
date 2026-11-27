@@ -53,7 +53,8 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
   keys (**P**/**L**/**T**, footprint **C**, **M**) resolve the same way:
   pressed before a same-batch Escape they stay cancelled, pressed after it
   they still arm. **Delete** and **Backspace** check whether Select is active
-  when the key is pressed, even if a later Escape cancels another tool.
+  when the key is pressed, even if a later Escape cancels another tool. Rotation
+  also uses the tool active at each press.
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
@@ -157,7 +158,7 @@ so canvas keys do not fire while a field is focused.
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |
 | P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), `library_tool_keys_resolve_against_same_batch_escape` (Escape ordering), ribbon clicks exercise `start_tool` |
 | M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path), `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss), `library_tool_keys_resolve_against_same_batch_escape` (Escape ordering) |
-| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
+| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event), `library_rotation_uses_the_tool_active_at_the_press` (Escape and multiple rotations in one batch) |
 | E | `canvas` → `details_requested` (single selection) | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss) |
 | Delete | `canvas` in Select → `delete` → `Action::Delete` | `unfocused_batches_ignore_library_canvas_keyboard_commands` (focus loss), `library_delete_keys_act_only_in_select_at_the_press` (event ordering) |
 | Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |

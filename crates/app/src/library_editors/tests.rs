@@ -1943,3 +1943,51 @@ fn library_delete_keys_act_only_in_select_at_the_press() {
         }
     }
 }
+
+/// Rotation follows the tool at each press, including a preview armed in an earlier batch.
+#[test]
+fn library_rotation_uses_the_tool_active_at_the_press() {
+    use egui::Key::{Escape, M, P, R};
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (start, batch, edits) in [
+            (None, vec![P, R, Escape], 0),
+            (Some(P), vec![R, Escape], 0),
+            (Some(M), vec![R, Escape], 0),
+            (Some(P), vec![Escape, R], 1),
+            (Some(M), vec![Escape, R, R], 2),
+        ] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let object = *doc.session.snapshot().objects.keys().next().unwrap();
+            doc.select(Some(object)).unwrap();
+            let before = doc.session.snapshot();
+            let revision = doc.session.revision();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            if let Some(key) = start {
+                h.key_press(key);
+                h.run();
+                assert!(!matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+            }
+            for key in &batch {
+                h.input_mut().events.extend([true, false].map(|pressed| egui::Event::Key {
+                    key: *key,
+                    physical_key: Some(*key),
+                    pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }));
+            }
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(matches!(doc.tool, canvas::Tool::Select), "{kind:?} {start:?} {batch:?}");
+            assert_eq!(doc.session.revision(), revision + edits, "{kind:?} {start:?} {batch:?}");
+            assert_eq!(doc.session.snapshot().as_ref() == before.as_ref(), edits == 0, "{kind:?} {start:?} {batch:?}");
+        }
+    }
+}

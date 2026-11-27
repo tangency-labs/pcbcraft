@@ -801,9 +801,7 @@ impl Document {
         let selecting_before_escape = selecting_at_start && matches!(self.tool, Tool::Select);
         // Cancel before pointer release can commit a drag. Keyboard actions below still
         // see the tool that was active before Escape until they reach that key event.
-        if escape_pressed {
-            self.tool = Tool::Select;
-        }
+        let tool_before_escape = escape_pressed.then(|| std::mem::take(&mut self.tool));
         let mut preview = Vec::new();
         let mut drag_invalid: Option<Point> = None;
         let mut path_preview = None;
@@ -1098,6 +1096,9 @@ impl Document {
                     })
                     .collect::<Vec<_>>()
             });
+            if let Some(tool) = tool_before_escape {
+                self.tool = tool;
+            }
             let mut selecting = matches!(self.tool, Tool::Select) && (!escape_pressed || selecting_before_escape);
             let mut backspace_allowed = selecting_at_start;
             for (key, modifiers) in keys {
@@ -1117,6 +1118,7 @@ impl Document {
                         }
                     }
                     egui::Key::M => self.begin_move(),
+                    egui::Key::R => self.rotate_by(if modifiers.shift { 1 } else { -1 }),
                     egui::Key::V if modifiers.command => self.paste(ui.ctx()),
                     egui::Key::D if modifiers.command => self.duplicate(),
                     egui::Key::Delete if selecting => self.delete(),
@@ -1124,17 +1126,6 @@ impl Document {
                     _ => {}
                 }
                 selecting &= matches!(self.tool, Tool::Select);
-            }
-            if let Some(shifted) = ui.input(|i| {
-                if !i.focused {
-                    return None;
-                }
-                i.events.iter().find_map(|event| match event {
-                    egui::Event::Key { key: egui::Key::R, pressed: true, modifiers, .. } => Some(modifiers.shift),
-                    _ => None,
-                })
-            }) {
-                self.rotate_by(if shifted { 1 } else { -1 });
             }
             if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                 self.details_requested = true;
