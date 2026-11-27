@@ -1,6 +1,7 @@
 //! Portable, bounded design fragments. Clipboard adapters carry text; only shared commands edit projects.
 use crate::{
     CommandError, Project, Session,
+    board::assignment::{Assignment, SchematicPackages},
     schematic::{Point, Terminal, WireEndpoint},
     selection::Selection,
 };
@@ -209,20 +210,21 @@ impl Fragment {
             }
         }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
-        let mut assignments = project
-            .board
-            .assignments
+        let assignments: BTreeMap<_, _> = components
             .iter()
-            .chain(project.schematic_packages.assignments.iter())
-            .filter(|(id, _)| components.contains(id))
-            .map(|(id, assignment)| (*id, assignment.clone()))
-            .collect::<BTreeMap<_, _>>();
-        // A package chosen by placing its footprint travels like an assigned one, as inspection reports it.
-        for assignment in project.placed_package_assignments().filter(|a| components.contains(&a.component)) {
-            assignments.entry(assignment.component).or_insert(assignment);
-        }
+            .filter_map(|&component| {
+                let assignment = project
+                    .schematic_packages
+                    .assignments
+                    .get(&component)
+                    .or_else(|| project.board.assignments.get(&component))
+                    .cloned()
+                    .or_else(|| project.board.footprint_for_part_instance(component).and_then(Assignment::from_placement));
+                assignment.map(|assignment| (component, assignment))
+            })
+            .collect();
         let definitions = assignments.values().filter_map(|a| project.assignment_definition(&a.key()).map(|d| (a.key(), d.clone()))).collect();
-        fragment.schematic_packages = Arc::new(crate::board::assignment::SchematicPackages { assignments, definitions });
+        fragment.schematic_packages = Arc::new(SchematicPackages { assignments, definitions });
         fragment.named_graph = Arc::default();
         fragment.numeric_id_high_water = Some(cursor.saturating_sub(1));
         let anchor = fragment
