@@ -30,7 +30,8 @@ fn ctrl_shift_z_redoes_project_edits() {
 }
 
 /// The symbol and footprint editors take Ctrl+Shift+Z as Redo for their own document history.
-/// Both Redo chords stay silent once the redo history is empty, as in the project editors.
+/// Both Redo chords stay silent once the redo history is empty and use any redo history made
+/// available by a queued Undo in the same frame.
 #[test]
 fn ctrl_shift_z_redoes_library_edits() {
     for kind in [Kind::Symbol, Kind::Footprint] {
@@ -61,6 +62,20 @@ fn ctrl_shift_z_redoes_library_edits() {
             h.run();
             assert_eq!(objects(&h), edited, "{kind:?}: {key:?} with nothing to redo changes nothing");
             assert_eq!(h.state().library_editors.inspect()["notice"], notice, "{kind:?}: {key:?} with nothing to redo stays silent");
+
+            // Unlike key_press_modifiers, raw input delivers both key presses in the same frame.
+            let state = h.state().library_editors.inspect();
+            assert_eq!(state["documents"][0]["state"]["can_redo"], false);
+            let revision = state["documents"][0]["state"]["revision"].as_u64().unwrap();
+            for (keys, key) in [(Modifiers::COMMAND, Key::Z), (modifiers, key)] {
+                for pressed in [true, false] {
+                    h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: keys });
+                }
+            }
+            h.run();
+            assert_eq!(objects(&h), edited, "{kind:?}: same-frame Undo and Redo should restore the edit");
+            let state = h.state().library_editors.inspect();
+            assert_eq!(state["documents"][0]["state"]["revision"], revision + 2, "{kind:?}: both history actions should execute");
         }
     }
 }

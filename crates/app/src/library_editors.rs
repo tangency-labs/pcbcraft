@@ -841,9 +841,8 @@ impl PcbApp {
             if ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Z)) {
                 intents.borrow_mut().push(Intent::Undo);
             }
-            // With nothing to redo both chords stay silent, as in the project editors.
-            let redoable = active.and_then(|id| self.library_editors.documents.get(&id)).is_some_and(|doc| doc.session.can_redo());
-            if (redo || ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y))) && redoable {
+            let redo_with_y = ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Y));
+            if redo || redo_with_y {
                 intents.borrow_mut().push(Intent::Redo);
             }
             if !IN_BROWSER && ctx.input_mut(|input| input.consume_shortcut(&crate::COMMAND_Q)) {
@@ -862,6 +861,8 @@ impl PcbApp {
                 Intent::Copy => active.ok_or("No active library item.".into()).and_then(|id| self.copy_library_document(&ctx, id)),
                 Intent::Remap => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_remap(id)),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
+                // Undo earlier in this frame may have made Redo available. An empty history stays silent.
+                Intent::Redo if !active.and_then(|id| self.library_editors.documents.get(&id)).is_some_and(|doc| doc.session.can_redo()) => Ok(()),
                 history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
                     let action = if matches!(history, Intent::Undo) { Action::Undo } else { Action::Redo };
