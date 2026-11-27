@@ -173,16 +173,19 @@ optional in version control and should not advance electrical history or mark
 the authored design dirty merely because they were generated.
 
 The engine's Gerber X3 assembly-layer writer reads one addressed board snapshot.
-It produces a file per populated side with one main flash per placed footprint,
-in the generic placement frame (Y up, viewed from the top on both sides). A main
-flash uses the transformed centroid offset when the board's adopted assembly profiles
+It produces a file per side with at least one included placement, in the
+generic placement frame (Y up, viewed from the top on both sides). A main flash
+uses the transformed centroid offset when the board's adopted assembly profiles
 supply one and agree. If absent or conflicting, it uses the footprint's placed
-reference point. The writer does not estimate a centroid from the pads.
-An ambiguous reference anywhere on the board prevents export, including when
-an accepted footprint remains pending removal. Orderable metadata appears
-only when the pinned selection still meets the part requirements. The writer
-omits angles without an IPC zero and does not infer a mounting process from
-holes. It does not declare registration with separately exported layers.
+reference point, the same point and frame as the generic
+[placement row](../libraries/footprint-schema.md#placement-output-conventions) without a
+profile. The writer does not estimate a centroid from the pads.
+An ambiguous reference anywhere on the board prevents export, including when an
+accepted footprint remains pending removal or when a placement is omitted from
+the output. Orderable metadata appears only when the pinned selection still
+meets the part requirements. The writer omits angles without an IPC zero and
+does not infer a mounting process from holes. It does not declare registration
+with separately exported layers.
 
 Pinned footprints contribute one pin flash per numbered land at its placed
 center. `.P` carries the part reference and the physical pad identifier, not
@@ -196,9 +199,13 @@ placements without pinned footprints have only the main
 flash. See the [Ucamco Gerber Layer Format Specification](https://www.ucamco.com/en/gerber/downloads/),
 revision 2026.05, §§4.2.2, 4.7.2, 5.6.10, 5.6.14–15 and 6.9.
 
-This writer is not yet called by the fabrication archive or placement export;
-it does not apply variants or write manifest entries. Bare-board fabrication
-is unchanged.
+The writer omits the main flash, pins and outlines for any placed part whose
+current instance is marked **Do not populate**. A historical placement with no
+current instance still uses its accepted reference; the accepted baseline does
+not record population intent. The writer is not included in the fabrication
+archive and does not apply named variants or write manifest entries. It does not
+apply **Exclude from pick-and-place files**; there is no pick-and-place export yet.
+Bare-board fabrication is unchanged.
 
 Use a new export destination or a deliberate replace operation, with failures
 leaving the previous complete output intact. Deleting a board must separately
@@ -363,8 +370,10 @@ than treating it as a harmless BOM substitution.
 
 Variant preview is user-local view state. Export recipes capture an explicit
 board and optional variant ID, and output records retain that choice. DNP parts
-remain in the circuit and physical design but are marked unpopulated in assembly
-outputs. A variant does not assert that the unpopulated circuit is electrically
+remain in the circuit and physical design. Variant-aware outputs must represent
+those parts as unpopulated; the current Gerber X3 writer instead omits placements
+based on the instance flag and does not apply variants. A variant does not assert
+that the unpopulated circuit is electrically
 functional; assembly-specific validation must report that separately. Shared
 structural edits validate affected variants and require explicit resolution for
 removed components or incompatible alternatives.

@@ -196,6 +196,11 @@ impl Footprint {
             && self.reference_offset.is_none_or(|offset| offset != DEFAULT_REFERENCE_OFFSET && valid_reference_offset(offset))
             && self.reference_text.as_ref().is_none_or(|text| self.library.is_some() && text.validate().is_ok())
     }
+    /// The authored placement reference point in board coordinates, before output offsets.
+    fn reference_point(&self) -> Point {
+        Point { x_nm: self.x_nm, y_nm: self.y_nm }
+    }
+
     /// Resolve the pinned library identity; legacy marker geometry is explicit compatibility behavior.
     pub(crate) fn key(&self) -> Option<definition::Key> {
         Some((self.library.clone()?, self.definition.clone(), self.definition_revision))

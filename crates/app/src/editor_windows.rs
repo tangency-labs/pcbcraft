@@ -300,6 +300,7 @@ impl PcbApp {
     /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
+            ViewAction::Browse(crate::project_browser::Action::CloseProject) => self.message = self.request_close_document(ctx).err(),
             ViewAction::Browse(action) => {
                 self.apply_browser_action(id, action);
                 if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_) | Dialog::BoardUpdate(_)) {
@@ -501,17 +502,11 @@ impl PcbApp {
         } else {
             self.views.bind(previous);
         }
-        if self.files.busy()
-            && matches!(
-                self.waiting,
-                Some(
-                    crate::unsaved::Waiting::ToDecide(crate::unsaved::Then::Close)
-                        | crate::unsaved::Waiting::ForSave(crate::unsaved::Then::Close)
-                        | crate::unsaved::Waiting::Discarding(crate::unsaved::Then::Close)
-                )
-            )
-            && matches!(self.dialog, Dialog::None)
-        {
+        use crate::unsaved::{Then, Waiting};
+        let quitting =
+            matches!(self.waiting, Some(Waiting::ToDecide(Then::Close) | Waiting::ForSave(Then::Close) | Waiting::Discarding(Then::Close)));
+        let closing_project = matches!(self.waiting, Some(Waiting::ForSave(Then::CloseProject) | Waiting::Discarding(Then::CloseProject)));
+        if self.files.busy() && (quitting || closing_project) && matches!(self.dialog, Dialog::None) {
             let (mut cancel, mut stop, mut close) = (false, false, false);
             let open = self.files.abandonable();
             let warning = if !open {
@@ -526,12 +521,12 @@ impl PcbApp {
             // A save or open stalled on an unresponsive disk would otherwise hold the close forever.
             let dismissed = pcbcraft_chrome::shell::dialog(ctx, "close_wait", "Close Project", |ui| {
                 ui.label("Waiting for the current file operation before closing.");
-                if let Some(warning) = warning {
+                if quitting && let Some(warning) = warning {
                     ui.label(warning);
                 }
                 // Stopping an open returns to the editor and its Save question, so it obeys the stalled-worker limit.
-                stop = open && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
-                close = pcbcraft_chrome::controls::button(ui, "Close without waiting").clicked();
+                stop = quitting && open && pcbcraft_chrome::controls::button(ui, "Stop waiting").clicked();
+                close = quitting && pcbcraft_chrome::controls::button(ui, "Close without waiting").clicked();
                 cancel = pcbcraft_chrome::controls::button(ui, "Cancel close").clicked();
             });
             if close {
@@ -539,7 +534,7 @@ impl PcbApp {
             } else if stop && let Err(error) = self.stop_waiting_for_file(None) {
                 self.message = Some(error);
             } else if cancel || dismissed {
-                // Keep the worker and its immutable snapshot; only withdraw the quit request.
+                // Keep the worker and its immutable snapshot while withdrawing the close request.
                 self.waiting = None;
                 self.file_notice = None;
             }
@@ -586,7 +581,9 @@ impl PcbApp {
                 }
                 panels.placed = true;
             }
+            self.automation_stage(ctx, host);
             ctx.show_viewport_immediate(viewport(host), builder, |ui, class| {
+                self.automation_child_input(ui.ctx(), host);
                 if class != egui::ViewportClass::EmbeddedWindow && ui.ctx().input(|input| input.viewport().close_requested()) {
                     self.close_editor_host(host, ui.ctx());
                     if !self.views.hosts.contains_key(&host) {
@@ -599,6 +596,7 @@ impl PcbApp {
                 ui.push_id(viewport(host), |ui| self.editor_host_frame(ui, integrated_titlebar && class != egui::ViewportClass::EmbeddedWindow));
                 self.bind_editor_host(self.views.main);
             });
+            self.automation_unstage(ctx);
         }
         self.windows.panels.retain(|host, _| self.views.hosts.contains_key(host));
     }

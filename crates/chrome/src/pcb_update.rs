@@ -19,7 +19,9 @@ pub struct Message {
     pub kind: Kind,
     /// Human-readable action, diagnostic or connection description.
     pub text: String,
-    /// Optional corrective action, for example assigning a missing package.
+    /// Whether activating the message navigates to the affected parts.
+    pub probe: bool,
+    /// Optional corrective action, separate from navigation.
     pub action: Option<String>,
 }
 
@@ -54,7 +56,9 @@ impl Filters {
 /// UI results address report rows; domain IDs and mutation remain with the owning editor.
 #[derive(Default)]
 pub struct ReportAction {
-    /// Index of the corrective action activated in the unfiltered message list.
+    /// Index of the message activated for navigation in the unfiltered list.
+    pub probe: Option<usize>,
+    /// Index of the corrective action activated in the unfiltered list.
     pub row: Option<usize>,
     /// Request a clipboard copy of the full report, independently of filters.
     pub copy: bool,
@@ -118,8 +122,8 @@ pub fn options(ui: &mut Ui, place: &mut bool) {
 }
 
 /// Draw one scrollable log, unfiltered warning/error totals and independently selectable message
-/// categories. Hiding an error never hides its count or makes a blocked update applicable.
-pub fn report(ui: &mut Ui, messages: &[&Message], filters: &mut Filters, trailing_actions: bool) -> ReportAction {
+/// categories. Stale results remain readable, filterable and copyable without enabling row actions.
+pub fn report(ui: &mut Ui, messages: &[&Message], filters: &mut Filters, trailing_actions: bool, current: bool) -> ReportAction {
     let t = Tokens::get();
     let mut action = ReportAction::default();
     let errors = messages.iter().filter(|m| m.kind == Kind::Error).count();
@@ -138,9 +142,16 @@ pub fn report(ui: &mut Ui, messages: &[&Message], filters: &mut Filters, trailin
                         Kind::Warning => ui.visuals().warn_fg_color,
                         _ => t.text,
                     };
-                    ui.add(egui::Label::new(RichText::new(&message.text).color(color)).wrap());
+                    let text = RichText::new(&message.text).color(color);
+                    if message.probe {
+                        if crate::controls::enabled_button(ui, current, text).on_hover_text("Reveal affected parts").clicked() {
+                            action.probe = Some(index);
+                        }
+                    } else {
+                        ui.add(egui::Label::new(text).wrap());
+                    }
                     if let Some(label) = &message.action
-                        && kit::button(ui, label, kit::Button::Normal).clicked()
+                        && ui.add_enabled_ui(current, |ui| kit::button(ui, label, kit::Button::Normal)).inner.clicked()
                     {
                         action.row = Some(index);
                     }

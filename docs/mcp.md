@@ -111,6 +111,11 @@ the screen's `horizontal` (left-to-right) or `vertical` (top-to-bottom) axis,
 composes with its quarter-turn rotation, keeps attached wires on their terminals,
 and is one undoable revision-checked edit. Applying the same axis twice restores
 the original pose; inspection publishes `mirrored` on each affected symbol.
+`schematic.mirror_items` mirrors an `items` selection (the shape `schematic.move_items`
+takes) across `axis` as one revision-checked undo step. The pivot is the center of
+the selected symbol origins, net-label anchors and wire vertices, snapped so grid
+points stay on the grid; mirroring twice on the same axis restores the group. An
+empty selection, an unknown ID or an item on another sheet is refused unchanged.
 
 `schematic.set_symbol_fields` applies reference, value and optional `rotation`,
 `x_nm` and `y_nm` together as one revision-checked undo step, matching the schematic
@@ -217,7 +222,8 @@ state, and a completed save can also adopt project metadata without advancing th
 revision: the first Save As of an Untitled project takes the destination's name,
 and the session and its undo history adopt that name, the storage layout and sheet
 occurrence IDs. Inspect the project again after every successful save, even when
-the revision is unchanged. `file.open` replaces the project. The separate
+the revision is unchanged. `file.open` replaces the project and `file.close`
+unloads it, ending its undo history. The separate
 `ui.` input commands described below can invoke authored edits. Call `inspect_editor` for the window,
 view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
@@ -232,7 +238,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
-| `pcb.align_footprints` | Align by bounds (`left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute along X or Y (`distribute_x`, `distribute_y`). Omit `pitch_nm` for equal gaps by bounds; supply it for exact origin spacing. See [set-pitch distribution](pcb/set-pitch-distribution.md#set-pitch-distribution). Track ends follow moving pads in the same undo step |
+| `pcb.align_footprints` | Align by bounds (`left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute along X or Y (`distribute_x`, `distribute_y`). Omit `pitch_nm` for equal gaps by bounds with the physical outermost footprints and span fixed; supply it for exact origin spacing. See [set-pitch distribution](pcb/set-pitch-distribution.md#set-pitch-distribution) and [fixed reference alignment](pcb/align-to-reference-footprint.md). Track ends follow moving pads in the same undo step |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
@@ -244,6 +250,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation, recovery snapshot and save-to-project intervals) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
+| `file.close` | **Close Project** returns to Home. If the project is dirty, the editor asks the user whether to save, discard, or cancel. Use `inspect_editor` to check the result. |
 | `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` is at least that ID. Read `file.last.status` only when the IDs are equal; a greater `file.last.id` means a later job replaced the result, so report it as unavailable rather than taking that job's outcome as yours. A failed or abandoned job keeps the current design, unsaved state and history. An unavailable result says nothing about the outcome: the earlier job may have saved or opened, and that is not undone, so inspect the project and `file.location` before going on |
 | `file.abandon` | **Stop waiting** in the Close Project wait: releases the editor from a running open, such as one stalled on an unresponsive disk. Pass the observed `file.operation.id` as `operation`; a different running job is left alone. Other commands wait while a file job runs, but this one does not. The late result is discarded, the current project is unchanged and `file.last` reports `abandoned`. Saves are refused because they may still be writing; the editor's Close Project wait always offers **Close without waiting**, which warns that unsaved edits are lost and that a first save may leave nothing on disk. At most four abandoned opens may still be running before abandoning is refused |
 

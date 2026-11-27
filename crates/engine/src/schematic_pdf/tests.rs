@@ -690,3 +690,95 @@ fn saved_net_label_text_keeps_180_rotation_and_start_alignment() {
         "expected Start-aligned anchor ({anchor_x}, {expected_ty}), got ({tx}, {ty})"
     );
 }
+
+/// Build a net that spans three pages, alongside a disconnected local label with the same
+/// spelling and a global label with no other destination. A differently named port joins the
+/// spanning net by contact, not by its label text.
+fn navigation_fixture() -> (Session, SheetTarget) {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let main = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::hierarchy::CREATE_CHILD, json!({"sheet":main.id(),"name":"Child","x_nm":60*GRID_NM,"y_nm":30*GRID_NM}));
+    apply(&mut session, crate::sheets::CREATE_SHEET, json!({"name":"Local Only"}));
+    apply(&mut session, crate::sheets::CREATE_SHEET, json!({"name":"Other Global"}));
+    let sheets: Vec<_> = session.project().unwrap().sheets().map(|info| info.target).collect();
+    for (index, sheet) in sheets.iter().enumerate() {
+        let style = if index == 2 { "local" } else { "global" };
+        apply(&mut session, crate::net_labels::ADD, json!({"sheet":sheet.id(),"name":"BUS","style":style,"x_nm":20*GRID_NM,"y_nm":20*GRID_NM}));
+    }
+    apply(
+        &mut session,
+        crate::hierarchy::ADD_LABEL,
+        json!({"sheet":sheets[1].id(),"name":"PORT_DATA","direction":"input","x_nm":20*GRID_NM,"y_nm":20*GRID_NM}),
+    );
+    apply(&mut session, crate::net_labels::ADD, json!({"sheet":main.id(),"name":"NO_PEER","style":"global","x_nm":30*GRID_NM,"y_nm":30*GRID_NM}));
+    (session, main)
+}
+
+/// Follow a page's annotation references and parse only document-local links with positive area.
+fn annotations(objects: &[&str], page: usize) -> Vec<(usize, [f64; 4])> {
+    let Some((_, tail)) = objects[page - 1].split_once("/Annots [") else { return Vec::new() };
+    let words: Vec<_> = tail.split_once(']').unwrap().0.split_whitespace().collect();
+    let (refs, remainder) = words.as_chunks::<3>();
+    assert!(remainder.is_empty());
+    refs.iter()
+        .map(|r| {
+            assert_eq!(r[1..], ["0", "R"]);
+            let id: usize = r[0].parse().unwrap();
+            let annotation = objects[id - 1];
+            assert!(annotation.starts_with("<< /Type /Annot /Subtype /Link "));
+            let dest = reference(annotation, "/Dest [").unwrap();
+            assert!(annotation.contains(&format!("/Dest [{dest} 0 R /Fit]")));
+            let rect = annotation.split_once("/Rect [").unwrap().1.split_once(']').unwrap().0;
+            let bounds: Vec<f64> = rect.split_whitespace().map(|value| value.parse().unwrap()).collect();
+            let [l, b, r, t] = <[f64; 4]>::try_from(bounds).unwrap();
+            assert!(l >= 0. && b >= 0. && r > l && t > b);
+            (dest, [l, b, r, t])
+        })
+        .collect()
+}
+
+/// Check the real page destinations, clipping space, wrap and absence of false matches.
+#[test]
+fn connects_sheet_symbols_and_cycles_net_pages_without_name_matching() {
+    let (session, root) = navigation_fixture();
+    let project = session.project().unwrap().for_sheet(root).unwrap();
+    let bytes = export_project(&project).unwrap();
+    assert_eq!(bytes, export_project(&project).unwrap());
+    let objects = objects(&bytes);
+    let pages = kids(&objects);
+    assert_eq!(pages.len(), 4);
+    let destinations = |page| annotations(&objects, page).into_iter().map(|(dest, _)| dest).collect::<Vec<_>>();
+    assert_eq!(destinations(pages[0]), [pages[1], pages[1]]); // BUS and sheet symbol; NO_PEER has no link.
+    assert_eq!(destinations(pages[1]), [pages[3], pages[3]]); // BUS and PORT_DATA skip the equal-looking local label.
+    assert!(destinations(pages[2]).is_empty());
+    assert_eq!(destinations(pages[3]), [pages[0]]); // Wrap.
+    let main = project.page().unwrap();
+    let [top_left, bottom_right] = main.corners();
+    let block = &project.sheet_symbols()[0];
+    let size = project.sheet_symbol_size(block);
+    let [l, b, r, t] = annotations(&objects, pages[0])[1].1;
+    let mm = |v: f64| v * 25.4 / 72.;
+    let coordinate_nm = |n: i64| n as f64 / 1_000_000.;
+    assert!((mm(l) - coordinate_nm(block.at.x_nm - top_left.x_nm)).abs() < 0.001);
+    assert!((mm(r) - mm(l) - coordinate_nm(size.x_nm)).abs() < 0.001);
+    assert!((mm(t) - coordinate_nm(bottom_right.y_nm - block.at.y_nm)).abs() < 0.001);
+    assert!((mm(t) - mm(b) - coordinate_nm(size.y_nm)).abs() < 0.001);
+    let single = export(&project, root).unwrap();
+    assert!(annotations(&self::objects(&single), 3).is_empty());
+}
+
+/// A partly visible annotation is clipped to the media box; a wholly invisible one is omitted.
+#[test]
+fn link_rectangles_are_clipped_to_paper() {
+    let mut page = pdf::Page::new([80., 60.]);
+    page.link([30., 90.], [-10., 20.], 1);
+    page.link([-20., 5.], [-10., 20.], 1);
+    let mut document = pdf::Document::new();
+    document.add_page(page);
+    document.add_page(pdf::Page::new([80., 60.]));
+    let bytes = document.finish(&[]).unwrap();
+    let objects = objects(&bytes);
+    let pages = kids(&objects);
+    assert_eq!(annotations(&objects, pages[0]), [(pages[1], [0., 20., 30., 60.])]);
+}

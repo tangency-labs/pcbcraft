@@ -1,6 +1,6 @@
 //! Gerber X3 assembly objects, separate from the bare-board fabrication files.
 
-use super::{Aperture, ApertureFunction, Fabrication, Gerber, Output, file_part, xy};
+use super::{Aperture, ApertureFunction, DrillChart, Fabrication, Gerber, Output, file_part, xy};
 use crate::{
     board::{
         Footprint,
@@ -23,11 +23,13 @@ const PIN_FLASH_NM: i64 = 100_000;
 const KEY_PIN_FLASH_NM: i64 = 360_000;
 
 impl BoardView<'_> {
-    /// Render Gerber X3 assembly layers for the placed parts in this snapshot, top first.
-    /// Requires a resolved origin, a copper stack, and unique references across both sides.
-    /// Rotation is omitted until the library-to-IPC zero is known; empty sides have no file.
-    /// Pinned footprint definitions contribute numbered lands and closed assembly outlines.
-    /// This is independent of bare-board fabrication and does not apply assembly variants.
+    /// Render Gerber X3 assembly layers from this snapshot, top first, omitting placements
+    /// whose current part instance is marked do not populate. Historical placements with
+    /// no current part retain their accepted reference; the baseline has no population flag.
+    /// Requires a resolved origin, a copper stack, and unique references across both sides,
+    /// including omitted placements. Empty sides have no file. Rotation is omitted until the
+    /// library-to-IPC zero is known. Pinned footprints supply numbered lands and closed outlines.
+    /// This does not select a named assembly variant or change bare-board fabrication.
     pub fn gerber_part_layers(self) -> Result<Fabrication, String> {
         let setup = self.setup().ok_or("Initialize the board setup before generating Gerber assembly layers.")?;
         let copper_count = setup.copper_stack().count();
@@ -49,6 +51,9 @@ impl BoardView<'_> {
             };
             if let Some(first) = references.insert(reference, placement.id) {
                 return Err(format!("Duplicate Gerber reference {reference:?} on placements footprint-{first} and footprint-{}.", placement.id));
+            }
+            if part.is_some_and(|part| part.metadata.attributes.do_not_populate) {
+                continue;
             }
             let definition = project.board.definition_for(placement);
             let (package, manufacturer) = package_metadata(placement, part.and_then(|part| part.part.as_ref()));
@@ -92,13 +97,14 @@ impl BoardView<'_> {
                 contents: writer.finish_in_frame(&format!("Component,L{layer},{side}"), "Positive", None),
             })
             .collect();
-        Ok(Fabrication { origin, files })
+        // Assembly layers carry no drill files, so they have no drill tools.
+        Ok(Fabrication { origin, files, drill_chart: DrillChart::default() })
     }
 
     /// The Gerber export does not select a vendor profile. Use an explicit centroid from
     /// the board's adopted revisions only when their supplied centroids agree.
     fn assembly_centroid(self, placement: &Footprint) -> Point {
-        let origin = Point { x_nm: placement.x_nm, y_nm: placement.y_nm };
+        let origin = placement.reference_point();
         let mut centroids = self
             .assembly_profiles()
             .iter()

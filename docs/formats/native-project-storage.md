@@ -645,7 +645,9 @@ are booleans `do_not_populate`, `exclude_from_bom`, `exclude_from_board`,
 A component excluded from the board cannot receive a new placed footprint. An
 existing placement may remain under an accepted baseline pending reviewed removal;
 legacy boards without a baseline refuse that exclusion. Package
-assignment can remain pinned for later inclusion. Other flags retain authored
+assignment can remain pinned for later inclusion. The Gerber X3 assembly-layer
+writer omits placements whose current part instance is marked `do_not_populate`;
+it does not change bare-board fabrication. The remaining flags retain authored
 intent for their respective future output/simulation consumers.
 
 ### Board instance records
@@ -1645,6 +1647,9 @@ In the browser, Download creates a new upgraded `.pc` file; it leaves the upload
 archive unchanged. Reopen the downloaded file to use the saved copy.
 Standalone JSON/container-v1 projects remain unsupported. The optional explicit
 converter below creates a separate copy of the immediately previous split layout.
+
+The oldest readable split project entry-point format is `pcbcraft-project/5`,
+in project folders and `.pc` packages. `pcbcraft-cli --help` reports this limit.
 
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions

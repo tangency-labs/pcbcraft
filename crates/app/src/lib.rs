@@ -527,8 +527,13 @@ impl PcbApp {
 
     /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
     pub fn with_integrated_titlebar(mut self, enabled: bool) -> Self {
-        self.integrated_titlebar = enabled;
+        self.set_integrated_titlebar(enabled);
         self
+    }
+
+    /// Configure window controls in place, avoiding a whole-app move during desktop startup.
+    pub fn set_integrated_titlebar(&mut self, enabled: bool) {
+        self.integrated_titlebar = enabled;
     }
 
     /// Open `path` through the ordinary project-file worker when this window first draws,
@@ -539,8 +544,15 @@ impl PcbApp {
     /// way. Desktop only: the browser has no command line.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
-        self.startup_open = Some(path);
+        self.set_startup_project(path);
         self
+    }
+
+    /// Queue a project for the first frame without moving the application state.
+    /// The normal file worker opens it with the same error handling as `with_startup_project`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_startup_project(&mut self, path: std::path::PathBuf) {
+        self.startup_open = Some(path);
     }
 
     pub fn session(&self) -> &Session {
@@ -792,6 +804,9 @@ impl PcbApp {
         }
 
         menu::separator(ui);
+        if MenuItem::new("Close Project").enabled(self.can_close_document()).show(ui) {
+            self.message = self.request_close_document(ui.ctx()).err();
+        }
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
@@ -951,6 +966,22 @@ impl PcbApp {
             } else {
                 self.select(Selection::default());
             }
+        }
+    }
+
+    /// Mirror a multi-item selection as one group edit about its center; a lone selected symbol
+    /// keeps the single-symbol command. Both are revision-checked and failures show in status.
+    fn mirror_selected(&mut self, axis: pcbcraft_engine::schematic::MirrorAxis) {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
+        if self.views.active.schematic.selection.len() > 1 {
+            self.run(
+                pcbcraft_engine::MIRROR_ITEMS,
+                &json!({"items":self.views.active.schematic.selection,"axis":axis.as_str(),"expected_revision":self.session.revision()}),
+            );
+        } else {
+            self.edit_selected(SymbolAction::Mirror(axis));
         }
     }
 
@@ -1395,7 +1426,7 @@ impl PcbApp {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
+            Action::CloseProject | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Inspection { source, .. } => match source {
                 pcbcraft_engine::board::correspondence::Source::Terminal(target) => {
@@ -1424,7 +1455,12 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::SetPage { .. } | Action::SetTemplate { .. } | Action::UpdatePcb => {}
+            Action::OpenDocument(_)
+            | Action::CloseProject
+            | Action::ManageSheet { .. }
+            | Action::SetPage { .. }
+            | Action::SetTemplate { .. }
+            | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1728,6 +1764,16 @@ impl PcbApp {
                             self.view_click(source, Click::MoveItems { items, origin, pickup: true, disconnect: true });
                         }
                     }
+                    // X/Y on a group mirror it about its center; a lone symbol keeps the hover path.
+                    let mirroring = match mirroring {
+                        Some(axis)
+                            if input_enabled && self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 =>
+                        {
+                            self.mirror_selected(axis);
+                            None
+                        }
+                        other => other,
+                    };
                     if (moving || rotating || mirroring.is_some())
                         && input_enabled
                         && self.views.active.schematic.tool.is_none()
@@ -1772,7 +1818,7 @@ impl PcbApp {
                         if self.schematic_clipboard_canvas(ui, project, &label, input_enabled) {
                             return None;
                         }
-                        let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
+                        let highlight = self.views.schematic_paint_highlight(self.views.active.id(), &self.session);
                         let edited = self.views.active.schematic.text_edit.as_ref().map(|edit| edit.target.clone());
                         let click = schematic_canvas::show(
                             ui,

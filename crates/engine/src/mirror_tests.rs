@@ -335,3 +335,76 @@ fn edited_generated_leg_becomes_authored_across_reopen() {
     assert_eq!(after.wires(), &[edited], "the edited route is authored and must survive");
     assert!(!after.symbols()[1].is_mirrored());
 }
+
+/// A one-symbol group mirror of an offset power terminal retains its named contact exactly as
+/// Mirror Symbol does, generated leg included. Both start at the same revision, so new wire
+/// identities match too.
+#[test]
+fn group_mirror_of_one_offset_power_symbol_matches_mirror_symbol() {
+    let (mut single, symbol, _) = offset_power_fixture();
+    let (mut group, _, _) = offset_power_fixture();
+    apply(&mut single, MIRROR_SYMBOL, json!({"symbol":symbol,"axis":"horizontal"}));
+    apply(&mut group, crate::MIRROR_ITEMS, json!({"items":Selection::one_symbol(symbol),"axis":"horizontal"}));
+    let (single, group) = (single.project().unwrap(), group.project().unwrap());
+    assert_eq!(group.wires().len(), 1, "the moved named pin gains a connecting leg");
+    assert_eq!(group.symbols(), single.symbols());
+    assert_eq!(group.wires(), single.wires());
+    assert_eq!(group.generated_legs, single.generated_legs);
+}
+
+/// In one group, an earlier pose can move another pin onto a power terminal's old contact point.
+/// The power terminal must keep its original contact, not gain a leg to that pin, so the whole
+/// group mirrors with an unchanged netlist.
+#[test]
+fn group_mirror_captures_named_contacts_before_any_pose() {
+    let (mut session, _, _) = offset_power_fixture();
+    // A third part widens the group so the resistor's far pin lands on the power pin's old point.
+    apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":12*GRID_NM,"y_nm":0}));
+    let before = session.snapshot().unwrap();
+    let items = Selection { symbols: before.symbols().iter().map(|symbol| symbol.id()).collect(), ..Selection::default() };
+    apply(&mut session, crate::MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    let after = session.snapshot().unwrap();
+    assert_eq!(before.inspect_schematic()["netlist"], after.inspect_schematic()["netlist"]);
+}
+
+/// A selected bent route and its interior naming pin reflect together without splitting.
+#[test]
+fn group_mirror_reflects_bends_through_a_moving_power_contact() {
+    let (mut session, power, initial) = offset_power_fixture();
+    let first = initial.symbols()[0].id();
+    apply(&mut session, MOVE_SYMBOL, json!({"symbol":first,"x_nm":6 * GRID_NM,"y_nm":-8 * GRID_NM}));
+    assert!(session.project().unwrap().wires().is_empty());
+    apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":20 * GRID_NM,"y_nm":10 * GRID_NM}));
+    let first = session.project().unwrap().symbols()[0].id();
+    let last = session.project().unwrap().symbols()[2].id();
+    apply(&mut session, CONNECT_PINS, json!({"from":{"symbol":first,"terminal":"2"},"to":{"symbol":last,"terminal":"1"}}));
+    let grid = |x, y| Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM };
+    let mut authored = (*session.snapshot().unwrap()).clone();
+    Arc::make_mut(&mut authored.sheet_mut().wires)[0].bends = Some(vec![grid(10, -4), grid(-4, -4), grid(-4, 0), grid(4, 0), grid(4, 10)]);
+    authored.sheet_mut().connectivity = Arc::default();
+    authored.named_graph = Arc::default();
+    session.change(authored).unwrap();
+
+    let before = session.snapshot().unwrap();
+    let wire = before.wires()[0].id();
+    let route = before.wire_path(&before.wires()[0]);
+    let power_pin = before.symbols()[1].terminals()[0];
+    assert_eq!(before.connectivity().net_for(power_pin).unwrap().len(), 3);
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let refused =
+        session.apply(MIRROR_ITEMS, &json!({"items":{"symbols":[first,last],"wires":[wire]},"axis":"horizontal","expected_revision":revision}));
+    assert!(matches!(refused, Err(CommandError::InvalidParams(message)) if message.contains("power pin")));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    let items = json!({"symbols":[first,power,last],"wires":[wire]});
+    apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    let after = session.project().unwrap();
+    assert_eq!(after.wires().len(), 1);
+    assert_eq!(after.wires()[0].id(), wire);
+    assert_eq!(after.wire_path(&after.wires()[0]), route.iter().map(|p| Point { x_nm: 16 * GRID_NM - p.x_nm, y_nm: p.y_nm }).collect::<Vec<_>>(),);
+    assert_eq!(before.connectivity().nets, after.connectivity().nets);
+    apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
+    assert_eq!(session.project().unwrap().wire_path(&session.project().unwrap().wires()[0]), route);
+}

@@ -40,5 +40,5 @@ window coordinates for a click. `ui.resize` requests a reproducible native windo
 size before a recording, and `ui.window` reports the measured result.
 Pointer, key, text and scroll operations use normal UI handling and report
 completion or cancellation through a bounded ticket. Input supports the original
-native window and its split panes; detached windows currently support lookup
-only. This does not record video.
+native window, its split panes and detached editor windows. This does not record
+video.

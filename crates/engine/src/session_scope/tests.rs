@@ -215,8 +215,14 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
                 continue;
             }
         };
-        let expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
-        let actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        let mut expected = control.execute(id, &params).unwrap_or_else(|error| panic!("control {id}: {error}"));
+        let mut actual = reader.execute(id, &params).unwrap_or_else(|error| panic!("reader {id}: {error}"));
+        if id == annotation::PREVIEW {
+            // Each session issues its own Apply token; the rest of the report must agree.
+            for report in [&mut expected, &mut actual] {
+                assert!(report.as_object_mut().and_then(|report| report.remove("token")).is_some_and(|token| token.is_string()));
+            }
+        }
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
             // These readers create a disposable project to build a fragment with its own IDs.
             assert!(actual["clipboard"].as_str().is_some_and(|text| !text.is_empty()), "{id}");
