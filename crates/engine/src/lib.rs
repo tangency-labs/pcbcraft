@@ -119,6 +119,8 @@ enum ParamKind {
     ReferencePolicy,
     CreateBoard,
     PartMetadata,
+    /// Bulk component edit rows, one per `component-N`.
+    PartFieldEdits,
     OptionalNativeId,
     NativeReference,
     PartRequirements,
@@ -299,6 +301,7 @@ impl ParamKind {
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::PartMetadata => schematic::fields::metadata_schema(),
+            Self::PartFieldEdits => part_instances::fields::edits_schema(),
             Self::UnconnectedPads => {
                 json!({"type":"array","maxItems":board::definition::MAX_PADS,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
             }
@@ -598,6 +601,7 @@ impl ParamKind {
                 .filter(|m| m.validate().is_ok())
                 .map(|_| ())
                 .ok_or("must contain valid component fields and attributes"),
+            Self::PartFieldEdits => part_instances::fields::validate_edits(value),
             Self::ReferenceText => serde_json::from_value::<Option<board::reference::Text>>(value.clone())
                 .ok()
                 .filter(|text| text.as_ref().is_none_or(|text| text.validate().is_ok()))
@@ -2231,6 +2235,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[14],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
+    part_instances::fields::COMMAND,
     Command {
         id: board::zones::ADD_ZONE,
         title: "Add Zone",
@@ -3887,6 +3892,7 @@ impl Session {
             | COMPLETE_PACKAGES
             | part_instances::PLACE_PART
             | part_instances::SET_PART
+            | part_instances::SET_FIELDS
             | CONNECT_PINS
             | MOVE_SYMBOL
             | ROTATE_SYMBOL
@@ -4100,6 +4106,9 @@ impl Session {
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             return self.preview_symbol_fields(params);
         }
+        if id == part_instances::SET_FIELDS {
+            return self.set_part_fields(params);
+        }
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
             return self.preview_annotation(params);
@@ -4274,6 +4283,10 @@ impl Session {
         }
         if id == COMPLETE_PACKAGES {
             self.complete_packages(params)?;
+            return Ok(self.revision);
+        }
+        if id == part_instances::SET_FIELDS {
+            self.set_part_fields(params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -4481,6 +4494,7 @@ impl Session {
                 | COMPLETE_PACKAGES
                 | part_instances::PLACE_PART
                 | part_instances::SET_PART
+                | part_instances::SET_FIELDS
                 | CONNECT_PINS
                 | MOVE_SYMBOL
                 | ROTATE_SYMBOL

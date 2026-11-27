@@ -1,11 +1,13 @@
 //! Project-owned part selections reuse immutable library records and share one transaction authority.
 pub(crate) mod commands;
+pub(crate) mod fields;
 pub(crate) mod storage;
 use crate::library::{
     parts::{ManufacturerPart, Reference, Requirement, SupplyRange, Value},
     sources::ResolvedPart,
 };
 pub use commands::{PLACE_PART, SET_PART};
+pub use fields::SET_FIELDS;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, sync::Arc};

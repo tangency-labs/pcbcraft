@@ -173,6 +173,30 @@ fn package_completion_report_survives_inspect_false() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
+/// A bulk component edit returns its change list with inspection suppressed, as a dry run and
+/// when applied as one undo step.
+#[test]
+fn component_field_changes_survive_inspect_false() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let revision = session.revision();
+    let part = session.inspect()["project"]["components"][0].clone();
+    let changes = json!([{"component":part["id"],"reference":part["reference"],"field":"value","old":part["value"],"new":"10k"}]);
+    for (dry_run, after) in [(true, revision), (false, revision + 1)] {
+        let result = crate::backend::call_session(
+            &mut session,
+            "engine.execute",
+            &json!({
+                "command":pcbcraft_engine::part_instances::SET_FIELDS,"inspect":false,
+                "params":{"edits":[{"component":part["id"],"value":"10k"}],"dry_run":dry_run,"expected_revision":revision}
+            }),
+        )
+        .unwrap();
+        assert_eq!(result, json!({"revision":after,"changes":changes}));
+    }
+}
+
 /// Annotation previews stay identical with inspection omitted; their distinct session-local
 /// tokens authorize only the originating session and apply one edit on either dispatcher.
 #[cfg(not(target_arch = "wasm32"))]

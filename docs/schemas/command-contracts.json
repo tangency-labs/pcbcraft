@@ -2319,6 +2319,133 @@
         "type": "object"
       }
     },
+    "part.set_fields": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "edits": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "component": {
+                  "pattern": "^component-[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "fields": {
+                  "additionalProperties": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "maxLength": 64,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "value": {
+                            "maxLength": 2048,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "value"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "maxProperties": 64,
+                  "type": "object"
+                },
+                "footprint": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "definition": {
+                      "type": "string"
+                    },
+                    "definition_revision": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "library": {
+                      "type": "string"
+                    },
+                    "mapping": {
+                      "additionalProperties": {
+                        "oneOf": [
+                          {
+                            "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                            "type": "string"
+                          },
+                          {
+                            "items": {
+                              "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "minItems": 1,
+                            "type": "array",
+                            "uniqueItems": true
+                          }
+                        ]
+                      },
+                      "maxProperties": 1024,
+                      "minProperties": 1,
+                      "type": "object"
+                    },
+                    "unconnected_pads": {
+                      "items": {
+                        "pattern": "^[A-Za-z0-9+_-]{1,8}$",
+                        "type": "string"
+                      },
+                      "maxItems": 1024,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  },
+                  "required": [
+                    "library",
+                    "definition",
+                    "definition_revision",
+                    "mapping"
+                  ],
+                  "type": "object"
+                },
+                "reference": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "component"
+              ],
+              "type": "object"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "edits",
+          "expected_revision"
+        ],
+        "type": "object"
+      }
+    },
     "part.set_selection": {
       "params": {
         "additionalProperties": false,
