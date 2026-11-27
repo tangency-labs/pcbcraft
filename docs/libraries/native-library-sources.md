@@ -140,8 +140,8 @@ Opening a project never searches or refreshes a library to replace its geometry.
 It compares existing part instances with native revisions already loaded in the
 session, without refreshing sources or accessing the network. It works through
 the shared engine command, including live and headless MCP with `inspect: false`.
-In the desktop app, Parts Library's **Review library updates** (also
-**Libraries → Updates** on the ribbon) lists the instances this query reports
+In the desktop app, Parts Library's **Project → Updates** ribbon tool (also
+**Libraries → Updates** in Schematic) lists the instances this query reports
 with a supported update; see
 [adopt non-geometric revisions](#adopt-non-geometric-revisions).
 
@@ -258,8 +258,8 @@ mapping. Neither preview nor Apply writes to a library source.
 
 ## Adopt non-geometric revisions
 
-With a project open, choose **Review library updates** in Parts Library, or
-**Updates** on the ribbon's Libraries tab, which opens the same review. Select
+With a project open, choose **Project → Updates** on the Parts Library ribbon, or
+**Libraries → Updates** in Schematic, which opens the same review. Select
 instances, choose **Preview selected updates**, and read the exact before and
 after fields. **Apply reviewed updates** uses the same command and Undo history
 as the schematic editor. **Undo adoption** reverses the change directly from
