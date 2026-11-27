@@ -3318,6 +3318,10 @@
             "maximum": 1974600000,
             "minimum": 1,
             "type": "integer"
+          },
+          "reference_footprint": {
+            "pattern": "^footprint-[1-9][0-9]*$",
+            "type": "string"
           }
         },
         "required": [

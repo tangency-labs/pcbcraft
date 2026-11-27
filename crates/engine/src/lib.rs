@@ -2484,7 +2484,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align footprints by bounds, distribute by equal gaps with fixed outer bounds, or set an exact origin-to-origin pitch along X or Y. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
+        summary: "Align footprints by bounds, optionally to a fixed reference footprint; distribute by equal gaps with fixed outer bounds or by exact origin pitch. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
@@ -2495,6 +2495,12 @@ const CATALOG: &[Command] = &[
                 name: "pitch_nm",
                 summary: "Positive origin spacing for distribute_x or distribute_y (two or more footprints), starting at the smallest axis coordinate. Ties follow footprint request order. Omit for equal gaps by bounds (three or more).",
                 kind: ParamKind::FootprintPitch,
+            },
+            Param {
+                required: false,
+                name: "reference_footprint",
+                summary: "Fixed footprint ID for edge or center alignment only. A locked reference is allowed and is never moved, even if listed in footprints. Select at least one other footprint.",
+                kind: ParamKind::FootprintId,
             },
         ],
     },
