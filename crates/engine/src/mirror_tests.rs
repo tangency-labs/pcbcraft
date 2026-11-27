@@ -373,6 +373,8 @@ fn group_mirror_reflects_bends_through_a_moving_power_contact() {
     let (mut session, power, initial) = offset_power_fixture();
     let mut spaced = (*initial).clone();
     Arc::make_mut(&mut spaced.sheet_mut().symbols)[0].position.y_nm = -8 * GRID_NM;
+    spaced.sheet_mut().connectivity = Arc::default();
+    spaced.named_graph = Arc::default();
     session.open_snapshot(Arc::new(spaced));
     apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":20 * GRID_NM,"y_nm":10 * GRID_NM}));
     let first = session.project().unwrap().symbols()[0].id();
@@ -381,11 +383,15 @@ fn group_mirror_reflects_bends_through_a_moving_power_contact() {
     let grid = |x, y| Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM };
     let mut authored = (*session.snapshot().unwrap()).clone();
     Arc::make_mut(&mut authored.sheet_mut().wires)[0].bends = Some(vec![grid(10, -4), grid(-4, -4), grid(-4, 0), grid(4, 0), grid(4, 10)]);
+    authored.sheet_mut().connectivity = Arc::default();
+    authored.named_graph = Arc::default();
     session.open_snapshot(Arc::new(authored));
 
     let before = session.snapshot().unwrap();
     let wire = before.wires()[0].id();
     let route = before.wire_path(&before.wires()[0]);
+    let power_pin = before.symbols()[1].terminals()[0];
+    assert_eq!(before.connectivity().net_for(power_pin).unwrap().len(), 3);
     let items = json!({"symbols":[first,power,last],"wires":[wire]});
     apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
     let after = session.project().unwrap();
