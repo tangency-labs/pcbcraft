@@ -53,6 +53,15 @@ predicate decides the result. DRC streams its candidates and skips its existing
 same-island and known same-net clearance exemptions before evaluating distances,
 so it does not allocate an intermediate all-pairs decision table.
 
+`DirtyRegion::between_geometry_edits` identifies a local geometry neighborhood,
+not a complete DRC recheck set. It includes added and modified objects and
+neighbors on common copper layers within the captured maximum clearance of an
+old or new footprint, and reports removed object labels. An edit to board rules,
+net classes or intended net membership requires separate invalidation or a full
+check. A copper edit that merges or splits physical islands can also change
+checks outside this neighborhood. An empty region does not prove that existing
+findings are still valid. The helper does not change the current DRC run path.
+
 `probe()` replaces one source object when `intended_from` is given, or starts
 with unknown membership otherwise. It combines the intended memberships of all
 contacted obstacles before evaluating the result, so an initially unnamed probe

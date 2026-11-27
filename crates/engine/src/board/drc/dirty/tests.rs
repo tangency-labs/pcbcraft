@@ -112,7 +112,7 @@ fn moving_one_via_matches_brute_force_neighbors_within_clearance() {
     let rev_before = s.revision();
     let after = query(&s);
 
-    let delta = EditDelta::between(&before, &after).unwrap();
+    let delta = EditDelta::between_geometry_edits(&before, &after).unwrap();
     assert_eq!(delta.target(), after.authority().target());
     assert_eq!(delta.from_revision(), before.authority().revision());
     assert_eq!(delta.to_revision(), after.authority().revision());
@@ -168,8 +168,8 @@ fn dirty_region_expands_to_largest_net_class_clearance_rule() {
     apply(&mut s, MOVE_TRACKS, json!({"vias": [moved_via], "dx_nm": new_at.x_nm - old_at.x_nm, "dy_nm": 0}));
     let after = query(&s);
 
-    let delta = EditDelta::between(&before, &after).unwrap();
-    let dirty = DirtyRegion::between(&before, &after).unwrap();
+    let delta = EditDelta::between_geometry_edits(&before, &after).unwrap();
+    let dirty = DirtyRegion::between_geometry_edits(&before, &after).unwrap();
     assert_eq!(dirty.max_clearance_nm(), class_clearance);
     assert_eq!(dirty.dirty_indices(), brute_force_dirty_indices(&after, &delta).as_slice());
     assert!(dirty.contains_index(index_by_name(&after, &inside_class_via.to_string())));
@@ -199,7 +199,7 @@ fn packed_spatial_index_dirty_region_matches_brute_force() {
     apply(&mut s, MOVE_TRACKS, json!({"vias": [moved_via], "dx_nm": target_at.x_nm - old_at.x_nm, "dy_nm": target_at.y_nm - old_at.y_nm}));
     let after = query(&s);
 
-    let delta = EditDelta::between(&before, &after).unwrap();
+    let delta = EditDelta::between_geometry_edits(&before, &after).unwrap();
     let dirty = DirtyRegion::from_delta(&after, &delta).unwrap();
     let expected = brute_force_dirty_indices(&after, &delta);
     assert_eq!(dirty.dirty_indices(), expected.as_slice());
@@ -232,7 +232,7 @@ fn single_layer_track_edit_respects_layer_isolation() {
     apply(&mut s, MOVE_TRACKS, json!({"tracks": [moved_track], "dx_nm": dest_x - 80_000_000, "dy_nm": 0}));
     let after = query(&s);
 
-    let delta = EditDelta::between(&before, &after).unwrap();
+    let delta = EditDelta::between_geometry_edits(&before, &after).unwrap();
     let dirty = DirtyRegion::from_delta(&after, &delta).unwrap();
     assert_eq!(dirty.dirty_indices(), brute_force_dirty_indices(&after, &delta).as_slice());
     assert!(dirty.contains_index(index_by_name(&after, &moved_track.to_string())));
@@ -259,7 +259,7 @@ fn add_delete_drill_edit_and_noop_match_brute_force() {
 
     // No-op comparison produces an empty delta and empty dirty region.
     let q0 = query(&s);
-    let noop_delta = EditDelta::between(&q0, &q0).unwrap();
+    let noop_delta = EditDelta::between_geometry_edits(&q0, &q0).unwrap();
     assert!(noop_delta.is_empty());
     let noop_dirty = DirtyRegion::from_delta(&q0, &noop_delta).unwrap();
     assert!(noop_dirty.is_empty());
@@ -267,7 +267,7 @@ fn add_delete_drill_edit_and_noop_match_brute_force() {
     // Adding a via marks the via and its nearby track dirty.
     let via_id = add_via(&mut s, anchor);
     let q1 = query(&s);
-    let add_delta = EditDelta::between(&q0, &q1).unwrap();
+    let add_delta = EditDelta::between_geometry_edits(&q0, &q1).unwrap();
     assert_eq!(add_delta.changes().len(), 1);
     assert_eq!(add_delta.changes()[0].change, ChangeKind::Added);
     let add_dirty = DirtyRegion::from_delta(&q1, &add_delta).unwrap();
@@ -278,7 +278,7 @@ fn add_delete_drill_edit_and_noop_match_brute_force() {
     // Editing only via drill size (same outer contour) still invalidates the via and its neighbors.
     apply(&mut s, SET_VIA_SIZE, json!({"vias": [via_id], "via_diameter_nm": DEFAULT_VIA_DIAMETER_NM, "via_drill_nm": 350_000}));
     let q2 = query(&s);
-    let drill_delta = EditDelta::between(&q1, &q2).unwrap();
+    let drill_delta = EditDelta::between_geometry_edits(&q1, &q2).unwrap();
     assert_eq!(drill_delta.changes().len(), 1);
     assert_eq!(drill_delta.changes()[0].change, ChangeKind::Modified);
     let drill_dirty = DirtyRegion::from_delta(&q2, &drill_delta).unwrap();
@@ -289,7 +289,7 @@ fn add_delete_drill_edit_and_noop_match_brute_force() {
     // Deleting the via records its removal and dirties the vacated neighbor.
     apply(&mut s, DELETE_TRACKS, json!({"vias": [via_id]}));
     let q3 = query(&s);
-    let del_delta = EditDelta::between(&q2, &q3).unwrap();
+    let del_delta = EditDelta::between_geometry_edits(&q2, &q3).unwrap();
     assert_eq!(del_delta.changes().len(), 1);
     assert_eq!(del_delta.changes()[0].change, ChangeKind::Removed);
     let del_dirty = DirtyRegion::from_delta(&q3, &del_delta).unwrap();
@@ -307,14 +307,54 @@ fn refuses_mismatched_board_target_and_stale_revision() {
 
     let first_before = query(&first);
     let second_query = query(&second);
-    assert!(matches!(EditDelta::between(&first_before, &second_query), Err(CommandError::InvalidParams(_))));
+    assert!(matches!(EditDelta::between_geometry_edits(&first_before, &second_query), Err(CommandError::InvalidParams(_))));
 
     let via_id = add_via(&mut first, Point { x_nm: 100_000_000, y_nm: 100_000_000 });
     let first_after = query(&first);
-    let delta = EditDelta::between(&first_before, &first_after).unwrap();
+    let delta = EditDelta::between_geometry_edits(&first_before, &first_after).unwrap();
     assert!(matches!(DirtyRegion::from_delta(&second_query, &delta), Err(CommandError::InvalidParams(_))));
 
     apply(&mut first, MOVE_TRACKS, json!({"vias": [via_id], "dx_nm": 1_000_000, "dy_nm": 0}));
     let first_later = query(&first);
     assert!(matches!(DirtyRegion::from_delta(&first_later, &delta), Err(CommandError::InvalidParams(_))));
+}
+
+/// Detect different board-rule captures even when both queries have the same geometry and revision.
+#[test]
+fn geometry_delta_refuses_changed_board_rule_capture() {
+    let s = routed_fixture();
+    let before = query(&s);
+    let different_clearance = before.authority().clearance_nm() + 100_000;
+    let after = s.clearance_query(before.authority().target(), different_clearance).unwrap();
+    assert_eq!(before.authority().revision(), after.authority().revision());
+    assert_ne!(before.authority().clearance_nm(), after.authority().clearance_nm());
+    assert!(matches!(DirtyRegion::between_geometry_edits(&before, &after), Err(CommandError::InvalidParams(_))));
+}
+
+/// Joining two islands dirties the bridge and adjacent copper, not an unchanged remote segment
+/// of the merged island. Connectivity invalidation belongs to the caller.
+#[test]
+fn connecting_islands_only_dirties_the_bridge_neighborhood() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let point = |x_nm| Point { x_nm, y_nm: 100_000_000 };
+    let remote = add_track(&mut s, front, point(90_000_000), point(100_000_000)).to_string();
+    let left = add_track(&mut s, front, point(100_000_000), point(110_000_000)).to_string();
+    let right = add_track(&mut s, front, point(112_000_000), point(122_000_000)).to_string();
+    let before = query(&s);
+    let island = |query: &ClearanceQuery, name: &str| query.objects()[index_by_name(query, name)].island;
+    assert_eq!(island(&before, &remote), island(&before, &left));
+    assert_ne!(island(&before, &remote), island(&before, &right));
+
+    let bridge = add_track(&mut s, front, point(110_000_000), point(112_000_000)).to_string();
+    let after = query(&s);
+    assert_eq!(island(&after, &remote), island(&after, &right));
+
+    let dirty = DirtyRegion::between_geometry_edits(&before, &after).unwrap();
+    let bridge = index_by_name(&after, &bridge);
+    let mut expected = [bridge, index_by_name(&after, &left), index_by_name(&after, &right)];
+    expected.sort_unstable();
+    assert_eq!(dirty.changed_indices(), &[bridge]);
+    assert_eq!(dirty.dirty_indices(), &expected);
+    assert!(!dirty.contains_index(index_by_name(&after, &remote)));
 }

@@ -1,9 +1,8 @@
-//! Dirty-region calculation from a board edit delta.
+//! Local geometry invalidation for two clearance queries of the same board.
 //!
-//! Comparing two immutable clearance queries of the same board identifies the objects whose
-//! footprints or copper properties changed. Expanding those footprints by the target snapshot's
-//! largest effective clearance rule through the board's spatial candidate index and filtering by
-//! exact contour gap yields the dirty object set for incremental design-rule checking.
+//! This is not a complete DRC invalidation set. It does not track board-rule or net-class edits,
+//! intended net changes, or the propagation of a physical island merge or split. Callers must
+//! invalidate those separately or use a full check, even when this set is empty.
 
 use crate::{
     CommandError,
@@ -13,7 +12,6 @@ use crate::{
         setup::LayerPurpose,
         view::BoardTarget,
     },
-    nets::NetAddress,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -57,7 +55,7 @@ pub struct ObjectChange {
     pub after: Option<RegionFootprint>,
 }
 
-/// Object-level differences between two immutable snapshots of the same board.
+/// Tracked object geometry differences between two immutable snapshots of the same board.
 #[derive(Clone, Debug)]
 pub struct EditDelta {
     target: BoardTarget,
@@ -67,19 +65,27 @@ pub struct EditDelta {
 }
 
 impl EditDelta {
-    /// Derive the changed objects between two immutable clearance queries of the same board.
-    pub fn between(before: &ClearanceQuery, after: &ClearanceQuery) -> Result<Self, CommandError> {
+    /// Compare added and removed objects, contours, layer coverage, mechanical status and via drill sizes.
+    ///
+    /// Only call for geometry edits under unchanged board and net-class policy and net intent.
+    /// Different resolved board rules or maximum clearances are rejected; equality of those values
+    /// does not establish unchanged class policy or net intent. This delta does not propagate
+    /// changes to unchanged geometry on an island that merged or split.
+    pub fn between_geometry_edits(before: &ClearanceQuery, after: &ClearanceQuery) -> Result<Self, CommandError> {
         let target = before.authority().target();
         if target != after.authority().target() {
             return Err(CommandError::InvalidParams("before and after queries must address the same board".into()));
+        }
+        if before.authority().rules() != after.authority().rules() || before.authority().clearance_nm() != after.authority().clearance_nm() {
+            return Err(CommandError::InvalidParams("geometry deltas require unchanged board rules and maximum clearance".into()));
         }
 
         let before_objects = before.objects();
         let after_objects = after.objects();
         let before_index = index_objects(before_objects);
         let after_index = index_objects(after_objects);
-        let before_vias = via_metadata(before);
-        let after_vias = via_metadata(after);
+        let before_vias = via_drills(before);
+        let after_vias = via_drills(after);
 
         let mut all_keys: BTreeSet<(u8, String, usize)> = before_index.keys().cloned().collect();
         all_keys.extend(after_index.keys().cloned());
@@ -149,13 +155,13 @@ impl EditDelta {
         &self.changes
     }
 
-    /// Whether both snapshots had identical tracked object state.
+    /// Whether no tracked object geometry changed; this does not certify unchanged DRC results.
     pub fn is_empty(&self) -> bool {
         self.changes.is_empty()
     }
 }
 
-/// Dirty object set for one edit delta under the target snapshot's largest clearance rule.
+/// Local geometry neighborhood under the target snapshot's largest clearance rule, not a complete DRC recheck set.
 #[derive(Clone, Debug)]
 pub struct DirtyRegion {
     target: BoardTarget,
@@ -169,13 +175,14 @@ pub struct DirtyRegion {
 }
 
 impl DirtyRegion {
-    /// Compute the dirty set directly from two immutable clearance queries of the same board.
-    pub fn between(before: &ClearanceQuery, after: &ClearanceQuery) -> Result<Self, CommandError> {
-        let delta = EditDelta::between(before, after)?;
+    /// Compute the local geometry neighborhood; see [`EditDelta::between_geometry_edits`] for caller obligations.
+    pub fn between_geometry_edits(before: &ClearanceQuery, after: &ClearanceQuery) -> Result<Self, CommandError> {
+        let delta = EditDelta::between_geometry_edits(before, after)?;
         Self::from_delta(after, &delta)
     }
 
-    /// Expand an edit delta on the matching target snapshot by its largest effective clearance rule.
+    /// Expand a geometry delta using the same target query that supplied its after indices.
+    /// This never expands a policy or connectivity change outside the geometric neighborhood.
     pub fn from_delta(after: &ClearanceQuery, delta: &EditDelta) -> Result<Self, CommandError> {
         let target = after.authority().target();
         if target != delta.target {
@@ -284,7 +291,7 @@ impl DirtyRegion {
         &self.removed_names
     }
 
-    /// Whether the edit affected no objects and left no removed labels.
+    /// Whether the local geometry set and removed labels are empty, not whether DRC is unchanged.
     pub fn is_empty(&self) -> bool {
         self.dirty_indices.is_empty() && self.removed_names.is_empty()
     }
@@ -319,25 +326,20 @@ fn index_objects(objects: &[Object]) -> BTreeMap<(u8, String, usize), usize> {
     map
 }
 
-/// Collect per-via drill size and authored net assignment keyed by via UUID string.
-fn via_metadata(query: &ClearanceQuery) -> BTreeMap<String, (i64, Option<NetAddress>)> {
+/// Collect per-via drill sizes keyed by via UUID string; net assignments are not geometry.
+fn via_drills(query: &ClearanceQuery) -> BTreeMap<String, i64> {
     let Some(view) = query.authority().view() else {
         return BTreeMap::new();
     };
-    view.vias().iter().map(|via| (via.id.to_string(), (via.drill_nm, via.net_assignment))).collect()
+    view.vias().iter().map(|via| (via.id.to_string(), via.drill_nm)).collect()
 }
 
 fn same_contour(left: &Contour, right: &Contour) -> bool {
     left.core == right.core && left.radius == right.radius
 }
 
-/// Compare two matched objects by footprint, layers, mechanical flag, and via-specific metadata.
-fn object_changed(
-    before: &Object,
-    after: &Object,
-    before_vias: &BTreeMap<String, (i64, Option<NetAddress>)>,
-    after_vias: &BTreeMap<String, (i64, Option<NetAddress>)>,
-) -> bool {
+/// Compare two matched objects by footprint, layers, mechanical flag, and via drill size.
+fn object_changed(before: &Object, after: &Object, before_vias: &BTreeMap<String, i64>, after_vias: &BTreeMap<String, i64>) -> bool {
     if !same_contour(&before.contour, &after.contour) || before.layers != after.layers || before.mechanical != after.mechanical {
         return true;
     }
