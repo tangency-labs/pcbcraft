@@ -48,6 +48,7 @@ pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
+pub use board::orientation::CHECK_ASSEMBLY;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::output_recipe::SET_OUTPUT_RECIPE;
 pub use board::rules::SET_RULES;
@@ -2759,6 +2760,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: CHECK_ASSEMBLY,
+        title: "Check Assembly Orientation",
+        summary: "Warn about each polarized package on the board that shows no pin 1 or polarity mark and states no zero orientation. Edits nothing; execute returns the findings.",
+        params: &[BOARD],
+    },
+    Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
         summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and Excellon plated and, when present, non-plated drill files. Edits nothing; execute returns every file's name and text.",
@@ -3892,6 +3899,7 @@ impl Session {
             | DELETE_DRAWING
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
+            | CHECK_ASSEMBLY
             | REFILL_ZONES
             | UNFILL_ZONES
             | board::fill::INSPECT_FILL
@@ -4148,6 +4156,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
         }
+        if id == CHECK_ASSEMBLY {
+            self.validate_project_command(id, params)?;
+            return self.assembly_check(params);
+        }
         if id == UNFILL_ZONES {
             return self.unfill_zones(params);
         }
@@ -4300,12 +4312,14 @@ impl Session {
 
     /// Check catalog parameters, board identity and availability without generating query data
     /// or changing the session. Layer-group inspection and output-recipe edits read or store only
-    /// metadata, so they can run regardless of copper geometry. State-specific setup diagnostics
-    /// remain with handlers.
+    /// metadata, and the assembly check does not interpret stored copper arcs or teardrops (it
+    /// reads package definitions with their orientation statements, the board's silkscreen
+    /// settings, and placements with their references and positions), so they can run regardless
+    /// of copper geometry. State-specific setup diagnostics remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | SET_OUTPUT_RECIPE);
+        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | SET_OUTPUT_RECIPE | CHECK_ASSEMBLY);
         if check_copper_geometry
             && id != board::arc::SET_ARCS
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
@@ -4354,6 +4368,7 @@ impl Session {
                 | DELETE_DRAWING
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
+                | CHECK_ASSEMBLY
                 | REFILL_ZONES
                 | UNFILL_ZONES
                 | board::fill::INSPECT_FILL
@@ -4720,6 +4735,9 @@ impl Session {
             }
             board::route::PLAN_ROUTE => {
                 self.route_plan_query(params)?;
+            }
+            CHECK_ASSEMBLY => {
+                self.assembly_check(params)?;
             }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;

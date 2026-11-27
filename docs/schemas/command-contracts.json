@@ -3521,6 +3521,19 @@
         "type": "object"
       }
     },
+    "pcb.check_assembly": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      }
+    },
     "pcb.check_design": {
       "params": {
         "additionalProperties": false,
