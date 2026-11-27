@@ -1,6 +1,20 @@
 {
   "command_api_version": 2,
   "commands": {
+    "annotate.apply": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      }
+    },
     "annotate.preview": {
       "params": {
         "additionalProperties": false,
@@ -15183,6 +15197,15 @@
         "required": [
           "path"
         ],
+        "type": "object"
+      },
+      "scope": "window"
+    },
+    "file.close": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
         "type": "object"
       },
       "scope": "window"

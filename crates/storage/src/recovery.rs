@@ -307,11 +307,14 @@ fn read_frame_bounded(reader: &mut impl Read, max_bytes: usize) -> Result<Option
 fn encode_record(edit: &CommittedEdit, before: &Documents, before_sha256: &str, after: &Documents, after_sha256: &str) -> Result<Vec<u8>, String> {
     let changed: Vec<(&String, &Vec<u8>)> = after.iter().filter(|(path, bytes)| before.get(*path) != Some(*bytes)).collect();
     let mut params = edit.params.clone();
-    // Setup review authority is session-local and already spent. Recovery replays the documents, not this capability.
-    if edit.command == pcbcraft_engine::SET_BOARD_SETUP
-        && let Some(params) = params.as_object_mut()
-    {
-        params.remove("plan_token");
+    // Review authority is session-local and already spent. Recovery replays documents, not commands.
+    let spent_token = match edit.command.as_str() {
+        pcbcraft_engine::SET_BOARD_SETUP => Some("plan_token"),
+        pcbcraft_engine::annotation::APPLY => Some("token"),
+        _ => None,
+    };
+    if let (Some(field), Some(params)) = (spent_token, params.as_object_mut()) {
+        params.remove(field);
     }
     let record = Record {
         command: edit.command.clone(),

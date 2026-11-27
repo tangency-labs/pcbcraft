@@ -51,10 +51,11 @@ impl Session {
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard. Export/publication preparation does
-/// not write files, netlist comparison only reads the text it is given, and the annotation
-/// and split previews cache no proposal. Lifecycle lookup and inspection only read exact
-/// pinned or loaded content. Loading/removing library sources, lifecycle adoption and Cut
-/// are not reads.
+/// not write files, and netlist comparison only reads the text it is given. Annotation
+/// preview keeps its proposal and Apply token only in the session; sheet split preview
+/// caches no proposal. Lifecycle lookup and inspection only read exact pinned or loaded
+/// content. Applying annotation, splitting a sheet, loading/removing library sources,
+/// lifecycle adoption and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,

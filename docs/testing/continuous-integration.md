@@ -58,23 +58,19 @@ pushes supersede prior PR work; unrelated labels cannot cancel a real build.
 
 ## Full builds, desktop platforms and caches
 
-Pages builds and deploys run inside CI after the aggregate `checks` job succeeds
-in full-validation mode. Only public-repository main pushes and manual CI runs
-on main can deploy; PR, nightly and documentation-only runs do not publish the
-site. The build checks out the exact tested commit, and deployment checks main
-again before publishing so a superseded revision is skipped. An API failure
-prevents deployment. The separate push-triggered Pages workflow has been removed,
-so manual deployment also goes through the full CI workflow.
-
-Both Pages jobs use explicit status conditions so the quick-compile job's
-intentional skip during full CI does not suppress publication. Cancellation
-still stops publication, and deployment requires both the aggregate checks and
-the Pages build to succeed.
+The `web` job builds the release site once from the exact tested commit. It
+stages that output for Pages on public-repository main pushes and manual full
+CI runs on main. Deployment requires both the web build and the aggregate
+`checks` job to succeed, and checks main again before publishing so a
+superseded revision is skipped. A Pages artifact upload failure surfaces in
+deployment while desktop nightlies can continue. PR, scheduled, and
+documentation-only runs skip publication.
 
 Full runs retain the complete Windows workspace suite, both Windows Clippy
 passes, Python/Node regressions and the opt-in harness. Windows checkouts keep
 `core.autocrlf=true`; Git attributes protect recorded evidence bytes. The build
-job stages the existing native-window lifecycle test from Cargo's JSON output.
+job stages the native-window lifecycle executable reported by Cargo during
+the workspace tests, so the desktop smoke job uses that build.
 A separate GitHub Windows desktop runs that normally opt-in test with DX12/FXC
 and a 180-second deadline. Zero tests or a nonzero exit fail, and only the owned
 process is killed on timeout. This checks frame delivery, window lifetimes and
@@ -87,8 +83,10 @@ still require a separate run.
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping
 release and ordinary development profiles are unchanged. Platforms have separate
-cache keys; only main saves caches and PRs restore them. New keys initially build
-cold. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
+cache keys, and only main saves caches. The Windows cache keeps dependencies
+under a new key. Its first build is cold, so the job has a 75-minute timeout.
+The Linux native job has 45 minutes to let cold tests finish and save their
+cache. The defaults are `ubuntu-latest`, `windows-latest` and `macos-latest`.
 `CI_RUNNER`, `CI_RUNNER_WINDOWS` and `CI_RUNNER_MACOS` select provisioned runners.
 Custom Windows builds must be x64 MSVC executables compatible with the presenting
 `windows-latest` desktop. `CI_BUILD_JOBS` defaults to four on Linux, and
