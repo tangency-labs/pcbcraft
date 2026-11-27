@@ -408,3 +408,59 @@ fn group_mirror_reflects_bends_through_a_moving_power_contact() {
     apply(&mut session, MIRROR_ITEMS, json!({"items":items,"axis":"horizontal"}));
     assert_eq!(session.project().unwrap().wire_path(&session.project().unwrap().wires()[0]), route);
 }
+
+/// One millimetre in schematic units.
+const MM: i64 = 1_000_000;
+
+/// R1 at (70, 80) mm and D1 at `led`, with a global GND label on D1 pin 2, and with `wired`,
+/// R1 pin 2 wired to D1 pin 1.
+fn led_with_ground_label(wired: bool, led: Point) -> Session {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Label on pin"})).unwrap();
+    for (definition, at) in [("resistor", Point { x_nm: 70 * MM, y_nm: 80 * MM }), ("led", led)] {
+        apply(&mut session, PLACE_SYMBOL, json!({"definition":definition,"x_nm":at.x_nm,"y_nm":at.y_nm}));
+    }
+    let [resistor, led] = [0, 1].map(|index| session.project().unwrap().symbols()[index].id());
+    if wired {
+        apply(&mut session, CONNECT_PINS, json!({"from":{"symbol":resistor,"terminal":"2"},"to":{"symbol":led,"terminal":"1"}}));
+    }
+    let pin = session.project().unwrap().symbols()[1].pins()[1];
+    apply(&mut session, net_labels::ADD, json!({"name":"GND","style":"global","x_nm":pin.x_nm,"y_nm":pin.y_nm}));
+    session
+}
+
+/// A label stays put when its part turns or mirrors in place. If that leaves the label on
+/// another pin of the part, the pin would silently join the label's net, so the edit is refused
+/// with the label and pin named, leaving revision, snapshot and history. Mirror Symbol, a group
+/// mirror of the part alone (with its origin on the grid, so the pivot is the origin) and a
+/// second quarter turn share the rule; a first quarter turn only leaves the label behind and commits.
+#[test]
+fn turning_or_mirroring_a_part_never_puts_a_label_on_another_pin() {
+    let reported = Point { x_nm: 95 * MM, y_nm: 95 * MM };
+    let on_grid = Point { x_nm: 75 * GRID_NM, y_nm: 75 * GRID_NM };
+    for wired in [true, false] {
+        for (led_at, command) in [(reported, MIRROR_SYMBOL), (on_grid, MIRROR_ITEMS)] {
+            let mut session = led_with_ground_label(wired, led_at);
+            let led = session.project().unwrap().symbols()[1].id();
+            let before = session.snapshot().unwrap();
+            let revision = session.revision();
+            let history = (session.undo.len(), session.redo.len());
+            let target = if command == MIRROR_SYMBOL { json!({"symbol":led}) } else { json!({"items":{"symbols":[led],"wires":[]}}) };
+            let mut params = json!({"axis":"horizontal","expected_revision":revision});
+            params.as_object_mut().unwrap().extend(target.as_object().unwrap().clone());
+            let result = session.apply(command, &params);
+            assert!(
+                matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains("Label GND would land on pin 1 of D1")),
+                "wired {wired} {command}: {result:?}"
+            );
+            assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+        }
+        let mut session = led_with_ground_label(wired, reported);
+        let led = session.project().unwrap().symbols()[1].id();
+        apply(&mut session, ROTATE_SYMBOL, json!({"symbol":led}));
+        let result = session.apply(ROTATE_SYMBOL, &json!({"symbol":led,"expected_revision":session.revision()}));
+        assert!(matches!(&result, Err(CommandError::InvalidParams(message)) if message.contains("join two nets")), "wired {wired}: {result:?}");
+    }
+}

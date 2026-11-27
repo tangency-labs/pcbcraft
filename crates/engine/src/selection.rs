@@ -305,7 +305,8 @@ impl Selection {
     /// routes whose ends both move with the group reflect their authored bends, and every other
     /// wire keeps its bends and follows its pins, as attached wires do under Mirror Symbol.
     /// Keeping those bends makes the mirror its own inverse even when an end stays fixed.
-    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection.
+    /// Refuse to move a label off a directly contacted pin or a selected route off a power pin outside the selection,
+    /// and refuse to leave an unselected label on another pin of a mirrored symbol.
     pub fn mirrored(&self, project: &Project, axis: MirrorAxis, revision: u64) -> Result<Project, CommandError> {
         self.validate(project)?;
         self.validate_marker_owners(project)?;
@@ -389,6 +390,7 @@ impl Selection {
         }
         let next = next.healed(&base, revision, false)?;
         self.check_stationary_power_contacts(project, &next)?;
+        next.check_label_contacts(project, &poses.iter().map(|&(index, ..)| index).collect::<Vec<_>>(), &self.net_labels)?;
         Ok(next)
     }
 
