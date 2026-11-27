@@ -581,7 +581,9 @@ impl PcbApp {
                 }
                 panels.placed = true;
             }
+            self.automation_stage(ctx, host);
             ctx.show_viewport_immediate(viewport(host), builder, |ui, class| {
+                self.automation_child_input(ui.ctx(), host);
                 if class != egui::ViewportClass::EmbeddedWindow && ui.ctx().input(|input| input.viewport().close_requested()) {
                     self.close_editor_host(host, ui.ctx());
                     if !self.views.hosts.contains_key(&host) {
@@ -594,6 +596,7 @@ impl PcbApp {
                 ui.push_id(viewport(host), |ui| self.editor_host_frame(ui, integrated_titlebar && class != egui::ViewportClass::EmbeddedWindow));
                 self.bind_editor_host(self.views.main);
             });
+            self.automation_unstage(ctx);
         }
         self.windows.panels.retain(|host, _| self.views.hosts.contains_key(host));
     }
