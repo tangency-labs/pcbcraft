@@ -1048,6 +1048,7 @@ pub fn ribbon_group_with_popups(
                 icon: crate::ribbon_icons::HOST_PAINTED,
                 size: shared::ButtonSize { width, min_width: width },
                 enabled: tool.enabled,
+                planned: false,
                 pressed: tool.active,
                 exit: false,
                 split: None,

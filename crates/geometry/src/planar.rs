@@ -166,7 +166,7 @@ impl Regions {
             if !positive {
                 kp.outer = kp.outer.reversed();
             }
-            profile::check_regions(std::iter::once(&kp), TOLERANCE_MM).map_err(|e| invalid(&format!("{e:?}")))?;
+            profile::check_regions(std::iter::once(&kp), TOLERANCE_MM, TOLERANCE_MM).map_err(|e| invalid(&format!("{e:?}")))?;
             Ok(Self { regions: vec![solidcore_convert::record_region2(&kp)], ..Self::default() })
         })
     }
@@ -572,7 +572,7 @@ fn envelope_nm(b: bounds::Bounds) -> [f64; 4] {
 /// finite-coordinate, closure, segment or work-budget checks.
 fn checked(regions: Vec<Region2>) -> Result<Regions> {
     let profiles: Vec<_> = regions.iter().map(solidcore_convert::region2).collect();
-    profile::check_regions(profiles.iter(), TOLERANCE_MM)
+    profile::check_regions(profiles.iter(), TOLERANCE_MM, TOLERANCE_MM)
         .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("planar result: {e:?}")))?;
     checked_coordinates(regions)
 }
@@ -590,7 +590,7 @@ fn checked_assembled(regions: Vec<Region2>) -> Result<Regions> {
     }
     for lp in regions.iter().flat_map(Region2::loops) {
         let profile = profile::Region2 { outer: solidcore_convert::loop2(lp), holes: Vec::new() };
-        profile::check_regions(std::iter::once(&profile), TOLERANCE_MM)
+        profile::check_regions(std::iter::once(&profile), TOLERANCE_MM, TOLERANCE_MM)
             .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("planar result: {e:?}")))?;
     }
     checked_coordinates(regions)

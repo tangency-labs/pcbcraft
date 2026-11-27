@@ -7,7 +7,7 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In [board format 43](../formats/native-project-storage.md#current-board-records),
+In the [current board format](../formats/native-project-storage.md#current-board-records),
 the placed footprint owns `locked`, an optional boolean that defaults to false.
 Canonical encoding omits false. The flag lives on the placement, separate
 from its pinned library definition and mapping. See

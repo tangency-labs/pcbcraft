@@ -3066,6 +3066,9 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "remove_unconnected_islands": {
+                "type": "boolean"
+              },
               "spoke_width_nm": {
                 "maximum": 10000000,
                 "minimum": 10000,
@@ -10136,6 +10139,9 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "remove_unconnected_islands": {
+                "type": "boolean"
+              },
               "spoke_width_nm": {
                 "maximum": 10000000,
                 "minimum": 10000,
@@ -10411,6 +10417,24 @@
           }
         },
         "required": [],
+        "type": "object"
+      }
+    },
+    "project.import_kicad_schematic": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 8388608,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
         "type": "object"
       }
     },

@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+pcbcraft-kicad = { workspace = true }
 pcbcraft-units = { workspace = true }
 pcbcraft-geometry = { workspace = true }
 serde = { workspace = true, features = ["rc"] }

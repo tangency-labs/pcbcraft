@@ -86,7 +86,7 @@ fn return_corner(path: &[Point]) -> Option<Point> {
 }
 
 /// A strictly positive collinear overlap; perpendicular crossings and point contact are excluded.
-fn overlap(a: &[Point], b: &[Point]) -> Option<(Point, Point)> {
+pub(super) fn overlap(a: &[Point], b: &[Point]) -> Option<(Point, Point)> {
     if a[0].y_nm == a[1].y_nm && b[0].y_nm == b[1].y_nm && a[0].y_nm == b[0].y_nm {
         let lo = a[0].x_nm.min(a[1].x_nm).max(b[0].x_nm.min(b[1].x_nm));
         let hi = a[0].x_nm.max(a[1].x_nm).min(b[0].x_nm.max(b[1].x_nm));

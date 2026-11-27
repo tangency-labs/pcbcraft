@@ -85,7 +85,7 @@ pub(crate) fn substrate_mesh(body: &KernelBody, chord_nm: i64) -> Result<BoardMe
         let tolerance = solidcore_tess::MeshTolerance::chord(chord);
         let (plan, stats) = solidcore_tess::plan(&record, &tolerance, size)
             .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("plan board mesh: {e}")))?;
-        let (mesh, refused) = plan.welded();
+        let (mesh, refused) = plan.welded().map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("weld board mesh: {e}")))?;
         if !stats.unmeshed.is_empty() || !stats.lenient.is_empty() || !refused.is_empty() || mesh.triangles.is_empty() {
             return Err(GeometryError::new(ErrorCode::OperationFailed, "kernel could not tessellate every substrate face"));
         }

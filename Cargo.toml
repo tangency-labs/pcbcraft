@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["apps/*", "crates/*"]
-exclude = ["vendor/eframe", "vendor/egui-winit", "vendor/solidcore-ops"]
+exclude = ["vendor/eframe", "vendor/egui-winit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,29 +14,30 @@ publish = false
 pcbcraft-app = { path = "crates/app" }
 pcbcraft-chrome = { path = "crates/chrome" }
 pcbcraft-engine = { path = "crates/engine" }
+pcbcraft-kicad = { path = "crates/kicad" }
 pcbcraft-mcp = { path = "crates/mcp" }
 pcbcraft-storage = { path = "crates/storage" }
 pcbcraft-units = { path = "crates/units" }
-solidcraft-ui-text = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-ui-text = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
 # SolidCraft's B-rep kernel and STEP crates, at the same revision as the UI crates above.
 # Only pcbcraft-geometry depends on them (docs/design/geometry-kernel.md).
 pcbcraft-geometry = { path = "crates/geometry" }
-solidcraft-geom = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-gpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-render = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-viewport = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-viewport-egui = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcraft-viewport-gpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore-convert = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore-ops = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore-record = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore-step = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-solidcore-tess = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcraft-geom = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-gpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-render = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-viewport = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-viewport-egui = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcraft-viewport-gpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore-convert = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore-ops = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore-record = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore-step = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+solidcore-tess = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
 eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence", "clipboard"] }
 egui = "=0.37.0"
 egui_kittest = "=0.37.0"
@@ -81,10 +82,13 @@ eframe = { path = "vendor/eframe" }
 # Empty-clipboard paste-chord completion + test seams; see vendor/egui-winit/PATCH.md.
 egui-winit = { path = "vendor/egui-winit" }
 
+# SolidCraft vendors egui with its own fixes; its egui-wgpu and the toolkit build against that copy,
+# so the whole egui family comes from the same revision.
+ecolor = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+egui = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+emath = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+epaint = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+epaint_default_fonts = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
-egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
-
-# Narrow backport of upstream STEP composition fixes; see vendor/solidcore-ops/PATCH.md.
-[patch."https://github.com/tangency-labs/solidcraft.git"]
-solidcore-ops = { path = "vendor/solidcore-ops" }
+egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
+winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "de3c68956eebed3aa0ac0ba26e91492fa6adaea8" }
