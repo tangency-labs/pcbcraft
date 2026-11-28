@@ -71,6 +71,7 @@ supported versions and deferred work before extending a format or consumer.
 | Schematic document output | [Schematic PDF writer](manufacturing/schematic-pdf.md) |
 | Object identities | [Identity inventory](formats/object-identity.md) |
 | Object-query parsing | [Syntax, trees and byte-offset diagnostics](design/object-queries.md), without evaluation or UI |
+| Board revision comparison | [Read-only object diff by UUID](pcb/board-object-diff.md) in the engine |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](formats/pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](formats/net-classes.md) · [Assignments and topology reconciliation](formats/net-class-assignments.md) · [Routing and checking consumers](formats/net-class-consumers.md) · [Authored electrical intent](formats/electrical-intent.md) |
 | Part groups | [Catalog, membership and storage](formats/part-groups.md) |
