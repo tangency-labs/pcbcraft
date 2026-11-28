@@ -502,7 +502,15 @@ fn split(project: &Project, plan: &Preview, anchor: Option<Point>, cursor: &mut 
                 Some(Point { x_nm: x_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM), y_nm: first.y_nm.clamp(-MAX_CENTER_NM, MAX_CENTER_NM) })
             })
             .ok_or_else(|| CommandError::Unavailable(format!("port {} has no position on this sheet", port.name)))?;
-        labels.push(hierarchy::Label { id: allocate(cursor)?, name: port.name.clone(), direction: port.direction, at, slot: free, parent_pin: None });
+        labels.push(hierarchy::Label {
+            id: allocate(cursor)?,
+            name: port.name.clone(),
+            direction: port.direction,
+            at,
+            slot: free,
+            parent_pin: None,
+            orientation: None,
+        });
     }
     let by_net: BTreeMap<usize, &hierarchy::Label> = plan.ports.iter().map(|port| port.net).zip(&labels).collect();
 

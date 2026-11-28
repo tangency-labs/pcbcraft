@@ -1030,8 +1030,10 @@ Sheet/11 can record an explicit `parent_pin` on a hierarchical label. Its
 from the top on vertical edges or from the left on horizontal edges. This
 preserves pin locations imported from KiCad, including locations outside the
 native pin slots. The pin moves with its parent symbol and follows its edge
-when the symbol is resized. Sheets without explicit pin positions still use
-sheet/10.
+when the symbol is resized. An optional label `orientation` (`left`, `right`,
+`up` or `down`) controls where the child-side glyph extends from its wire anchor
+independently of electrical direction. Sheets without explicit pin positions
+still use sheet/10.
 
 A stored `{"label":<id>}` endpoint addresses a child label; `{"sheet_pin":<id>}`
 addresses its distinct parent-side pin. Both resolve only within their owning

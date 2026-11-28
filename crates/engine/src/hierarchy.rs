@@ -64,11 +64,21 @@ pub struct Label {
     pub name: String,
     pub direction: Direction,
     pub at: Point,
+    /// The direction the child-side glyph extends from its wire anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<schematic::PinOrientation>,
     /// Stable side-local slot: removing another label never moves this pin.
     pub slot: u8,
     /// An explicitly positioned parent pin, independent of its electrical direction.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "parent_pin_layout")]
     pub parent_pin: Option<ParentPin>,
+}
+
+impl Label {
+    pub fn orientation(&self) -> schematic::PinOrientation {
+        use schematic::PinOrientation::{Left, Right};
+        self.orientation.unwrap_or(if self.direction.right() { Right } else { Left })
+    }
 }
 
 fn parent_pin_layout<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<ParentPin>, D::Error> {
@@ -430,6 +440,7 @@ impl Session {
                     at: at()?,
                     slot,
                     parent_pin: existing.and_then(|index| project.labels[index].parent_pin),
+                    orientation: existing.and_then(|index| project.labels[index].orientation),
                 };
                 let labels = Arc::make_mut(&mut project.sheet_mut().labels);
                 if let Some(index) = existing {

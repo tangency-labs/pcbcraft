@@ -10,7 +10,7 @@ use pcbcraft_chrome::{MenuItem, Tokens, canvas_text, shell, theme};
 use pcbcraft_engine::{
     Project, SheetTarget,
     hierarchy::{self as engine, Direction, PinEdge},
-    schematic::{GRID_NM, Point},
+    schematic::{GRID_NM, PinOrientation, Point},
 };
 use serde_json::json;
 
@@ -215,7 +215,7 @@ pub(super) fn paint(
     for label in project.hierarchical_labels() {
         let at = moving.filter(|(kind, id, _)| *kind == Kind::Label && *id == Some(label.id)).and_then(|(_, _, at)| at).unwrap_or(label.at);
         let color = if selected == Some((Kind::Label, label.id)) { tokens.accent } else { tokens.schematic_wire };
-        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, step, color);
+        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, label.orientation(), step, color);
     }
     if let Some((kind, None, Some(at))) = moving {
         let pos = camera.screen(at, rect);
@@ -228,7 +228,7 @@ pub(super) fn paint(
                 egui::StrokeKind::Middle,
             );
         } else {
-            paint_label(painter, pos, "Label", Direction::Input, step, tokens.accent);
+            paint_label(painter, pos, "Label", Direction::Input, PinOrientation::Left, step, tokens.accent);
         }
     }
 }
@@ -279,21 +279,57 @@ fn corners(rect: Rect) -> [(Pos2, Corner); 4] {
     ]
 }
 
-fn label_geometry(pos: Pos2, direction: Direction, step: f32) -> ([Pos2; 3], Pos2, Align2) {
-    let sign = if direction.right() { 1. } else { -1. };
-    let back = pos + Vec2::X * (sign * step * PIN_LENGTH);
-    let rise = Vec2::Y * (step * PIN_TEXT_GAP);
-    let text = back + Vec2::X * (sign * step * PIN_TEXT_GAP);
-    let align = if sign < 0. { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
-    ([back - rise, pos, back + rise], text, align)
+struct LabelInk {
+    outline: Vec<Pos2>,
+    text: Option<egui::epaint::TextShape>,
 }
 
-/// The interface anchor is the pointed end; direction also appears in the properties dialog.
-pub(super) fn paint_label(painter: &Painter, pos: Pos2, name: &str, direction: Direction, step: f32, color: egui::Color32) {
-    let (points, text, align) = label_geometry(pos, direction, step);
-    painter.add(egui::Shape::line(points.to_vec(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color)));
-    if show_text(step) {
-        canvas_text::paint(painter, text, align, name.to_owned(), FontId::proportional(step), color);
+fn label_ink(
+    painter: &Painter,
+    pos: Pos2,
+    name: &str,
+    direction: Direction,
+    orientation: PinOrientation,
+    step: f32,
+    color: egui::Color32,
+) -> LabelInk {
+    let profile: &[(f32, f32)] = match direction {
+        Direction::Input => &[(0., 0.), (0.5, -0.5), (1., -0.5), (1., 0.5), (0.5, 0.5)],
+        Direction::Output => &[(0., -0.5), (0.5, -0.5), (1., 0.), (0.5, 0.5), (0., 0.5)],
+        Direction::Bidirectional | Direction::TriState => &[(0., 0.), (0.5, -0.5), (1., 0.), (0.5, 0.5)],
+        Direction::Passive => &[(0., -0.5), (1., -0.5), (1., 0.5), (0., 0.5)],
+    };
+    let (axis, align, rotation) = match orientation {
+        PinOrientation::Right => (Vec2::X, Align2::LEFT_CENTER, 0.),
+        PinOrientation::Left => (-Vec2::X, Align2::RIGHT_CENTER, 0.),
+        PinOrientation::Up => (-Vec2::Y, Align2::LEFT_CENTER, -std::f32::consts::FRAC_PI_2),
+        PinOrientation::Down => (Vec2::Y, Align2::RIGHT_CENTER, -std::f32::consts::FRAC_PI_2),
+    };
+    let across = egui::vec2(-axis.y, axis.x);
+    let outline = profile.iter().map(|&(x, y)| pos + (axis * x + across * y) * step).collect();
+    let text = show_text(step).then(|| {
+        let anchor = pos + axis * (step * 1.15);
+        let galley = canvas_text::layout_no_wrap(painter, name.to_owned(), FontId::proportional(step), color);
+        let bounds = align.anchor_size(anchor, galley.size());
+        egui::epaint::TextShape::new(bounds.min, galley, color).with_angle_and_anchor(rotation, align)
+    });
+    LabelInk { outline, text }
+}
+
+/// Draw the port profile from its electrical anchor and the name just beyond it.
+pub(super) fn paint_label(
+    painter: &Painter,
+    pos: Pos2,
+    name: &str,
+    direction: Direction,
+    orientation: PinOrientation,
+    step: f32,
+    color: egui::Color32,
+) {
+    let ink = label_ink(painter, pos, name, direction, orientation, step, color);
+    painter.add(egui::Shape::closed_line(ink.outline, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color)));
+    if let Some(text) = ink.text {
+        painter.add(egui::Shape::Text(text));
     }
 }
 
@@ -322,16 +358,9 @@ fn hit(
     let tokens = Tokens::get();
     for label in project.hierarchical_labels().iter().rev().filter(|_| filters.labels) {
         let pos = camera.screen(label.at, rect);
-        let (points, text, align) = label_geometry(pos, label.direction, step);
-        let marker = Rect::from_points(&points).expand(theme::SCHEMATIC_PIN_HIT_RADIUS);
-        if marker.contains(pointer) {
-            return Some((Kind::Label, label.id, label.at));
-        }
-        let over_text = show_text(step) && {
-            let galley = canvas_text::layout_no_wrap(&painter, label.name.clone(), FontId::proportional(step), tokens.schematic_wire);
-            align.anchor_size(text, galley.size()).contains(pointer)
-        };
-        if over_text {
+        let ink = label_ink(&painter, pos, &label.name, label.direction, label.orientation(), step, tokens.schematic_wire);
+        let marker = Rect::from_points(&ink.outline).expand(theme::SCHEMATIC_PIN_HIT_RADIUS);
+        if marker.contains(pointer) || ink.text.is_some_and(|text| text.visual_bounding_rect().contains(pointer)) {
             return Some((Kind::Label, label.id, label.at));
         }
     }
@@ -719,6 +748,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn directional_ports_keep_the_wire_anchor_and_point_beyond_it() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let at = Pos2::new(100., 100.);
+            let color = egui::Color32::WHITE;
+            let output = label_ink(ui.painter(), at, "Fan Power", Direction::Output, PinOrientation::Right, 10., color);
+            assert!(output.outline.contains(&(at + Vec2::X * 10.)));
+            assert_eq!(Rect::from_points(&output.outline).left(), at.x);
+            assert!(output.text.unwrap().visual_bounding_rect().left() > at.x + 10.);
+            let input = label_ink(ui.painter(), at, "Signal", Direction::Input, PinOrientation::Down, 10., color);
+            assert_eq!(input.outline[0], at);
+            assert!(input.outline.iter().skip(1).all(|point| point.y > at.y));
+            assert!(input.text.unwrap().visual_bounding_rect().top() > at.y + 10.);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn hierarchy_text_tracks_grid_scale_and_disappears_at_overview() {
         let ctx = egui::Context::default();
         pcbcraft_chrome::install(&ctx);
@@ -729,7 +776,7 @@ mod tests {
                 let bounds = Rect::from_min_size(origin, egui::vec2(16., 10.) * step);
                 let color = egui::Color32::WHITE;
                 paint_title(ui.painter(), bounds, "Fan Control", step, color);
-                paint_label(ui.painter(), origin + Vec2::Y * (20. * step), "Fan Power Select", Direction::Input, step, color);
+                paint_label(ui.painter(), origin + Vec2::Y * (20. * step), "Fan Power Select", Direction::Input, PinOrientation::Left, step, color);
                 if show_text(step) {
                     paint_bounded_text(
                         ui.painter(),

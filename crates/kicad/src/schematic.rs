@@ -338,6 +338,8 @@ pub struct Label {
     pub shape: Option<String>,
     /// The character height.
     pub size_nm: i64,
+    /// Text alignment, which also selects the side of a hierarchical label.
+    pub justify: Justify,
 }
 
 /// What a label's name reaches.
@@ -793,6 +795,7 @@ impl State {
             rotation_mdeg: millidegrees(at.and_then(|a| a.number(2)).unwrap_or(0.0)),
             shape: node.child("shape").and_then(|s| s.text(0)).map(str::to_owned),
             size_nm: text_size(node),
+            justify: justify(node),
         });
         Ok(())
     }

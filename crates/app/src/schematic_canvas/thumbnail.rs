@@ -20,7 +20,7 @@ pub(crate) struct Thumbnail {
     symbols: Vec<Symbol>,
     wires: Vec<Vec<Pos2>>,
     blocks: Vec<(Rect, String)>,
-    labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction)>,
+    labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction, pcbcraft_engine::schematic::PinOrientation)>,
     /// The sheet's paper and its frame lines, in grid steps. Frame texts are too small to read
     /// on a card and are left out.
     paper: Option<(Rect, Vec<[Pos2; 2]>)>,
@@ -92,7 +92,7 @@ impl Thumbnail {
             .map(|label| {
                 let at = grid_pos(label.at);
                 bounds = bounds.union(Rect::from_pos(at));
-                (at, label.name.clone(), label.direction)
+                (at, label.name.clone(), label.direction, label.orientation())
             })
             .collect();
         let paper = project.page().zip(project.frame()).map(|(page, frame)| {
@@ -140,8 +140,8 @@ impl Thumbnail {
             painter.rect_stroke(bounds, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text), egui::StrokeKind::Middle);
             crate::hierarchy::paint_title(&painter, bounds, name, step, t.text);
         }
-        for (at, name, direction) in &self.labels {
-            crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, step, t.schematic_wire);
+        for (at, name, direction, orientation) in &self.labels {
+            crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, *orientation, step, t.schematic_wire);
         }
         for symbol in &self.symbols {
             let placement = &symbol.placement;

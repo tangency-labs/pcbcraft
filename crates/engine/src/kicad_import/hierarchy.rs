@@ -2,8 +2,8 @@
 
 use super::{Imported, MAX_TEXT_BYTES, Placed, Report, SheetNets, symbols, wiring};
 use crate::hierarchy::{Direction, Label, ParentPin, PinEdge, SheetSymbol};
-use crate::{CommandError, Point, Project, Session, WireEndpoint};
-use pcbcraft_kicad::schematic::{LabelKind, PlacedSymbol, ReferenceSource, Schematic};
+use crate::{CommandError, Point, Project, Session, WireEndpoint, schematic::PinOrientation};
+use pcbcraft_kicad::schematic::{Justify, LabelKind, PlacedSymbol, ReferenceSource, Schematic};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -106,6 +106,14 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
                 at: native_point(primary.at),
                 slot,
                 parent_pin: Some(parent_pin),
+                // KiCad stores the axis in the angle and the side in justification.
+                orientation: match (primary.rotation_mdeg.rem_euclid(180_000), primary.justify == Justify::Right) {
+                    (0, false) => Some(PinOrientation::Right),
+                    (0, true) => Some(PinOrientation::Left),
+                    (90_000, false) => Some(PinOrientation::Up),
+                    (90_000, true) => Some(PinOrientation::Down),
+                    _ => None,
+                },
             });
             for alias in extra {
                 // Repeated occurrences of a child interface name are additional local anchors.

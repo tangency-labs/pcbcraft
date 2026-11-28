@@ -162,7 +162,7 @@ fn repeated_sheets_import_wires_ports_and_scoped_nets_as_one_project() {
     };
     let child = format!(
         r#"(kicad_sch (generator_version "10.0") {LIBRARY} {} {} {} {} {} {}
-          (hierarchical_label "SIGNAL" (shape input) (at 35 40 0))
+          (hierarchical_label "SIGNAL" (shape input) (at 35 40 270) (effects (justify left)))
           (wire (pts (xy 35 40) (xy 40 40)))
           (global_label "GLOBAL" (shape input) (at 40 45 0))
           (label "LOCAL" (at 40 50 0))
@@ -200,4 +200,8 @@ fn repeated_sheets_import_wires_ports_and_scoped_nets_as_one_project() {
         .collect::<BTreeSet<_>>();
     assert_eq!(groups, expected);
     assert_eq!(project.sheets().count(), 3);
+    for child in project.sheets.iter().skip(1) {
+        assert_eq!(child.labels[0].orientation(), PinOrientation::Up);
+        assert_eq!(child.labels[0].parent_pin.unwrap().edge, PinEdge::Left);
+    }
 }
