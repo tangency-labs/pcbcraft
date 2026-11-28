@@ -111,6 +111,41 @@ fn new_net_labels_face_away_from_snapped_pins() {
     }
 }
 
+/// With the view's snapping off a free net label lands at the pointer's exact position, while a
+/// label dropped near a pin still takes the pin's exact position and net.
+#[test]
+fn snap_off_places_free_net_labels_at_the_pointer_and_keeps_pin_contact() {
+    let mut h = editor(1400.);
+    h.state_mut().parts.set_repeat(false);
+    let symbol = resistor(&mut h, "resistor");
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    h.run();
+    let placed = h.state().session.project().unwrap().symbols().iter().find(|s| s.id() == symbol).unwrap().clone();
+    let (pin, terminal) = (placed.pins()[1], placed.terminals()[1]);
+    let place = |h: &mut Harness<'_, PcbApp>, pointer: egui::Pos2| {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run();
+        name(h, "SNAP");
+        click(h, "Place");
+        h.hover_at(pointer);
+        h.run();
+        click_canvas_at(h, pointer);
+    };
+    let free = at(&h, Point { x_nm: pin.x_nm + 8 * pcbcraft_engine::schematic::GRID_NM, y_nm: pin.y_nm - 6 * pcbcraft_engine::schematic::GRID_NM })
+        + egui::vec2(3.0, 2.0);
+    place(&mut h, free);
+    let exact = h.state().views.active.camera.unsnapped(free, h.get_by_label("Schematic canvas").rect());
+    assert_eq!(h.state().session.project().unwrap().net_labels()[0].at, exact);
+    assert_ne!(exact.x_nm % pcbcraft_engine::schematic::GRID_NM, 0);
+    let near_pin = at(&h, pin) + egui::vec2(2.0, 1.0);
+    place(&mut h, near_pin);
+    let project = h.state().session.project().unwrap();
+    assert!(project.net_labels().iter().any(|label| label.at == pin), "the pin still takes the label");
+    let graph = project.connectivity();
+    assert_eq!(graph.net_name(graph.net_index_for(terminal).unwrap()), "SNAP");
+}
+
 /// The form, keyboard and pointer menu can all override pin orientation. Explicit name text
 /// still renders at its own angle when the glyph is rotated.
 #[test]

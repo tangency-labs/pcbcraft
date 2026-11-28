@@ -53,9 +53,29 @@ pub(super) struct CameraState {
     zoom: f32,
     center_nm: [f64; 2],
     snap_nm: i64,
+    /// Absent in arrangements saved before snapping could be turned off, and omitted while on,
+    /// so an arrangement with snapping on keeps its earlier bytes.
+    #[serde(default = "snap_on", skip_serializing_if = "is_on")]
+    snap_enabled: bool,
+}
+
+/// Snapping is on unless a view turned it off.
+fn snap_on() -> bool {
+    true
+}
+
+/// Whether a saved snap setting is the default, which arrangements leave out.
+fn is_on(enabled: &bool) -> bool {
+    *enabled
 }
 
 impl CameraState {
+    /// Take a live camera's spacing and snapping, so a retained view restores the latest choice.
+    pub(super) fn keep_grid(&mut self, camera: &Camera) {
+        self.snap_nm = camera.snap_nm;
+        self.snap_enabled = camera.snap_enabled;
+    }
+
     /// Validate navigation against the shared editor range before restoring it.
     pub(super) fn valid(&self) -> bool {
         (MIN_ZOOM..=MAX_ZOOM).contains(&self.zoom)
@@ -93,6 +113,10 @@ pub(crate) struct Camera {
     /// Spacing of the points the pointer snaps to, in nanometres. It never changes the scale:
     /// drawing is always in [`GRID_NM`] units, so a new spacing leaves everything where it is.
     snap_nm: i64,
+    /// Whether placement and drags snap to the grid. Off places at the pointer's exact position
+    /// and keeps the spacing for when snapping is turned on again; contacts such as pins and pads
+    /// still attract. Like the spacing it is view state, never project data or history.
+    snap_enabled: bool,
     /// View the board from below: model X is drawn right-to-left. Only board views set this; it
     /// changes presentation and picking, never the model, and is not saved with the arrangement.
     mirrored: bool,
@@ -114,6 +138,7 @@ impl Default for Camera {
             center_requested: None,
             uncovered: None,
             snap_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            snap_enabled: true,
             mirrored: false,
         }
     }
@@ -153,12 +178,12 @@ impl Camera {
         let limit = (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64;
         let mut center_nm = [self.offset.x, self.offset.y].map(|offset| (-f64::from(offset) / scale).clamp(-limit, limit));
         center_nm[0] *= self.sign() as f64;
-        CameraState { zoom: self.zoom, center_nm, snap_nm: self.snap_nm }
+        CameraState { zoom: self.zoom, center_nm, snap_nm: self.snap_nm, snap_enabled: self.snap_enabled }
     }
 
     /// Restore validated navigation with fresh host geometry and no deferred fit.
     pub(super) fn from_state(state: &CameraState) -> Self {
-        let mut camera = Self { zoom: state.zoom, snap_nm: state.snap_nm, ..Self::default() };
+        let mut camera = Self { zoom: state.zoom, snap_nm: state.snap_nm, snap_enabled: state.snap_enabled, ..Self::default() };
         let scale = f64::from(camera.unit_step()) / GRID_NM as f64;
         camera.offset = vec2((-state.center_nm[0] * scale) as f32, (-state.center_nm[1] * scale) as f32);
         camera
@@ -171,7 +196,20 @@ impl Camera {
         self.cancel_zoom();
         self.fit_requested = false;
         self.center_requested = None;
-        Self { zoom: self.zoom, offset: self.offset, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() }
+        Self {
+            zoom: self.zoom,
+            offset: self.offset,
+            snap_nm: self.snap_nm,
+            snap_enabled: self.snap_enabled,
+            mirrored: self.mirrored,
+            ..Self::default()
+        }
+    }
+
+    /// Take navigation forked from another view into this existing view, keeping this view's own
+    /// snapping; a new view takes the forked camera whole instead.
+    pub(crate) fn adopt_navigation(&mut self, forked: Self) {
+        *self = Self { snap_enabled: self.snap_enabled, ..forked };
     }
 
     /// Whether this view shows the board from below.
@@ -214,6 +252,22 @@ impl Camera {
             self.snap_nm = spacing_nm;
         }
         valid
+    }
+
+    /// Whether placement and drags snap to the grid.
+    pub(crate) fn snap_enabled(&self) -> bool {
+        self.snap_enabled
+    }
+
+    /// Turn grid snapping on or off. Nothing moves and the spacing stays as it is.
+    pub(crate) fn set_snap_enabled(&mut self, enabled: bool) {
+        self.snap_enabled = enabled;
+    }
+
+    /// Take another camera's spacing and snapping, which survive rebuilding a view.
+    pub(crate) fn keep_grid(&mut self, from: &Self) {
+        self.snap_nm = from.snap_nm;
+        self.snap_enabled = from.snap_enabled;
     }
 
     /// The on-screen distance between snap points, before the grid thins its dots out.
@@ -366,9 +420,10 @@ impl Camera {
 
     /// Snap the pointer to the nearest multiple of the snap spacing in schematic coordinates,
     /// even when the displayed grid is coarser. The division is in `f64`, so points far from
-    /// the origin still land exactly on the grid.
+    /// the origin still land exactly on the grid. With snapping off this is [`Self::unsnapped`],
+    /// so every placement and drag that snaps through here follows the view's setting.
     pub(crate) fn snap(&self, pointer: Pos2, rect: Rect) -> Point {
-        self.point_at_spacing(pointer, rect, self.snap_nm.max(1))
+        self.point_at_spacing(pointer, rect, if self.snap_enabled { self.snap_nm.max(1) } else { 1 })
     }
 
     /// Convert a pointer to integer nanometres without applying the view's placement grid.
@@ -418,7 +473,13 @@ impl Camera {
             self.performance_rect = Some(rect);
         }
         if std::mem::take(&mut self.fit_requested) {
-            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
+            *self = Self {
+                uncovered: self.uncovered,
+                snap_nm: self.snap_nm,
+                snap_enabled: self.snap_enabled,
+                mirrored: self.mirrored,
+                ..Self::default()
+            };
             let copper = project.tracks().iter().flat_map(|track| [track.start, track.end]).chain(project.vias().iter().map(|via| via.at));
             let bounds = project
                 .footprints()
@@ -458,7 +519,13 @@ impl Camera {
     ) {
         self.schematic_rect = Some(rect);
         if std::mem::take(&mut self.fit_requested) {
-            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
+            *self = Self {
+                uncovered: self.uncovered,
+                snap_nm: self.snap_nm,
+                snap_enabled: self.snap_enabled,
+                mirrored: self.mirrored,
+                ..Self::default()
+            };
             let bounds =
                 points.fold(Rect::NOTHING, |bounds, point| bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2())));
             self.fit_bounds(bounds, rect, MAX_ZOOM);
@@ -605,7 +672,8 @@ impl Camera {
     /// margin for labels, in the part of the canvas left uncovered by all visible floating cards.
     /// Drawing that lies off the paper stays in view too.
     fn fit(&mut self, project: &Project, rect: Rect) {
-        *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
+        *self =
+            Self { uncovered: self.uncovered, snap_nm: self.snap_nm, snap_enabled: self.snap_enabled, mirrored: self.mirrored, ..Self::default() };
         let mut bounds = Rect::NOTHING;
         if let Some([min, max]) = project.page().map(|page| page.corners()) {
             bounds = Rect::from_two_pos(self.screen(min, rect), self.screen(max, rect)).translate(-rect.center().to_vec2());
@@ -829,6 +897,40 @@ mod tests {
         session.execute("project.new", &serde_json::json!({"name": "Grid"})).unwrap();
         camera.fit(&session.snapshot().unwrap(), rect);
         assert_eq!((camera.snap_nm(), camera.fork_navigation().snap_nm()), (30 * mil, 30 * mil));
+    }
+
+    /// With snapping off the pointer maps to its exact nanometre, in a mirrored view too, and
+    /// turning it back on restores the same spacing. Split, Fit and the saved state keep the
+    /// setting; an arrangement saved before it existed, or with snapping on, has no field for it.
+    #[test]
+    fn snapping_off_uses_the_exact_pointer_and_survives_split_fit_and_saving() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mil = grid::NM_PER_MIL;
+        for mirrored in [false, true] {
+            let mut camera = Camera { zoom: 2.0, offset: vec2(-30.0, 14.0), mirrored, ..Camera::default() };
+            let pointer = camera.screen(Point { x_nm: 37 * mil, y_nm: -63 * mil }, rect);
+            assert_eq!(camera.snap(pointer, rect), Point { x_nm: 50 * mil, y_nm: -50 * mil });
+            camera.set_snap_enabled(false);
+            assert_eq!(camera.snap(pointer, rect), camera.unsnapped(pointer, rect));
+            assert_eq!(camera.snap_nm(), 50 * mil);
+            assert!(!camera.fork_navigation().snap_enabled());
+            assert!(!Camera::from_state(&camera.saved_state()).snap_enabled());
+            camera.set_snap_enabled(true);
+            assert_eq!(camera.snap(pointer, rect), Point { x_nm: 50 * mil, y_nm: -50 * mil });
+        }
+        let mut camera = Camera::default();
+        camera.set_snap_enabled(false);
+        let mut session = pcbcraft_engine::Session::default();
+        session.execute("project.new", &serde_json::json!({"name": "Snap"})).unwrap();
+        camera.fit(&session.snapshot().unwrap(), rect);
+        assert!(!camera.snap_enabled(), "Fit keeps the setting");
+        let off = serde_json::to_value(camera.saved_state()).unwrap();
+        assert_eq!(off["snap_enabled"], false);
+        camera.set_snap_enabled(true);
+        let on = serde_json::to_value(camera.saved_state()).unwrap();
+        assert!(on.get("snap_enabled").is_none(), "{on}");
+        let older: CameraState = serde_json::from_value(on).unwrap();
+        assert!(older.snap_enabled && older.valid());
     }
 
     /// Every sampled frame changes scale smoothly while keeping the anchor fixed. Motion

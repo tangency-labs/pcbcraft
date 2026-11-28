@@ -159,6 +159,34 @@ fn stale_sheet_forms_and_deleted_sheet_views_never_fall_back_to_editing_main() {
     assert_eq!(h.state().views.view(id).unwrap().camera.saved_state(), camera);
 }
 
+/// Grid spacing and snapping chosen through `view.set_grid` while a view's sheet is deleted are
+/// still that view's choices when undo brings the sheet back.
+#[test]
+fn grid_choices_made_while_a_sheet_is_unavailable_survive_its_return() {
+    let mut h = sheet_harness(1400.0);
+    let revision = h.state().session.revision();
+    h.state_mut().run(CREATE_SHEET, &json!({"name":"Power","expected_revision":revision}));
+    h.run();
+    let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    click(&mut h, "Power");
+    let id = h.state().views.active.id();
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(DELETE_SHEET, &json!({"sheet":power.id(),"expected_revision":revision})).unwrap();
+    h.run();
+    assert!(h.state().views.view(id).unwrap().unavailable());
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "view.set_grid", &json!({"view": id.0, "spacing_nm": 635_000, "snap": false})).unwrap();
+    let grid = |h: &Harness<'_, PcbApp>| {
+        let camera = &h.state().views.view(id).unwrap().camera;
+        (camera.snap_nm(), camera.snap_enabled())
+    };
+    assert_eq!(grid(&h), (635_000, false));
+    h.state_mut().session.apply("edit.undo", &Value::Null).unwrap();
+    h.run();
+    assert_eq!(h.state().views.view(id).unwrap().target(), Some(DocumentTarget::Sheet(power)));
+    assert_eq!(grid(&h), (635_000, false), "the sheet came back with the grid chosen while it was gone");
+}
+
 /// Deleting the active sheet externally cannot disable project-wide Save/Save As. A real
 /// folder save still preserves the unavailable view, and its pending job blocks a second save.
 #[cfg(not(target_arch = "wasm32"))]

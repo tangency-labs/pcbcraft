@@ -38,6 +38,8 @@ pub(super) struct EditorViews {
     selection_source: Option<(ViewId, Workspace)>,
     report_probe: Option<ReportProbe>,
     pending_reveal: BTreeMap<ViewId, PendingReveal>,
+    /// The parked view created at startup until it is first shown, when it is seeded like a new view.
+    spare: Option<ViewId>,
 }
 
 /// A report projects stable addresses for one board and one live source revision. Neither
@@ -97,6 +99,7 @@ impl Default for EditorViews {
             selection_source: None,
             report_probe: None,
             pending_reveal: BTreeMap::new(),
+            spare: Some(ViewId(1)),
         }
     }
 }
@@ -349,9 +352,7 @@ impl EditorViews {
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
                 let camera = self.view(id)?.camera.clone().fork_navigation();
-                if self.view(parked)?.workspace == self.view(id)?.workspace {
-                    self.view_mut(parked)?.camera = camera;
-                }
+                self.seed_navigation(parked, camera, self.view(id)?.workspace);
                 parked
             } else {
                 self.duplicate(id, true)?
@@ -543,6 +544,14 @@ impl EditorViews {
     pub(super) fn set_grid_defaults(&mut self, schematic_nm: i64, board_nm: i64) {
         for view in self.all_mut() {
             view.set_grid_defaults(schematic_nm, board_nm);
+        }
+    }
+
+    /// Seed every live and cached view with the remembered schematic and PCB snapping, as
+    /// [`Self::set_grid_defaults`] does for the spacing.
+    pub(super) fn set_snap_defaults(&mut self, schematic: bool, board: bool) {
+        for view in self.all_mut() {
+            view.set_snap_defaults(schematic, board);
         }
     }
 
@@ -1105,8 +1114,25 @@ impl EditorViews {
         true
     }
 
+    /// Show a parked view, seeding it with navigation forked from a view in `workspace` when it
+    /// shows the same one. The startup spare is seeded whole like a new view only the first time
+    /// it is shown, whatever its workspace; a view being restored keeps its own snapping.
+    fn seed_navigation(&mut self, id: ViewId, camera: crate::canvas_camera::Camera, workspace: Workspace) {
+        let spare = self.spare == Some(id);
+        if spare {
+            self.spare = None;
+        }
+        if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
+            if spare {
+                view.camera = camera;
+            } else {
+                view.camera.adopt_navigation(camera);
+            }
+        }
+    }
+
     /// Toggle a split within this host only. Collapsing parks its other views; reopening seeds
-    /// the restored panes from the active camera, retaining their separate edit selections.
+    /// the restored panes from the active camera, retaining their separate edit selections and grid snapping.
     fn set_split(&mut self, split: bool) {
         if split == self.is_split() {
             return;
@@ -1117,10 +1143,7 @@ impl EditorViews {
             if let Some(layout) = collapsed.filter(|layout| matches!(layout, Layout::Split { .. })) {
                 for id in layout.views().into_iter().filter(|id| *id != source) {
                     let camera = self.active.camera.fork_navigation();
-                    let workspace = self.active.workspace;
-                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
-                        view.camera = camera;
-                    }
+                    self.seed_navigation(id, camera, self.active.workspace);
                 }
                 if let Some(host) = self.hosts.get_mut(&self.host) {
                     host.layout = layout;
@@ -1144,10 +1167,7 @@ impl EditorViews {
                         }
                     }
                     let camera = self.active.camera.fork_navigation();
-                    let workspace = self.active.workspace;
-                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
-                        view.camera = camera;
-                    }
+                    self.seed_navigation(id, camera, self.active.workspace);
                     if let Some(host) = self.hosts.get_mut(&self.host) {
                         host.layout.insert(source, id);
                     }
@@ -1251,7 +1271,8 @@ impl PcbApp {
     /// nothing moves, and other views keep their own spacing. An in-progress gesture is left
     /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
     /// Schematic and PCB views update separate preferences, so changing one never replaces the
-    /// other workspace's startup spacing.
+    /// other workspace's startup spacing. A view whose document is unavailable keeps the choice
+    /// for when the document returns.
     pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
         let Some(workspace) = self.views.view(id).map(|view| view.workspace) else {
             return;
@@ -1259,9 +1280,25 @@ impl PcbApp {
         if let Some(view) = self.views.view_mut(id)
             && view.camera.set_snap_nm(spacing_nm)
         {
+            view.retain_grid();
             match workspace {
                 Workspace::Schematic => self.preferences.schematic_grid_nm = spacing_nm,
                 Workspace::Board => self.preferences.board_grid_nm = spacing_nm,
+            }
+        }
+    }
+
+    /// Turn snapping on or off in one view and remember it for its workspace, as
+    /// [`Self::set_view_grid`] does for the spacing: presentation only, so the project, its
+    /// revision, unsaved state and undo history stay as they are, nothing moves, and other views
+    /// keep their own setting.
+    pub(super) fn set_view_snap(&mut self, id: ViewId, enabled: bool) {
+        if let Some(view) = self.views.view_mut(id) {
+            view.camera.set_snap_enabled(enabled);
+            view.retain_grid();
+            match view.workspace {
+                Workspace::Schematic => self.preferences.schematic_grid_snap = enabled,
+                Workspace::Board => self.preferences.board_grid_snap = enabled,
             }
         }
     }

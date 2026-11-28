@@ -16478,6 +16478,9 @@
       "params": {
         "additionalProperties": false,
         "properties": {
+          "snap": {
+            "type": "boolean"
+          },
           "spacing_nm": {
             "maximum": 25400000,
             "minimum": 10000,
@@ -16490,8 +16493,7 @@
           }
         },
         "required": [
-          "view",
-          "spacing_nm"
+          "view"
         ],
         "type": "object"
       },

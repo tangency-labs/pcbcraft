@@ -1041,6 +1041,37 @@ fn footprint_drag_snaps_to_board_grid_at_several_zoom_levels() {
     }
 }
 
+/// With the view's snapping off, a footprint drag moves by exactly the pointer's travel.
+#[test]
+fn footprint_drag_with_snapping_off_follows_the_pointer_exactly() {
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    let before = placement(&h);
+    let start = Point { x_nm: before["x_nm"].as_i64().unwrap(), y_nm: before["y_nm"].as_i64().unwrap() };
+    h.state_mut().views.active.camera.center_on(start);
+    h.run();
+    let rect = h.get_by_label("PCB canvas").rect();
+    let from = board_point(&h, start);
+    let destination = from + egui::vec2(23.0, 11.0);
+    let camera = &h.state().views.active.camera;
+    let (a, b) = (camera.unsnapped(from, rect), camera.unsnapped(destination, rect));
+    let expected = Point { x_nm: start.x_nm + b.x_nm - a.x_nm, y_nm: start.y_nm + b.y_nm - a.y_nm };
+    assert_ne!(expected.x_nm % h.state().views.active.camera.snap_nm(), 0);
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(destination);
+    h.run();
+    h.drop_at(destination);
+    h.run();
+    let moved = placement(&h);
+    assert_eq!((moved["x_nm"].as_i64().unwrap(), moved["y_nm"].as_i64().unwrap()), (expected.x_nm, expected.y_nm));
+}
+
 /// Screen positions of a painted text label in the most recent frame only.
 fn painted_text(h: &Harness<'_, PcbApp>, text: &str) -> Vec<egui::Pos2> {
     h.output()

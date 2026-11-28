@@ -36,6 +36,7 @@ mod display_units;
 mod editor_views;
 mod footprint_assignment;
 mod grab;
+mod grid_snap;
 mod grid_spacing;
 mod hierarchy;
 mod inspection_selection;

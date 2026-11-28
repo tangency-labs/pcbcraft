@@ -503,6 +503,7 @@ impl PcbApp {
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         let mut views = EditorViews::default();
         views.set_grid_defaults(preferences.schematic_grid_nm, preferences.board_grid_nm);
+        views.set_snap_defaults(preferences.schematic_grid_snap, preferences.board_grid_snap);
         Self {
             library_sources: native_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(native_sources::STORAGE_KEY))),
             home: true,
@@ -1511,6 +1512,7 @@ impl PcbApp {
         let mut cancel_pour = false;
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
+        let mut snap = self.views.active.camera.snap_enabled();
         let grid_workspace = self.views.active.workspace;
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
         let grid_style = if !self.preferences.grid_visible(self.views.active.workspace == Workspace::Board) {
@@ -1668,6 +1670,7 @@ impl PcbApp {
                     grid_changed = grid::spacing_menu(
                         ui,
                         &mut spacing,
+                        &mut snap,
                         grid_workspace.grid_presets(),
                         grid_workspace.grid_default_nm(),
                         every,
@@ -1687,6 +1690,9 @@ impl PcbApp {
         );
         if let Some(id) = grid_view.filter(|_| grid_changed) {
             self.set_view_grid(id, spacing);
+        }
+        if let Some(id) = grid_view.filter(|_| self.views.active.camera.snap_enabled() != snap) {
+            self.set_view_snap(id, snap);
         }
         if let Some(target) = cancelable.filter(|_| cancel_pour) {
             self.cancel_copper_pour(target);

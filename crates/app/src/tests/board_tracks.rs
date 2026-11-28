@@ -863,6 +863,52 @@ fn ctrl_bypasses_the_routing_grid_but_keeps_copper_contacts() {
     assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
 }
 
+/// With the view's snapping off, plain clicks place free route vertices and a via at the pointer,
+/// held Ctrl changes nothing, and the route still attaches exactly to a nearby pad.
+#[test]
+fn snap_off_routes_free_vertices_and_vias_at_the_pointer() {
+    let mut h = routable();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    h.run();
+    let pad = airwires(&h)[0].from.position;
+    let rect = h.get_by_label("PCB canvas").rect();
+    let corner_screen = at(&h, Point { x_nm: 3_810_000, y_nm: 2_540_000 }) + egui::vec2(4.0, 3.0);
+    let via_screen = at(&h, Point { x_nm: 5_080_000, y_nm: 3_810_000 }) + egui::vec2(5.0, 4.0);
+    let camera = &h.state().views.active.camera;
+    let (corner, via, spacing) = (camera.unsnapped(corner_screen, rect), camera.unsnapped(via_screen, rect), camera.snap_nm());
+    assert_eq!(camera.snap(corner_screen, rect), corner);
+    assert_ne!(corner.x_nm % spacing, 0);
+    assert_ne!(via.x_nm % spacing, 0);
+    let copper = pcbcraft_chrome::Tokens::get().board_front;
+
+    h.key_press(Key::X);
+    h.run();
+    let near_pad = at(&h, pad) + egui::vec2(3.0, 2.0);
+    click_canvas_at(&mut h, near_pad);
+    h.run_steps(20);
+    for modifiers in [Modifiers::NONE, Modifiers::CTRL, Modifiers::NONE] {
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.hover_at(corner_screen);
+        h.run();
+        assert!(preview_ends_at(&h, copper, corner_screen), "{modifiers:?}");
+    }
+    click_canvas_at(&mut h, corner_screen);
+    h.run_steps(20);
+    h.hover_at(via_screen);
+    h.run();
+    h.key_press_modifiers(Modifiers::CTRL, Key::PageDown);
+    h.run();
+    h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+    h.run();
+
+    assert_eq!(h.state().message, None);
+    let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
+    assert!(ends.contains(&pad) && ends.contains(&corner) && ends.contains(&via), "{ends:?}");
+    assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
+    assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
+}
+
 /// Escape and the menu's Cancel drop an unfinished route without editing; Enter finishes an open-ended
 /// route; Backspace removes the last vertex. The width field sets the next route's width.
 #[test]
