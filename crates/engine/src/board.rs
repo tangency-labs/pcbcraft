@@ -22,6 +22,7 @@ pub mod fill;
 pub(crate) mod footprint_delta;
 pub mod geometry;
 pub mod identity;
+pub mod land_pattern;
 mod library_migration;
 #[cfg(test)]
 mod lock_storage_tests;
