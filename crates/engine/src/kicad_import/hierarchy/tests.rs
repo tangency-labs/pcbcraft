@@ -161,16 +161,20 @@ fn repeated_sheets_import_wires_ports_and_scoped_nets_as_one_project() {
         )
     };
     let child = format!(
-        r#"(kicad_sch (generator_version "10.0") {LIBRARY} {} {} {} {} {} {}
+        r#"(kicad_sch (generator_version "10.0") {LIBRARY} {} {} {} {} {} {} {} {}
           (hierarchical_label "SIGNAL" (shape input) (at 35 40 270) (effects (justify left)))
           (wire (pts (xy 35 40) (xy 40 40)))
           (global_label "GLOBAL" (shape input) (at 40 45 0))
+          (label "GLOBAL" (at 45 45 0))
+          (label "BIAS" (at 55 61 0))
           (label "LOCAL" (at 40 50 0))
           (label "LOCAL" (at 50 50 0)))"#,
         instance(40, 40, 3, 4),
         instance(40, 45, 5, 6),
         instance(40, 50, 7, 8),
         instance(50, 50, 9, 10),
+        instance(45, 45, 11, 12),
+        instance(55, 61, 13, 14),
         power(60, 1, 2),
         power(70, 3, 4)
     );
@@ -181,11 +185,11 @@ fn repeated_sheets_import_wires_ports_and_scoped_nets_as_one_project() {
     let expected = BTreeSet::from([
         BTreeSet::from(["X1".to_owned(), "X3".to_owned()]),
         BTreeSet::from(["X2".to_owned(), "X4".to_owned()]),
-        BTreeSet::from(["X5".to_owned(), "X6".to_owned()]),
+        BTreeSet::from(["X5".to_owned(), "X6".to_owned(), "X11".to_owned(), "X12".to_owned()]),
         BTreeSet::from(["X7".to_owned(), "X9".to_owned()]),
         BTreeSet::from(["X8".to_owned(), "X10".to_owned()]),
-        BTreeSet::from(["#PWR01".to_owned(), "#PWR03".to_owned()]),
-        BTreeSet::from(["#PWR02".to_owned(), "#PWR04".to_owned()]),
+        BTreeSet::from(["#PWR01".to_owned(), "#PWR03".to_owned(), "X13".to_owned()]),
+        BTreeSet::from(["#PWR02".to_owned(), "#PWR04".to_owned(), "X14".to_owned()]),
     ]);
     let groups = project
         .electrical_connectivity()
@@ -204,4 +208,146 @@ fn repeated_sheets_import_wires_ports_and_scoped_nets_as_one_project() {
         assert_eq!(child.labels[0].orientation(), PinOrientation::Up);
         assert_eq!(child.labels[0].parent_pin.unwrap().edge, PinEdge::Left);
     }
+}
+
+#[test]
+fn root_legacy_annotations_resolve_each_child_occurrence() {
+    let symbol_id = "30000000-0000-4000-8000-000000000003";
+    let root = project(&format!(
+        r#"{} {}
+        (symbol_instances (path "/{A}/{symbol_id}" (reference "U2") (unit 2))
+                          (path "/{B}/{symbol_id}" (reference "U3") (unit 1)))"#,
+        block(A, "child.kicad_sch"),
+        block(B, "child.kicad_sch")
+    ));
+    let child = format!(
+        r#"(kicad_sch (symbol (lib_id "Example:TwoUnit") (at 40 40 0) (unit 1)
+        (uuid "{symbol_id}") (property "Reference" "U?")))"#
+    );
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+    assert_eq!(sheets[1].placements, [("U2".into(), 2)]);
+    assert_eq!(sheets[2].placements, [("U3".into(), 1)]);
+}
+
+#[test]
+fn annotated_units_on_different_sheets_share_a_component_and_reserve_future_references() {
+    let lib = r#"(lib_symbols (symbol "Fixture:Pair" (property "Reference" "U")
+        (symbol "Pair_1_1" (pin passive line (at 0 0 0) (length 2.54) (number "1")))
+        (symbol "Pair_2_1" (pin passive line (at 0 0 0) (length 2.54) (number "2")))))"#;
+    let root = project(&format!(
+        r#"{lib} {}
+        (symbol (lib_id "Fixture:Pair") (at 30 60 0) (unit 1) (property "Reference" "U1"))
+        (symbol (lib_id "Fixture:Pair") (at 45 60 0) (unit 1) (property "Reference" "U?"))"#,
+        block(A, "child.kicad_sch")
+    ));
+    let child = format!(
+        r#"(kicad_sch {lib}
+        (symbol (lib_id "Fixture:Pair") (at 30 60 0) (unit 2) (property "Reference" "U1"))
+        (symbol (lib_id "Fixture:Pair") (at 45 60 0) (unit 1) (property "Reference" "U2")))"#
+    );
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+    let imported = import(&sheets, "Shared units").unwrap();
+    let project = crate::persistence::decode_documents(&crate::persistence::encode_documents(imported.project).unwrap()).unwrap();
+    let child = project.for_sheet(project.child_sheet(project.sheet_symbols()[0].id).unwrap()).unwrap();
+    assert_eq!(project.components.len(), 3);
+    let parent_unit = project.symbols().iter().find(|symbol| project.reference(symbol) == "U1").unwrap();
+    let child_unit = child.symbols().iter().find(|symbol| child.reference(symbol) == "U1").unwrap();
+    assert_eq!(parent_unit.component, child_unit.component);
+    assert_ne!(parent_unit.unit, child_unit.unit);
+    assert!(child.symbols().iter().any(|symbol| child.reference(symbol) == "U2"));
+    assert!(project.symbols().iter().any(|symbol| project.reference(symbol) == "U3"));
+}
+
+#[test]
+fn imported_port_rename_updates_only_its_repeated_anchors_and_allocates_distinct_pins() {
+    let root = project(&format!(
+        r#"(sheet (uuid "{A}") (at 10 20) (size 25 25)
+        (property "Sheetname" "Child") (property "Sheetfile" "child.kicad_sch")
+        (pin "OUT" output (at 35 25.08 0)))"#
+    ));
+    let child = r#"(kicad_sch
+        (hierarchical_label "OUT" (shape output) (at 40 45 0))
+        (hierarchical_label "OUT" (shape output) (at 50 55 0))
+        (label "OUT" (at 55 55 0)))"#;
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.to_owned() })).unwrap();
+    let imported = import(&sheets, "Repeat port").unwrap();
+    let project = crate::persistence::decode_documents(&crate::persistence::encode_documents(imported.project).unwrap()).unwrap();
+    let target = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+    let port = project.for_sheet(target).unwrap().hierarchical_labels()[0].clone();
+    let [alias] = port.imported_aliases.as_slice() else {
+        panic!("one imported alias expected");
+    };
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    session
+        .apply(
+            crate::hierarchy::EDIT_LABEL,
+            &json!({"sheet":target.id(), "id":format!("label-{}", port.id), "name":"DATA",
+        "direction":"output", "x_nm":port.at.x_nm, "y_nm":port.at.y_nm, "expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let project = session.snapshot().unwrap();
+    let child = project.for_sheet(target).unwrap();
+    assert_eq!(child.net_labels().iter().find(|label| label.id == *alias).unwrap().name, "DATA");
+    assert_eq!(child.net_labels().iter().find(|label| label.id != *alias).unwrap().name, "OUT");
+    let graph = project.electrical_connectivity();
+    let port_net = graph.net_index_for_endpoint(WireEndpoint::Label(port.id)).unwrap();
+    assert_eq!(graph.net_index_for_endpoint(WireEndpoint::NetLabel(*alias)), Some(port_net));
+    let root = project.sheet_target();
+    let block = project.sheet_symbols()[0].id;
+    let clipboard = session
+        .execute(
+            crate::clipboard::COPY,
+            &json!({
+                "items":crate::selection::Selection::default(), "objects":[format!("sheet-symbol-{block}")], "sheet":root.id(),
+                "expected_revision":session.revision()
+            }),
+        )
+        .unwrap()["clipboard"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    session
+        .apply(
+            crate::clipboard::PASTE,
+            &json!({"text":clipboard,"sheet":root.id(),"x_nm":60_000_000,"y_nm":60_000_000,
+        "expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let copied = session.snapshot().unwrap();
+    let new_block = copied.sheet_symbols().iter().find(|sheet| sheet.id != block).unwrap();
+    let copied_child = copied.for_sheet(copied.child_sheet(new_block.id).unwrap()).unwrap();
+    let copy_aliases = &copied_child.hierarchical_labels()[0].imported_aliases;
+    assert_eq!(copy_aliases.len(), 1);
+    assert_ne!(copy_aliases[0], *alias);
+    assert_eq!(copied_child.net_labels().iter().find(|label| label.id == copy_aliases[0]).unwrap().name, "DATA");
+
+    // Give the explicit pin a different slot in a candidate. Slot 0 is free by ordinal but its
+    // automatic position is already occupied by the explicit 5.08 mm offset.
+    let mut candidate = (*session.snapshot().unwrap()).clone();
+    let labels = Arc::make_mut(&mut Arc::make_mut(&mut candidate.sheets)[1].labels);
+    labels[0].slot = 7;
+    session.open_snapshot(Arc::new(candidate));
+    session
+        .apply(crate::hierarchy::ADD_LABEL, &json!({"sheet":target.id(),"name":"Second","direction":"output","x_nm":60_000_000,"y_nm":55_000_000,"expected_revision":session.revision()}))
+        .unwrap();
+    let project = session.snapshot().unwrap();
+    let pins: Vec<_> = project.sheet_pins(&project.sheet_symbols()[0]).map(|pin| pin.at).collect();
+    assert_eq!(pins[0].y_nm, 25_080_000);
+    assert_ne!(pins[0], pins[1]);
+}
+
+#[test]
+fn invalid_interface_reports_the_child_file_and_occurrence() {
+    let name = "x".repeat(201);
+    let root = project(&format!(
+        r#"(sheet (uuid "{A}") (at 10 20) (size 25 25)
+        (property "Sheetname" "Child") (property "Sheetfile" "child.kicad_sch")
+        (pin "{name}" input (at 10 25 0)))"#
+    ));
+    let child = format!(r#"(kicad_sch (hierarchical_label "{name}" (shape input) (at 40 45 0)))"#);
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+    let error = build_sheet_structure(&sheets, "Invalid name").unwrap_err().to_string();
+    assert!(error.contains(&format!("child.kicad_sch (/{ROOT}/{A})")));
+    assert!(error.contains("1–200 characters"));
 }

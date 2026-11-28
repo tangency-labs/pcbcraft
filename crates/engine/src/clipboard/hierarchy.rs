@@ -218,11 +218,11 @@ impl Fragment {
                 if index == 0 {
                     copy.at = transformed(source.at, self.anchor, at, options.quarter_turns)?;
                     let occupied = &next.sheets[dest_index].labels;
-                    copy.slot = (0..model::MAX_LABELS as u8)
-                        .find(|slot| !occupied.iter().any(|l| l.direction.right() == copy.direction.right() && l.slot == *slot))
+                    copy.slot = model::available_pin_slot(occupied.iter(), copy.direction, copy.parent_pin.is_some())
                         .ok_or_else(|| CommandError::CapExceeded("no free parent pin slot".into()))?;
                 }
                 copy.name.push_str(&options.net_name_suffix);
+                copy.imported_aliases.clear();
                 Arc::make_mut(&mut Arc::make_mut(&mut next.sheets)[dest_index].labels).push(copy);
             }
             for source in source.subsheets.iter() {
@@ -277,6 +277,21 @@ impl Fragment {
             let position = if index == 0 { transformed(flat.anchor(), self.anchor, at, options.quarter_turns)? } else { flat.anchor() };
             let (mut candidate, added, copied_lock) = flat.placed_with_parts(&destination, position, cursor, &policy, &mut shared_parts)?;
             introduced_lock |= copied_lock;
+            if source.labels.iter().any(|label| !label.imported_aliases.is_empty()) {
+                let aliases: BTreeMap<_, _> = source
+                    .net_labels
+                    .iter()
+                    .zip(candidate.net_labels().iter().skip(destination.net_labels().len()))
+                    .map(|(old, new)| (old.id, new.id))
+                    .collect();
+                let ports: BTreeMap<_, _> = source.labels.iter().map(|label| (labels[&label.id], label)).collect();
+                for label in Arc::make_mut(&mut candidate.sheet_mut().labels) {
+                    if let Some(original) = ports.get(&label.id) {
+                        label.imported_aliases = original.imported_aliases.iter().filter_map(|id| aliases.get(id).copied()).collect();
+                        label.imported_aliases.sort_unstable();
+                    }
+                }
+            }
             for (offset, source) in source.wires.iter().enumerate() {
                 for (end, original) in source.endpoints.iter().enumerate() {
                     let replacement = match original {

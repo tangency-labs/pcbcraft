@@ -118,7 +118,7 @@ symbol remains separate authoring work. See [part-schema.md](part-schema.md).
 
 The engine also checks relationships: terminal IDs are unique; every terminal
 appears in at least one unit and every pin names a terminal; terminal appearances
-and pin positions are distinct within each unit; unit IDs are unique;
+and pin positions are distinct within each unit for formats 1–6. Unit IDs are unique;
 integrated leads and parameterized drawing extents remain within bounds; power
 behavior names an existing terminal; and default field appearances reference
 valid metadata. Filled polygons must be convex and nonintersecting. Category

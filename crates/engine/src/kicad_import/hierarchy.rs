@@ -82,6 +82,7 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
         let mut native_labels = Vec::new();
         let mut aliases = Vec::new();
         let mut assigned = BTreeSet::new();
+        let mut occupied = BTreeSet::new();
         for (slot, pin) in block.pins.iter().enumerate() {
             let slot = u8::try_from(slot)
                 .ok()
@@ -95,17 +96,23 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
             else {
                 return Err(refused(format!("Parent pin {:?} has no matching hierarchical label.", pin.name)));
             };
+            crate::hierarchy::check_label_name(&primary.name)
+                .map_err(|reason| refused(format!("Port {:?}: {reason}", super::symbols::clip(&primary.name, 64).unwrap_or_default())))?;
             let parent_pin = parent_pin(at, size, native_point(pin.at))
                 .ok_or_else(|| refused(format!("Pin {:?} is outside the sheet symbol border.", pin.name)))?;
+            if !occupied.insert((pin.at.x_nm, pin.at.y_nm)) {
+                return Err(refused(format!("Parent pin {:?} shares a position with another pin.", pin.name)));
+            }
             let direction = direction(pin.shape.as_deref().or(primary.shape.as_deref()))
                 .ok_or_else(|| refused(format!("Unrecognized direction for parent pin {:?}.", pin.name)))?;
-            native_labels.push(Label {
+            let mut port = Label {
                 id: allocate(),
                 name: primary.name.clone(),
                 direction,
                 at: native_point(primary.at),
                 slot,
                 parent_pin: Some(parent_pin),
+                imported_aliases: Vec::new(),
                 // KiCad stores the axis in the angle and the side in justification.
                 orientation: match (primary.rotation_mdeg.rem_euclid(180_000), primary.justify == Justify::Right) {
                     (0, false) => Some(PinOrientation::Right),
@@ -114,13 +121,15 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
                     (90_000, true) => Some(PinOrientation::Down),
                     _ => None,
                 },
-            });
+            };
             for alias in extra {
                 // Repeated occurrences of a child interface name are additional local anchors.
                 // The named graph binds these to the same child port rather than adding parent pins.
                 let rotation = if alias.rotation_mdeg % 90_000 == 0 { (alias.rotation_mdeg / 1000) as u16 } else { 0 };
+                let id = allocate();
+                port.imported_aliases.push(id);
                 aliases.push(crate::net_labels::Label {
-                    id: allocate(),
+                    id,
                     name: alias.name.clone(),
                     style: crate::net_labels::Style::Local,
                     at: native_point(alias.at),
@@ -128,6 +137,7 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
                     text: Some(super::label_layout(alias, rotation)),
                 });
             }
+            native_labels.push(port);
         }
         if let Some((unmatched, _)) = ports.first_key_value() {
             return Err(refused(format!("Hierarchical label {unmatched:?} has no corresponding parent pin.")));
@@ -192,12 +202,21 @@ pub fn import(occurrences: &[Occurrence], name: &str) -> Result<Imported, Comman
     if let [root] = occurrences
         && root.source.sheets.is_empty()
     {
-        return super::import_sheet((*root.source).clone(), name, None).map(|(imported, _)| imported);
+        return super::import_sheet((*root.source).clone(), name, None, &mut super::PlacementState::default()).map(|(imported, _)| imported);
     }
     let mut project = Arc::new(build_sheet_structure(occurrences, name)?);
     let sheets = project.sheets().map(|sheet| sheet.target).collect::<Vec<_>>();
     let mut report = Report::default();
     let mut source = Vec::new();
+    let mut placement = super::PlacementState {
+        reserved: occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.placements.iter().map(|(reference, _)| reference))
+            .filter(|reference| !reference.ends_with('?') && super::check_reference(reference).is_ok())
+            .cloned()
+            .collect(),
+        ..Default::default()
+    };
     for (occurrence, sheet) in occurrences.iter().zip(sheets) {
         let mut schematic = (*occurrence.source).clone();
         for (symbol, (reference, unit)) in schematic.symbols.iter_mut().zip(&occurrence.placements) {
@@ -207,7 +226,7 @@ pub fn import(occurrences: &[Occurrence], name: &str) -> Result<Imported, Comman
                 symbol.reference_from = ReferenceSource::OwnRecord;
             }
         }
-        let (imported, groups) = super::import_sheet(schematic, name, Some((project, sheet))).map_err(|error| {
+        let (imported, groups) = super::import_sheet(schematic, name, Some((project, sheet)), &mut placement).map_err(|error| {
             let message = format!("{} ({}): {error}", occurrence.file, occurrence.instance_path);
             match error {
                 CommandError::CapExceeded(_) => CommandError::CapExceeded(message),
@@ -254,7 +273,7 @@ pub(super) fn source_nets(
             {
                 let local = schematic.lib_symbols.get(&symbol.lib_symbol).is_some_and(|lib| lib.power_local);
                 if local {
-                    contacts.labels.push(("local power", name.to_owned(), *point));
+                    contacts.labels.push(("local", name.to_owned(), *point));
                 } else {
                     contacts.pins.push((Contact::Power(name.to_owned()), *point));
                 }
@@ -265,10 +284,9 @@ pub(super) fn source_nets(
     for label in &schematic.labels {
         if label.kind == LabelKind::Global {
             contacts.pins.push((Contact::Global(label.name.clone()), label.at));
-        } else {
-            contacts.labels.push(("local", label.name.clone(), label.at));
-            cuts.insert(label.at);
         }
+        contacts.labels.push(("local", label.name.clone(), label.at));
+        cuts.insert(label.at);
     }
     for (end, point) in sheet.hierarchy_endpoints() {
         if let WireEndpoint::SheetPin(id) = end {
@@ -398,10 +416,12 @@ impl<F: FnMut(&str, usize) -> Result<String, String>> Loader<F> {
             return Err(CommandError::CapExceeded(format!("{file}: the hierarchy exceeds {} sheet occurrences.", crate::sheets::MAX_SHEETS)));
         }
         let source = self.source(&file)?;
+        let root_records = self.occurrences.first().map_or(&source.legacy_instances, |root| &root.source.legacy_instances);
+        let root_path = self.occurrences.first().map_or(path.as_str(), |root| root.instance_path.as_str());
         let placements = source
             .symbols
             .iter()
-            .map(|symbol| placement(symbol, &path, parent.is_none()))
+            .map(|symbol| placement(symbol, &path, root_path, root_records, parent.is_none()))
             .collect::<Result<_, _>>()
             .map_err(|error| CommandError::InvalidParams(format!("{file} ({path}): {error}")))?;
         self.occurrences.push(Occurrence { file: file.clone(), instance_path: path.clone(), source: Arc::clone(&source), parent, placements });
@@ -419,7 +439,13 @@ impl<F: FnMut(&str, usize) -> Result<String, String>> Loader<F> {
 }
 
 /// Select the reference for the actual sheet occurrence, never another project's first record.
-fn placement(symbol: &PlacedSymbol, path: &str, root: bool) -> Result<(String, u32), String> {
+fn placement(
+    symbol: &PlacedSymbol,
+    path: &str,
+    root_path: &str,
+    root_records: &BTreeMap<String, (String, Option<u32>)>,
+    root: bool,
+) -> Result<(String, u32), String> {
     let occurrence_record = |record: &&pcbcraft_kicad::schematic::Instance| record.path == path;
     let mut matches = symbol.instances.iter().filter(occurrence_record);
     if let Some(first) = matches.next() {
@@ -428,6 +454,13 @@ fn placement(symbol: &PlacedSymbol, path: &str, root: bool) -> Result<(String, u
             return Err(format!("conflicting instance records for {}.", symbol.lib_symbol));
         }
         return Ok((first.reference.clone(), unit));
+    }
+    if let Some(uuid) = &symbol.uuid {
+        let relative = path.strip_prefix(root_path).unwrap_or(path);
+        let record = root_records.get(&format!("{relative}/{uuid}")).or_else(|| root_records.get(&format!("{path}/{uuid}")));
+        if let Some((reference, unit)) = record {
+            return Ok((reference.clone(), unit.unwrap_or(symbol.declared_unit)));
+        }
     }
     if !root && !symbol.instances.is_empty() {
         return Err(format!("no matching instance record for {}.", symbol.lib_symbol));

@@ -48,6 +48,8 @@ pub struct Schematic {
     pub uuid: Option<String>,
     /// The sheet's paper, when the file names a known size.
     pub paper: Option<Paper>,
+    /// Legacy reference and unit records by full symbol instance path.
+    pub legacy_instances: BTreeMap<String, (String, Option<u32>)>,
     /// The symbols placed symbols draw with, by the name placed symbols use.
     pub lib_symbols: BTreeMap<String, LibSymbol>,
     /// Placed symbols, in file order.
@@ -954,6 +956,7 @@ impl State {
                 symbol.unit = unit;
             }
         }
+        self.schematic.legacy_instances = self.legacy;
         Ok(self.schematic)
     }
 

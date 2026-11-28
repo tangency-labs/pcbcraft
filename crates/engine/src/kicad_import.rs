@@ -52,6 +52,19 @@ pub const MAX_WIRE_PIECES: usize = 4000;
 /// of the converted documents, so one identity, item and revision always means one content,
 /// as native sources require, and imports of different schematics never conflict.
 const LIBRARY_PREFIX: &str = "kicad-";
+#[derive(Default)]
+struct PlacementState {
+    components: BTreeMap<(String, String), ImportedComponent>,
+    references: BTreeSet<String>,
+    reserved: BTreeSet<String>,
+}
+
+struct ImportedComponent {
+    id: u64,
+    units: BTreeSet<u32>,
+    definition: [u8; 32],
+}
+
 /// The scratch session's source registration.
 const SOURCE: &str = "kicad-import";
 /// The report line for a paper the sheet can't take where the file puts it.
@@ -184,12 +197,17 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     }
     let schematic =
         pcbcraft_kicad::read_schematic(text).map_err(|e| CommandError::InvalidParams(format!("The KiCad schematic can't be read: {e}")))?;
-    import_sheet(schematic, name, None).map(|(imported, _)| imported)
+    import_sheet(schematic, name, None, &mut PlacementState::default()).map(|(imported, _)| imported)
 }
 
 type SheetNets = BTreeSet<BTreeSet<hierarchy::Contact>>;
 
-fn import_sheet(mut schematic: Schematic, name: &str, scope: Option<(Arc<Project>, SheetTarget)>) -> Result<(Imported, SheetNets), CommandError> {
+fn import_sheet(
+    mut schematic: Schematic,
+    name: &str,
+    scope: Option<(Arc<Project>, SheetTarget)>,
+    placement: &mut PlacementState,
+) -> Result<(Imported, SheetNets), CommandError> {
     let mut interface_labels = Vec::new();
     let hierarchical = scope.is_some();
     if hierarchical {
@@ -281,7 +299,7 @@ fn import_sheet(mut schematic: Schematic, name: &str, scope: Option<(Arc<Project
     // pin number is checked when they are recognized. A refused symbol has no pins, so the
     // power-flag reasons below are complete only when every placed symbol converted.
     let pins = LibraryPins::new(&schematic, converted.keys().copied().chain(flags.iter().map(|f| f.lib_symbol.as_str())));
-    refuse_name_clashes(&schematic, &converted, &mut refusals);
+    refuse_name_clashes(&schematic, &converted, hierarchical, &mut refusals);
     check_values(&schematic, &converted, &mut refusals, &mut report);
     // One sheet is the whole schematic here (sub-sheets are refused above), so a net that stays
     // on its sheet reaches the same pins as a global one. Importing sub-sheets must keep the
@@ -341,7 +359,7 @@ fn import_sheet(mut schematic: Schematic, name: &str, scope: Option<(Arc<Project
     refusals.check()?;
 
     let mut builder = Builder::new(name, &converted, scope)?;
-    let placed = builder.place(&schematic, &converted, &pins, &poses, &mut report)?;
+    let placed = builder.place(&schematic, &converted, &pins, &poses, placement, &mut report)?;
     builder.wire(&schematic, &segments, &placed, &converted, &pins, &mut report)?;
     builder.page(schematic.paper.as_ref(), &mut report)?;
     let project = builder.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
@@ -501,10 +519,10 @@ fn is_power_flag(symbol: &pcbcraft_kicad::schematic::LibSymbol) -> bool {
 }
 
 /// Refuse a net name used by more than one kind of named marker: local labels, global labels,
-/// power symbols and local power symbols (KiCad 10's `(power local)`). PCBCraft joins every
-/// marker of one name on a sheet; whether KiCad does across those kinds isn't confirmed, so
-/// such files are refused rather than guessed at.
-fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, refusals: &mut Refusals) {
+/// power symbols and local power symbols (KiCad 10's `(power local)`). The hierarchy importer
+/// handles per-occurrence naming for local and global labels and local power symbols. Other
+/// mixes keep the existing conservative check.
+fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, hierarchical: bool, refusals: &mut Refusals) {
     let mut kinds: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for label in &schematic.labels {
         kinds.entry(label.name.as_str()).or_default().insert(if label.kind == LabelKind::Global { "global label" } else { "local label" });
@@ -518,6 +536,10 @@ fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols
         }
     }
     for (name, kinds) in kinds.iter().filter(|(_, kinds)| kinds.len() > 1) {
+        if hierarchical && !kinds.contains("power symbol") {
+            // Verified against KiCad's export: these markers join by name within one occurrence.
+            continue;
+        }
         let kinds: Vec<&str> = kinds.iter().copied().collect();
         refusals.add(format!("the name `{name}` is used by a {}; how KiCad joins those isn't confirmed", kinds.join(" and a ")));
     }
@@ -803,12 +825,10 @@ impl Builder {
         converted: &BTreeMap<&str, symbols::Converted>,
         pins: &LibraryPins,
         poses: &[Option<(u8, bool)>],
+        placement: &mut PlacementState,
         report: &mut Report,
     ) -> Result<Vec<Placed>, CommandError> {
         let mut placed = Vec::new();
-        // Annotated units of one component share a reference and a library symbol.
-        let mut components: BTreeMap<(String, String), (u64, BTreeSet<u32>)> = BTreeMap::new();
-        let mut references: BTreeSet<String> = BTreeSet::new();
         for source in placement_order(schematic) {
             let (Some(symbol), Some(pose)) = (schematic.symbols.get(source), poses.get(source)) else { continue };
             let (Some(c), Some((turns, mirrored))) = (converted.get(symbol.lib_symbol.as_str()), *pose) else { continue };
@@ -818,9 +838,13 @@ impl Builder {
             let annotated = !symbol.reference.ends_with('?');
             let key = (symbol.reference.clone(), symbol.lib_symbol.clone());
             // A unit already placed under this reference is a copy KiCad allows: a new part.
-            let existing = annotated.then(|| components.get(&key).cloned()).flatten().filter(|(_, units)| !units.contains(&symbol.unit));
-            match &existing {
-                Some((component, _)) => {
+            let existing = if annotated { placement.components.get(&key).filter(|part| !part.units.contains(&symbol.unit)) } else { None };
+            if existing.is_some_and(|part| part.definition != c.definition) {
+                return Err(CommandError::InvalidParams(format!("{} has different symbol definitions on its placed units.", symbol.reference)));
+            }
+            match existing {
+                Some(part) => {
+                    let component = part.id;
                     let params = json!({"component": format!("component-{component}"), "unit": unit, "rotation": rotation,
                         "x_nm": symbol.at.x_nm, "y_nm": symbol.at.y_nm, "auto_heal": false});
                     self.apply(PLACE_UNIT, params, &format!("placing {} unit {}", symbol.reference, symbol.unit))?;
@@ -847,12 +871,16 @@ impl Builder {
                 )?;
             }
             if existing.is_none() {
-                self.set_fields(symbol, ordinal, annotated, &mut references, report)?;
+                self.set_fields(symbol, ordinal, annotated, placement, report)?;
                 if annotated {
-                    components.entry(key).or_insert((component, BTreeSet::from([symbol.unit])));
+                    placement.components.entry(key).or_insert_with(|| ImportedComponent {
+                        id: component,
+                        units: BTreeSet::from([symbol.unit]),
+                        definition: c.definition,
+                    });
                 }
-            } else if let Some((_, units)) = components.get_mut(&key) {
-                units.insert(symbol.unit);
+            } else if let Some(part) = placement.components.get_mut(&key) {
+                part.units.insert(symbol.unit);
                 let project = self.project()?;
                 let id = crate::schematic::symbol_id(ordinal);
                 let native = project.symbol(&id).ok_or_else(|| CommandError::NotFound("the imported unit is missing".into()))?;
@@ -878,7 +906,7 @@ impl Builder {
         symbol: &PlacedSymbol,
         ordinal: u64,
         annotated: bool,
-        references: &mut BTreeSet<String>,
+        placement: &mut PlacementState,
         report: &mut Report,
     ) -> Result<(), CommandError> {
         if symbol.reference_from == pcbcraft_kicad::schematic::ReferenceSource::OtherRecord {
@@ -893,10 +921,17 @@ impl Builder {
             report.note("unannotated references numbered automatically");
         } else if check_reference(&symbol.reference).is_err() {
             report.note("references longer than 32 characters or containing spaces numbered automatically");
-        } else if !references.insert(symbol.reference.clone()) {
+        } else if !placement.references.insert(symbol.reference.clone()) {
             report.note("references used by two different parts numbered automatically");
         } else {
             reference = symbol.reference.clone();
+        }
+        if reference != symbol.reference && placement.reserved.contains(&reference) {
+            let prefix = &part.definition.reference_prefix;
+            reference = (part.reference_number + 1..=crate::MAX_REFERENCE_NUMBER)
+                .map(|number| format!("{prefix}{number}"))
+                .find(|candidate| !placement.reserved.contains(candidate) && !project.components.values().any(|part| part.reference() == candidate))
+                .ok_or_else(|| CommandError::CapExceeded("no unreserved automatic reference number is available".into()))?;
         }
         let value = part.value().to_owned();
         let metadata = metadata(symbol, report)?;

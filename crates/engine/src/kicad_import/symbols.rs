@@ -43,6 +43,8 @@ pub(super) struct Converted {
     pub(super) text: String,
     /// The native unit ID for each KiCad unit number that can be placed.
     pub(super) units: BTreeMap<u32, String>,
+    /// Content fingerprint for matching multi-unit definitions independently of local IDs.
+    pub(super) definition: [u8; 32],
     /// For a power symbol, the terminal whose net the placed Value names.
     pub(super) power_terminal: Option<String>,
     /// For a power symbol, where that terminal's pin is in the library symbol: the index of its
@@ -253,11 +255,22 @@ pub(super) fn convert(
     {
         document["behavior"] = json!({"type": "power", "terminal": terminal});
     }
+    // A per-sheet ID suffix can change when another name maps to the same slug.
+    // Compare the converted symbol content independently of that allocated ID.
+    let definition = if units.len() > 1 {
+        use sha2::Digest;
+        let native_id = document["id"].take();
+        let digest = sha2::Sha256::digest(document.to_string().as_bytes()).into();
+        document["id"] = native_id;
+        digest
+    } else {
+        [0; 32]
+    };
     let text = document.to_string();
     if text.len() > MAX_FILE_BYTES {
         return Err(format!("its native document would take {} KiB; a library file holds at most {} KiB", text.len() >> 10, MAX_FILE_BYTES >> 10));
     }
-    Ok(Converted { id, text, units, power_terminal, power_pin })
+    Ok(Converted { id, text, definition, units, power_terminal, power_pin })
 }
 
 /// A pin's logical terminal: its name and native electrical type. Fails for a number the native

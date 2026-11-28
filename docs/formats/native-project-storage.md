@@ -689,8 +689,10 @@ saved without the opening migration.
 
 The first desktop Save or browser Download rewrites older sheets at the same
 paths even when their records are unchanged. Later unchanged saves preserve
-the exact bytes. Removing optional records or using Undo and Redo keeps the
-sheet/10 header.
+the exact bytes. Edits, Undo and Redo retain the header while the presence of
+explicit parent pin positions stays the same. Deleting the last explicit pin
+position writes sheet/10 on the next save, and undoing that deletion restores
+sheet/11 on the next save.
 
 #### Historical appearance and generated legs
 
@@ -1032,8 +1034,9 @@ preserves pin locations imported from KiCad, including locations outside the
 native pin slots. The pin moves with its parent symbol and follows its edge
 when the symbol is resized. An optional label `orientation` (`left`, `right`,
 `up` or `down`) controls where the child-side glyph extends from its wire anchor
-independently of electrical direction. Sheets without explicit pin positions
-still use sheet/10.
+independently of electrical direction. The optional `imported_aliases` list
+holds IDs of repeated anchors on the same sheet, so renaming the port also
+renames those anchors. Sheets without explicit pin positions still use sheet/10.
 
 A stored `{"label":<id>}` endpoint addresses a child label; `{"sheet_pin":<id>}`
 addresses its distinct parent-side pin. Both resolve only within their owning

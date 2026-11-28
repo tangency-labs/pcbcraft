@@ -510,6 +510,7 @@ fn split(project: &Project, plan: &Preview, anchor: Option<Point>, cursor: &mut 
             slot: free,
             parent_pin: None,
             orientation: None,
+            imported_aliases: Vec::new(),
         });
     }
     let by_net: BTreeMap<usize, &hierarchy::Label> = plan.ports.iter().map(|port| port.net).zip(&labels).collect();
