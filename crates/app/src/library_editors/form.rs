@@ -10,6 +10,10 @@ pub(super) struct Draft {
     value: Value,
     original: Value,
     numbers: BTreeMap<String, (String, String)>,
+    /// The assembly label defaults (body centre, no rotation, default size) when the draft was
+    /// taken, ignoring stored custom settings: a newly enabled or re-enabled custom setting
+    /// starts from its current default, never from the override it replaces.
+    assembly_label: Option<pcbcraft_engine::board::definition::ResolvedAssemblyLabel>,
 }
 impl Draft {
     /// Capture the selected primitive or definition metadata with its document authority.
@@ -23,12 +27,24 @@ impl Draft {
                 "enabled": item.reference_font.is_some(),
                 "offset": item.reference_offset.unwrap_or(pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET),
             });
+            // Every setting is optional; the metadata edit always sends the complete record.
+            value["assembly_label"] = serde_json::to_value(item.assembly_label.unwrap_or_default()).unwrap_or_else(|_| json!({}));
         }
         if let Some(pad) = value.get_mut("pad").and_then(Value::as_object_mut) {
             pad.entry("corner_radius_nm").or_insert(json!(0));
             pad.entry("drill_nm").or_insert(Value::Null);
         }
-        Self { revision, object, kind: item.kind, original: value.clone(), value, numbers: BTreeMap::new() }
+        let assembly_label =
+            (object.is_none() && item.kind == Kind::Footprint).then(|| item.draft_footprint().ok()).flatten().map(|mut definition| {
+                definition.assembly_label = None;
+                definition.assembly_label()
+            });
+        Self { revision, object, kind: item.kind, original: value.clone(), value, numbers: BTreeMap::new(), assembly_label }
+    }
+    /// The edited JSON value, for harness tests of the property controls.
+    #[cfg(test)]
+    pub(super) fn value(&self) -> &Value {
+        &self.value
     }
     /// Invalid numeric text is also unsaved input even while the last valid scalar is unchanged.
     pub(super) fn dirty(&self) -> bool {
@@ -56,7 +72,7 @@ impl Draft {
             hidden.push("fill");
         }
         if self.kind == Kind::Footprint && self.object.is_none() {
-            hidden.extend(["reference_prefix", "default_value", "footprint_reference"]);
+            hidden.extend(["reference_prefix", "default_value", "footprint_reference", "assembly_label"]);
             let reference = &mut self.value["footprint_reference"];
             let mut enabled = reference["enabled"].as_bool().unwrap_or_default();
             if ui.checkbox(&mut enabled, "Generate silkscreen reference").changed() {
@@ -67,6 +83,40 @@ impl Draft {
             } else {
                 self.numbers.remove(".footprint_reference.offset.x_nm");
                 self.numbers.remove(".footprint_reference.offset.y_nm");
+            }
+            // The assembly label shows the designator. Each setting is either its default (the
+            // body centre, no rotation, the default size) or a custom value.
+            ui.label("Assembly label");
+            let defaults = self.assembly_label;
+            let label = &mut self.value["assembly_label"];
+            if !label.is_object() {
+                *label = json!({});
+            }
+            for (key, name, default) in [
+                ("position", "Custom label position", defaults.map_or(json!({"x_nm": 0, "y_nm": 0}), |d| json!(d.position))),
+                ("rotation", "Custom label rotation", defaults.map_or(json!(0), |d| json!(d.rotation))),
+                ("size", "Custom label size", json!(defaults.map_or(pcbcraft_engine::board::definition::AssemblyLabel::DEFAULT_SIZE, |d| d.size))),
+            ] {
+                let mut custom = label.get(key).is_some();
+                if ui.checkbox(&mut custom, name).changed()
+                    && let Some(object) = label.as_object_mut()
+                {
+                    if custom {
+                        object.insert(key.into(), default);
+                    } else {
+                        object.remove(key);
+                    }
+                }
+                let path = format!(".assembly_label.{key}");
+                if custom {
+                    fields(ui, &mut label[key], &mut self.numbers, &path, expanded, &[]);
+                } else {
+                    self.numbers.retain(|field, _| field != &path && !field.starts_with(&format!("{path}.")));
+                }
+            }
+            if label.as_object().is_some_and(|object| !object.is_empty()) && pcbcraft_chrome::controls::button(ui, "Reset assembly label").clicked() {
+                *label = json!({});
+                self.numbers.retain(|field, _| !field.starts_with(".assembly_label."));
             }
         }
         if pad {
@@ -264,6 +314,14 @@ fn label(path: &str) -> String {
     let path = path.trim_start_matches('.');
     if let Some(axis) = path.strip_prefix("footprint_reference.offset.") {
         return if axis == "x_nm" { "Reference X offset (mm)" } else { "Reference Y offset (mm)" }.into();
+    }
+    match path {
+        "assembly_label.position.x_nm" => return "Assembly label X (mm)".into(),
+        "assembly_label.position.y_nm" => return "Assembly label Y (mm)".into(),
+        "assembly_label.rotation" => return "Assembly label rotation (°)".into(),
+        "assembly_label.size.height_nm" => return "Assembly label height (mm)".into(),
+        "assembly_label.size.stroke_width_nm" => return "Assembly label stroke (mm)".into(),
+        _ => {}
     }
     let names = path
         .split('.')
@@ -600,5 +658,72 @@ mod slot_form_tests {
         draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "360".into()));
         let error = draft.action().unwrap_err();
         assert_eq!(error, "Slot Rotation (°) must be at least 0° and less than 360°.");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod assembly_label_form_tests {
+    use super::*;
+
+    /// A draft with fabrication geometry but no pads or holes still gives the form its
+    /// body-centre default, so a custom position starts there.
+    #[test]
+    fn definition_form_takes_the_label_default_from_a_draft_without_pads() {
+        use pcbcraft_engine::{
+            authoring::{Action, Primitive},
+            board::definition::{GraphicPurpose, GraphicRect},
+            schematic::Point,
+        };
+        let mut session = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        session.execute(session.revision(), Action::Delete { objects: vec![1, 2, 3] }).unwrap();
+        let body = GraphicRect {
+            purpose: GraphicPurpose::Fabrication,
+            center: Point { x_nm: 4_000_000, y_nm: 0 },
+            width_nm: 1_600_000,
+            height_nm: 800_000,
+            rotation: 0,
+        };
+        session.execute(session.revision(), Action::Insert { primitive: Primitive::Outline { graphic: body } }).unwrap();
+        assert!(session.snapshot().footprint().is_err());
+        let draft = Draft::new(&session.snapshot(), None, session.revision());
+        assert_eq!(draft.assembly_label.unwrap().position, Point { x_nm: 4_000_000, y_nm: 0 });
+    }
+
+    /// The definition form sets custom label position, rotation and size from typed values,
+    /// starts from the resolved defaults, and resets the label to its defaults.
+    #[test]
+    fn definition_form_sets_and_resets_the_assembly_label() {
+        let mut session = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let mut draft = Draft::new(&session.snapshot(), None, session.revision());
+        assert_eq!(draft.value["assembly_label"], json!({}));
+        let defaults = draft.assembly_label.unwrap();
+        assert_eq!(defaults.position, session.snapshot().footprint().unwrap().body_centre());
+        assert_eq!((defaults.rotation, defaults.size), (0, pcbcraft_engine::board::definition::AssemblyLabel::DEFAULT_SIZE));
+        draft.value["assembly_label"] = json!({"position": defaults.position, "rotation": 0, "size": defaults.size});
+        draft.numbers.insert(".assembly_label.position.x_nm".into(), ("0".into(), "1.5".into()));
+        draft.numbers.insert(".assembly_label.rotation".into(), ("0".into(), "90".into()));
+        draft.numbers.insert(".assembly_label.size.height_nm".into(), ("1".into(), "0.8".into()));
+        draft.numbers.insert(".assembly_label.size.stroke_width_nm".into(), ("0.15".into(), "0.1".into()));
+        assert_eq!(label(".assembly_label.rotation"), "Assembly label rotation (°)");
+        session.execute(session.revision(), draft.action().unwrap()).unwrap();
+        let saved = session.snapshot().assembly_label.unwrap();
+        assert_eq!(saved.position.map(|position| position.x_nm), Some(1_500_000));
+        assert_eq!(saved.rotation, Some(90));
+        assert_eq!(saved.size.map(|size| (size.height_nm, size.stroke_width_nm)), Some((800_000, 100_000)));
+        assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-footprint/13");
+
+        let mut draft = Draft::new(&session.snapshot(), None, session.revision());
+        assert_eq!(draft.value["assembly_label"]["rotation"], 90);
+        let reseeded = draft.assembly_label.unwrap();
+        assert_eq!(
+            (reseeded.position, reseeded.rotation, reseeded.size),
+            (session.snapshot().footprint().unwrap().body_centre(), 0, pcbcraft_engine::board::definition::AssemblyLabel::DEFAULT_SIZE),
+            "custom settings re-enabled in this draft start from the defaults, not the stored overrides"
+        );
+        draft.value["assembly_label"] = json!({});
+        session.execute(session.revision(), draft.action().unwrap()).unwrap();
+        assert_eq!(session.snapshot().assembly_label, None, "a reset label uses the defaults");
+        assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-footprint/13");
     }
 }

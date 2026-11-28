@@ -589,11 +589,11 @@ encoder refuses test-point marks rather than dropping them. See
 
 ## Document ownership
 
-Plated slots change the pinned footprint document, not the board placement or
-accepted baseline record. A footprint with at least one slot uses format 5 in
-both folder and archive saves. The placement still refers to the same
-library/item/revision key; a save without slot or non-plated hole data does not
-advance the footprint format.
+Plated slots and assembly label settings change the pinned footprint document,
+not the board placement or accepted baseline record. A pinned copy keeps its
+published format in both folder and archive saves; newly exported definitions
+use format 13. The placement still refers to the same library/item/revision key,
+so saving a project does not advance the format of an existing pinned footprint.
 
 | File | Format | Contents |
 |---|---|---|

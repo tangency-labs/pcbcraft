@@ -15,8 +15,10 @@ pub(crate) const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
 const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
 /// Historical format for any supported mix of holes, without an orientation statement.
 pub(crate) const MIXED_HOLES_FORMAT: &str = "pcbcraft-footprint/6";
-/// Native format for all newly authored footprints: format 6 plus an optional orientation statement.
-pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/7";
+/// Historical format 6 plus an optional assembly orientation statement.
+pub(crate) const ORIENTATION_FORMAT: &str = "pcbcraft-footprint/7";
+/// The sole write format: format 7 plus optional assembly label settings.
+pub(crate) const CURRENT_FORMAT: &str = "pcbcraft-footprint/13";
 const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
@@ -171,6 +173,92 @@ impl CircularNpth {
     }
 }
 
+/// Optional defaults for the assembly label. The label's text is always the component's reference
+/// designator; omitted settings resolve to the footprint body centre, no rotation and the default size.
+/// It decodes only from an object, as does each of its records, never from a positional array.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct AssemblyLabel {
+    /// Local position of the centre of the lettering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<Point>,
+    /// Counterclockwise whole degrees, 0 through 359.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<super::reference::Size>,
+}
+
+/// The fields of an assembly label record, with the position and size records object-only.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssemblyLabelRecord {
+    #[serde(default, deserialize_with = "present_object")]
+    position: Option<Point>,
+    #[serde(default, deserialize_with = "super::reference::present")]
+    rotation: Option<u16>,
+    #[serde(default, deserialize_with = "present_object")]
+    size: Option<super::reference::Size>,
+}
+
+impl<'de> Deserialize<'de> for AssemblyLabel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let AssemblyLabelRecord { position, rotation, size } = object(deserializer)?;
+        Ok(Self { position, rotation, size })
+    }
+}
+
+/// Decode a record only from an object: a derived decoder also reads a positional sequence.
+fn object<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<T, D::Error> {
+    struct Record<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Record<T> {
+        type Value = T;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an object")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(Record(std::marker::PhantomData))
+}
+
+/// A present optional record, which must be an object; `null` is refused as for other settings.
+fn present_object<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    object(deserializer).map(Some)
+}
+
+/// Assembly label settings with every default applied, in footprint-local coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedAssemblyLabel {
+    pub position: Point,
+    pub rotation: u16,
+    pub size: super::reference::Size,
+}
+
+impl AssemblyLabel {
+    /// The default size matches the default silkscreen reference.
+    pub const DEFAULT_SIZE: super::reference::Size = super::reference::Size { height_nm: 1_000_000, stroke_width_nm: 150_000 };
+
+    /// Refuse an empty record, which is written by omitting the field, and out-of-range settings.
+    pub fn validate(&self) -> Result<(), String> {
+        if self == &Self::default() {
+            return Err("Omit empty assembly label settings to use the defaults.".into());
+        }
+        if self.position.is_some_and(|position| !super::valid_reference_offset(position)) {
+            return Err("Assembly label position must stay within the reference offset limit.".into());
+        }
+        if self.rotation.is_some_and(|rotation| rotation >= 360) {
+            return Err("Assembly label rotation must be from 0 through 359 degrees.".into());
+        }
+        if self.size.is_some_and(|size| !(1..=10_000_000).contains(&size.height_nm) || !(1..=size.height_nm / 2).contains(&size.stroke_width_nm)) {
+            return Err("Assembly label height must be positive and at most 10 mm, with stroke width at most half the height.".into());
+        }
+        Ok(())
+    }
+}
+
 /// Absence is the only encoding for an empty list. In particular, older formats
 /// must not accept a `non_plated_holes` field disguised as an empty array.
 fn nonempty_mechanical_holes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<CircularNpth>, D::Error> {
@@ -207,7 +295,10 @@ pub struct FootprintDefinition {
     /// Optional local displacement of the default reference from the automatic anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
-    /// Optional assembly orientation statement. Only format 7 can carry it; historical formats
+    /// Optional assembly label defaults; only format 13 carries them.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::reference::present")]
+    pub assembly_label: Option<AssemblyLabel>,
+    /// Optional assembly orientation statement. Only formats 7 and 13 can carry it; earlier formats
     /// read without one keep their format and bytes.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
     pub orientation: Option<Orientation>,
@@ -369,6 +460,100 @@ impl FootprintDefinition {
         super::silkscreen::clipped(paths, &self.pads, style)
     }
 
+    /// The centre of the footprint body: the bounding box of its fabrication graphics, or of its
+    /// pads and holes when it has none, or the origin of an empty draft. Pads are bounded by
+    /// their copper contour, so rounded ends and corners of rotated pads are taken into account.
+    pub fn body_centre(&self) -> Point {
+        let corners = |center: Point, width: i64, height: i64, rotation: u16| {
+            let (sin, cos) = f64::from(rotation).to_radians().sin_cos();
+            [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)].map(|(rx, ry)| {
+                let (x, y) = (rx * width as f64, ry * height as f64);
+                Point { x_nm: center.x_nm + (x * cos + y * sin).round() as i64, y_nm: center.y_nm + (y * cos - x * sin).round() as i64 }
+            })
+        };
+        let body: Vec<Point> = self
+            .graphics
+            .iter()
+            .filter(|graphic| graphic.purpose == GraphicPurpose::Fabrication)
+            .flat_map(|graphic| corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation))
+            .chain(
+                self.artwork
+                    .iter()
+                    .filter(|artwork| artwork.purpose == GraphicPurpose::Fabrication)
+                    .flat_map(|artwork| artwork.graphic.paths().into_iter().flatten()),
+            )
+            .collect();
+        let body = if body.is_empty() {
+            self.pads
+                .iter()
+                .flat_map(|pad| {
+                    let contour = super::geometry::Contour::pad(
+                        pad.center,
+                        pad.local_corners(),
+                        pad.shape,
+                        pad.corner_radius_nm,
+                        (pad.width_nm, pad.height_nm),
+                    );
+                    let [left, top, right, bottom] = contour.bounds().map(|bound| bound.round() as i64);
+                    [Point { x_nm: left, y_nm: top }, Point { x_nm: right, y_nm: bottom }]
+                })
+                .chain(self.non_plated_holes.iter().flat_map(|hole| corners(hole.center, hole.diameter_nm, hole.diameter_nm, 0)))
+                .collect()
+        } else {
+            body
+        };
+        let (Some(left), Some(right)) = (body.iter().map(|p| p.x_nm).min(), body.iter().map(|p| p.x_nm).max()) else {
+            return Point { x_nm: 0, y_nm: 0 };
+        };
+        let (Some(top), Some(bottom)) = (body.iter().map(|p| p.y_nm).min(), body.iter().map(|p| p.y_nm).max()) else {
+            return Point { x_nm: 0, y_nm: 0 };
+        };
+        Point { x_nm: left + (right - left) / 2, y_nm: top + (bottom - top) / 2 }
+    }
+
+    /// Apply the defaults to the stored assembly label settings.
+    pub fn assembly_label(&self) -> ResolvedAssemblyLabel {
+        let label = self.assembly_label.unwrap_or_default();
+        ResolvedAssemblyLabel {
+            position: label.position.unwrap_or_else(|| self.body_centre()),
+            rotation: label.rotation.unwrap_or(0),
+            size: label.size.unwrap_or(AssemblyLabel::DEFAULT_SIZE),
+        }
+    }
+
+    /// Resolve the assembly label strokes for a reference designator in local coordinates: the
+    /// lettering is centred on the label position, then rotated about it. It uses the definition's
+    /// reference font and is not clipped by pads.
+    pub fn assembly_label_paths(&self, text: &str) -> Vec<Vec<Point>> {
+        let label = self.assembly_label();
+        if text.is_empty() || self.assembly_label.is_some_and(|label| label.validate().is_err()) {
+            return Vec::new();
+        }
+        let style =
+            super::silkscreen::Settings { text_height_nm: label.size.height_nm, stroke_width_nm: label.size.stroke_width_nm, pad_clearance_nm: 0 };
+        let lettering =
+            if self.reference.as_deref() == Some("pcbcraft-stroke-1") { super::silkscreen::legacy_lettering } else { super::silkscreen::lettering };
+        let mut paths = lettering(text, 0, style);
+        let points = || paths.iter().flatten();
+        let (Some(left), Some(right)) = (points().map(|p| p.x_nm).min(), points().map(|p| p.x_nm).max()) else { return Vec::new() };
+        let (Some(top), Some(bottom)) = (points().map(|p| p.y_nm).min(), points().map(|p| p.y_nm).max()) else { return Vec::new() };
+        let (cx, cy) = (left + (right - left) / 2, top + (bottom - top) / 2);
+        // Quarter turns stay exact; 90 degrees maps local (x, y) to (y, -x).
+        let (sin, cos) = match label.rotation {
+            0 => (0.0, 1.0),
+            90 => (1.0, 0.0),
+            180 => (0.0, -1.0),
+            270 => (-1.0, 0.0),
+            degrees => f64::from(degrees).to_radians().sin_cos(),
+        };
+        for point in paths.iter_mut().flatten() {
+            let (x, y) = ((point.x_nm - cx) as f64, (point.y_nm - cy) as f64);
+            point.x_nm = label.position.x_nm + (x * cos + y * sin).round() as i64;
+            point.y_nm = label.position.y_nm + (y * cos - x * sin).round() as i64;
+        }
+        paths
+    }
+
     /// Return the exact identity used by placements and pinned project copies.
     pub(crate) fn key(&self) -> Key {
         (self.library.clone(), self.id.clone(), self.revision)
@@ -379,16 +564,21 @@ impl FootprintDefinition {
         self.pads.iter().any(|pad| pad.plated_slot.is_some())
     }
 
-    /// Keep the historical feature requirements while allowing any supported mix in formats 6
-    /// and 7. Only the current format 7 can carry an orientation statement, which stays
-    /// optional there. Pad and hole dimensions are validated separately.
+    /// Keep historical feature requirements; formats 6, 7 and 13 allow any supported hole mix.
+    /// Only formats 7 and 13 can carry orientation, and only format 13 carries label settings.
     fn validate_format(&self) -> Result<(), String> {
+        if self.assembly_label.is_some()
+            && matches!(self.format.as_str(), LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | MIXED_HOLES_FORMAT | ORIENTATION_FORMAT)
+        {
+            return Err("assembly label settings require footprint format 13".into());
+        }
         let matches_content = match self.format.as_str() {
-            CURRENT_FORMAT => true,
             LEGACY_FORMAT | NPTH_FORMAT | SLOT_FORMAT | MIXED_HOLES_FORMAT if self.orientation.is_some() => {
-                return Err(format!("footprint format must be {CURRENT_FORMAT} for a definition with an orientation statement"));
+                return Err(format!(
+                    "footprint format must be {ORIENTATION_FORMAT} or {CURRENT_FORMAT} for a definition with an orientation statement"
+                ));
             }
-            MIXED_HOLES_FORMAT => true,
+            MIXED_HOLES_FORMAT | ORIENTATION_FORMAT | CURRENT_FORMAT => true,
             LEGACY_FORMAT => self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             NPTH_FORMAT => !self.non_plated_holes.is_empty() && !self.has_plated_slots(),
             SLOT_FORMAT => self.has_plated_slots(),
@@ -421,6 +611,9 @@ impl FootprintDefinition {
             return Err(format!("a footprint has at most {MAX_ARTWORK} artwork objects, not {}", self.artwork.len()));
         }
         self.validate_format()?;
+        if let Some(label) = &self.assembly_label {
+            label.validate()?;
+        }
         if self.non_plated_holes.len() > MAX_MECHANICAL_HOLES || self.non_plated_holes.iter().any(|hole| !hole.valid()) {
             return Err("invalid circular non-plated hole count, centre or finished diameter".into());
         }

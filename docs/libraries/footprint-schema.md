@@ -16,9 +16,9 @@ commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
 Historical board format 15 adds local reference position and print overrides.
-These fields are optional in current boards. New footprint exports and publications use `pcbcraft-footprint/7` for any supported
+These fields are optional in current boards. New footprint exports and publications use `pcbcraft-footprint/13` for any supported
 mix of pads and holes, with or without an [assembly orientation](#assembly-orientation)
-statement. Published and project-pinned revisions retain their
+statement or [assembly label](#assembly-label) settings. Published and project-pinned revisions retain their
 original formats and addresses.
 
 | Document | Format | Machine-readable schema |
@@ -27,7 +27,8 @@ original formats and addresses.
 | Historical footprint with circular non-plated through holes and no slots | `pcbcraft-footprint/4` | [Format 4 schema](../schemas/footprint-v4.schema.json) |
 | Historical footprint with plated slots | `pcbcraft-footprint/5` | [Format 5 schema](../schemas/footprint-v5.schema.json) |
 | Historical footprint with any supported mix of pads and holes and no orientation statement | `pcbcraft-footprint/6` | [Format 6 schema](../schemas/footprint-v6.schema.json) |
-| Current footprint definition, with an optional assembly orientation statement | `pcbcraft-footprint/7` | [Format 7 schema](../schemas/footprint-v7.schema.json) |
+| Historical footprint definition, with an optional assembly orientation statement | `pcbcraft-footprint/7` | [Format 7 schema](../schemas/footprint-v7.schema.json) |
+| Current write format for any footprint, with optional assembly orientation and label settings | `pcbcraft-footprint/13` | [Format 13 schema](../schemas/footprint-v13.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](../schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
@@ -96,14 +97,15 @@ also accept `null` for some optional Rust fields as a compatibility input.
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | Up to 1,024 distinct numbered pads. An empty array requires at least one non-plated hole and format 4, 6 or 7 | Physical lands with optional plated circular or obround holes |
-| `non_plated_holes` | 1…128 entries when present. Required in format 4, optional in formats 5, 6 and 7, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
+| `pads` | Up to 1,024 distinct numbered pads. An empty array requires at least one non-plated hole and format 4, 6, 7 or 13 | Physical lands with optional plated circular or obround holes |
+| `non_plated_holes` | 1…128 entries when present. Required in format 4, optional in formats 5, 6, 7 and 13, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
 | `artwork` | Optional 1…256 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
 | `reference` | Optional `pcbcraft-stroke-1` or `pcbcraft-technical-1` | Enable generated reference text using this font |
 | `reference_offset` | Optional nonzero local point | Displace the generated reference from its automatic anchor |
-| `orientation` | Optional in format 7 and forbidden in the earlier formats | Polarity, pin 1 pad and stated zero orientation for assembly |
+| `orientation` | Optional in formats 7 and 13; forbidden in earlier formats | Polarity, pin 1 pad and stated zero orientation for assembly |
+| `assembly_label` | Optional record, format 13 only | Assembly label settings; see [Assembly label](#assembly-label) |
 
 Source strings are nonempty, trimmed and free of control characters. Their UTF-8
 byte limits are 64 for `kind`, 2,048 for `reference` and 1,024 for `locator`.
@@ -113,7 +115,7 @@ Pad numbers and mapping identifiers retain their spelling, including `01`.
 They contain 1…8 ASCII letters, digits, `+`, `-` or `_`. The
 [footprint guide](footprint-library.md#definition-and-placement-contract)
 defines the existing land shapes, copper bindings and drill relationships.
-In formats 5, 6 and 7 a pad may use `plated_slot` in place of `drill_nm`, only with
+In formats 5, 6, 7 and 13 a pad may use `plated_slot` in place of `drill_nm`, only with
 `copper: "all_copper"`. Its anchor is the pad centre. `width_nm` is the finished
 opening width and `length_nm` is the full end-to-end length, including both
 round caps. Both use the existing footprint dimension bounds and length must be
@@ -140,7 +142,7 @@ A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,0
 The array implies a non-plated through hole with no copper land. It has no pad
 number and does not participate in terminal mappings or connectivity. Footprint
 rotation and side changes transform its center. Removing the last non-plated
-hole omits the array from the next export, which stays at format 7.
+hole omits the array from the next format-13 export.
 
 ## Coordinates and generated reference
 
@@ -235,6 +237,27 @@ label when local overrides do not enable ink. An explicit `visible: true`
 switches to physical reference paths. Hiding a definition-owned reference keeps
 its physical mode and does not restore an editor-only label.
 
+## Assembly label
+
+Every footprint has an assembly label: the component designator, which a
+fabrication or assembly drawing can show inside the part body. Format 13 stores
+its settings in an optional `assembly_label` record. The record is omitted when
+every setting is the default, and an empty record is refused.
+
+| Member | Type and constraint | Default when omitted |
+| --- | --- | --- |
+| `position` | Local point, each axis within ±100 mm | The body centre |
+| `rotation` | Integer 0…359, counterclockwise degrees | 0 |
+| `size` | `height_nm` 1…10,000,000 and `stroke_width_nm` at most half the height | 1.0 mm high, 0.15 mm stroke |
+
+The body centre is the centre of the bounding box of the definition's fabrication
+graphics and artwork. Without fabrication geometry it is the centre of the pads
+and holes, and otherwise the footprint origin. A pad counts with its copper
+outline, including the rounded ends of an oval and the rounded corners of a
+rounded rectangle at any rotation. Library previews show `REF` with
+the resolved settings. This change stores the settings only; board views and
+outputs do not yet draw the label.
+
 ## Physical placement fields
 
 The historical format-15 placement schema validates one physical `footprints`
@@ -320,7 +343,7 @@ change an existing adoption.
 
 IPC-7351 section 7.3.1 asks that a device's orientation and polarity be defined in
 the CAD data, and section 16 defines placement rotations from the library's zero
-component orientation. A format-7 definition can state both in `orientation`:
+component orientation. Formats 7 and 13 can state both in `orientation`:
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
@@ -331,7 +354,7 @@ component orientation. A format-7 definition can state both in `orientation`:
 The object is closed to unknown fields, `null` is refused for each field and for the
 object, and `pin_1` must name an existing pad. The editor does not keep the statement
 yet, so it declines to open or fork a definition that has one instead of dropping it;
-a format-7 definition without a statement opens normally.
+a format-7 or format-13 definition without a statement opens normally.
 Symbols and parts carry no orientation data.
 
 Whether a part shows its orientation on the board is derived from geometry, not
@@ -368,7 +391,7 @@ other fields or project state.
 - Drawing extents after tessellation stay within definition bounds. Lines have
   distinct endpoints, rectangles have ordered corners, and polyline segments
   have distinct consecutive points. Text is nonblank and control-free.
-- An `orientation` statement appears only in `pcbcraft-footprint/7`, and its
+- An `orientation` statement appears only in formats 7 and 13, and its
   `pin_1`, when given, names one of the definition's pads.
 - Metadata meets the UTF-8 byte limits and trimming rules. JSON Schema's string
   lengths count Unicode characters, so its bounds alone cannot establish this.
@@ -392,23 +415,24 @@ the default reference offset and subsequent exports retain its new revision.
 
 ## Compatibility and versioning
 
-The `reference_offset` extension follows the existing format-1 optional
-field convention. Earlier binaries reject an unknown field. They cannot read
-definitions carrying this extension. Definitions with no new data keep their
-existing bytes on no-op save. The format-15 board extension provides an explicit
-version for placed overrides.
+Formats 1, 4, 5, 6 and 7 remain readable; pinned copies and bundled library
+definitions keep their published format and bytes. Format 1 accepts surface and
+round plated lands. Format 4 requires a circular non-plated hole and excludes
+plated slots. Format 5 requires at least one plated slot and permits circular
+non-plated holes. Format 6 accepts any supported mix of pads and holes.
 
-Version 7, the current write format, is version 6 plus an optional `orientation`
-statement. Both accept surface lands, round plated holes, plated slots and circular
-non-plated holes in one schema. Removing a slot or non-plated hole keeps the
-next export at version 7. Formats 1, 4, 5 and 6 keep their historical requirements
-and remain readable.
-Format 1 accepts surface and round plated lands. Format 4 requires a circular
-non-plated hole and excludes plated slots. Format 5 requires at least one plated
-slot and permits circular non-plated holes. Format 6 accepts any supported mix.
-Formats 1, 4, 5 and 6 refuse an orientation statement. Opening a newly exported
-definition requires a reader that supports format 7. Older
-readers refuse unknown footprint versions.
+Format 7 adds an optional `orientation` statement to format 6. Format 13 adds
+optional `assembly_label` settings to format 7. Formats 6, 7 and 13 accept the
+same mix of pads and holes; only 7 and 13 accept `orientation`, and only 13
+accepts `assembly_label`. The exporter writes format 13 for every new or forked
+footprint, even after a slot, non-plated hole or label setting is removed. New
+exports require a reader that supports format 13.
+
+The `reference_offset` extension follows the existing format-1 optional field
+convention. Earlier binaries reject unknown fields and cannot read definitions
+carrying this extension. Definitions with no new data keep their existing bytes
+on no-op save. The format-15 board extension provides an explicit version for
+placed overrides.
 
 Slot-bearing editor drafts use `pcbcraft-library-item/4`. Schematic and board
 clipboard envelopes carrying slots use `pcbcraft-clipboard/7` and `/8`

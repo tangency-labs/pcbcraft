@@ -60,6 +60,11 @@ fn present_category<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result
     Option::deserialize(deserializer).map(Some)
 }
 
+/// Preserve the distinction between an omitted assembly label update and an explicit null.
+fn present_assembly_label<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Box<Option<footprint::AssemblyLabel>>>, D::Error> {
+    Option::deserialize(deserializer).map(|label| Some(Box::new(label)))
+}
+
 /// Generated reference settings owned by the footprint definition, independent of board instances.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -237,6 +242,10 @@ pub struct Item {
     pub reference_font: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
+    /// Optional assembly label defaults: position, rotation and text size. An optional record in
+    /// every footprint editor format, so adding or removing it never changes the format.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::board::reference::present")]
+    pub assembly_label: Option<footprint::AssemblyLabel>,
     /// Read-only provenance from a forked footprint, independent of its editable source summary.
     pub original_source: Option<footprint::Source>,
     allocation: Allocation,
@@ -401,6 +410,10 @@ pub enum Action {
         symbol_settings: Option<SymbolSettings>,
         #[serde(default)]
         footprint_reference: Option<FootprintReferenceSettings>,
+        /// Omission preserves the assembly label settings; an explicit null resets them to the defaults.
+        /// Boxed so this rare edit does not enlarge every action.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_assembly_label")]
+        assembly_label: Option<Box<Option<footprint::AssemblyLabel>>>,
     },
     /// Generate a closed courtyard polygon enclosing pads and optional body graphics.
     GenerateCourtyard {
@@ -417,6 +430,12 @@ pub enum Action {
 }
 
 impl Item {
+    /// The library-item document format this draft carries (read by tests outside this module).
+    #[cfg(test)]
+    pub(crate) fn format(&self) -> &str {
+        &self.format
+    }
+
     /// Resolve an authored symbol through the same native parser used for pinned copies.
     /// Footprint documents return an error rather than producing a placeholder symbol.
     pub fn symbol(&self) -> Result<Arc<SymbolDefinition>, String> {
@@ -432,6 +451,15 @@ impl Item {
             return Err("This document is a symbol.".into());
         }
         serde_json::from_value(self.native()?).map_err(|e| e.to_string())
+    }
+
+    /// Resolve a footprint draft for editor previews and defaults through draft validation, so a
+    /// draft that has no pads or holes yet still resolves. Export and pinned copies use `footprint`.
+    pub fn draft_footprint(&self) -> Result<footprint::FootprintDefinition, String> {
+        if self.kind != Kind::Footprint {
+            return Err("This document is a symbol.".into());
+        }
+        serde_json::from_value(self.native_mode(true)?).map_err(|e| e.to_string())
     }
 
     /// Create an original starting definition with a fresh portable identity.
@@ -458,6 +486,7 @@ impl Item {
             other_units: BTreeMap::new(),
             reference_font: None,
             reference_offset: None,
+            assembly_label: None,
             original_source: None,
             allocation: Allocation { object: 3, revision: 1 },
             objects: BTreeMap::new(),
@@ -641,6 +670,7 @@ impl Item {
         item.license = definition.license.clone();
         item.reference_font = definition.reference.clone();
         item.reference_offset = definition.reference_offset;
+        item.assembly_label = definition.assembly_label;
         item.original_source = Some(definition.source.clone());
         for primitive in definition
             .pads
@@ -800,6 +830,8 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
+                // Every footprint the editor writes is a new revision in the current format, including
+                // a fork of a footprint saved in an earlier one. Existing files keep their format.
                 format: footprint::CURRENT_FORMAT.into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
@@ -815,6 +847,7 @@ impl Item {
                 reference: self.reference_font.clone(),
                 reference_offset: self.reference_offset,
                 orientation: None,
+                assembly_label: self.assembly_label,
             };
             if draft {
                 definition.validate_draft()?;
@@ -843,6 +876,8 @@ impl Item {
             FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT | SHARED_CONTACT_FORMAT
         ) || (self.kind == Kind::Footprint && self.format != self.footprint_format())
             || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
+            || (self.kind == Kind::Symbol && self.assembly_label.is_some())
+            || self.assembly_label.is_some_and(|label| label.validate().is_err())
             || (!matches!(self.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT | SHARED_CONTACT_FORMAT) && self.has_alternate_functions())
             || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
@@ -1152,7 +1187,16 @@ impl Session {
                             }
                         }
                     }
-                    Action::Metadata { name, license, source, reference_prefix, default_value, symbol_settings, footprint_reference } => {
+                    Action::Metadata {
+                        name,
+                        license,
+                        source,
+                        reference_prefix,
+                        default_value,
+                        symbol_settings,
+                        footprint_reference,
+                        assembly_label,
+                    } => {
                         next.name = name;
                         next.license = license;
                         next.source = source;
@@ -1178,6 +1222,16 @@ impl Session {
                             } else {
                                 next.reference_font = None;
                                 next.reference_offset = None;
+                            }
+                        }
+                        if let Some(label) = assembly_label.map(|label| *label) {
+                            if next.kind != Kind::Footprint && label.is_some() {
+                                return Err("Assembly label settings require a footprint document.".into());
+                            }
+                            // Empty settings mean the defaults, which are stored by omission.
+                            next.assembly_label = label.filter(|label| *label != footprint::AssemblyLabel::default());
+                            if let Some(label) = &next.assembly_label {
+                                label.validate()?;
                             }
                         }
                     }

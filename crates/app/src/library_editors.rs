@@ -47,6 +47,9 @@ struct Document {
     publish_source: Option<String>,
     /// The library reference preview is derived once per authoring revision.
     reference_preview: Option<(u64, std::sync::Arc<[Vec<pcbcraft_engine::schematic::Point>]>)>,
+    /// The assembly label preview and its stroke width, derived once per authoring revision.
+    #[allow(clippy::type_complexity)]
+    assembly_label_preview: Option<(u64, std::sync::Arc<[Vec<pcbcraft_engine::schematic::Point>]>, i64)>,
     bound_view: Option<crate::ViewId>,
     presentations: BTreeMap<crate::ViewId, views::Presentation>,
     selected: Option<u64>,
@@ -289,6 +292,7 @@ impl Editors {
             id,
             Document {
                 reference_preview: None,
+                assembly_label_preview: None,
                 session: Session::new(item, saved)?,
                 publish_source: None,
                 bound_view: None,

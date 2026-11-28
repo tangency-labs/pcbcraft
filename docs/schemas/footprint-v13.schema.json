@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint:13",
+  "title": "PCBcraft canonical published footprint definition, format 13",
+  "description": "The current footprint write format: surface, plated, slotted and non-plated-hole footprints with optional assembly orientation and label settings. The engine requires at least one pad or hole and checks the label stroke against its height.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics"],
+  "dependentRequired": { "reference_offset": ["reference"] },
+  "anyOf": [
+    { "properties": { "pads": { "minItems": 1 } } },
+    { "required": ["non_plated_holes"] }
+  ],
+  "properties": {
+    "format": { "const": "pcbcraft-footprint/13" },
+    "library": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
+    "graphics": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/graphics" },
+    "artwork": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/artwork" },
+    "silkscreen": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/silkscreen" },
+    "reference": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference" },
+    "reference_offset": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference_offset" },
+    "pads": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "oneOf": [
+          { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad" },
+          { "$ref": "urn:pcbcraft:schema:footprint:5#/$defs/slotted_pad" }
+        ]
+      }
+    },
+    "non_plated_holes": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/non_plated_holes" },
+    "orientation": {
+      "description": "Assembly polarity and zero orientation. pin_1 must also name one of this definition's pads, which the engine checks.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["polarized"],
+      "properties": {
+        "polarized": { "type": "boolean" },
+        "pin_1": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id" },
+        "zero": { "const": "ipc-7351" }
+      }
+    },
+    "assembly_label": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Assembly label settings for the component designator. Omitted members use their defaults: the body centre, rotation 0 and a 1.0 mm high, 0.15 mm stroke. Omit the whole record when every setting is the default.",
+      "properties": {
+        "position": {
+          "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point",
+          "description": "Text centre in footprint-local nanometers."
+        },
+        "rotation": { "type": "integer", "minimum": 0, "maximum": 359, "description": "Counterclockwise text rotation in whole degrees." },
+        "size": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["height_nm", "stroke_width_nm"],
+          "description": "The stroke width must be at most half the height.",
+          "properties": {
+            "height_nm": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+            "stroke_width_nm": { "type": "integer", "minimum": 1, "maximum": 5000000 }
+          }
+        }
+      }
+    }
+  }
+}

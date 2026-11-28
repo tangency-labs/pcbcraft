@@ -104,6 +104,63 @@ fn footprint_definition_properties_save_a_default_reference_offset() {
     assert_eq!(h.state().library_editors.documents[&id].session.snapshot().reference_offset, None);
 }
 
+/// The assembly label controls in definition properties: a Custom checkbox inserts the current
+/// default and unticking removes it, a typed value applies, re-enabling a cleared override starts
+/// from the default again, and Reset returns to the defaults.
+#[test]
+fn footprint_definition_properties_set_and_reset_the_assembly_label() {
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Footprint);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let id = h.state().library_editors.active.unwrap();
+    let draft = |h: &Harness<'_, PcbApp>| h.state().library_editors.documents[&id].draft.as_ref().unwrap().value()["assembly_label"].clone();
+    let field = "Assembly label rotation (°)";
+    assert_eq!(draft(&h), serde_json::json!({}));
+    assert!(h.query_by_label(field).is_none());
+    assert!(h.query_by_label("Reset assembly label").is_none());
+
+    crate::tests::click(&mut h, "Custom label size");
+    let size = pcbcraft_engine::board::definition::AssemblyLabel::DEFAULT_SIZE;
+    assert_eq!(draft(&h), serde_json::json!({"size": size}), "a custom setting starts from its default");
+    assert!(h.query_by_label("Assembly label height (mm)").is_some());
+    crate::tests::click(&mut h, "Custom label size");
+    assert_eq!(draft(&h), serde_json::json!({}), "unticking removes the setting");
+    assert!(h.query_by_label("Assembly label height (mm)").is_none());
+
+    crate::tests::click(&mut h, "Custom label rotation");
+    assert_eq!(draft(&h), serde_json::json!({"rotation": 0}));
+    h.get_by_label(field).click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label(field).type_text("90");
+    h.run();
+    crate::tests::click(&mut h, "Apply");
+    let applied = h.state().library_editors.documents[&id].session.snapshot();
+    assert_eq!(applied.assembly_label.and_then(|label| label.rotation), Some(90));
+    assert_eq!(applied.export_native().unwrap()["assembly_label"], serde_json::json!({"rotation": 90}));
+
+    // Starting from the stored override, clearing and re-enabling it in one draft restores the
+    // stated default rather than the old custom value.
+    assert_eq!(draft(&h), serde_json::json!({"rotation": 90}));
+    crate::tests::click(&mut h, "Custom label rotation");
+    assert_eq!(draft(&h), serde_json::json!({}));
+    crate::tests::click(&mut h, "Custom label rotation");
+    assert_eq!(draft(&h), serde_json::json!({"rotation": 0}), "a re-enabled rotation starts from 0");
+    crate::tests::click(&mut h, "Custom label size");
+    assert_eq!(draft(&h), serde_json::json!({"rotation": 0, "size": size}));
+
+    crate::tests::click(&mut h, "Reset assembly label");
+    assert_eq!(draft(&h), serde_json::json!({}));
+    crate::tests::click(&mut h, "Apply");
+    let reset = h.state().library_editors.documents[&id].session.snapshot();
+    assert_eq!(reset.assembly_label, None);
+    let native = reset.export_native().unwrap();
+    assert_eq!(native["format"], "pcbcraft-footprint/13");
+    assert!(native.get("assembly_label").is_none());
+    assert!(h.query_by_label("Reset assembly label").is_none());
+}
+
 /// Project and definition Browsers share row geometry and disclosure controls. Folding a
 /// definition retains its selected primitive and both document histories at normal/compact widths.
 #[test]

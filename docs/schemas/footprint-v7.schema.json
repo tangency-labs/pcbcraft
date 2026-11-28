@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:pcbcraft:schema:footprint:7",
   "title": "PCBcraft canonical published footprint definition, format 7",
-  "description": "Current footprint format: format 6 plus an optional assembly orientation object, for any supported pad and hole mix. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
+  "description": "Historical footprint format: format 6 plus an optional assembly orientation object, for any supported pad and hole mix. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics"],

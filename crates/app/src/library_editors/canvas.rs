@@ -706,12 +706,32 @@ impl Document {
         Some(paths)
     }
 
+    /// Preview every footprint's assembly label with a sample designator, at its default or custom
+    /// position, rotation and size, with the stroke width it uses.
+    fn assembly_label_preview(&mut self, item: &Item) -> Option<(std::sync::Arc<[Vec<Point>]>, i64)> {
+        if item.kind != Kind::Footprint {
+            return None;
+        }
+        let revision = self.session.revision();
+        if let Some((cached, paths, stroke)) = &self.assembly_label_preview
+            && *cached == revision
+        {
+            return Some((paths.clone(), *stroke));
+        }
+        let definition = item.draft_footprint().ok()?;
+        let stroke = definition.assembly_label().size.stroke_width_nm;
+        let paths: std::sync::Arc<[_]> = definition.assembly_label_paths("REF").into();
+        self.assembly_label_preview = Some((revision, paths.clone(), stroke));
+        Some((paths, stroke))
+    }
+
     /// Navigate and edit the focused pane through revision-checked transactions. Directional
     /// boxes, modifier selection, clipboard placement and repeated drawing share stable IDs.
     pub(super) fn canvas(&mut self, ui: &mut Ui, area: Rect, covered: [Rect; 2], navigation: Navigation, active: bool) {
         use pcbcraft_engine::library_graphics::{Fill, Geometry, Graphic};
         let item = self.session.snapshot();
         let reference = self.reference_preview(&item);
+        let assembly_label = self.assembly_label_preview(&item);
         let t = Tokens::get();
         let response = ui.interact(area, ui.scope_id().with("library_canvas"), egui::Sense::click_and_drag());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::GenericContainer, ui.is_enabled(), "Library canvas"));
@@ -729,7 +749,11 @@ impl Document {
                     && ui.ctx().layer_id_at(p).is_none_or(|layer| layer.order == egui::Order::Background)
             });
         self.camera.set_uncovered(area, workspace::catalog::uncovered(area, &covered));
-        let extents = item.objects.values().flat_map(points).chain(reference.iter().flat_map(|paths| paths.iter().flatten().copied()));
+        let extents = item
+            .objects
+            .values()
+            .flat_map(points)
+            .chain(reference.iter().chain(assembly_label.iter().map(|(paths, _)| paths)).flat_map(|paths| paths.iter().flatten().copied()));
         self.camera.navigate_definition(&response, area, extents, over, navigation);
         let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(area);
         painter.rect_filled(area, 0, if item.kind == Kind::Symbol { t.canvas } else { t.board_canvas });
@@ -1237,6 +1261,13 @@ impl Document {
                 painter.add(egui::Shape::line(path.iter().map(|point| self.camera.screen(*point, area)).collect(), stroke));
             }
         }
+        if let Some((paths, stroke_width_nm)) = &assembly_label {
+            let width = *stroke_width_nm as f32 / pcbcraft_engine::schematic::GRID_NM as f32 * self.camera.unit_step();
+            let stroke = egui::Stroke::new(width, pcbcraft_chrome::board::graphic_color(pcbcraft_chrome::board::GraphicStyle::Fabrication));
+            for path in paths.iter() {
+                painter.add(egui::Shape::line(path.iter().map(|point| self.camera.screen(*point, area)).collect(), stroke));
+            }
+        }
         if let Tool::Box { start, .. } = self.tool
             && let Some(point) = pointer
         {
@@ -1557,6 +1588,29 @@ mod tests {
         assert_eq!(doc.session.revision(), 0);
         doc.execute(0, Action::Insert { primitive }).unwrap();
         assert_eq!(doc.session.snapshot().symbol().unwrap().pins().len(), 3);
+    }
+    /// The assembly label preview stays on the canvas while a footprint draft has no pads or
+    /// holes, centred on its fabrication body.
+    #[test]
+    fn assembly_label_preview_shows_for_a_draft_without_pads() {
+        let mut editors = super::super::Editors::default();
+        let id = editors.open(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let doc = editors.documents.get_mut(&id).unwrap();
+        doc.execute(0, Action::Delete { objects: vec![1, 2, 3] }).unwrap();
+        let body = pcbcraft_engine::board::definition::GraphicRect {
+            purpose: pcbcraft_engine::board::definition::GraphicPurpose::Fabrication,
+            center: Point { x_nm: 4_000_000, y_nm: 0 },
+            width_nm: 1_600_000,
+            height_nm: 800_000,
+            rotation: 0,
+        };
+        doc.execute(1, Action::Insert { primitive: Primitive::Outline { graphic: body } }).unwrap();
+        let item = doc.session.snapshot();
+        assert!(item.footprint().is_err());
+        let (paths, stroke) = doc.assembly_label_preview(&item).unwrap();
+        assert_eq!(stroke, pcbcraft_engine::board::definition::AssemblyLabel::DEFAULT_SIZE.stroke_width_nm);
+        let xs = || paths.iter().flatten().map(|point| point.x_nm);
+        assert!(((xs().min().unwrap() + xs().max().unwrap()) / 2 - 4_000_000).abs() <= 1, "the label is centred on the body");
     }
     /// Selecting a drawing cannot turn the Text tool into a rectangle repetition tool.
     #[test]

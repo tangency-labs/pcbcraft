@@ -146,7 +146,7 @@ fn footprint_publication_keeps_legacy_revision_and_uses_current_format() {
     let retained = catalog.footprint("workshop", &old.id, old.revision).unwrap();
     let new = catalog.footprint("workshop", &old.id, prepared.item().revision).unwrap();
     assert_eq!(retained, old);
-    assert_eq!(new.format, "pcbcraft-footprint/7");
+    assert_eq!(new.format, "pcbcraft-footprint/13");
     assert!(new.orientation.is_none());
     assert_eq!(new.pads, old.pads);
 }
