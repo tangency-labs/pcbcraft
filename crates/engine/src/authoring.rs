@@ -23,14 +23,16 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Maximum editor document size, including metadata and stable primitive identities.
 pub const MAX_BYTES: usize = 1 << 20;
 const MAX_SYMBOL_OBJECTS: usize = 512;
+const MAX_EXACT_SYMBOL_OBJECTS: usize = library::MAX_TERMINALS + library::MAX_SHAPES;
 /// Maximum primitives in one footprint drawing; no document kind accepts more, so it also bounds object-ID lists.
 pub const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWORK + 256;
-const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_SYMBOL_OBJECTS);
+const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_EXACT_SYMBOL_OBJECTS && MAX_EXACT_SYMBOL_OBJECTS >= MAX_SYMBOL_OBJECTS);
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
 const SLOT_FORMAT: &str = "pcbcraft-library-item/4";
 const PIN_FUNCTION_FORMAT: &str = "pcbcraft-library-item/5";
+const EXACT_SYMBOL_FORMAT: &str = "pcbcraft-library-item/6";
 const HISTORY: usize = 64;
 
 /// A definition editor is distinct from schematic-sheet and board-placement editors.
@@ -597,8 +599,10 @@ impl Item {
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
         }
-        if definition.format() == library::SYMBOL_FORMAT_V5 {
-            item.format = PIN_FUNCTION_FORMAT.into();
+        match definition.format() {
+            library::SYMBOL_FORMAT_V6 => item.format = EXACT_SYMBOL_FORMAT.into(),
+            library::SYMBOL_FORMAT_V5 => item.format = PIN_FUNCTION_FORMAT.into(),
+            _ => {}
         }
         if !fork {
             item.library = definition.library.clone();
@@ -755,7 +759,8 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":library::SYMBOL_FORMAT_V5,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let format = if self.format == EXACT_SYMBOL_FORMAT { library::SYMBOL_FORMAT_V6 } else { library::SYMBOL_FORMAT_V5 };
+            let mut value = json!({"format":format,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -814,9 +819,10 @@ impl Item {
         }
     }
 
-    /// Maximum primitives permitted in the active drawing for this document kind.
+    /// Maximum primitives permitted in each drawing for this document kind and format.
     pub(super) fn max_objects(&self) -> usize {
         match self.kind {
+            Kind::Symbol if self.format == EXACT_SYMBOL_FORMAT => MAX_EXACT_SYMBOL_OBJECTS,
             Kind::Symbol => MAX_SYMBOL_OBJECTS,
             Kind::Footprint => MAX_FOOTPRINT_OBJECTS,
         }
@@ -825,10 +831,11 @@ impl Item {
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
-        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT)
+        let limit = self.max_objects();
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT)
             || (self.kind == Kind::Footprint && self.format != self.footprint_format())
             || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
-            || (self.format != PIN_FUNCTION_FORMAT && self.has_alternate_functions())
+            || (!matches!(self.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) && self.has_alternate_functions())
             || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
                 && (self.unit_order.len() != self.other_units.len() + 1
@@ -838,8 +845,8 @@ impl Item {
             || self.other_units.len() >= 32
             || unique.len() != all_objects.len()
             || all_objects.iter().any(|(id, _)| **id == 0 || **id > self.allocation.object)
-            || self.other_units.values().any(|objects| objects.len() > MAX_SYMBOL_OBJECTS)
-            || self.objects.len() > self.max_objects()
+            || self.other_units.values().any(|objects| objects.len() > limit)
+            || self.objects.len() > limit
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
             || self.revision > self.allocation.revision
@@ -1056,7 +1063,7 @@ impl Session {
                         if next.kind != Kind::Symbol || !footprint::valid_id(&unit) || unit == next.unit || next.other_units.contains_key(&unit) {
                             return Err("A new symbol unit needs an unused portable identity.".into());
                         }
-                        if next.format != PIN_FUNCTION_FORMAT {
+                        if !matches!(next.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) {
                             next.format = MULTI_UNIT_FORMAT.into();
                         }
                         if next.unit_order.is_empty() {
@@ -1216,7 +1223,7 @@ impl Session {
                         alternates.clone_from(shared_alternates);
                     }
                 }
-                if next.format != PIN_FUNCTION_FORMAT && next.has_alternate_functions() {
+                if !matches!(next.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) && next.has_alternate_functions() {
                     next.format = PIN_FUNCTION_FORMAT.into();
                 }
                 next.revision = self.next_content_revision;

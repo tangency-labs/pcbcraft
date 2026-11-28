@@ -150,19 +150,20 @@ the file and the reason; the rest of the library still loads.
 
 The native parser and placement commands support:
 
-- **1 to 1,024 logical terminals**, each appearing in at least one unit. The
+- **Up to 1,024 logical terminals**, each appearing in at least one unit. Version 6 also allows zero terminals. The
   legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
   [Physical footprints](footprint-library.md) validate complete terminal and pad coverage
   with exclusive pad ownership. Multiple pads may map to one terminal, and other
   pads can be explicitly unconnected;
   the starter NPN uses three SOT-23 pads.
-- **1 to 32 units in format 4**, including shared supply-terminal appearances.
+- **1 to 32 units in formats 4–6**, including shared supply-terminal appearances.
   Each unit is placed once per part, and units on different sheets retain one
   reference, Value and physical package. Formats 1–3 retain one unit and therefore hold at most 441 terminals. See the
   [multi-unit contract](symbol-schema.md#multiple-schematic-units).
-- **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
-  each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so
-  every pin stays on the sheet.
+- **Pins at distinct positions.** Formats 1–5 use the 1.27 mm grid within
+  12.7 mm of the symbol origin on each axis. Format 6 stores exact nanometer
+  coordinates within 100 mm of the origin. A placement must keep its pins
+  within the sheet bounds.
 
 ## Native sources
 

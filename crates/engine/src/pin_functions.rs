@@ -110,7 +110,7 @@ impl Project {
     /// Draw the addressed unit with its part's effective terminal names.
     /// Resolve sparse choice data once, even for a unit with many terminal appearances.
     pub fn symbol_graphics(&self, symbol: &SymbolPlacement) -> Vec<crate::schematic::Shape> {
-        let choices = if symbol.definition.format() == crate::library::SYMBOL_FORMAT_V5 { self.pin_functions.owner(symbol.component) } else { None };
+        let choices = if symbol.definition.format_version >= 5 { self.pin_functions.owner(symbol.component) } else { None };
         symbol.graphics(choices)
     }
 }

@@ -952,7 +952,7 @@ fn validate_with_hierarchy(
         };
         let field_layout = record.field_layout.unwrap_or_default();
         crate::schematic::fields::validate_layouts(&field_layout, &component.metadata)?;
-        symbols.push(SymbolPlacement {
+        let placement = SymbolPlacement {
             definition: component.definition.clone(),
             ordinal: record.id,
             component: record.component,
@@ -962,7 +962,11 @@ fn validate_with_hierarchy(
             field_layout,
             rotation,
             mirrored: record.mirrored.unwrap_or(false),
-        });
+        };
+        if !placement.pins_fit_sheet() {
+            return Err(format!("symbol {} has a pin outside the schematic bounds", record.id));
+        }
+        symbols.push(placement);
     }
     let placed_components: BTreeSet<_> = units.keys().map(|(component, _)| component).collect();
     if components.keys().any(|id| !placed_components.contains(id)) {

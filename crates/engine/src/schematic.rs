@@ -19,8 +19,17 @@ pub const GRID_NM: i64 = 1_270_000;
 pub const PIN_OFFSET_NM: i64 = 5 * GRID_NM;
 /// How far a library pin may sit from its symbol's center on either axis.
 pub const MAX_PIN_OFFSET_NM: i64 = 2 * PIN_OFFSET_NM;
-/// Symbol centers stay this far inside the sheet edge, so every library pin stays on the sheet.
-pub const MAX_CENTER_NM: i64 = 1_000_000_000 - MAX_PIN_OFFSET_NM;
+/// Exact symbol pins share the 100 mm local bound used by symbol artwork.
+pub(crate) const MAX_EXACT_PIN_OFFSET_NM: i64 = 100_000_000;
+
+/// Whether a pin can be stored by the original grid-constrained symbol formats.
+pub(crate) fn legacy_pin_offset(x_nm: i64, y_nm: i64) -> bool {
+    [x_nm, y_nm].into_iter().all(|nm| nm.unsigned_abs() <= MAX_PIN_OFFSET_NM as u64 && nm % GRID_NM == 0)
+}
+/// The fixed sheet boundary that symbol terminal positions must stay within.
+pub(crate) const SHEET_EDGE_NM: i64 = 1_000_000_000;
+/// Symbol centers leave room for every legacy pin between the center and the sheet edge.
+pub const MAX_CENTER_NM: i64 = SHEET_EDGE_NM - MAX_PIN_OFFSET_NM;
 pub(crate) const MAX_SYMBOLS: usize = 4096;
 
 /// Format the symbol ID used by inspection and command endpoints.
@@ -224,6 +233,7 @@ impl SymbolDefinition {
     /// Native schema retained when pinning or exporting an unchanged definition.
     pub fn format(&self) -> &'static str {
         match self.format_version {
+            6 => crate::library::SYMBOL_FORMAT_V6,
             5 => crate::library::SYMBOL_FORMAT_V5,
             4 => crate::library::SYMBOL_FORMAT_V4,
             3 => crate::library::SYMBOL_FORMAT_V3,
@@ -532,6 +542,14 @@ impl SymbolPlacement {
     /// Return the terminal references in the same order as the pin positions.
     pub fn terminals(&self) -> Vec<Terminal> {
         Terminal::for_symbol(self.ordinal, self.unit_definition())
+    }
+
+    /// Legacy pins always fit at a valid center. Exact pins may need more room at the edges.
+    pub(crate) fn pins_fit_sheet(&self) -> bool {
+        const INNER_EDGE: u64 = (SHEET_EDGE_NM - MAX_EXACT_PIN_OFFSET_NM) as u64;
+        self.definition.format_version < 6
+            || self.position.x_nm.unsigned_abs().max(self.position.y_nm.unsigned_abs()) <= INNER_EDGE
+            || self.pins().iter().all(|pin| pin.x_nm.unsigned_abs().max(pin.y_nm.unsigned_abs()) <= SHEET_EDGE_NM as u64)
     }
 
     /// Return every pin in absolute schematic coordinates, turned with the symbol, in the

@@ -15,8 +15,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(test)]
+use crate::schematic::GRID_NM;
 use crate::schematic::{
-    ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, SymbolUnit, TextAlign, check_value,
+    ElectricalType, MAX_EXACT_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, SymbolUnit, TextAlign, check_value, legacy_pin_offset,
 };
 
 #[cfg(test)]
@@ -63,6 +65,8 @@ pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
 pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
 /// Current native symbol write format, with optional alternate functions on logical terminals.
 pub const SYMBOL_FORMAT_V5: &str = "pcbcraft-symbol/5";
+/// Native symbols with exact nanometer pin geometry and units that may have no terminals.
+pub const SYMBOL_FORMAT_V6: &str = "pcbcraft-symbol/6";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,13 +88,13 @@ pub struct Defaults {
 pub const LIBRARY_FORMAT: &str = "pcbcraft-library/1";
 
 /// Most strokes in one symbol drawing.
-const MAX_SHAPES: usize = 256;
+pub(crate) const MAX_SHAPES: usize = 256;
 /// Most points in one polyline.
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
 pub(crate) const MAX_DRAWING_NM: i64 = 100_000_000;
-/// Most terminals in one symbol, and so in one part's terminal-to-pad map. A pin may sit on only
-/// 441 grid spots in one unit, so symbols this large divide their pins among units.
+/// Most terminals in one symbol, and so in one part's terminal-to-pad map. Legacy units
+/// have only 441 grid positions for pin appearances, while exact units allow more.
 pub(crate) const MAX_TERMINALS: usize = 1024;
 /// Longest text label in a drawing, in characters.
 const MAX_LABEL: usize = 16;
@@ -278,12 +282,14 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must use one of formats 1–5 with no unknown fields.
+/// The file must use one of formats 1–6 with no unknown fields.
 /// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding.
 /// A symbol has up to 1,024 logical terminals, each with a unique ID of 1 to 8 letters, digits, `+`, `-` or `_`.
-/// Formats 1–3 contain one unit; formats 4–5 support up to 32 units sharing the logical terminal table.
+/// Formats 1–3 contain one unit; formats 4–6 support up to 32 units sharing the logical terminal table.
 /// Format 5 adds alternate functions. Each unit has at most one appearance per terminal.
-/// Pins sit on the 1.27 mm grid, at most 12.7 mm from the center on each axis and apart from each other.
+/// Formats 1–5 require a nonempty unit and pins on the 1.27 mm grid within 12.7 mm of the origin.
+/// Format 6 permits pinless units and exact pin coordinates within 100 mm of the origin.
+/// All formats require distinct pin positions.
 /// Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
@@ -297,7 +303,7 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
     parse_symbol_mode(value, false)
 }
 
-/// Draft documents may temporarily have no pins; published symbols retain the strict minimum.
+/// Legacy drafts may temporarily have no pins. Format 6 also allows published pinless units.
 /// More than [`MAX_TERMINALS`] terminals is refused with the limit and the count.
 fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, String> {
     let format_version = match value["format"].as_str() {
@@ -306,6 +312,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         Some(SYMBOL_FORMAT_V3) => 3,
         Some(SYMBOL_FORMAT_V4) => 4,
         Some(SYMBOL_FORMAT_V5) => 5,
+        Some(SYMBOL_FORMAT_V6) => 6,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
@@ -339,11 +346,12 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         return Err("`reference_prefix` must be 1 to 4 capital letters".to_owned());
     }
     check_value(&file.default_value).map_err(|error| error.replace("`value`", "`default_value`"))?;
-    if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
-        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals, not {}", file.terminals.len()));
+    if file.terminals.len() > MAX_TERMINALS || (!draft && format_version < 6 && file.terminals.is_empty()) {
+        let minimum = if draft || format_version >= 6 { 0 } else { 1 };
+        return Err(format!("a symbol has {minimum} to {MAX_TERMINALS} terminals, not {}", file.terminals.len()));
     }
-    if format_version != 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
-        return Err("Alternate pin functions require pcbcraft-symbol/5.".into());
+    if format_version < 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
+        return Err("Alternate pin functions require pcbcraft-symbol/5 or later.".into());
     }
     let mut numbers = BTreeSet::new();
     for terminal in &file.terminals {
@@ -359,7 +367,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
     }
     if file.units.is_empty() || file.units.len() > 32 || (format_version < 4 && file.units.len() != 1) {
-        return Err("formats 1–3 require one unit; formats 4–5 support 1 to 32 units".into());
+        return Err("formats 1–3 require one unit; formats 4–6 support 1 to 32 units".into());
     }
     let mut unit_ids = BTreeSet::new();
     let mut units = Vec::new();
@@ -386,9 +394,11 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
                 return Err(format!("terminal {} needs exactly one pin per unit", terminal.id));
             }
             let [x_nm, y_nm] = pin.at_nm;
-            let reach = -MAX_PIN_OFFSET_NM..=MAX_PIN_OFFSET_NM;
-            if !reach.contains(&x_nm) || !reach.contains(&y_nm) || x_nm % GRID_NM != 0 || y_nm % GRID_NM != 0 {
+            if format_version < 6 && !legacy_pin_offset(x_nm, y_nm) {
                 return Err(format!("pin {} must sit on the 1.27 mm grid within 12.7 mm of the center", terminal.id));
+            }
+            if [x_nm, y_nm].into_iter().any(|nm| nm.unsigned_abs() > MAX_EXACT_PIN_OFFSET_NM as u64) {
+                return Err(format!("pin {} must be within 100 mm of the center", terminal.id));
             }
             if !positions.insert((x_nm, y_nm)) {
                 return Err(format!("pin {} shares a position with another pin", terminal.id));
@@ -411,7 +421,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
             return Err(format!("a drawing has at most {MAX_SHAPES} strokes"));
         }
         let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
-        if pins.is_empty() && !draft {
+        if pins.is_empty() && !draft && format_version < 6 {
             return Err("a unit must contain at least one terminal appearance".into());
         }
         units.push(SymbolUnit { unit: unit.id, pins, drawing });

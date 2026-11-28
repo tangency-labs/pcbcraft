@@ -4829,7 +4829,7 @@ impl Session {
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
     /// Explicit native selections reject conflicting pinned content. Calls omitting all
     /// selection qualifiers retain the compatibility behavior of reusing saved definitions.
-    /// Placing a version-5 symbol adopts current project storage in the same undoable edit.
+    /// Placing a version-5 or later symbol adopts current project storage in the same undoable edit.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -4898,7 +4898,7 @@ impl Session {
         };
         let component_id = component.ordinal;
         let mut project = project.clone();
-        if definition.format() == library::SYMBOL_FORMAT_V5 && !project.supports_pin_function_storage() {
+        if definition.format_version >= 5 && !project.supports_pin_function_storage() {
             if project.layout.is_none() || project.numeric_id_high_water.is_none() {
                 project = project.with_board_folders(project.layout_root().unwrap_or(".")).map_err(CommandError::InvalidParams)?;
             }
@@ -5326,6 +5326,16 @@ impl Session {
         annotation::tests::count_work(|work| work.preparations += 1);
         #[cfg(test)]
         pin_functions::FULL_PREPARATIONS.set(pin_functions::FULL_PREPARATIONS.get() + 1);
+        if !previous.is_some_and(|old| Arc::ptr_eq(&old.sheets, &project.sheets)) {
+            for (index, sheet) in project.sheets.iter().enumerate() {
+                if previous.and_then(|old| old.sheets.get(index)).is_some_and(|old| Arc::ptr_eq(&old.symbols, &sheet.symbols)) {
+                    continue;
+                }
+                if let Some(symbol) = sheet.symbols.iter().find(|symbol| !symbol.pins_fit_sheet()) {
+                    return Err(CommandError::InvalidParams(format!("{} has a pin outside the schematic bounds", project.reference(symbol))));
+                }
+            }
+        }
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !previous.is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
