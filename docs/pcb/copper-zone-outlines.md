@@ -150,7 +150,10 @@ circular arcs (`G75` with `G02`/`G03`), split at quarter turns. Every vertex and
 centre is rounded once to the file's 1 nm resolution, so the written boundary lies
 within about 2 nm of the fill; arcs whose end points are less than about 2.4 µm
 apart are written as lines, so the processing tolerance of the Gerber specification
-(±0.5 µm per coordinate, §4.14.2) cannot turn one into a nearly full circle. The
+(±0.5 µm per coordinate, §4.14.2) cannot turn one into a nearly full circle.
+Export never changes the fill: a zone that cannot be written within 100 nm of it,
+such as a tiny clearance circle that would become a square, is refused with a
+message naming the zone's net and layer. The
 drill files and boards without zones are unchanged. The Manufacturing review draws
 pour regions; it flattens arcs to within 1 µm for display only.
 

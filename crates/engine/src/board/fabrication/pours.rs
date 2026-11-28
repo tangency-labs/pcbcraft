@@ -19,7 +19,8 @@
 //! are the analytic radius and centre, c′ the written centre and r₁, r₂ the written start and end
 //! radii: the ring that §4.7.2 allows any rendering of the arc to occupy. The written centre is
 //! the one of the nine nanometre points around c that minimises this bound, which therefore
-//! never exceeds 3√2/2 nm (about 2.1 nm). A short piece written as a line adds its sagitta.
+//! never exceeds 3√2/2 nm (about 2.1 nm). A short piece written as a line adds its sagitta;
+//! a contour whose bound exceeds [`MAX_DEVIATION_NM`] is refused rather than written.
 //! [`Stats::deviation_nm`] reports the largest bound of one export.
 
 use super::{ApertureFunction, DELETE_APERTURE_FUNCTION, Gerber, object_attributes::RoutedNets};
@@ -27,6 +28,11 @@ use crate::board::{fill::ProblemKind, origin::Frame, view::BoardView};
 use pcbcraft_geometry::planar::{Boundary, Edge};
 use std::{collections::BTreeMap, f64::consts::FRAC_PI_2, fmt::Write as _};
 use uuid::Uuid;
+
+/// Largest distance a written segment may lie from the fill's analytic boundary: one fifth of
+/// the ±0.5 µm a coordinate may move in processing (§4.14.2). Only a short arc written as a line
+/// can come near it; a contour beyond it is refused.
+const MAX_DEVIATION_NM: f64 = 100.;
 
 /// Shortest chord written as a circular arc: 1 µm plus the √2 µm by which the §4.14.2
 /// perturbation (±0.5 µm per coordinate of each end point) can shorten it (Ucamco Gerber 2026.05).
@@ -94,8 +100,9 @@ impl Pours {
     /// Convert the board's current fill. A board without zones has no pours. Refuses, without
     /// writing anything, when pours were removed, when the fill for the current board is still
     /// pending or failed, or when a zone produced no fill because its net is unavailable: a
-    /// stale or missing pour is never exported as if it were current.
-    pub(super) fn new(view: BoardView<'_>, frame: Frame) -> Result<Self, String> {
+    /// stale or missing pour is never exported as if it were current. A zone whose fill cannot be
+    /// written safely is refused with the description `name` gives from its net and layer.
+    pub(super) fn new(view: BoardView<'_>, frame: Frame, name: impl Fn(Uuid, Uuid) -> String) -> Result<Self, String> {
         if view.zones().is_empty() {
             return Ok(Self::default());
         }
@@ -121,9 +128,12 @@ impl Pours {
         }
         let mut pours = Self::default();
         for zone in &fill.zones {
+            let refuse =
+                |reason: String| format!("Cannot write the {} to Gerber: {reason} No fabrication files were generated.", name(zone.net, zone.layer));
             for island in &zone.islands {
-                let boundaries = island.region.boundaries().map_err(|error| format!("Cannot write a copper zone to Gerber: {error}"))?;
-                let contours = boundaries.iter().map(|boundary| contour(boundary, frame, &mut pours.stats)).collect::<Result<_, _>>()?;
+                let boundaries = island.region.boundaries().map_err(|error| refuse(error.to_string()))?;
+                let contours =
+                    boundaries.iter().map(|boundary| contour(boundary, frame, &mut pours.stats)).collect::<Result<_, _>>().map_err(refuse)?;
                 pours.layers.entry(zone.layer).or_default().push(Pour { net: zone.net, contours });
             }
         }
@@ -157,13 +167,23 @@ fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// Write one region's boundary as a single closed contour: the outer loop counter-clockwise,
 /// every hole clockwise and joined to it by a cut-in. Returns why when a loop collapses at the
-/// output resolution or a hole cannot be joined.
+/// output resolution, a hole cannot be joined or the written boundary would lie more than
+/// [`MAX_DEVIATION_NM`] from the fill.
 pub(super) fn contour(boundary: &Boundary, frame: Frame, stats: &mut Stats) -> Result<Vec<Segment>, String> {
-    let outer = oriented(written(&pieces(&boundary.outer, frame), stats)?, true)?;
-    let holes = boundary.holes.iter().map(|hole| oriented(written(&pieces(hole, frame), stats)?, false)).collect::<Result<Vec<_>, _>>()?;
-    let contour = bridge(outer, holes, stats)?;
+    let mut own = Stats::default();
+    let outer = oriented(written(&pieces(&boundary.outer, frame), &mut own)?, true)?;
+    let holes = boundary.holes.iter().map(|hole| oriented(written(&pieces(hole, frame), &mut own)?, false)).collect::<Result<Vec<_>, _>>()?;
+    let contour = bridge(outer, holes, &mut own)?;
+    if own.deviation_nm > MAX_DEVIATION_NM {
+        return Err(format!(
+            "A short arc written as a line would lie {:.0} nm from the fill, more than the {MAX_DEVIATION_NM:.0} nm tolerance.",
+            own.deviation_nm
+        ));
+    }
+    stats.deviation_nm = stats.deviation_nm.max(own.deviation_nm);
     stats.segments += contour.len();
     stats.arcs += contour.iter().filter(|segment| segment.shape != Shape::Line).count();
+    stats.cut_ins += own.cut_ins;
     Ok(contour)
 }
 
@@ -641,6 +661,17 @@ mod tests {
         let arc = Some(([0., 0.], radius, false));
         assert_eq!(shape((71_100, 70_300), (70_300, 71_100), arc, &mut stats), Shape::Line);
         assert!(matches!(shape((72_000, 69_368), (70_232, 71_134), arc, &mut stats), Shape::Arc { .. }));
+    }
+
+    /// A short arc written as a line moves the boundary by its sagitta. Beyond the documented
+    /// tolerance the contour is refused: a clearance circle of 500 nm radius would be a square whose
+    /// sides are 146 nm inside the circle.
+    #[test]
+    fn a_line_beyond_the_tolerance_is_refused() {
+        let material = rect(0, 0, 100, 100).boolean(&Regions::circle([5 * MM, 5 * MM], 1_000).unwrap(), Operation::Difference).unwrap();
+        let boundaries = material.boundaries().unwrap();
+        let error = contour(&boundaries[0], Frame::BOARD_ZERO, &mut Stats::default()).unwrap_err();
+        assert!(error.contains("100 nm"), "{error}");
     }
 
     /// Long edges are kept once, not copied into every band they span: 200 tall holes give at

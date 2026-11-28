@@ -674,7 +674,13 @@ impl BoardView<'_> {
         let base = file_part(&self.project().name);
         let routed_nets = RoutedNets::new(self);
         let nets = &routed_nets;
-        let pours = pours::Pours::new(self, frame)?;
+        let pours = pours::Pours::new(self, frame, |net, layer| {
+            let layer = copper.iter().find(|candidate| candidate.id == layer).map_or("an unknown layer", |layer| layer.name.as_str());
+            match nets.zone(net).net.filter(|name| !name.is_empty()) {
+                Some(net) => format!("copper zone of net {net} on {layer}"),
+                None => format!("copper zone on {layer}"),
+            }
+        })?;
         let pads: Vec<_> = self
             .footprints()
             .flat_map(|footprint| {
