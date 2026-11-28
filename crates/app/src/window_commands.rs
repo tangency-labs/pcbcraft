@@ -267,7 +267,7 @@ mod live {
                             },
                             "required": ["clearance_nm"]
                         },
-                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step and optional numbering {mode:\"ball_grid\",skip_jedec}; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
+                        "description": "A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step and optional numbering {mode:\"ball_grid\",skip_jedec}; metadata name/license/source/reference_prefix/default_value with optional symbol_settings, footprint_reference and assembly_label (footprints only: omit to keep the current settings; null or {} resets them to the defaults; otherwise an object with optional position {x_nm,y_nm} (each within ±100 mm), rotation in whole degrees 0-359 and size {height_nm,stroke_width_nm} with a height up to 10 mm and a stroke up to half of it; this edit form differs from the published footprint record, which omits empty settings); generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."
                     })
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
@@ -2267,6 +2267,47 @@ mod live {
             );
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
             assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
+        }
+
+        /// Discovery documents the metadata `assembly_label` edit, and live validation decodes it as
+        /// the engine does: omission keeps the settings, null and `{}` reset them, an object sets
+        /// them, and positional records or wrong types are refused before the edit reaches the
+        /// document. Out-of-range values decode and are refused when the edit is applied.
+        #[test]
+        fn library_edit_discovery_documents_and_decodes_the_metadata_assembly_label() {
+            let described = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let description = described["params"]["properties"]["action"]["description"].as_str().expect("action description");
+            assert!(
+                description.contains("assembly_label (footprints only: omit to keep the current settings; null or {} resets them to the defaults"),
+                "unexpected description: {description}"
+            );
+            let metadata = |label: Option<Value>| {
+                let mut action = json!({
+                    "operation": "metadata",
+                    "name": "Part",
+                    "license": "",
+                    "source": "",
+                    "reference_prefix": "U",
+                    "default_value": ""
+                });
+                if let Some(label) = label {
+                    action["assembly_label"] = label;
+                }
+                Kind::LibraryAction.validate(&action)
+            };
+            assert!(metadata(None).is_ok(), "omission keeps the settings");
+            assert!(metadata(Some(Value::Null)).is_ok(), "null resets the settings");
+            assert!(metadata(Some(json!({}))).is_ok(), "an empty record resets the settings");
+            let size = json!({"height_nm": 800_000, "stroke_width_nm": 100_000});
+            assert!(metadata(Some(json!({"position": {"x_nm": 1_500_000, "y_nm": 0}, "rotation": 90, "size": size}))).is_ok());
+            assert!(metadata(Some(json!({"position": [0, 0]}))).is_err(), "a positional position is refused");
+            assert!(metadata(Some(json!({"size": [800_000, 100_000]}))).is_err(), "a positional size is refused");
+            assert!(metadata(Some(json!([[0, 0], 90]))).is_err(), "a positional record is refused");
+            assert!(metadata(Some(json!({"rotation": "90"}))).is_err(), "a text rotation is refused");
+            assert!(metadata(Some(json!({"rotation": -1}))).is_err(), "a negative rotation is refused");
+            assert!(metadata(Some(json!({"rotation": null}))).is_err(), "a null member is refused");
+            assert!(metadata(Some(json!({"colour": "red"}))).is_err(), "an unknown member is refused");
+            assert!(metadata(Some(json!({"rotation": 360}))).is_ok(), "range checks run when the edit is applied");
         }
 
         /// Group selection reaches every pad of a 26 x 26 ball grid; the published `maxItems` and

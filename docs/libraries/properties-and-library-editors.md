@@ -146,6 +146,22 @@ Footprint **Definition** properties can enable a generated silkscreen reference
 and set its default X/Y offset. The editor shows `REF` at that position, and the
 native definition retains the offset when exported or forked.
 
+The same properties show the assembly label. By default it sits at the body
+centre with no rotation and the default text size. **Custom label position**,
+**Custom label rotation** and **Custom label size** each replace one default with
+typed values, starting from the current default. Clearing a custom setting and
+enabling it again in the same edit also starts from the default, not from the
+value it replaced. **Reset assembly label** returns
+every setting to its default. The canvas previews `REF` at the resolved position
+on the fabrication layer. The settings are an optional record: changing them
+leaves the authoring format unchanged, and exports write
+[`pcbcraft-footprint/13`](footprint-schema.md#assembly-label).
+Live MCP sets them with the `app.library_edit` `metadata` action's optional
+`assembly_label` member. Omitting it keeps the current settings, while `null`
+or `{}` resets them to the defaults. An object sets the settings with the members
+and limits of the published record, and the members must be objects rather than
+positional lists. Unlike the published record, the edit accepts an empty object.
+
 Footprints support SMD/plated through-hole rectangular, rounded, circular and oval
 pads. Pad numbers accept the same 1–8 alphanumeric/`+`/`-`/`_` spelling as terminal
 identifiers. Through-hole selection supplies a drill default and validates a
@@ -203,7 +219,7 @@ confirm a durable editor save, so they retain the unsaved state.
 
 Export Native Definition writes a new standalone file. Exports and new
 published revisions use [`pcbcraft-symbol/5`](symbol-schema.md) for symbols and
-[`pcbcraft-footprint/7`](footprint-schema.md) for footprints, including after
+[`pcbcraft-footprint/13`](footprint-schema.md) for footprints, including after
 optional records are removed. Older published and project-pinned revisions
 keep their original formats and addresses. Keep the editor item for the symbol's license
 and stable editor primitive IDs. If the license is unknown, record it before

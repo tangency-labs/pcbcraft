@@ -39,6 +39,37 @@ class FootprintSchemaTests(unittest.TestCase):
         for invalid in ([], None, [dict(hole, number="1")], [dict(hole, diameter_nm=0)], [hole] * 129):
             self.assertFalse(validator.is_valid(dict(value, non_plated_holes=invalid)))
 
+    def test_assembly_label_is_optional_in_format_13(self):
+        """Accept format 13 with or without assembly label settings and keep the record closed."""
+        schemas = [json.loads((ROOT / f"docs/schemas/footprint-v{n}.schema.json").read_text()) for n in (4, 5, 6, 7, 13)]
+        registry = Registry().with_resources((schema["$id"], Resource.from_contents(schema)) for schema in [self.schema, *schemas])
+        validator = Draft202012Validator(schemas[-1], registry=registry)
+        value = dict(self.definition, format="pcbcraft-footprint/13")
+        validator.validate(value)
+        orientation = {"polarized": True, "pin_1": value["pads"][0]["number"], "zero": "ipc-7351"}
+        validator.validate(dict(value, orientation=orientation, assembly_label={"rotation": 90}))
+        self.assertFalse(validator.is_valid(dict(value, orientation={"polarized": True, "zero": "unknown"})))
+        v7 = Draft202012Validator(schemas[-2], registry=registry)
+        earlier = dict(value, format="pcbcraft-footprint/7", orientation=orientation)
+        v7.validate(earlier)
+        self.assertFalse(v7.is_valid(dict(earlier, assembly_label={"rotation": 90})))
+        size = {"height_nm": 800000, "stroke_width_nm": 120000}
+        for label in ({"size": size}, {"rotation": 90}, {"position": {"x_nm": 0, "y_nm": 0}},
+                      {"position": {"x_nm": 300000, "y_nm": -200000}, "rotation": 359, "size": size}):
+            validator.validate(dict(value, assembly_label=label))
+        self.assertFalse(self.validator.is_valid(dict(self.definition, assembly_label={"rotation": 90})))
+        for invalid in (
+            {},
+            None,
+            {"text": "R1"},
+            {"rotation": 360},
+            {"rotation": -1},
+            {"position": {"x_nm": 100000001, "y_nm": 0}},
+            {"size": {"height_nm": 0, "stroke_width_nm": 1}},
+            {"size": {"height_nm": 10000001, "stroke_width_nm": 1}},
+        ):
+            self.assertFalse(validator.is_valid(dict(value, assembly_label=invalid)))
+
     def test_format_6_schema_accepts_any_supported_mix(self):
         """Historical format 6 reads any supported pad and hole mix while format 5 keeps its slot rule."""
         npth, slots, current = [

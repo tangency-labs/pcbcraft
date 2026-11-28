@@ -196,6 +196,93 @@ fn metadata_omission_preserves_category_while_null_clears_it() {
     }
 }
 
+/// A footprint draft with a fabrication body but no pads or holes is not exportable, but it still
+/// resolves for editor previews and label defaults, centred on that body.
+#[test]
+fn draft_footprint_resolves_a_draft_without_pads() {
+    let mut editor = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    apply(&mut editor, Action::Delete { objects: vec![1, 2, 3] });
+    let body = footprint::GraphicRect {
+        purpose: footprint::GraphicPurpose::Fabrication,
+        center: p(4_000_000, 0),
+        width_nm: 1_600_000,
+        height_nm: 800_000,
+        rotation: 0,
+    };
+    apply(&mut editor, Action::Insert { primitive: Primitive::Outline { graphic: body } });
+    let item = editor.snapshot();
+    assert!(item.footprint().is_err(), "export still needs a pad or hole");
+    let draft = item.draft_footprint().unwrap();
+    assert!(draft.pads.is_empty());
+    assert_eq!(draft.assembly_label().position, p(4_000_000, 0), "the default label sits on the fabrication body");
+    assert!(Item::new(Kind::Symbol).unwrap().draft_footprint().is_err());
+}
+
+/// The Footprint Editor sets, changes and resets assembly label settings in one metadata edit
+/// each. Omission preserves them, an empty record means the defaults, and the settings are an
+/// optional record: neither the editor format nor the native format 13 changes.
+#[test]
+fn metadata_sets_changes_and_resets_assembly_label_settings() {
+    let mut editor = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let edit = |editor: &mut Session, label: Option<Value>| {
+        let snapshot = editor.snapshot();
+        let mut action = json!({"operation":"metadata","name":snapshot.name,"license":snapshot.license,"source":snapshot.source,
+            "reference_prefix":snapshot.reference_prefix,"default_value":snapshot.default_value});
+        if let Some(label) = label {
+            action["assembly_label"] = label;
+        }
+        let action: Action = serde_json::from_value(action).map_err(|error| error.to_string())?;
+        editor.execute(editor.revision(), action)
+    };
+    assert_eq!(editor.snapshot().export_native().unwrap()["format"], "pcbcraft-footprint/13", "a new footprint uses format 13");
+    edit(&mut editor, Some(json!({"rotation":90}))).unwrap();
+    let added = editor.snapshot();
+    assert_eq!(added.format, FORMAT);
+    assert_eq!(added.assembly_label, Some(footprint::AssemblyLabel { rotation: Some(90), ..Default::default() }));
+    assert_eq!(added.export_native().unwrap()["assembly_label"], json!({"rotation":90}));
+    assert_eq!(Item::decode(&added.encode().unwrap()).unwrap(), *added);
+    let position = Point { x_nm: 500_000, y_nm: 250_000 };
+    edit(&mut editor, Some(json!({"position":position,"rotation":270,"size":{"height_nm":2_000_000,"stroke_width_nm":200_000}}))).unwrap();
+    let label = editor.snapshot().assembly_label.unwrap();
+    assert_eq!((label.position, label.rotation, label.size.unwrap().height_nm), (Some(position), Some(270), 2_000_000));
+    edit(&mut editor, None).unwrap();
+    assert_eq!(editor.snapshot().assembly_label, Some(label), "omission preserves the settings");
+    let revision = editor.revision();
+    for invalid in [json!({"size":{"height_nm":1_000_000,"stroke_width_nm":600_000}}), json!({"rotation":360})] {
+        assert!(edit(&mut editor, Some(invalid)).is_err());
+        assert_eq!(editor.revision(), revision, "refused settings leave the document unchanged");
+    }
+    for array in [json!([position, 90]), json!({"size":[2_000_000, 200_000]}), json!({"position":[500_000, 250_000]})] {
+        let error = edit(&mut editor, Some(array)).unwrap_err();
+        assert!(error.contains("expected an object"), "unexpected error: {error}");
+        assert_eq!((editor.revision(), editor.snapshot().assembly_label), (revision, Some(label)), "a positional array is refused");
+    }
+    let mut stored: Value = serde_json::from_slice(&editor.snapshot().encode().unwrap()).unwrap();
+    stored["assembly_label"]["size"] = json!([2_000_000, 200_000]);
+    assert!(Item::decode(&serde_json::to_vec(&stored).unwrap()).is_err(), "the stored item refuses a positional size");
+    stored["assembly_label"] = json!([position, 270]);
+    assert!(Item::decode(&serde_json::to_vec(&stored).unwrap()).is_err(), "the stored item refuses a positional record");
+    edit(&mut editor, Some(json!({}))).unwrap();
+    assert_eq!(editor.snapshot().assembly_label, None, "empty settings are the defaults");
+    edit(&mut editor, Some(json!({"rotation":90}))).unwrap();
+    edit(&mut editor, Some(Value::Null)).unwrap();
+    assert_eq!(editor.snapshot().format, FORMAT);
+    let native = editor.snapshot().export_native().unwrap();
+    assert_eq!(native["format"], "pcbcraft-footprint/13");
+    assert!(native.get("assembly_label").is_none());
+    let saved = String::from_utf8(editor.snapshot().encode().unwrap()).unwrap();
+    assert!(!saved.contains("assembly_label"), "a reset leaves no field behind");
+    editor.execute(editor.revision(), Action::Undo).unwrap();
+    assert_eq!(editor.snapshot().assembly_label.and_then(|label| label.rotation), Some(90), "undo restores the settings in one step");
+    editor.execute(editor.revision(), Action::Redo).unwrap();
+    assert_eq!(editor.snapshot().assembly_label, None, "redo resets them again");
+    let mut stored: Value = serde_json::from_slice(&editor.snapshot().encode().unwrap()).unwrap();
+    stored["assembly_label"] = Value::Null;
+    assert!(Item::decode(&serde_json::to_vec(&stored).unwrap()).is_err(), "the item has one spelling for no settings");
+    let mut symbol = Session::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
+    assert!(edit(&mut symbol, Some(json!({"rotation":90}))).is_err());
+}
+
 /// Done test: a 26 x 26 BGA (0.8 mm pitch, JEDEC skip set on per IPC-SM-782A Section 14.0 ¶4.5 / IPC-7351 §14.2.5)
 /// generates A1..AF26 in one undoable step, previews via dry run, round-trips through save/reopen,
 /// maps every ball to a matching terminal, and lists pads in natural order (A2 before A10, Y26 before AA1).

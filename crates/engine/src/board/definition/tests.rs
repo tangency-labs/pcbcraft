@@ -68,6 +68,243 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
     assert_eq!(write_saved(&definition).unwrap(), legacy);
 }
 
+/// Format 13 round-trips with and without assembly label settings, accepts every earlier hole
+/// feature, and refuses malformed settings or settings in an earlier format. Existing footprints
+/// keep their format and bytes.
+#[test]
+fn assembly_label_native_codec_round_trips_format_13() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    let legacy = write_saved(&definition).unwrap();
+    assert_eq!(*read_saved(&legacy).unwrap(), definition, "an existing format still reads");
+    assert_eq!(write_saved(&read_saved(&legacy).unwrap()).unwrap(), legacy, "and re-saves unchanged");
+    assert!(!String::from_utf8(legacy.clone()).unwrap().contains("assembly_label"));
+
+    definition.format = CURRENT_FORMAT.into();
+    let bare = write_saved(&definition).unwrap();
+    assert_eq!(*read_saved(&bare).unwrap(), definition, "format 13 without settings round-trips");
+    let value: Value = serde_json::from_slice(&bare).unwrap();
+    assert!(value.get("assembly_label").is_none(), "omitted settings are not written");
+
+    let size = crate::board::reference::Size { height_nm: 800_000, stroke_width_nm: 120_000 };
+    let label = AssemblyLabel { position: Some(Point { x_nm: 300_000, y_nm: -200_000 }), rotation: Some(90), size: Some(size) };
+    definition.assembly_label = Some(label);
+    let bytes = write_saved(&definition).unwrap();
+    assert_eq!(*read_saved(&bytes).unwrap(), definition, "format 13 with settings round-trips");
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value["assembly_label"],
+        json!({"position":{"x_nm":300_000,"y_nm":-200_000},"rotation":90,"size":{"height_nm":800_000,"stroke_width_nm":120_000}})
+    );
+    definition.assembly_label = Some(AssemblyLabel { rotation: Some(45), ..AssemblyLabel::default() });
+    let value_rotation_only: Value = serde_json::from_slice(&write_saved(&definition).unwrap()).unwrap();
+    assert_eq!(value_rotation_only["assembly_label"], json!({"rotation":45}), "each setting is optional");
+
+    let size_error = "stroke width at most half the height";
+    for (invalid, expected) in [
+        (Value::Null, "invalid type: null"),
+        (json!({}), "Omit empty assembly label settings"),
+        (json!({"rotation":360}), "0 through 359 degrees"),
+        (json!({"rotation":null}), "invalid type: null"),
+        (json!({"position":{"x_nm":i64::MAX,"y_nm":0}}), "reference offset limit"),
+        (json!({"size":{"height_nm":0,"stroke_width_nm":0}}), size_error),
+        (json!({"size":{"height_nm":10_000_001,"stroke_width_nm":1}}), size_error),
+        (json!({"size":{"height_nm":800_000,"stroke_width_nm":400_001}}), size_error),
+        (json!({"text":"R1"}), "unknown field `text`"),
+        (json!([{"x_nm":0,"y_nm":0}, 90]), "expected an object"),
+        (json!({"size":[800_000, 120_000]}), "expected an object"),
+        (json!({"position":[0, 0]}), "expected an object"),
+    ] {
+        let mut changed = value.clone();
+        changed["assembly_label"] = invalid;
+        let error = read_saved(&serde_json::to_vec(&changed).unwrap()).unwrap_err();
+        assert!(error.contains(expected), "unexpected error: {error}");
+    }
+    let mut mixed = (*basic_components("resistor-0402").unwrap()).clone();
+    mixed.format = MIXED_HOLES_FORMAT.into();
+    mixed.non_plated_holes.push(CircularNpth { center: Point { x_nm: 0, y_nm: 2_000_000 }, diameter_nm: 1_000_000 });
+    let saved_mixed = write_saved(&mixed).unwrap();
+    let read_mixed = read_saved(&saved_mixed).unwrap();
+    assert_eq!(*read_mixed, mixed);
+    assert_eq!(write_saved(&read_mixed).unwrap(), saved_mixed);
+
+    for format in [LEGACY_FORMAT, NPTH_FORMAT, SLOT_FORMAT, MIXED_HOLES_FORMAT, ORIENTATION_FORMAT] {
+        let mut downgraded = value.clone();
+        downgraded["format"] = json!(format);
+        assert_eq!(
+            read_saved(&serde_json::to_vec(&downgraded).unwrap()).unwrap_err(),
+            "assembly label settings require footprint format 13",
+            "{format}"
+        );
+    }
+    let mut unknown = value;
+    unknown["format"] = json!("pcbcraft-footprint/2");
+    assert_eq!(read_saved(&serde_json::to_vec(&unknown).unwrap()).unwrap_err(), "unsupported footprint format pcbcraft-footprint/2");
+    definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: 0, y_nm: 2_000_000 }, diameter_nm: 1_000_000 });
+    assert_eq!(*read_saved(&write_saved(&definition).unwrap()).unwrap(), definition, "format 13 also carries holes");
+}
+
+/// Omitted settings put the label on the body centre: the middle of the fabrication outline, or
+/// of the pads and holes when there is no outline, unrotated and at the default size. Explicit
+/// settings place, rotate and size the designator lettering about its own centre.
+#[test]
+fn omitted_assembly_label_settings_resolve_to_the_body_centre() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    definition.format = CURRENT_FORMAT.into();
+    definition.graphics.clear();
+    definition.artwork.clear();
+    let pads_only = definition.body_centre();
+    let (left, right) = (
+        definition.pads.iter().map(|pad| pad.center.x_nm - pad.width_nm / 2).min().unwrap(),
+        definition.pads.iter().map(|pad| pad.center.x_nm + pad.width_nm / 2).max().unwrap(),
+    );
+    assert!((pads_only.x_nm - (left + (right - left) / 2)).abs() <= 1);
+    let body = GraphicRect {
+        purpose: GraphicPurpose::Fabrication,
+        center: Point { x_nm: 2_000_000, y_nm: -1_000_000 },
+        width_nm: 1_000_000,
+        height_nm: 600_000,
+        rotation: 0,
+    };
+    definition.graphics.push(body.clone());
+    definition.graphics.push(GraphicRect { purpose: GraphicPurpose::Courtyard, center: Point { x_nm: -9_000_000, y_nm: 0 }, ..body });
+    assert_eq!(definition.body_centre(), Point { x_nm: 2_000_000, y_nm: -1_000_000 }, "only the fabrication body counts");
+    let resolved = definition.assembly_label();
+    assert_eq!(
+        resolved,
+        ResolvedAssemblyLabel { position: Point { x_nm: 2_000_000, y_nm: -1_000_000 }, rotation: 0, size: AssemblyLabel::DEFAULT_SIZE }
+    );
+
+    let bounds = |paths: &[Vec<Point>]| {
+        let xs = || paths.iter().flatten().map(|p| p.x_nm);
+        let ys = || paths.iter().flatten().map(|p| p.y_nm);
+        [xs().min().unwrap(), ys().min().unwrap(), xs().max().unwrap(), ys().max().unwrap()]
+    };
+    let centred = definition.assembly_label_paths("R12");
+    let [x0, y0, x1, y1] = bounds(&centred);
+    assert!(((x0 + x1) / 2 - 2_000_000).abs() <= 1 && ((y0 + y1) / 2 + 1_000_000).abs() <= 1, "the lettering is centred on the body");
+    assert_ne!(centred, definition.assembly_label_paths("R1"), "the text is the designator");
+    assert!(definition.assembly_label_paths("").is_empty());
+
+    let position = Point { x_nm: 500_000, y_nm: 250_000 };
+    let size = crate::board::reference::Size { height_nm: 2_000_000, stroke_width_nm: 200_000 };
+    definition.assembly_label = Some(AssemblyLabel { position: Some(position), rotation: None, size: Some(size) });
+    let [ux0, uy0, ux1, uy1] = bounds(&definition.assembly_label_paths("R12"));
+    assert!(((ux0 + ux1) / 2 - position.x_nm).abs() <= 1 && ((uy0 + uy1) / 2 - position.y_nm).abs() <= 1, "the lettering is centred on the position");
+    assert!(ux1 - ux0 > x1 - x0 && uy1 - uy0 > y1 - y0, "a larger size draws larger text");
+    definition.assembly_label = Some(AssemblyLabel { rotation: Some(90), ..definition.assembly_label.unwrap() });
+    let [tx0, ty0, tx1, ty1] = bounds(&definition.assembly_label_paths("R12"));
+    assert!(((tx0 + tx1) / 2 - position.x_nm).abs() <= 1 && ((ty0 + ty1) / 2 - position.y_nm).abs() <= 1, "it turns about its centre");
+    assert!(((ty1 - ty0) - (ux1 - ux0)).abs() <= 2 && ((tx1 - tx0) - (uy1 - uy0)).abs() <= 2, "a quarter turn swaps the extents");
+}
+
+/// Without a fabrication body, a circular pad bounds the body by its diameter at any rotation,
+/// so turning it does not move the default label; other shapes use their rotated contour.
+#[test]
+fn circular_pad_rotation_does_not_move_the_body_centre() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    definition.graphics.clear();
+    definition.artwork.clear();
+    let circle = RectPad {
+        center: Point { x_nm: 0, y_nm: 0 },
+        width_nm: 2_000_000,
+        height_nm: 2_000_000,
+        rotation: 0,
+        shape: PadShape::Circle,
+        corner_radius_nm: 0,
+        ..definition.pads[0].clone()
+    };
+    definition.pads = vec![circle.clone(), RectPad { number: "2".into(), center: Point { x_nm: 10_000_000, y_nm: 0 }, rotation: 45, ..circle }];
+    assert_eq!(definition.body_centre(), Point { x_nm: 5_000_000, y_nm: 0 }, "a turned circle keeps its bounds");
+    definition.pads[1].shape = PadShape::Rectangle;
+    assert!(definition.body_centre().x_nm > 5_000_000, "a turned rectangle reaches further");
+}
+
+/// A rotated oval or rounded rectangle bounds the body by its rounded copper outline, not by the
+/// corners of its unrounded rectangle, so the default label sits on the copper's true centre.
+#[test]
+fn rotated_rounded_pads_bound_the_body_by_their_contour() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    definition.graphics.clear();
+    definition.artwork.clear();
+    let circle = RectPad {
+        center: Point { x_nm: 0, y_nm: 0 },
+        width_nm: 2_000_000,
+        height_nm: 2_000_000,
+        rotation: 0,
+        shape: PadShape::Circle,
+        corner_radius_nm: 0,
+        ..definition.pads[0].clone()
+    };
+    let oval = RectPad {
+        number: "2".into(),
+        center: Point { x_nm: 10_000_000, y_nm: 0 },
+        width_nm: 4_000_000,
+        rotation: 45,
+        shape: PadShape::Oval,
+        ..circle.clone()
+    };
+    definition.pads = vec![circle, oval];
+    // The oval's right end reaches 10 mm + 1 mm * cos 45 degrees + its 1 mm end radius.
+    let centre = definition.body_centre();
+    assert!((centre.x_nm - 5_353_553).abs() <= 2, "the oval's rounded end bounds the body: {centre:?}");
+    assert!(centre.y_nm.abs() <= 2, "the oval is symmetric about the axis: {centre:?}");
+    definition.pads[1].shape = PadShape::RoundedRectangle;
+    definition.pads[1].corner_radius_nm = 500_000;
+    // 10 mm + (1.5 mm + 0.5 mm) * cos 45 degrees + the 0.5 mm corner radius.
+    let centre = definition.body_centre();
+    assert!((centre.x_nm - 5_457_107).abs() <= 2, "the rounded corner bounds the body: {centre:?}");
+}
+
+/// Fixture: a footprint authored in the Footprint Editor saves as format 13 even without assembly
+/// label settings, and adding, reopening and resetting the settings keeps format 13. Forking an
+/// existing footprint writes a new format-13 footprint and leaves the original in its own format.
+#[test]
+fn new_footprints_save_as_format_13() {
+    use crate::authoring::{Action, Item, Kind};
+    let metadata = |item: &Item, assembly_label: Option<Option<AssemblyLabel>>| Action::Metadata {
+        name: item.name.clone(),
+        license: item.license.clone(),
+        source: item.source.clone(),
+        reference_prefix: item.reference_prefix.clone(),
+        default_value: item.default_value.clone(),
+        symbol_settings: None,
+        footprint_reference: None,
+        assembly_label: assembly_label.map(Box::new),
+    };
+    let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    assert_eq!(editor.snapshot().footprint().unwrap().format, CURRENT_FORMAT);
+    assert_eq!(editor.snapshot().format(), "pcbcraft-library-item/1", "the editor draft keeps its format");
+    let label = AssemblyLabel { rotation: Some(180), ..AssemblyLabel::default() };
+    editor.execute(editor.revision(), metadata(&editor.snapshot(), Some(Some(label)))).unwrap();
+    let definition = editor.snapshot().footprint().unwrap();
+    assert_eq!((definition.format.as_str(), definition.assembly_label), (CURRENT_FORMAT, Some(label)));
+    let reopened = Item::edit_footprint(&definition).unwrap().footprint().unwrap();
+    assert_eq!((reopened.format, reopened.assembly_label), (definition.format.clone(), Some(label)), "reopening keeps the settings");
+    editor.execute(editor.revision(), metadata(&editor.snapshot(), Some(None))).unwrap();
+    let reset = editor.snapshot().footprint().unwrap();
+    assert_eq!((reset.format.as_str(), reset.assembly_label), (CURRENT_FORMAT, None), "reset keeps format 13");
+    let reopened = Item::edit_footprint(&reset).unwrap();
+    assert_eq!(reopened.footprint().unwrap().format, CURRENT_FORMAT, "a reopened footprint keeps format 13");
+    assert_eq!(serde_json::to_value(&reopened).unwrap()["format"], "pcbcraft-library-item/1");
+
+    let original = basic_components("resistor-0402").unwrap();
+    let mut fork = crate::authoring::Session::new(Item::from_footprint(&original).unwrap(), false).unwrap();
+    assert_eq!(fork.snapshot().footprint().unwrap().format, CURRENT_FORMAT, "a fork is a new footprint");
+    assert_eq!(write_saved(&original).unwrap(), write_saved(&basic_components("resistor-0402").unwrap()).unwrap());
+    assert_eq!(original.format, LEGACY_FORMAT, "the existing footprint keeps its format");
+    fork.execute(fork.revision(), metadata(&fork.snapshot(), Some(Some(label)))).unwrap();
+    let labelled = fork.snapshot().footprint().unwrap();
+    assert_eq!(labelled.format, CURRENT_FORMAT);
+    assert_eq!(labelled.pads, original.pads);
+
+    let s = place_mounting_fixture(fork.snapshot().as_ref(), false);
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let pinned = saved.iter().find(|(path, _)| path.starts_with("library/footprints/") && path.contains(&labelled.id)).unwrap().1;
+    let pinned: Value = serde_json::from_slice(pinned).unwrap();
+    assert_eq!((pinned["format"].as_str(), &pinned["assembly_label"]), (Some(CURRENT_FORMAT), &json!({"rotation":180})));
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved, "a placed format-13 footprint re-saves unchanged");
+}
+
 /// Load an authored fixture and place its mapped component. Route tests optionally connect
 /// terminal 1 to a real schematic net before accepting the board's source.
 fn place_mounting_fixture(item: &crate::authoring::Item, connected: bool) -> Session {
@@ -407,6 +644,7 @@ fn library_and_board_reference_offsets_are_additive() {
                 default_value: before.default_value.clone(),
                 symbol_settings: None,
                 footprint_reference: Some(FootprintReferenceSettings { enabled: true, offset: default }),
+                assembly_label: None,
             },
         )
         .unwrap();
@@ -539,6 +777,7 @@ fn invalid_physical_footprints_and_mappings_are_atomic() {
         ("/pads/0/drill_nm", json!(100_000)),
         ("/pads/0/shape", json!("circle")),
         ("/format", json!("pcbcraft-footprint/2")),
+        ("/assembly_label", json!({"rotation":90})),
     ] {
         let mut bad = docs.clone();
         let mut d: Value = serde_json::from_slice(&bad[path]).unwrap();
