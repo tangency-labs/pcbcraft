@@ -13,6 +13,7 @@
 //! is checked against KiCad's nets, worked out from the file alone. Text, drawings and other
 //! appearance the native model doesn't hold are left out and listed in the [`Report`].
 
+pub mod hierarchy;
 mod symbols;
 mod wiring;
 

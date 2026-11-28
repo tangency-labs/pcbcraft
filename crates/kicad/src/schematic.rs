@@ -195,6 +195,8 @@ pub struct PlacedSymbol {
     pub mirror: Mirror,
     /// The unit placed, from 1.
     pub unit: u32,
+    /// The placement’s own unit before applying any occurrence record.
+    pub declared_unit: u32,
     /// The body style shown, from 1 (`body_style` or legacy `convert`); 1, the normal style,
     /// when the file doesn't say. The library symbol need not have that style: KiCad 10.0.8
     /// then gives the part none of the normal style's pins, so a caller that must keep every
@@ -835,6 +837,7 @@ impl State {
             },
             // Settled in `finish`; the symbol's own `(unit N)` until then.
             unit: unit_of(node).unwrap_or(1),
+            declared_unit: unit_of(node).unwrap_or(1),
             body_style,
             reference: String::new(),
             reference_from: ReferenceSource::None,
