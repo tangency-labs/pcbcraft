@@ -4,9 +4,8 @@
 editable, net-addressed outlines on one copper layer. [Fill #232](https://github.com/tangency-labs/pcbcraft/issues/232)
 derives conductive material inside a closed Board Outline, with clearance holes,
 thermal or solid pad connections, priority and minimum island area. Short diagonal
-boundary hatching continues to identify the authored outline. Fabrication export
-rejects boards containing zones until Gerber zone output is available in
-[#233](https://github.com/tangency-labs/pcbcraft/issues/233).
+boundary hatching continues to identify the authored outline. [Fabrication output #233](https://github.com/tangency-labs/pcbcraft/issues/233)
+writes the poured copper into each copper layer's Gerber file.
 
 ## Drawing and editing
 
@@ -132,6 +131,35 @@ analytic zone checking use disposable same-build Web Workers, with cancellation,
 a 30-second timeout and no foreground geometry fallback. Worker failure leaves
 fill unavailable until another edit or explicit refill. These bounds do not
 promise a maximum duration for an individual native kernel operation.
+
+## Fabrication output
+
+**Manufacture › Fabrication › Outputs** and `pcb.export_fabrication` write the
+current fill, the same material DRC checks, into the copper Gerber file of each
+zone's layer. Export never pours copper itself. While the fill for the current
+board is still being calculated, or after **Remove pours**, it is refused with a
+message naming **Pour copper**; it is also refused when the fill failed or left a
+zone without material.
+
+Each filled island is one dark region (`G36`/`G37`) tagged `.AperFunction,Conductor`
+and carrying its zone's net as `.N`, the same name its pads carry. Every outer
+boundary and hole of the island is one contour; holes join their outer boundary by
+cut-ins, pairs of coincident segments, as the Gerber specification requires
+(§4.10), so no clear polarity is written. Cut-ins are horizontal; when one would
+meet a circular edge tangentially, which the specification forbids, all cut-ins
+of that contour turn to another axis direction. Circular boundary pieces stay
+circular arcs (`G75` with `G02`/`G03`), split at quarter turns. Every vertex and arc
+centre is rounded once to the file's 1 nm resolution, so the written boundary lies
+within about 2 nm of the fill; arcs whose end points are less than about 2.4 µm
+apart are written as lines, so the processing tolerance of the Gerber specification
+(±0.5 µm per coordinate, §4.14.2) cannot turn one into a nearly full circle.
+Export never changes the fill: a zone that cannot be written within 100 nm of it,
+such as a tiny clearance circle that would become a square, or whose edges come
+within 1 µm of each other without meeting, such as a copper strip narrower than
+1 µm between two clearances, is refused with a message naming the zone's net and
+layer, because processing may move each coordinate by 0.5 µm (§4.14.2). The
+drill files and boards without zones are unchanged. The Manufacturing review draws
+pour regions; it flattens arcs to within 1 µm for display only.
 
 ## Shared commands
 

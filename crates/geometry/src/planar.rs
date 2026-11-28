@@ -51,6 +51,24 @@ pub struct DisplayMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
+/// One piece of a region boundary in board nanometres. It ends where the next piece of its
+/// loop starts; the last piece ends at the loop's first point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Edge {
+    /// A straight piece from `start_nm`.
+    Line { start_nm: [f64; 2] },
+    /// A circular piece from `start_nm` about `center_nm` with radius `radius_nm`, sweeping
+    /// `sweep_rad` radians (positive: counter-clockwise).
+    Arc { start_nm: [f64; 2], center_nm: [f64; 2], radius_nm: f64, sweep_rad: f64 },
+}
+
+/// The exact boundary of one region: its outer loop and the loops of its holes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Boundary {
+    pub outer: Vec<Edge>,
+    pub holes: Vec<Vec<Edge>>,
+}
+
 /// A set of planar regions with holes. No kernel type crosses this boundary.
 ///
 /// Cloning copies profile data and shares a lazily prepared operand. Operations copy that
@@ -209,6 +227,33 @@ impl Regions {
             let b = self.profile_bounds().iter().map(|region| region[0]).fold(bounds::empty(), bounds::join);
             envelope_nm(b)
         })
+    }
+
+    /// Read every region's exact boundary in board nanometres, in the stored region, loop and
+    /// segment order, without rounding or approximating any curve. Each region's outer loop is
+    /// counter-clockwise and its holes clockwise, as the kernel stores them. Returns
+    /// `operation_failed` when a loop contains a free-form curve (a Bézier or conic piece),
+    /// which has no exact line/arc representation.
+    pub fn boundaries(&self) -> Result<Vec<Boundary>> {
+        let edges = |lp: &Loop2| -> Result<Vec<Edge>> {
+            lp.segs
+                .iter()
+                .map(|segment| match *segment {
+                    solidcore_record::Seg2::Line { a, .. } => Ok(Edge::Line { start_nm: nm(a) }),
+                    solidcore_record::Seg2::Arc { center, radius, start, sweep } => Ok(Edge::Arc {
+                        start_nm: nm(center + Vec2::new(start.cos() * radius, start.sin() * radius)),
+                        center_nm: nm(center),
+                        radius_nm: radius * NM_PER_MM as f64,
+                        sweep_rad: sweep,
+                    }),
+                    _ => Err(GeometryError::new(ErrorCode::OperationFailed, "planar boundary contains a free-form curve")),
+                })
+                .collect()
+        };
+        self.regions
+            .iter()
+            .map(|region| Ok(Boundary { outer: edges(&region.outer)?, holes: region.holes.iter().map(edges).collect::<Result<_>>()? }))
+            .collect()
     }
 
     /// Place a local line/arc profile on the board without recomputing its curves.
@@ -627,6 +672,11 @@ fn point_mm(point: [i64; 2]) -> Result<Vec2> {
         return Err(invalid("coordinate exceeds the supported range"));
     }
     Ok(Vec2::new(point[0] as f64 / NM_PER_MM as f64, point[1] as f64 / NM_PER_MM as f64))
+}
+
+/// Convert a kernel millimetre point to board nanometres without rounding.
+fn nm(point: Vec2) -> [f64; 2] {
+    [point.x * NM_PER_MM as f64, point.y * NM_PER_MM as f64]
 }
 
 /// Invalid arguments have one stable command-facing error code.

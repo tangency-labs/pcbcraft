@@ -165,3 +165,37 @@ fn fabrication_review_rejects_crossing_regions_with_nonzero_area() {
     let review = Package::read(package(&[("top.gbr", &simple)]).bytes()).unwrap();
     assert_eq!(review.layers[0].marks.len(), 3);
 }
+
+/// A copper pour region joins its circular hole by a cut-in, uses multi-quadrant arcs and may
+/// hold several contours; the review draws its exact area within the arc flattening. Arcs stay
+/// refused outside pours, where the writer never emits them.
+#[test]
+fn fabrication_review_draws_pour_regions_with_cut_ins_and_arcs() {
+    let pour = "G75*\n%TA.AperFunction,Conductor*%\nG36*\nX0Y0D02*\nX10000000Y0D01*\nX10000000Y5000000D01*\nX7000000Y5000000D01*\nG02*\n\
+X5000000Y3000000I-2000000J0D01*\nX3000000Y5000000I0J2000000D01*\nX5000000Y7000000I2000000J0D01*\nX7000000Y5000000I0J-2000000D01*\nG01*\n\
+X10000000Y5000000D01*\nX10000000Y10000000D01*\nX0Y10000000D01*\nX0Y0D01*\nX20000000Y0D02*\nX21000000Y0D01*\nX21000000Y1000000D01*\nX20000000Y1000000D01*\nX20000000Y0D01*\nG37*\n%TD.AperFunction*%\n";
+    let review = Package::read(package(&[("top.gbr", &gerber("Copper,L1,Top", pour))]).bytes()).unwrap();
+    let area: f64 = review.layers[0]
+        .marks
+        .iter()
+        .map(|mark| match mark {
+            Mark::Polygon(v) => {
+                v.iter()
+                    .zip(v.iter().cycle().skip(1))
+                    .map(|(a, b)| (a.x_nm as f64) * (b.y_nm as f64) - (a.y_nm as f64) * (b.x_nm as f64))
+                    .sum::<f64>()
+                    / 2.
+            }
+            other => panic!("{other:?}"),
+        })
+        .sum();
+    let exact = 101e12 - std::f64::consts::PI * 4e12;
+    // Chords within 1 µm of the hole's circle add at most its perimeter times 1 µm of copper.
+    let flattening = 2. * std::f64::consts::PI * 2e6 * 1e3;
+    assert!(area > exact && area - exact < flattening, "{area} against {exact}");
+
+    let open = pour.replace("X0Y0D01*\nX20000000Y0D02*", "X20000000Y0D02*");
+    assert!(Package::read(package(&[("top.gbr", &gerber("Copper,L1,Top", &open))]).bytes()).unwrap_err().contains("Gerber region is open"));
+    let pad_arc = "G75*\n%TA.AperFunction,SMDPad,CuDef*%\nG36*\nX0Y0D02*\nG02*\n";
+    assert!(Package::read(package(&[("top.gbr", &gerber("Copper,L1,Top", pad_arc))]).bytes()).unwrap_err().contains("Unsupported Gerber record"));
+}

@@ -99,6 +99,8 @@ impl Intent {
 pub(super) struct RoutedNets {
     objects: BTreeMap<Uuid, Intent>,
     pads: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Each zone's persistent net mapped to the same intended membership as its pads.
+    zones: BTreeMap<Uuid, usize>,
     names: BTreeMap<usize, String>,
 }
 
@@ -200,7 +202,24 @@ impl RoutedNets {
         for id in intrinsic.into_iter().flatten() {
             names.entry(id).or_insert_with(|| memberships.names.get(&id).filter(|name| !name.is_empty()).cloned().unwrap_or_else(|| "Net".into()));
         }
-        Self { objects, pads, names: distinct_names(names) }
+        let mut zones = BTreeMap::new();
+        if !view.zones().is_empty() {
+            // A zone names a persistent net. Resolve it to the membership its pads use, so a
+            // pour and the pads it connects carry one Gerber net name.
+            let accepted = project.accepted_net_memberships();
+            for zone in view.zones() {
+                let Some(&id) = accepted.ids.get(&zone.net) else { continue };
+                names.entry(id).or_insert_with(|| accepted.names.get(&id).filter(|name| !name.is_empty()).cloned().unwrap_or_else(|| "Net".into()));
+                zones.insert(zone.net, id);
+            }
+        }
+        Self { objects, pads, zones, names: distinct_names(names) }
+    }
+
+    /// Attributes of a pour of the zone net `net`. A net without a current membership gets no
+    /// .N, like unresolved routed copper, rather than a guessed name.
+    pub(super) fn zone(&self, net: Uuid) -> Object<'_> {
+        Object { net: self.zones.get(&net).and_then(|id| self.names.get(id)).map(String::as_str), component: None }
     }
 
     /// Resolve pad intent independently of physical contacts, including on a board without routes.

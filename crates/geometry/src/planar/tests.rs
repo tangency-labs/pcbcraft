@@ -45,6 +45,38 @@ fn circular_clearance_is_a_hole_with_exact_curved_area() {
     area_is(&land, std::f64::consts::PI);
 }
 
+/// Boundaries expose the exact stored lines and circle in nanometres, with no chords.
+#[test]
+fn boundaries_report_exact_lines_and_arcs_in_nanometres() {
+    let fill = rectangle(0, 0, 10 * MM, 10 * MM).boolean(&Regions::circle([4 * MM, 5 * MM], 2 * MM + 1).unwrap(), Operation::Difference).unwrap();
+    let boundaries = fill.boundaries().unwrap();
+    assert_eq!(boundaries.len(), 1);
+    let corners: Vec<_> = boundaries[0]
+        .outer
+        .iter()
+        .map(|edge| match *edge {
+            Edge::Line { start_nm } => start_nm.map(|v| v.round() as i64),
+            Edge::Arc { .. } => panic!("the outer loop is straight: {edge:?}"),
+        })
+        .collect();
+    assert_eq!(corners.len(), 4);
+    for corner in [[0, 0], [10 * MM, 0], [10 * MM, 10 * MM], [0, 10 * MM]] {
+        assert!(corners.contains(&corner), "{corner:?} in {corners:?}");
+    }
+    assert_eq!(boundaries[0].holes.len(), 1);
+    let mut sweep = 0.;
+    for edge in &boundaries[0].holes[0] {
+        let Edge::Arc { start_nm, center_nm, radius_nm, sweep_rad } = *edge else { panic!("the hole is circular: {edge:?}") };
+        assert!((center_nm[0] - 4e6).abs() < 1e-6 && (center_nm[1] - 5e6).abs() < 1e-6, "{center_nm:?}");
+        assert!((radius_nm - 1_000_000.5).abs() < 1e-6, "the half-nanometre radius is kept: {radius_nm}");
+        assert!(((start_nm[0] - center_nm[0]).hypot(start_nm[1] - center_nm[1]) - radius_nm).abs() < 1e-6);
+        assert!(sweep_rad < 0., "holes run clockwise: {sweep_rad}");
+        sweep += sweep_rad;
+    }
+    assert!((sweep + std::f64::consts::TAU).abs() < 1e-12, "the arcs close one full circle: {sweep}");
+    assert!(Regions::default().boundaries().unwrap().is_empty());
+}
+
 #[test]
 fn crossing_obstacle_splits_material_and_islands_keep_holes() {
     let board = rectangle(0, 0, 10 * MM, 10 * MM);

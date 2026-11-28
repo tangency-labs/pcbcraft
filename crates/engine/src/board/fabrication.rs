@@ -17,9 +17,13 @@
 //! Mounting-side pads follow the placement side; silkscreen follows the top or bottom legend.
 //! X2 aperture functions describe the emitted features without changing their geometry.
 //! Copper object attributes describe intended nets and component pins.
-//! Track and Board Outline strokes remain linear. Export refuses boards with copper zones.
+//! Track and Board Outline strokes remain linear. Each island of the board's current copper
+//! zone fill is a dark region on its copper layer, with its zone's net; see [`pours`] for the
+//! contour form and its error bound. Export refuses a board whose pours were removed, are
+//! still being poured or failed, rather than writing stale or missing copper.
 mod drill_chart;
 mod object_attributes;
+mod pours;
 
 pub use self::drill_chart::{DrillChart, DrillChartRow};
 use self::object_attributes::{Object, RoutedNets};
@@ -629,7 +633,9 @@ impl BoardView<'_> {
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
     /// The Gerber profile includes the closed outline loops and omits open outline paths.
-    /// Refuses circular copper and copper zones before generating any output files.
+    /// Refuses circular copper before generating any output files. Copper zones are written from
+    /// the current fill DRC uses; a removed, pending or failed fill, or a zone left without fill
+    /// because its net is unavailable, is refused before any output file is generated.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
     /// Returns an error if a plated or non-plated drill diameter rounds to zero at the output resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
@@ -638,9 +644,6 @@ impl BoardView<'_> {
     /// A placed slot is refused until the plated machining output can preserve its geometry.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
-        if !self.zones().is_empty() {
-            return Err("Fabrication export is unavailable on boards with copper zones.".into());
-        }
         let board = &self.project().board;
         if board.footprints().iter().filter_map(|footprint| board.definition_for(footprint)).any(|definition| definition.has_plated_slots()) {
             return Err("Fabrication output cannot yet machine plated slots; no files were generated.".into());
@@ -671,6 +674,13 @@ impl BoardView<'_> {
         let base = file_part(&self.project().name);
         let routed_nets = RoutedNets::new(self);
         let nets = &routed_nets;
+        let pours = pours::Pours::new(self, frame, |net, layer| {
+            let layer = copper.iter().find(|candidate| candidate.id == layer).map_or("an unknown layer", |layer| layer.name.as_str());
+            match nets.zone(net).net.filter(|name| !name.is_empty()) {
+                Some(net) => format!("copper zone of net {net} on {layer}"),
+                None => format!("copper zone on {layer}"),
+            }
+        })?;
         let pads: Vec<_> = self
             .footprints()
             .flat_map(|footprint| {
@@ -720,6 +730,7 @@ impl BoardView<'_> {
             for via in self.vias() {
                 gerber.object(routed_nets.object(via.id), |gerber| gerber.stroke(&[via.at], via.diameter_nm, Some(ApertureFunction::ViaPad)));
             }
+            pours.write(&mut gerber, layer.id, nets);
             let position = match (index, layer.side) {
                 (_, Some(Side::Front)) => "Top",
                 (_, Some(Side::Back)) => "Bot",

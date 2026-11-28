@@ -24,6 +24,14 @@ struct Plot {
     selected: Option<u32>,
     at: Option<Point>,
     region: Option<Vec<Point>>,
+    /// An open copper pour region: its contours, with arcs flattened for display.
+    pour: Option<Vec<Vec<Point>>>,
+    /// The attribute dictionary's aperture function is Conductor, which only pours give regions.
+    conductor: bool,
+    /// G75 has selected multi-quadrant arcs, the only arc mode the writer uses.
+    multi_quadrant: bool,
+    /// The circular interpolation direction, clockwise when true, while G02 or G03 is active.
+    arc: Option<bool>,
     marks: Vec<Mark>,
 }
 
@@ -70,7 +78,7 @@ pub(super) fn read(text: &str, budget: &mut usize) -> Result<(Layer, CoordinateF
     let role = plot.role.ok_or("Gerber file function is missing")?;
     let frame = plot.frame.ok_or("Gerber coordinate frame is missing")?;
     let is_mask = matches!(role, LayerRole::TopMask | LayerRole::BottomMask);
-    if lines.next().is_some() || plot.region.is_some() || !plot.ready() || plot.polarity != Some(!is_mask) {
+    if lines.next().is_some() || plot.region.is_some() || plot.pour.is_some() || !plot.ready() || plot.polarity != Some(!is_mask) {
         return Err("Incomplete or unsupported PCBcraft Gerber plot".into());
     }
     Ok((Layer { name: String::new(), role, marks: plot.marks, tools: Vec::new() }, frame))
@@ -88,7 +96,15 @@ impl Plot {
             "%FSLAX46Y46*%" => self.format = true,
             "%MOMM*%" => self.metric = true,
             "%LPD*%" => self.dark = true,
-            "G01*" => self.linear = true,
+            "G01*" => {
+                self.linear = true;
+                self.arc = None;
+            }
+            "G02*" | "G03*" if self.pour.is_some() && self.multi_quadrant => {
+                self.linear = false;
+                self.arc = Some(record == "G02*");
+            }
+            "G75*" if self.region.is_none() && self.pour.is_none() => self.multi_quadrant = true,
             r if r.starts_with("%TF.SameCoordinates,") && self.frame.is_none() => {
                 let value = r.strip_prefix("%TF.SameCoordinates,").and_then(|s| s.strip_suffix("*%")).ok_or("Invalid Gerber coordinate frame")?;
                 self.frame = Some(CoordinateFrame::parse(value)?);
@@ -98,7 +114,22 @@ impl Plot {
                     return Err("Duplicate Gerber file polarity".into());
                 }
             }
-            "G36*" if self.region.is_none() && self.ready() => self.region = Some(Vec::new()),
+            "G36*" if self.region.is_none() && self.pour.is_none() && self.ready() => {
+                if self.conductor {
+                    self.pour = Some(Vec::new());
+                } else {
+                    self.region = Some(Vec::new());
+                }
+            }
+            "G37*" if self.pour.is_some() => {
+                let contours = self.pour.take().unwrap_or_default();
+                if !self.linear || contours.is_empty() || contours.iter().any(|contour| contour.len() < 3 || contour.first() != contour.last()) {
+                    return Err("Gerber region is open".into());
+                }
+                for mark in trapezoids(&contours) {
+                    add(&mut self.marks, mark, budget)?;
+                }
+            }
             "G37*" => {
                 let mut vertices = self.region.take().ok_or("No open region")?;
                 if vertices.len() < 3 || vertices.first() != vertices.last() {
@@ -116,7 +147,12 @@ impl Plot {
                 }
             }
             r if ["%TF.GenerationSoftware,", "%TA.", "%TO.", "%TD"].iter().any(|prefix| r.starts_with(prefix))
-                && r[1..].strip_suffix("*%").is_some_and(|attribute| !attribute.contains(['*', '%'])) => {}
+                && r[1..].strip_suffix("*%").is_some_and(|attribute| !attribute.contains(['*', '%'])) =>
+            {
+                if r.starts_with("%TA.AperFunction,") || r == "%TD.AperFunction*%" || r == "%TD*%" {
+                    self.conductor = r == "%TA.AperFunction,Conductor*%";
+                }
+            }
             r if r.starts_with("%ADD") => {
                 let (id, aperture) = aperture(r, &self.macros)?;
                 if self.apertures.insert(id, aperture).is_some() {
@@ -130,8 +166,43 @@ impl Plot {
                 }
                 self.selected = Some(id);
             }
+            r if r.starts_with('X') && r.ends_with('*') && self.pour.is_some() => self.pour_vertex(r)?,
             r if r.starts_with('X') && r.ends_with('*') && self.ready() => self.draw(r, budget)?,
             _ => return Err("Unsupported Gerber record".into()),
+        }
+        Ok(())
+    }
+
+    /// Add one vertex to an open pour. D02 starts a contour after the previous one closed; D01
+    /// draws a line, or in G02/G03 mode an arc about its start plus I/J, flattened for display.
+    fn pour_vertex(&mut self, record: &str) -> Result<(), String> {
+        const MAX_POUR_VERTICES: usize = 4_000_000;
+        let (position, operation) = record.split_once('D').ok_or("Expected explicit Gerber operation")?;
+        let (position, offset) = match position.split_once('I') {
+            Some((position, offset)) => (position, Some(offset)),
+            None => (position, None),
+        };
+        let p = xy(position, coordinate)?;
+        let previous = self.at.replace(p);
+        let contours = self.pour.as_mut().ok_or("No open region")?;
+        match (operation, self.arc, offset, contours.last_mut()) {
+            ("02*", None, None, last) => {
+                if last.is_some_and(|contour| contour.first() != contour.last()) {
+                    return Err("Gerber region is open".into());
+                }
+                contours.push(vec![p]);
+            }
+            ("01*", None, None, Some(contour)) => contour.push(p),
+            ("01*", Some(clockwise), Some(offset), Some(contour)) => {
+                let (i, j) = offset.split_once('J').ok_or("Expected I and J offsets")?;
+                let start = previous.ok_or("No starting point for arc")?;
+                let center = point(start.x_nm + coordinate(i)?, start.y_nm + coordinate(j)?);
+                flatten(contour, start, p, center, clockwise);
+            }
+            _ => return Err("Unsupported Gerber region contour".into()),
+        }
+        if contours.iter().map(Vec::len).sum::<usize>() > MAX_POUR_VERTICES {
+            return Err("Fabrication geometry exceeds the review limit".into());
         }
         Ok(())
     }
@@ -319,6 +390,113 @@ fn triangulate(mut points: Vec<Point>) -> Result<Vec<[Point; 3]>, String> {
         points.remove(index);
     }
     Ok(triangles)
+}
+
+/// Flatten a multi-quadrant arc into chords within 1 µm of its circle, for display only. Equal
+/// start and end points draw a full circle (§4.7.2).
+fn flatten(contour: &mut Vec<Point>, start: Point, end: Point, center: Point, clockwise: bool) {
+    let (dx, dy) = ((start.x_nm - center.x_nm) as f64, (start.y_nm - center.y_nm) as f64);
+    let radius = dx.hypot(dy);
+    let from = dy.atan2(dx);
+    let mut sweep = ((end.y_nm - center.y_nm) as f64).atan2((end.x_nm - center.x_nm) as f64) - from;
+    if clockwise && sweep >= 0. {
+        sweep -= std::f64::consts::TAU;
+    } else if !clockwise && sweep <= 0. {
+        sweep += std::f64::consts::TAU;
+    }
+    let step = 2. * (1. - (1_000. / radius).min(1.)).acos();
+    let chords = ((sweep.abs() / step.max(1e-3)).ceil() as usize).clamp(1, 1024);
+    for k in 1..chords {
+        let angle = from + sweep * k as f64 / chords as f64;
+        contour.push(point(center.x_nm + (radius * angle.cos()).round() as i64, center.y_nm + (radius * angle.sin()).round() as i64));
+    }
+    contour.push(end);
+}
+
+/// Split pour contours into trapezoids under the nonzero rule, so the contours of one region
+/// unite and the coincident cut-ins of a contour cancel (§4.10). One sweep over the distinct
+/// vertex heights keeps only the edges crossing each band; a trapezoid grows while the same two
+/// edges bound it, so the marks stay near the edge count rather than bands times spans.
+fn trapezoids(contours: &[Vec<Point>]) -> Vec<Mark> {
+    struct Edge {
+        low: Point,
+        high: Point,
+        winding: i32,
+    }
+    let mut edges: Vec<Edge> = contours
+        .iter()
+        .flat_map(|contour| contour.windows(2))
+        .filter(|pair| pair[0].y_nm != pair[1].y_nm)
+        .map(|pair| match pair[0].y_nm < pair[1].y_nm {
+            true => Edge { low: pair[0], high: pair[1], winding: 1 },
+            false => Edge { low: pair[1], high: pair[0], winding: -1 },
+        })
+        .collect();
+    edges.sort_by_key(|edge| edge.low.y_nm);
+    let mut heights: Vec<i64> = edges.iter().flat_map(|edge| [edge.low.y_nm, edge.high.y_nm]).collect();
+    heights.sort_unstable();
+    heights.dedup();
+    let x_at = |edge: &Edge, y: f64| {
+        edge.low.x_nm as f64 + (edge.high.x_nm - edge.low.x_nm) as f64 * (y - edge.low.y_nm as f64) / (edge.high.y_nm - edge.low.y_nm) as f64
+    };
+    let mut marks = Vec::new();
+    let close = |marks: &mut Vec<Mark>, (left, right, bottom): (usize, usize, i64), top: i64| {
+        let at = |edge: usize, y: i64| point(x_at(&edges[edge], y as f64).round() as i64, y);
+        let mut corners = vec![at(left, bottom), at(right, bottom), at(right, top), at(left, top)];
+        corners.dedup();
+        if corners.len() > 1 && corners.first() == corners.last() {
+            corners.pop();
+        }
+        if corners.len() >= 3 {
+            marks.push(Mark::Polygon(corners.into()));
+        }
+    };
+    let (mut active, mut next, mut open) = (Vec::<usize>::new(), 0, Vec::<(usize, usize, i64)>::new());
+    for band in heights.windows(2) {
+        let (bottom, top) = (band[0], band[1]);
+        active.retain(|&edge| edges[edge].high.y_nm > bottom);
+        while next < edges.len() && edges[next].low.y_nm <= bottom {
+            active.push(next);
+            next += 1;
+        }
+        let middle = (bottom as f64 + top as f64) / 2.;
+        active.sort_by(|&a, &b| x_at(&edges[a], middle).total_cmp(&x_at(&edges[b], middle)));
+        let (mut spans, mut winding, mut left) = (Vec::new(), 0, 0);
+        for &edge in &active {
+            let before = winding;
+            winding += edges[edge].winding;
+            if before == 0 && winding != 0 {
+                left = edge;
+            } else if before != 0 && winding == 0 {
+                spans.push((left, edge));
+            }
+        }
+        // Spans are matched by their edge pair in sorted lists, not by scanning, so a band costs
+        // about its span count rather than its open spans times its spans.
+        let mut current = spans.clone();
+        current.sort_unstable();
+        let mut kept = Vec::with_capacity(spans.len());
+        for span in open.drain(..) {
+            if current.binary_search(&(span.0, span.1)).is_ok() {
+                kept.push(span);
+            } else {
+                close(&mut marks, span, bottom);
+            }
+        }
+        let mut continued: Vec<_> = kept.iter().map(|span| (span.0, span.1)).collect();
+        continued.sort_unstable();
+        for (left, right) in spans {
+            if continued.binary_search(&(left, right)).is_err() {
+                kept.push((left, right, bottom));
+            }
+        }
+        open = kept;
+    }
+    let top = heights.last().copied().unwrap_or_default();
+    for span in open {
+        close(&mut marks, span, top);
+    }
+    marks
 }
 
 /// Compare each pair of nonconsecutive edges in a short closed contour.

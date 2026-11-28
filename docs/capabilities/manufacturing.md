@@ -7,7 +7,8 @@
   basic file-presence and outline checks through shared GUI and live MCP.
 
 - **Manufacture › Fabrication › Outputs** exports Gerber X2 copper, mask, paste, silkscreen and
-  outline layers with aperture functions. The deterministic archive contains plated and, when
+  outline layers with aperture functions, including [poured copper zones](../pcb/copper-zone-outlines.md#fabrication-output)
+  as conductor regions with exact arcs. The deterministic archive contains plated and, when
   present, [non-plated Excellon drill files](../manufacturing/drill-files.md) under portable names.
 - The embedded manifest records member byte sizes and SHA-256. Desktop saves one ZIP and the browser
   requests one download. [Fabrication through MCP](../manufacturing/fabrication-mcp.md) returns file

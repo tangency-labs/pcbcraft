@@ -394,6 +394,7 @@ worker; cancellation terminates it immediately. The foreground validates the
 request fingerprint, geometry and display indices before publishing into the
 captured source slot. Source/session/view authority separately rejects obsolete
 completion. Native unwinding uses the existing guard; no hard native kernel-call
-timeout or process isolation is claimed. Gerber conversion remains #233 and must
-consume the same authoritative fill. See the [zone guide](../pcb/copper-zone-outlines.md)
+timeout or process isolation is claimed. Gerber output (#233) reads the same
+authoritative fill through `Regions::boundaries`, which reports each boundary as
+exact lines and circular arcs in nanometres without exposing kernel types. See the [zone guide](../pcb/copper-zone-outlines.md)
 for the supported board/rule/connection behavior.

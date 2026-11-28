@@ -546,6 +546,30 @@ struct ReadGerber {
     rounded: BTreeMap<usize, ReadRounded>,
     rounded_flashes: Vec<(Point, usize)>,
     objects: Vec<(Option<&'static str>, ReadObject)>,
+    /// What each entry of `objects` drew, in the same order.
+    drawn: Vec<Drawn>,
+    /// Conductor regions: copper pours, with one or more contours of lines and arcs.
+    pours: Vec<Vec<Vec<ReadSegment>>>,
+}
+
+/// The primitive that captured one entry of `ReadGerber::objects`.
+#[derive(Clone, Copy, Debug)]
+enum Drawn {
+    Flash(Point, usize),
+    Stroke(Point, Point, usize),
+    Region,
+    Pour(usize),
+}
+
+/// The contours of an open region: each point with the arc (centre, clockwise) that reached it.
+type OpenContours = Vec<Vec<(Point, Option<(Point, bool)>)>>;
+
+/// One region contour segment from `from` to `to`; an arc has its centre and direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReadSegment {
+    from: Point,
+    to: Point,
+    arc: Option<(Point, bool)>,
 }
 
 #[derive(Debug, Default)]
@@ -754,7 +778,10 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
     let mut macros = BTreeMap::new();
     let mut selected = None;
     let mut position = None;
-    let mut region: Option<Vec<Point>> = None;
+    // Each contour lists its points, with the arc (centre, clockwise) that reached each one.
+    let mut region: Option<(&'static str, OpenContours)> = None;
+    let mut mode = "G01*";
+    let mut multi_quadrant = false;
     let mut body = false;
     let mut pending_function = None;
     let mut object = ReadObject::default();
@@ -862,34 +889,90 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             }
             selected = Some(code);
         } else if line == "G36*" {
-            if region.replace(Vec::new()).is_some() {
+            if region.is_some() {
                 return Err("nested region");
             }
             let function = pending_function.take().ok_or("missing region function")?;
+            region = Some((function, Vec::new()));
             read.region_functions.push(function);
             read.objects.push((Some(function), object.clone()));
+            read.drawn.push(if function == "Conductor" { Drawn::Pour(read.pours.len()) } else { Drawn::Region });
         } else if line == "G37*" {
-            let points = region.take().ok_or("region end without start")?;
-            if points.len() < 4 || points.first() != points.last() {
+            let (function, contours) = region.take().ok_or("region end without start")?;
+            // Two linear segments only retrace one line; an arc closed by its chord encloses area.
+            let open = |points: &Vec<(Point, Option<(Point, bool)>)>| {
+                points.len() < 3
+                    || (points.len() == 3 && points.iter().all(|point| point.1.is_none()))
+                    || points.first().map(|p| p.0) != points.last().map(|p| p.0)
+            };
+            if contours.is_empty() || contours.iter().any(open) {
                 return Err("region contour not closed");
             }
-            read.regions.push(points);
+            if mode != "G01*" {
+                return Err("region leaves circular mode");
+            }
+            if function == "Conductor" {
+                read.pours.push(
+                    contours
+                        .iter()
+                        .map(|points| points.windows(2).map(|pair| ReadSegment { from: pair[0].0, to: pair[1].0, arc: pair[1].1 }).collect())
+                        .collect(),
+                );
+            } else {
+                let [points] = contours.as_slice() else { return Err("invalid region operation") };
+                if points.len() < 4 || points.iter().any(|point| point.1.is_some()) {
+                    return Err("region contour not closed");
+                }
+                read.regions.push(points.iter().map(|point| point.0).collect());
+            }
             if lines.next() != Some("%TD.AperFunction*%") {
                 return Err("region function not cleared");
             }
+        } else if line == "G75*" {
+            if region.is_some() {
+                return Err("G75 in region");
+            }
+            multi_quadrant = true;
+        } else if matches!(line, "G01*" | "G02*" | "G03*") {
+            if line != "G01*" && (!multi_quadrant || region.as_ref().is_none_or(|(function, _)| *function != "Conductor")) {
+                return Err("unsupported circular mode");
+            }
+            mode = if line == "G01*" {
+                "G01*"
+            } else if line == "G02*" {
+                "G02*"
+            } else {
+                "G03*"
+            };
         } else if let Some(coordinates) = line.strip_prefix('X') {
             let (x, rest) = coordinates.split_once('Y').ok_or("invalid coordinate")?;
             let (y, operation) = rest.split_once('D').ok_or("invalid coordinate")?;
-            let point = Point { x_nm: read_coordinate(x)?, y_nm: read_coordinate(y)? };
-            if let Some(points) = region.as_mut() {
-                if operation != if points.is_empty() { "02*" } else { "01*" } {
-                    return Err("invalid region operation");
+            let (y, offset) = match y.split_once('I') {
+                Some((y, offset)) => {
+                    let (i, j) = offset.split_once('J').ok_or("invalid arc offset")?;
+                    (y, Some((read_coordinate(i)?, read_coordinate(j)?)))
                 }
-                points.push(point);
+                None => (y, None),
+            };
+            let point = Point { x_nm: read_coordinate(x)?, y_nm: read_coordinate(y)? };
+            if offset.is_some() != (mode != "G01*") || (offset.is_some() && operation != "01*") {
+                return Err("invalid arc operation");
+            }
+            if let Some((function, contours)) = region.as_mut() {
+                match operation {
+                    "02*" if contours.is_empty() || *function == "Conductor" => contours.push(vec![(point, None)]),
+                    "01*" if !contours.is_empty() => {
+                        let start: Point = position.ok_or("draw without position")?;
+                        let arc = offset.map(|(i, j)| (Point { x_nm: start.x_nm + i, y_nm: start.y_nm + j }, mode == "G02*"));
+                        contours.last_mut().ok_or("invalid region operation")?.push((point, arc));
+                    }
+                    _ => return Err("invalid region operation"),
+                }
             } else {
                 match operation {
                     "03*" => {
                         let code = selected.ok_or("undefined aperture")?;
+                        read.drawn.push(Drawn::Flash(point, code));
                         let function = if let Some(&aperture) = read.apertures.get(&code) {
                             read.flashes.push((point, aperture));
                             aperture.function
@@ -905,6 +988,7 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
                             return Err("unsupported stroke aperture");
                         }
                         read.strokes.push((position.ok_or("draw without position")?, point, aperture));
+                        read.drawn.push(Drawn::Stroke(position.ok_or("draw without position")?, point, selected.ok_or("undefined aperture")?));
                         read.objects.push((aperture.function, object.clone()));
                     }
                     "02*" => (),
@@ -2861,46 +2945,6 @@ fn embedded_manifest(capture: &Archive) -> Value {
     serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap()
 }
 
-/// Even an unfilled or suppressed zone carries copper intent that fabrication would omit.
-#[test]
-fn fabrication_refuses_boards_with_zones_in_every_fill_state() {
-    use crate::board::{
-        fill::{INSPECT_FILL, REFILL_ZONES, UNFILL_ZONES},
-        zones::{ADD_ZONE, Connection, DELETE_ZONES, Options},
-    };
-    use std::sync::Arc;
-
-    let mut session = routed_fixture();
-    outline(&mut session);
-    let (target, points) = {
-        let view = view(&session);
-        let airwires = view.ratsnest().unwrap();
-        let end = &airwires.lines[0].from;
-        let target = view.net_class_target_for_copper(&format!("{}:{}", end.footprint, end.pad.number.as_str())).unwrap().unwrap();
-        let points = view.drawings().first().unwrap().points.clone();
-        (target, points)
-    };
-    let layer = copper_layers(&session)[0];
-    let options = Options { connection: Connection::Solid, ..Options::default() };
-    session
-        .apply(ADD_ZONE, &json!({"target":target,"points":points,"layer":layer,"options":options,"expected_revision":session.revision()}))
-        .unwrap();
-    let params = json!({});
-    let revision = session.revision();
-    let snapshot = session.snapshot().unwrap();
-    for (command, state) in [(INSPECT_FILL, "pending"), (REFILL_ZONES, "ready"), (UNFILL_ZONES, "unfilled")] {
-        let result = session.execute(command, &params).unwrap();
-        assert_eq!(result["zone_fill"]["result"]["state"], state);
-        let check = |error: CommandError| assert!(matches!(error, CommandError::Unavailable(message) if message.contains("copper zones")));
-        check(session.export_fabrication_archive(&params).unwrap_err());
-        check(session.execute(EXPORT_FABRICATION, &params).unwrap_err());
-        assert_eq!(session.revision(), revision);
-        assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
-    }
-    session.apply(DELETE_ZONES, &json!({"zones":[view(&session).zones()[0].id],"expected_revision":revision})).unwrap();
-    assert!(session.export_fabrication_archive(&params).is_ok());
-}
-
 /// The same board gives byte-identical outputs and archives, including rounded pad macros.
 /// The sole extra member describes the exact generated bytes in order, not itself or the
 /// outer ZIP. All entries have fixed metadata.
@@ -3084,3 +3128,5 @@ fn fabrication_apply_and_execute_share_validation() {
     assert!(!exported["fabrication"]["files"].as_array().unwrap().is_empty());
     assert_eq!(s.inspect(), before);
 }
+
+mod zone_pours;
