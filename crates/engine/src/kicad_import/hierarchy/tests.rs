@@ -351,3 +351,80 @@ fn invalid_interface_reports_the_child_file_and_occurrence() {
     assert!(error.contains(&format!("child.kicad_sch (/{ROOT}/{A})")));
     assert!(error.contains("1–200 characters"));
 }
+
+#[test]
+fn repeated_annotation_fallback_keeps_one_multi_unit_part_per_occurrence() {
+    let child = r#"(kicad_sch
+        (lib_symbols (symbol "Fixture:Pair" (property "Reference" "U")
+            (symbol "Pair_1_1" (pin passive line (at 0 0 0) (length 2.54) (number "1")))
+            (symbol "Pair_2_1" (pin passive line (at 0 0 0) (length 2.54) (number "2")))))
+        (symbol (lib_id "Fixture:Pair") (at 30 60 0) (unit 2) (property "Reference" "U1"))
+        (symbol (lib_id "Fixture:Pair") (at 45 60 0) (unit 1) (property "Reference" "U1")))"#;
+    let second = block(B, "child.kicad_sch").replace("(at 10 20)", "(at 10 60)");
+    let root = project(&format!("{} {second}", block(A, "child.kicad_sch")));
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.to_owned() })).unwrap();
+    let imported = import(&sheets, "Repeated units").unwrap();
+    let project = crate::persistence::decode_documents(&crate::persistence::encode_documents(imported.project).unwrap()).unwrap();
+    assert_eq!(project.components.len(), 2);
+    let mut components = BTreeSet::new();
+    let mut references = BTreeSet::new();
+    for child in project.sheets().skip(1) {
+        let sheet = project.for_sheet(child.target).unwrap();
+        let [left, right] = sheet.symbols() else { panic!("each child should have two unit placements") };
+        assert_eq!(left.component, right.component);
+        assert_ne!(left.unit, right.unit);
+        assert!(components.insert(left.component));
+        assert!(references.insert(sheet.reference(left).to_owned()));
+    }
+}
+
+#[test]
+fn joining_power_flags_are_refused_with_only_hierarchical_contacts() {
+    const FLAG: &str = r##"(lib_symbols
+        (symbol "power:PWR_FLAG" (power) (property "Reference" "#FLG")
+            (symbol "PWR_FLAG_1_1" (pin power_out line (at 0 0 0) (length 0) (name "pwr") (number "1")))))
+        (symbol (lib_id "power:PWR_FLAG") (at 25 15 0) (unit 1) (property "Reference" "#FLG01"))"##;
+    const WIRES: &str = "(wire (pts (xy 10 15) (xy 35 15))) (wire (pts (xy 25 5) (xy 25 30)))";
+    let parent_ports = format!(
+        r#"(sheet (uuid "{A}") (at 0 10) (size 10.16 10.16)
+             (property "Sheetname" "Left") (property "Sheetfile" "left.kicad_sch")
+             (pin "A" output (at 10.16 15 0)))
+           (sheet (uuid "{B}") (at 20 -5.16) (size 10.16 10.16)
+             (property "Sheetname" "Top") (property "Sheetfile" "top.kicad_sch")
+             (pin "B" output (at 25 5 90)))"#
+    );
+    for dot in ["", "(junction (at 25 15))"] {
+        let root = project(&format!("{FLAG} {parent_ports} {} {dot}", WIRES.replace("xy 10 15", "xy 10.16 15")));
+        let sheets = load("root.kicad_sch", |file, _| {
+            Ok(match file {
+                "root.kicad_sch" => root.clone(),
+                "left.kicad_sch" => r#"(kicad_sch (hierarchical_label "A" (shape output) (at 20 20 0)))"#.into(),
+                "top.kicad_sch" => r#"(kicad_sch (hierarchical_label "B" (shape output) (at 20 20 0)))"#.into(),
+                _ => unreachable!(),
+            })
+        })
+        .unwrap();
+        let imported = import(&sheets, "Parent contacts");
+        if dot.is_empty() {
+            assert!(matches!(imported, Err(CommandError::InvalidParams(message)) if message.contains("power flag #FLG01 sits")));
+        } else {
+            imported.unwrap();
+        }
+    }
+
+    let root = project(&format!(
+        r#"(sheet (uuid "{A}") (at 10 20) (size 25 25)
+          (property "Sheetname" "Child") (property "Sheetfile" "child.kicad_sch")
+          (pin "A" input (at 10 25 180)) (pin "B" input (at 10 30 180)))"#
+    ));
+    let child = format!(
+        r#"(kicad_sch {FLAG} {WIRES}
+            (hierarchical_label "A" (shape input) (at 10 15 0))
+            (hierarchical_label "B" (shape input) (at 25 5 90)))"#
+    );
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+    let imported = import(&sheets, "Child contacts");
+    assert!(
+        matches!(imported, Err(CommandError::InvalidParams(message)) if message.contains("child.kicad_sch") && message.contains("power flag #FLG01 sits"))
+    );
+}

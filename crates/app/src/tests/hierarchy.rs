@@ -288,6 +288,30 @@ fn a_clicked_hierarchical_label_remains_selected_off_hover() {
     assert!(h.state().views.active.schematic.selected_hierarchy.is_none());
 }
 
+#[test]
+fn hierarchical_label_anchor_starts_wiring_and_ribbon_moves_the_selected_label() {
+    let mut h = hierarchy_harness(1400.);
+    let revision = h.state().session.revision();
+    h.state_mut().run(engine::ADD_LABEL, &json!({"name":"Fan Power","direction":"output","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    h.run();
+    let label = h.state().session.project().unwrap().hierarchical_labels()[0].id;
+    let anchor = screen(&h, Point { x_nm: 0, y_nm: 0 });
+    point_click(&mut h, anchor);
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
+    assert!(h.state().views.active.schematic.selected_hierarchy.is_none());
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    let text = screen(&h, Point { x_nm: 3 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
+    point_click(&mut h, text);
+    assert_eq!(h.state().views.active.schematic.selected_hierarchy, Some((crate::hierarchy::Kind::Label, label)));
+    click(&mut h, "Move");
+    assert!(
+        matches!(h.state().views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, id: Some(id), .. }) if id == label)
+    );
+}
+
 /// Build original geometry through commands and clear floating panels for coordinate gestures.
 fn movable_sheet(width: f32) -> Harness<'static, PcbApp> {
     let mut h = hierarchy_harness(width);

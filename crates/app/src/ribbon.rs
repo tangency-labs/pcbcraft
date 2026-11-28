@@ -287,7 +287,8 @@ impl Action {
                 schematic
                     && app.views.active.schematic.tool.is_none()
                     && (app.views.active.schematic.selection.single_symbol().is_some()
-                        || app.views.active.schematic.selection.single_net_label().is_some())
+                        || app.views.active.schematic.selection.single_net_label().is_some()
+                        || (self == Self::Move && app.views.active.schematic.selected_hierarchy.is_some()))
             }
             Self::MirrorHorizontal | Self::MirrorVertical => {
                 schematic
@@ -402,7 +403,13 @@ impl PcbApp {
             Action::NoConnect => self.begin_no_connect(),
             Action::NoConnectCheck => self.inspect_no_connects(),
             Action::Move | Action::Rotate => {
-                if let Some(label) = self
+                if action == Action::Move
+                    && let Some((kind, id)) = self.views.active.schematic.selected_hierarchy
+                {
+                    if let Some(source) = self.views.active.input(&self.session) {
+                        self.hierarchy_action(source, kind, id, crate::hierarchy::Action::Move);
+                    }
+                } else if let Some(label) = self
                     .views
                     .active
                     .snapshot(&self.session)

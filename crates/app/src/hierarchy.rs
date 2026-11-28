@@ -533,12 +533,19 @@ pub(super) fn input(
     if let Some((kind, id, _)) = hovered
         && response.clicked()
         && let Some(pointer) = response.hover_pos()
-        && (kind == Kind::Label
-            || project.sheet_symbols().iter().find(|b| b.id == id).is_some_and(|block| {
-                !project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2))
-            }))
     {
-        return Some(Some(Click::SelectHierarchy(kind, id)));
+        let hits_anchor = |at| camera.screen(at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
+        let wiring_target = match kind {
+            Kind::Label => project.endpoint_position(pcbcraft_engine::WireEndpoint::Label(id)).is_some_and(hits_anchor),
+            Kind::Sheet => project
+                .sheet_symbols()
+                .iter()
+                .find(|block| block.id == id)
+                .is_some_and(|block| project.sheet_pins(block).any(|pin| hits_anchor(pin.at))),
+        };
+        if !wiring_target {
+            return Some(Some(Click::SelectHierarchy(kind, id)));
+        }
     }
     None
 }

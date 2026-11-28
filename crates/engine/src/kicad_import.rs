@@ -209,9 +209,11 @@ fn import_sheet(
     placement: &mut PlacementState,
 ) -> Result<(Imported, SheetNets), CommandError> {
     let mut interface_labels = Vec::new();
+    let mut interface_pins = Vec::new();
     let hierarchical = scope.is_some();
     if hierarchical {
         // The tree builder has already created the native ports and their repeated anchors.
+        interface_pins.extend(schematic.sheets.iter().flat_map(|sheet| sheet.pins.iter().map(|pin| pin.at)));
         schematic.sheets.clear();
         schematic.labels.retain(|label| {
             if label.kind == LabelKind::Hierarchical {
@@ -334,7 +336,8 @@ fn import_sheet(
         }
     };
     if !flags.is_empty() && segments.len() <= MAX_WIRE_PIECES {
-        match flags_that_join(&schematic, &flags, &segments, &converted, &pins)? {
+        let interfaces = hierarchical.then_some(FlagInterfaces { pins: &interface_pins, labels: &interface_labels });
+        match flags_that_join(&schematic, &flags, &segments, &converted, &pins, interfaces.as_ref())? {
             Joining::None => {}
             Joining::Each(culprits) => {
                 for flag in culprits {
@@ -393,6 +396,11 @@ fn placement_order(schematic: &Schematic) -> Vec<usize> {
     keep
 }
 
+struct FlagInterfaces<'a> {
+    pins: &'a [Point],
+    labels: &'a [(String, Point)],
+}
+
 /// The file's nets as groups of `(symbol index, pin number)`, worked out from its geometry with
 /// [`wiring::kicad_nets`], with `extra` pins (keyed past the placed symbols) joining in too.
 fn file_nets(
@@ -401,6 +409,7 @@ fn file_nets(
     converted: &BTreeMap<&str, symbols::Converted>,
     pins: &LibraryPins,
     extra: &[(usize, String, Point)],
+    interfaces: Option<&FlagInterfaces<'_>>,
 ) -> Result<BTreeSet<BTreeSet<(usize, String)>>, CommandError> {
     let mut contacts = wiring::Contacts { pins: Vec::new(), labels: Vec::new(), power: Vec::new() };
     let mut cuts: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).collect();
@@ -410,7 +419,11 @@ fn file_nets(
             if power == Some(number.as_str())
                 && let Some(value) = symbol.property("Value")
             {
-                contacts.power.push(((index, number.clone()), value.to_owned()));
+                if interfaces.is_some() && schematic.lib_symbols.get(&symbol.lib_symbol).is_some_and(|lib| lib.power_local) {
+                    contacts.labels.push(("local", value.to_owned(), at));
+                } else {
+                    contacts.power.push(((index, number.clone()), value.to_owned()));
+                }
             }
             cuts.insert(at);
             contacts.pins.push(((index, number), at));
@@ -421,8 +434,12 @@ fn file_nets(
         contacts.pins.push(((*key, number.clone()), *at));
     }
     for label in &schematic.labels {
-        contacts.labels.push((if label.kind == LabelKind::Global { "global" } else { "local" }, label.name.clone(), label.at));
+        let scope = if interfaces.is_none() && label.kind == LabelKind::Global { "global" } else { "local" };
+        contacts.labels.push((scope, label.name.clone(), label.at));
         cuts.insert(label.at);
+    }
+    if let Some(interfaces) = interfaces {
+        contacts.labels.extend(interfaces.labels.iter().map(|(name, at)| ("local", name.clone(), *at)));
     }
     Ok(wiring::kicad_nets(&wiring::split(segments, &cuts), &contacts))
 }
@@ -455,19 +472,24 @@ fn flags_that_join(
     segments: &[wiring::Segment],
     converted: &BTreeMap<&str, symbols::Converted>,
     pins: &LibraryPins,
+    interfaces: Option<&FlagInterfaces<'_>>,
 ) -> Result<Joining, CommandError> {
     let first_extra = schematic.symbols.len();
     let first_label = first_extra + flags.len();
-    let labels: Vec<(usize, String, Point)> =
-        schematic.labels.iter().enumerate().map(|(j, label)| (first_label + j, String::new(), label.at)).collect();
-    let without = file_nets(schematic, segments, converted, pins, &labels)?;
+    let mut points: Vec<_> = schematic.labels.iter().map(|label| label.at).collect();
+    if let Some(interfaces) = interfaces {
+        points.extend_from_slice(interfaces.pins);
+        points.extend(interfaces.labels.iter().map(|(_, at)| *at));
+    }
+    let labels: Vec<_> = points.iter().enumerate().map(|(index, at)| (first_label + index, String::new(), *at)).collect();
+    let without = file_nets(schematic, segments, converted, pins, &labels, interfaces)?;
     let net_of: BTreeMap<&(usize, String), usize> = without.iter().enumerate().flat_map(|(i, group)| group.iter().map(move |pin| (pin, i))).collect();
     let mut extra = labels.clone();
     for (i, flag) in flags.iter().enumerate() {
         extra.extend(pins_of(flag, pins)?.into_iter().map(|(number, at)| (first_extra + i, number, at)));
     }
     let mut joining = BTreeSet::new();
-    for group in file_nets(schematic, segments, converted, pins, &extra)? {
+    for group in file_nets(schematic, segments, converted, pins, &extra, interfaces)? {
         let nets: BTreeSet<usize> = group.iter().filter_map(|pin| net_of.get(pin).copied()).collect();
         if nets.len() > 1 {
             joining.extend(group.iter().filter(|(index, _)| (first_extra..first_label).contains(index)).map(|(index, _)| index - first_extra));
@@ -477,7 +499,7 @@ fn flags_that_join(
         return Ok(Joining::None);
     }
     // Where wires already meet, a flag adds nothing; leave those out of the one-by-one checks.
-    let mut met: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).chain(schematic.labels.iter().map(|l| l.at)).collect();
+    let mut met: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).chain(points).collect();
     met.extend(segments.iter().flat_map(|(a, b)| [*a, *b]));
     for symbol in &schematic.symbols {
         met.extend(pins_of(symbol, pins)?.into_iter().map(|(_, at)| at));
@@ -495,7 +517,7 @@ fn flags_that_join(
     for flag in &candidates {
         let mut alone = labels.clone();
         alone.extend(pins_of(flag, pins)?.into_iter().map(|(number, at)| (first_extra, number, at)));
-        let joins = file_nets(schematic, segments, converted, pins, &alone)?
+        let joins = file_nets(schematic, segments, converted, pins, &alone, interfaces)?
             .iter()
             .any(|group| group.iter().filter_map(|pin| net_of.get(pin)).collect::<BTreeSet<_>>().len() > 1);
         if joins {
@@ -828,6 +850,14 @@ impl Builder {
         placement: &mut PlacementState,
         report: &mut Report,
     ) -> Result<Vec<Placed>, CommandError> {
+        let mut incoming_units = BTreeMap::<_, BTreeSet<_>>::new();
+        for symbol in &schematic.symbols {
+            if !symbol.reference.ends_with('?') {
+                incoming_units.entry((symbol.reference.as_str(), symbol.lib_symbol.as_str())).or_default().insert(symbol.unit);
+            }
+        }
+        let mut unit_copies = BTreeMap::new();
+        let mut local_parts = BTreeMap::new();
         let mut placed = Vec::new();
         for source in placement_order(schematic) {
             let (Some(symbol), Some(pose)) = (schematic.symbols.get(source), poses.get(source)) else { continue };
@@ -837,14 +867,23 @@ impl Builder {
             let rotation = u16::from(if mirrored { (4 - turns) % 4 } else { turns }) * 90;
             let annotated = !symbol.reference.ends_with('?');
             let key = (symbol.reference.clone(), symbol.lib_symbol.clone());
-            // A unit already placed under this reference is a copy KiCad allows: a new part.
-            let existing = if annotated { placement.components.get(&key).filter(|part| !part.units.contains(&symbol.unit)) } else { None };
-            if existing.is_some_and(|part| part.definition != c.definition) {
+            // The first copy can join earlier sheets only when every unit in this
+            // occurrence is still free. Later copies stay within this occurrence.
+            let group = annotated.then(|| {
+                let count = unit_copies.entry((symbol.reference.as_str(), symbol.lib_symbol.as_str(), symbol.unit)).or_insert(0);
+                let group = (symbol.reference.as_str(), symbol.lib_symbol.as_str(), *count);
+                *count += 1;
+                group
+            });
+            let earlier = group.filter(|(_, _, copy)| *copy == 0).and_then(|(reference, library, _)| {
+                placement.components.get(&key).filter(|part| part.units.is_disjoint(&incoming_units[&(reference, library)]))
+            });
+            if earlier.is_some_and(|part| part.definition != c.definition) {
                 return Err(CommandError::InvalidParams(format!("{} has different symbol definitions on its placed units.", symbol.reference)));
             }
+            let existing = group.and_then(|group| local_parts.get(&group).copied()).or_else(|| earlier.map(|part| part.id));
             match existing {
-                Some(part) => {
-                    let component = part.id;
+                Some(component) => {
                     let params = json!({"component": format!("component-{component}"), "unit": unit, "rotation": rotation,
                         "x_nm": symbol.at.x_nm, "y_nm": symbol.at.y_nm, "auto_heal": false});
                     self.apply(PLACE_UNIT, params, &format!("placing {} unit {}", symbol.reference, symbol.unit))?;
@@ -870,17 +909,22 @@ impl Builder {
                     "mirroring a symbol",
                 )?;
             }
-            if existing.is_none() {
-                self.set_fields(symbol, ordinal, annotated, placement, report)?;
-                if annotated {
-                    placement.components.entry(key).or_insert_with(|| ImportedComponent {
+            if let Some(group) = group {
+                local_parts.insert(group, component);
+                if group.2 == 0 {
+                    let part = placement.components.entry(key).or_insert_with(|| ImportedComponent {
                         id: component,
-                        units: BTreeSet::from([symbol.unit]),
+                        units: BTreeSet::new(),
                         definition: c.definition,
                     });
+                    if part.id == component {
+                        part.units.insert(symbol.unit);
+                    }
                 }
-            } else if let Some(part) = placement.components.get_mut(&key) {
-                part.units.insert(symbol.unit);
+            }
+            if existing.is_none() {
+                self.set_fields(symbol, ordinal, annotated, placement, report)?;
+            } else {
                 let project = self.project()?;
                 let id = crate::schematic::symbol_id(ordinal);
                 let native = project.symbol(&id).ok_or_else(|| CommandError::NotFound("the imported unit is missing".into()))?;
