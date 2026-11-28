@@ -217,7 +217,13 @@ impl CheckJob {
                             let message = super::clearance_message(a, b, d.gap_nm, d.clearance_nm);
                             let mut names = vec![a.name.clone(), b.name.clone()];
                             names.sort();
-                            self.found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
+                            self.found.push(Violation {
+                                kind: Kind::Clearance,
+                                message,
+                                at: super::clearance_marker(a, b),
+                                items: names,
+                                nets: Vec::new(),
+                            });
                         }
                     }
                     if !done {

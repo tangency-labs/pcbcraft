@@ -399,3 +399,129 @@ fn ambiguous_meeting_outlines_report_ambiguity_with_drawing_ids() {
         assert_eq!(ambiguous[0].items, ids, "({x},{y},{size}): {report:#?}");
     }
 }
+
+/// The report of the resumable job, stepped in small batches.
+fn job_report(s: &Session) -> Report {
+    let mut job = s.design_check_job(&json!({})).unwrap();
+    while !job.step(7) {}
+    job.take_report().unwrap()
+}
+
+/// A clearance marker sits in the gap between a track's end and a foreign pad, wherever the
+/// track starts, in the synchronous check and the resumable job alike.
+#[test]
+fn clearance_marker_sits_in_the_gap_wherever_the_track_starts() {
+    let mut markers = BTreeSet::new();
+    for length in [3_000_000, 5_000_000, 8_000_000] {
+        let mut s = routed_fixture();
+        let front = copper_layers(&s)[0];
+        let lowest = |land: &Land| land.contour().bounds()[3];
+        let land = crate::board::track::lands(view(&s))
+            .into_iter()
+            .filter(|land| land.layers.contains(&front))
+            .max_by(|a, b| lowest(a).total_cmp(&lowest(b)))
+            .unwrap();
+        let [left, _, right, bottom] = land.contour().bounds();
+        let x = ((left + right) / 2.).round() as i64;
+        // A 0.2 mm track whose round end stops 0.1 mm below the pad.
+        let end = bottom.round() as i64 + 200_000;
+        s.apply(
+            ADD_TRACKS,
+            &json!({"layer":front,"width_nm":200_000,"points":[{"x_nm":x,"y_nm":end + length},{"x_nm":x,"y_nm":end}],"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        let expected = Point { x_nm: x, y_nm: ((bottom + (end - 100_000) as f64) / 2.).round() as i64 };
+        for report in [check(&s), job_report(&s)] {
+            let found: Vec<_> = report.violations.iter().filter(|v| v.kind == Kind::Clearance).collect();
+            assert_eq!(found.len(), 1, "{found:#?}");
+            assert_eq!(found[0].at, expected, "track length {length}: {found:#?}");
+            markers.insert((found[0].at.x_nm, found[0].at.y_nm));
+        }
+    }
+    assert_eq!(markers.len(), 1, "{markers:?}");
+}
+
+/// Copper leaving the board is marked where it is off the board: a track that starts on the
+/// board and ends beyond the outline is marked at its outside end, not its on-board midpoint.
+#[test]
+fn copper_leaving_the_board_is_marked_off_the_board() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let leaving = track_mm(&mut s, (20., 30.), (28., 30.));
+    for report in [check(&s), job_report(&s)] {
+        let found = outline_findings(&report, &leaving);
+        assert_eq!(found.len(), 1, "{report:#?}");
+        assert_eq!(found[0].kind, Kind::OutsideBoard);
+        assert_eq!(found[0].at, Point { x_nm: 28_000_000, y_nm: 30_000_000 });
+    }
+}
+
+/// An edge clearance marker sits between the copper and the edge it is too close to: a 0.2 mm
+/// track running towards the bottom edge and stopping 0.1 mm short of it is marked 0.05 mm from
+/// the edge. Copper crossing a cut-out is marked where it crosses the cut-out's edge.
+#[test]
+fn edge_clearance_marker_sits_between_copper_and_edge() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let front = copper_layers(&s)[0];
+    s.apply(
+        ADD_TRACKS,
+        &json!({"layer":front,"width_nm":200_000,"points":[{"x_nm":10_000_000,"y_nm":25_000_000},{"x_nm":10_000_000,"y_nm":34_800_000}],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let near = view(&s).tracks().iter().find(|track| track.end.y_nm == 34_800_000).unwrap().id.to_string();
+    for report in [check(&s), job_report(&s)] {
+        let found = outline_findings(&report, &near);
+        assert_eq!(found.len(), 1, "{report:#?}");
+        assert_eq!(found[0].kind, Kind::EdgeClearance);
+        assert_eq!(found[0].at, Point { x_nm: 10_000_000, y_nm: 34_950_000 });
+    }
+
+    let (mut s, _) = cut_out_board();
+    let across = track_mm(&mut s, (3., 24.), (17., 24.));
+    for report in [check(&s), job_report(&s)] {
+        let found = outline_findings(&report, &across);
+        assert_eq!(found.len(), 1, "{report:#?}");
+        assert_eq!(found[0].kind, Kind::EdgeClearance);
+        let at = found[0].at;
+        assert!(at.y_nm == 24_000_000 && [5_000_000, 15_000_000].contains(&at.x_nm), "marker on the crossed cut-out edge: {at:?}");
+    }
+}
+
+/// Copper whose edge clearance is broken because it reaches past a board edge it runs along is
+/// marked inside the copper that lies beyond that edge: a 0.2 mm track whose centreline runs
+/// 0.05 mm inside the bottom edge reaches 0.05 mm past it, and is marked halfway into that part.
+#[test]
+fn copper_reaching_past_an_edge_is_marked_in_the_part_beyond_it() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let front = copper_layers(&s)[0];
+    s.apply(
+        ADD_TRACKS,
+        &json!({"layer":front,"width_nm":200_000,"points":[{"x_nm":0,"y_nm":34_950_000},{"x_nm":10_000_000,"y_nm":34_950_000}],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let along = view(&s).tracks().iter().find(|track| track.start.y_nm == 34_950_000).unwrap().id.to_string();
+    for report in [check(&s), job_report(&s)] {
+        let found = outline_findings(&report, &along);
+        assert_eq!(found.len(), 1, "{report:#?}");
+        assert_eq!((found[0].kind, found[0].message.as_str()), (Kind::EdgeClearance, "Copper crosses the Board Outline"));
+        let at = found[0].at;
+        assert!((0..=10_000_000).contains(&at.x_nm) && at.y_nm == 35_025_000, "between the edge (35.000) and the copper side (35.050): {at:?}");
+    }
+}
+
+/// Copper that starts exactly on the Board Outline and leaves the board is marked at copper that
+/// is strictly outside, not at the boundary point where it starts.
+#[test]
+fn copper_starting_on_the_outline_is_marked_off_the_board() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let leaving = track_mm(&mut s, (25., 30.), (28., 30.));
+    for report in [check(&s), job_report(&s)] {
+        let found = outline_findings(&report, &leaving);
+        assert_eq!(found.len(), 1, "{report:#?}");
+        assert_eq!((found[0].kind, found[0].message.as_str()), (Kind::OutsideBoard, "Copper lies outside the Board Outline"));
+        assert_eq!(found[0].at, Point { x_nm: 28_000_000, y_nm: 30_000_000 });
+    }
+}
