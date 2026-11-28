@@ -268,13 +268,13 @@ fn contour_area(contour: &[Seg]) -> f64 {
         .sum()
 }
 
-/// Horizontal segments that a later segment retraces in reverse: the cut-ins.
+/// Horizontal or vertical segments that a later segment retraces in reverse: the cut-ins.
 fn cut_ins(contour: &[ReadSegment]) -> usize {
     contour
         .iter()
         .enumerate()
         .filter(|(i, s)| {
-            s.arc.is_none() && s.from.y_nm == s.to.y_nm && contour[i + 1..].iter().any(|t| t.arc.is_none() && t.from == s.to && t.to == s.from)
+            s.arc.is_none() && (s.from.y_nm == s.to.y_nm || s.from.x_nm == s.to.x_nm) && contour[i + 1..].iter().any(|t| t.arc.is_none() && t.from == s.to && t.to == s.from)
         })
         .count()
 }

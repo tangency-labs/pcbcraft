@@ -11,8 +11,10 @@
 //! √2/2 µm, and an arc whose end points come closer than 1 µm can turn into a nearly full circle.
 //!
 //! Holes, the clearances around other copper, are joined to their outer contour with
-//! horizontal cut-ins: pairs of fully-coincident linear segments (§§4.10.3, 4.10.4.7). No clear
-//! polarity is used, so the image does not depend on the order of objects in the file.
+//! horizontal cut-ins: pairs of fully-coincident linear segments (§§4.10.3, 4.10.4.7). A contour
+//! where one would be tangent to an arc, which §4.10 forbids, takes all its cut-ins along another
+//! axis direction. No clear polarity is used, so the image does not depend on the order of
+//! objects in the file.
 //!
 //! Conversion error from the analytic boundary, per written segment: a line is within √2/2 nm
 //! (its rounded end points). An arc is within max(|r₁ − r|, |r₂ − r|) + |c′ − c|, where r and c
@@ -336,15 +338,89 @@ struct Join {
     hole: usize,
 }
 
-/// Join every hole to the outer contour. A cut-in runs from the hole's rightmost vertex in +X to
-/// the first segment it meets. That segment is on the outer loop or on a hole whose rightmost
-/// vertex lies further right, since no other loop reaches the ray; so taking holes from the
-/// largest X down, cut-ins never cross holes or each other. Rays are answered from horizontal
-/// bands of segments and the contour is assembled in one pass, so the work grows with the
-/// number of segments, not with holes times segments, for loops spread over the region.
+/// A cut-in closer to tangent than this, measured as the offset of its end from the arc
+/// centre's line across the cut-in, could become tangent when the §4.14.2 perturbation moves the
+/// end and the centre by up to 0.5 µm each across it.
+const MIN_TANGENT_OFFSET_NM: i64 = 1_000;
+
+/// The four ray directions cut-ins may take, as maps of the output frame in which the ray runs
+/// in +X: unchanged, mirrored in X (rays in −X), mirrored about the diagonal (rays in +Y) and
+/// turned a quarter clockwise (rays in −Y). A mirror reverses the direction of every arc.
+#[derive(Clone, Copy)]
+enum Turn {
+    Same,
+    MirrorX,
+    Diagonal,
+    Quarter,
+}
+
+impl Turn {
+    const ALL: [Self; 4] = [Self::Same, Self::MirrorX, Self::Diagonal, Self::Quarter];
+
+    /// Map a point into this frame, or back out of it with `back`.
+    fn map<T: Copy + std::ops::Neg<Output = T>>(self, [x, y]: [T; 2], back: bool) -> [T; 2] {
+        match (self, back) {
+            (Self::Same, _) => [x, y],
+            (Self::MirrorX, _) => [-x, y],
+            (Self::Diagonal, _) => [y, x],
+            (Self::Quarter, false) => [-y, x],
+            (Self::Quarter, true) => [y, -x],
+        }
+    }
+
+    fn segment(self, segment: &Segment, back: bool) -> Segment {
+        let vertex = |(x, y): Vertex| {
+            let [x, y] = self.map([x, y], back);
+            (x, y)
+        };
+        let shape = match segment.shape {
+            Shape::Line => Shape::Line,
+            Shape::Arc { center, clockwise, circle: (c, r) } => Shape::Arc {
+                center: vertex(center),
+                clockwise: clockwise != matches!(self, Self::MirrorX | Self::Diagonal),
+                circle: (self.map(c, back), r),
+            },
+        };
+        Segment { start: vertex(segment.start), exact: self.map(segment.exact, back), shape }
+    }
+}
+
+/// Join every hole to the outer contour with cut-ins all in one direction, trying the next
+/// direction when one would leave a cut-in tangent to an arc or too close to its own hole, and
+/// refusing with the first direction's reason when none works.
 fn bridge(outer: Vec<Segment>, holes: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>, String> {
     let mut loops = vec![outer];
     loops.extend(holes);
+    if loops.len() == 1 {
+        return bridge_in(loops, stats);
+    }
+    let mut first = None;
+    for turn in Turn::ALL {
+        let turned = loops.iter().map(|segments| segments.iter().map(|segment| turn.segment(segment, false)).collect()).collect();
+        match bridge_in(turned, stats) {
+            Ok(contour) => return Ok(contour.iter().map(|segment| turn.segment(segment, true)).collect()),
+            Err(reason) => {
+                first.get_or_insert(reason);
+            }
+        }
+    }
+    Err(first.unwrap_or_default())
+}
+
+/// Whether a horizontal cut-in ending at `at` would be tangent to `segment` there, within the
+/// perturbation: an arc's tangent at `at` is horizontal when `at` is above or below its centre.
+fn grazes(segment: &Segment, at: Vertex) -> bool {
+    matches!(segment.shape, Shape::Arc { center, .. } if (at.0 - center.0).abs() < MIN_TANGENT_OFFSET_NM)
+}
+
+/// Join every hole of `loops` (the outer loop first) to the outer contour. A cut-in runs from the
+/// hole's rightmost vertex in +X to the first segment it meets. That segment is on the outer loop
+/// or on a hole whose rightmost vertex lies further right, since no other loop reaches the ray;
+/// so taking holes from the largest X down, cut-ins never cross holes or each other. Rays are
+/// answered from horizontal bands of segments and the contour is assembled in one pass, so the
+/// work grows with the number of segments, not with holes times segments, for loops spread over
+/// the region. Refuses a cut-in tangent to an arc at either end (§4.10).
+fn bridge_in(loops: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>, String> {
     let entries: Vec<usize> = loops
         .iter()
         .enumerate()
@@ -375,6 +451,11 @@ fn bridge(outer: Vec<Segment>, holes: Vec<Vec<Segment>>, stats: &mut Stats) -> R
         };
         if h.0 <= v.0 {
             return Err("A copper zone hole is too close to its boundary to join at the 1 nm Gerber resolution.".into());
+        }
+        let (m, entry) = (loops[hole].len(), entries[hole]);
+        let at_h = if h == segments[segment].start { vec![segment, (segment + n - 1) % n] } else { vec![segment] };
+        if at_h.into_iter().any(|k| grazes(&segments[k], h)) || [entry, (entry + m - 1) % m].iter().any(|&k| grazes(&loops[hole][k], v)) {
+            return Err("A copper zone hole cannot be joined to its boundary without a cut-in tangent to a circular edge.".into());
         }
         let along = distance(float(segments[segment].start), float(h));
         joins[l].push(Join { segment, along, h, exact, hole });
@@ -672,6 +753,32 @@ mod tests {
         let boundaries = material.boundaries().unwrap();
         let error = contour(&boundaries[0], Frame::BOARD_ZERO, &mut Stats::default()).unwrap_err();
         assert!(error.contains("100 nm"), "{error}");
+    }
+
+    /// A cut-in never meets a circular segment tangentially (§4.10.3). The +X ray from the left
+    /// hole's rightmost point touches the right hole at the bottom of its circle, and the −X ray
+    /// from the right hole touches the left one at its top, so the holes are joined another way.
+    #[test]
+    fn cut_ins_never_touch_an_arc_tangentially() {
+        let holes = [Regions::circle([2 * MM, 4 * MM], 2 * MM).unwrap(), Regions::circle([5 * MM, 3 * MM], 2 * MM).unwrap()];
+        let (contour, stats, area) = written_board(&holes);
+        assert_eq!(stats.cut_ins, 2);
+        let lines = lines(&contour);
+        for &(a, b) in lines.iter().filter(|&&(a, b)| lines.contains(&(b, a))) {
+            let direction = [(b.0 - a.0) as f64, (b.1 - a.1) as f64];
+            let length = direction[0].hypot(direction[1]);
+            for (i, segment) in contour.iter().enumerate() {
+                let Shape::Arc { center, .. } = segment.shape else { continue };
+                for end in [segment.start, contour[(i + 1) % contour.len()].start] {
+                    if end == a || end == b {
+                        let radial = [(end.0 - center.0) as f64, (end.1 - center.1) as f64];
+                        let along = (radial[0] * direction[0] + radial[1] * direction[1]).abs() / length;
+                        assert!(along > 1_000., "the cut-in {a:?}-{b:?} is tangent to the arc about {center:?}");
+                    }
+                }
+            }
+        }
+        assert!((super::area(&contour) - area).abs() < 4. * 7_000_000., "{} against {area}", super::area(&contour));
     }
 
     /// Long edges are kept once, not copied into every band they span: 200 tall holes give at

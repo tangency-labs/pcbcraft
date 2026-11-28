@@ -144,8 +144,10 @@ zone without material.
 Each filled island is one dark region (`G36`/`G37`) tagged `.AperFunction,Conductor`
 and carrying its zone's net as `.N`, the same name its pads carry. Every outer
 boundary and hole of the island is one contour; holes join their outer boundary by
-a horizontal cut-in, a pair of coincident segments, as the Gerber specification
-requires (§4.10), so no clear polarity is written. Circular boundary pieces stay
+cut-ins, pairs of coincident segments, as the Gerber specification requires
+(§4.10), so no clear polarity is written. Cut-ins are horizontal; when one would
+meet a circular edge tangentially, which the specification forbids, all cut-ins
+of that contour turn to another axis direction. Circular boundary pieces stay
 circular arcs (`G75` with `G02`/`G03`), split at quarter turns. Every vertex and arc
 centre is rounded once to the file's 1 nm resolution, so the written boundary lies
 within about 2 nm of the fill; arcs whose end points are less than about 2.4 µm
