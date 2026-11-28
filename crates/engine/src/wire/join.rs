@@ -211,9 +211,11 @@ impl Session {
         let candidate = self.retain_allocation_watermark(Arc::new(transaction.open_project()?.clone()));
         crate::persistence::encode_documents(candidate.clone()).map_err(CommandError::InvalidParams)?;
         if params["dry_run"].as_bool() != Some(true) {
+            // Read the junction at the crossing itself: splitting a bent wire again at a corner can
+            // leave the first request wire ending elsewhere.
             let junction = candidate
                 .for_sheet(target)
-                .and_then(|sheet| sheet.wires.iter().find(|wire| wire.ordinal == join.wires[0]).map(|wire| wire.endpoints[1].inspect()));
+                .and_then(|sheet| sheet.junctions().find(|(_, at)| *at == join.at).map(|(id, _)| WireEndpoint::Junction(id).inspect()));
             self.publish_change(candidate, transaction.revision);
             self.report_committed(JOIN_WIRES, params);
             reply["junction"] = json!(junction);

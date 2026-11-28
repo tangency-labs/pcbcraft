@@ -434,3 +434,22 @@ fn a_name_reached_through_a_child_sheet_conflicts() {
     assert!(error.contains("demo-x") && error.contains("two names"), "{error}");
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
+
+/// The reply names the junction at the crossing whichever order the wires are given in, also
+/// when the first wire is the bent one that is split again at a corner.
+#[test]
+fn the_reply_names_the_crossing_junction_in_either_order() {
+    for reversed in [false, true] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+        let a = wire(&mut s, &[p(0, 0), p(10, 0)]);
+        let start = ends(&s, &a)[0];
+        run(&mut s, DRAW_WIRE, json!({"from":start.inspect(),"to":p(5, 2),"bends":[p(-2, 0), p(-2, -2), p(5, -2)],"auto_heal":false})).unwrap();
+        let b = s.project().unwrap().wires().last().unwrap().id();
+        let (wire, other) = if reversed { (&b, &a) } else { (&a, &b) };
+        let applied = run(&mut s, JOIN, json!({"wire":wire,"other":other})).unwrap();
+        let project = s.project().unwrap();
+        let crossing = project.junctions().find(|(_, at)| *at == p(5, 0)).map(|(id, _)| WireEndpoint::Junction(id).inspect());
+        assert_eq!(applied["junction"], json!(crossing), "reversed: {reversed}");
+    }
+}
