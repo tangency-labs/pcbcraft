@@ -67,6 +67,8 @@ pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
 pub const SYMBOL_FORMAT_V5: &str = "pcbcraft-symbol/5";
 /// Native symbols with exact nanometer pin geometry and units that may have no terminals.
 pub const SYMBOL_FORMAT_V6: &str = "pcbcraft-symbol/6";
+/// Distinct terminals in one unit can share an exact electrical contact.
+pub const SYMBOL_FORMAT_V7: &str = "pcbcraft-symbol/7";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,14 +284,14 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must use one of formats 1–6 with no unknown fields.
+/// The file must use one of formats 1–7 with no unknown fields.
 /// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding.
 /// A symbol has up to 1,024 logical terminals, each with a unique ID of 1 to 8 letters, digits, `+`, `-` or `_`.
-/// Formats 1–3 contain one unit; formats 4–6 support up to 32 units sharing the logical terminal table.
+/// Formats 1–3 contain one unit; formats 4–7 support up to 32 units sharing the logical terminal table.
 /// Format 5 adds alternate functions. Each unit has at most one appearance per terminal.
 /// Formats 1–5 require a nonempty unit and pins on the 1.27 mm grid within 12.7 mm of the origin.
 /// Format 6 permits pinless units and exact pin coordinates within 100 mm of the origin.
-/// All formats require distinct pin positions.
+/// Format 7 allows multiple terminals in one unit to share a position and electrical contact.
 /// Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
@@ -313,6 +315,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         Some(SYMBOL_FORMAT_V4) => 4,
         Some(SYMBOL_FORMAT_V5) => 5,
         Some(SYMBOL_FORMAT_V6) => 6,
+        Some(SYMBOL_FORMAT_V7) => 7,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
@@ -367,7 +370,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
     }
     if file.units.is_empty() || file.units.len() > 32 || (format_version < 4 && file.units.len() != 1) {
-        return Err("formats 1–3 require one unit; formats 4–6 support 1 to 32 units".into());
+        return Err("formats 1–3 require one unit; formats 4–7 support 1 to 32 units".into());
     }
     let mut unit_ids = BTreeSet::new();
     let mut units = Vec::new();
@@ -400,7 +403,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
             if [x_nm, y_nm].into_iter().any(|nm| nm.unsigned_abs() > MAX_EXACT_PIN_OFFSET_NM as u64) {
                 return Err(format!("pin {} must be within 100 mm of the center", terminal.id));
             }
-            if !positions.insert((x_nm, y_nm)) {
+            if format_version < 7 && !positions.insert((x_nm, y_nm)) {
                 return Err(format!("pin {} shares a position with another pin", terminal.id));
             }
             if let Some(appearance) = &pin.appearance {

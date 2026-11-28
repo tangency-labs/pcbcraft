@@ -48,6 +48,8 @@ pub struct Schematic {
     pub uuid: Option<String>,
     /// The sheet's paper, when the file names a known size.
     pub paper: Option<Paper>,
+    /// Legacy reference and unit records by full symbol instance path.
+    pub legacy_instances: BTreeMap<String, (String, Option<u32>)>,
     /// The symbols placed symbols draw with, by the name placed symbols use.
     pub lib_symbols: BTreeMap<String, LibSymbol>,
     /// Placed symbols, in file order.
@@ -104,6 +106,8 @@ pub struct LibSymbol {
     pub properties: Vec<Property>,
     /// Whether the symbol hides its pins' names.
     pub pin_names_hidden: bool,
+    /// Pin-name offset into the body; zero places names beside the leads.
+    pub pin_name_offset_nm: i64,
     /// Whether the symbol hides its pins' numbers.
     pub pin_numbers_hidden: bool,
     /// The drawing, by unit and body style. Unit 0 is common to every unit. Symbol frame.
@@ -157,6 +161,8 @@ pub struct Pin {
     /// The pin's name; empty when the file writes `~`.
     pub name: String,
     pub number: String,
+    pub name_height_nm: i64,
+    pub number_height_nm: i64,
     /// Whether the pin is hidden. A hidden pin still connects.
     pub hidden: bool,
 }
@@ -195,6 +201,8 @@ pub struct PlacedSymbol {
     pub mirror: Mirror,
     /// The unit placed, from 1.
     pub unit: u32,
+    /// The placement’s own unit before applying any occurrence record.
+    pub declared_unit: u32,
     /// The body style shown, from 1 (`body_style` or legacy `convert`); 1, the normal style,
     /// when the file doesn't say. The library symbol need not have that style: KiCad 10.0.8
     /// then gives the part none of the normal style's pins, so a caller that must keep every
@@ -332,6 +340,8 @@ pub struct Label {
     pub shape: Option<String>,
     /// The character height.
     pub size_nm: i64,
+    /// Text alignment, which also selects the side of a hierarchical label.
+    pub justify: Justify,
 }
 
 /// What a label's name reaches.
@@ -489,6 +499,7 @@ struct RawLibSymbol {
     power_local: bool,
     properties: Vec<Property>,
     pin_names_hidden: bool,
+    pin_name_offset_nm: i64,
     pin_numbers_hidden: bool,
     units: Arc<Vec<SymbolUnit>>,
     /// The symbol's own jumper pin groups, shared with every symbol that extends it.
@@ -713,6 +724,12 @@ impl State {
             power_local: power.is_some_and(|p| p.flag("local")),
             properties,
             pin_names_hidden: node.child("pin_names").is_some_and(hidden),
+            pin_name_offset_nm: node
+                .child("pin_names")
+                .and_then(|names| names.child("offset"))
+                .and_then(|offset| offset.number(0))
+                .and_then(nm)
+                .unwrap_or(508_000),
             pin_numbers_hidden: node.child("pin_numbers").is_some_and(hidden),
             units: Arc::new(units),
             jumper_pin_groups: Arc::new(jumper_pin_groups),
@@ -753,6 +770,8 @@ impl State {
             length_nm: nm(node.child("length").and_then(|l| l.number(0)).unwrap_or(0.0)).filter(|l| *l >= 0)?,
             name: node.child("name").and_then(|n| n.text(0)).map(|n| if n == "~" { String::new() } else { n.to_owned() }).unwrap_or_default(),
             number: number.to_owned(),
+            name_height_nm: node.child("name").map_or(1_270_000, text_size),
+            number_height_nm: node.child("number").map_or(1_270_000, text_size),
             hidden: hidden(node),
         })
     }
@@ -778,6 +797,7 @@ impl State {
             rotation_mdeg: millidegrees(at.and_then(|a| a.number(2)).unwrap_or(0.0)),
             shape: node.child("shape").and_then(|s| s.text(0)).map(str::to_owned),
             size_nm: text_size(node),
+            justify: justify(node),
         });
         Ok(())
     }
@@ -835,6 +855,7 @@ impl State {
             },
             // Settled in `finish`; the symbol's own `(unit N)` until then.
             unit: unit_of(node).unwrap_or(1),
+            declared_unit: unit_of(node).unwrap_or(1),
             body_style,
             reference: String::new(),
             reference_from: ReferenceSource::None,
@@ -935,6 +956,7 @@ impl State {
                 symbol.unit = unit;
             }
         }
+        self.schematic.legacy_instances = self.legacy;
         Ok(self.schematic)
     }
 
@@ -966,6 +988,7 @@ impl State {
                     power_local: power && if own.power { own.power_local } else { drawn.power_local },
                     properties: own.properties.clone(),
                     pin_names_hidden: drawn.pin_names_hidden,
+                    pin_name_offset_nm: drawn.pin_name_offset_nm,
                     pin_numbers_hidden: drawn.pin_numbers_hidden,
                     units: Arc::clone(&drawn.units),
                     jumper_pin_groups,

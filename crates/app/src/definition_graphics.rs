@@ -11,16 +11,17 @@ pub(super) fn paint(p: &Painter, graphic: &Graphic, at: impl Fn(Point) -> Pos2, 
     let stroke = Stroke::new((graphic.stroke_nm as f32 * scale).max(pcbcraft_chrome::authoring::MIN_DRAWING_STROKE), ink);
     for path in graphic.paths() {
         let mut points: Vec<_> = path.into_iter().map(&at).collect();
-        if graphic.closed() && graphic.fill != Fill::None && points.len() >= 3 {
-            p.add(egui::Shape::convex_polygon(points.clone(), if graphic.fill == Fill::Solid { ink } else { background }, Stroke::NONE));
+        if graphic.closed() && points.first() == points.last() {
+            points.pop();
         }
-        if graphic.closed()
-            && points.first() != points.last()
-            && let Some(first) = points.first().copied()
-        {
-            points.push(first);
-        }
-        if points.len() >= 2 {
+        if graphic.closed() && points.len() >= 3 {
+            let shape = match graphic.fill {
+                Fill::None => egui::Shape::closed_line(points, stroke),
+                Fill::Solid => egui::Shape::convex_polygon(points, ink, stroke),
+                Fill::Background => egui::Shape::convex_polygon(points, background, stroke),
+            };
+            p.add(shape);
+        } else if points.len() >= 2 {
             p.add(egui::Shape::line(points, stroke));
         }
     }
@@ -62,6 +63,35 @@ mod tests {
         library_graphics::{Fill, Geometry},
         schematic::TextAlign,
     };
+    #[test]
+    fn a_filled_outline_joins_the_first_corner() {
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let corners = [point(0, 0), point(20, 10), point(0, 20)];
+        let graphic = Graphic {
+            geometry: Geometry::Polyline { points: [corners.as_slice(), &corners[..1]].concat(), closed: true },
+            stroke_nm: 100_000,
+            fill: Fill::Background,
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            paint(ui.painter(), &graphic, |p| Pos2::new(p.x_nm as f32, p.y_nm as f32), 0.00001, Color32::WHITE, Color32::BLACK);
+        });
+        output.textures_delta.clear();
+        let paths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].closed);
+        assert_eq!(paths[0].points.len(), corners.len());
+        assert_eq!(paths[0].fill, Color32::BLACK);
+        assert!(paths[0].stroke.width > 0.);
+    }
+
     /// A half-turn label stays readable and inside its rotated body edge without mutating native data.
     #[test]
     fn rotated_symbol_text_keeps_its_alignment_and_source() {

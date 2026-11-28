@@ -128,6 +128,7 @@ fn every_rotation_and_mirror_puts_each_pin_where_kicad_does() {
                 _ => Mirror::None,
             },
             unit: 1,
+            declared_unit: 1,
             body_style: 1,
             reference: format!("Q{}", i + 1),
             reference_from: Default::default(),
@@ -167,6 +168,7 @@ fn kicad_pin_rules_turn_counterclockwise_then_mirror() {
         rotation_mdeg,
         mirror,
         unit: 1,
+        declared_unit: 1,
         body_style: 1,
         reference: String::new(),
         reference_from: Default::default(),
@@ -279,9 +281,6 @@ fn symbols_the_native_format_cant_hold_are_refused_by_name() {
     };
     let far = message(symbol(r#"(pin passive line (at 100.001 0 180) (length 2.54) (number "1"))"#));
     assert!(far.contains("`L:Wide`") && far.contains("100 mm"), "{far}");
-    let stacked =
-        message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "1")) (pin passive line (at 0 0 0) (length 2.54) (number "2"))"#));
-    assert!(stacked.contains("share a position"), "{stacked}");
     let hidden = message(symbol(r#"(pin power_in line (at 0 0 0) (length 2.54) hide (name "VCC") (number "1"))"#));
     assert!(hidden.contains("hidden power pin"), "{hidden}");
     let long_number = message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "123456789"))"#));
@@ -332,6 +331,118 @@ fn exact_pins_and_pinless_mechanical_symbols_survive_native_reopen() {
 }
 
 #[test]
+fn pin_labels_keep_source_scale_rotation_and_inset() {
+    use crate::{
+        library_graphics::Geometry,
+        schematic::{Shape, TextAlign},
+    };
+    let source = r#"(kicad_sch (version 20231120)
+      (lib_symbols
+        (symbol "L:Amp" (pin_names (offset 0.127)) (property "Reference" "U")
+          (symbol "Amp_1_1"
+            (pin power_in line (at 0 3.81 270) (length 2.54)
+              (name "V+" (effects (font (size 1 1)))) (number "1" (effects (font (size 0.8 0.8)))))
+            (pin power_in line (at 0 -3.81 90) (length 2.54)
+              (name "V-") (number "2")))))
+      (symbol (lib_id "L:Amp") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#;
+    let imported = import(source, "Pin text").unwrap();
+    let saved = encode_documents(imported.project).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let graphics = reopened.symbols()[0].unit_definition().graphics();
+    let text = |name: &str| {
+        graphics
+            .iter()
+            .find_map(|graphic| {
+                let Shape::Graphic(graphic) = graphic else { return None };
+                match &graphic.geometry {
+                    Geometry::Text { text, at, height_nm, rotation, align } if text == name => Some((*at, *height_nm, *rotation, *align)),
+                    _ => None,
+                }
+            })
+            .unwrap()
+    };
+    let (at, height, rotation, align) = text("V+");
+    assert_eq!((at.x_nm, at.y_nm, height, rotation, align), (0, -1_143_000, 1_000_000, 270, TextAlign::End));
+    let (at, _, rotation, align) = text("V-");
+    assert_eq!((at.y_nm, rotation, align), (1_143_000, 270, TextAlign::Start));
+    let (at, height, rotation, align) = text("1");
+    assert!(at.x_nm > 0);
+    assert_eq!((height, rotation, align), (800_000, 270, TextAlign::Middle));
+
+    let beside = import(&source.replace("(offset 0.127)", "(offset 0)"), "Pin text").unwrap();
+    let graphics = beside.project.symbols()[0].unit_definition().graphics();
+    assert!(graphics.iter().any(|shape| matches!(shape,
+        Shape::Graphic(graphic) if matches!(&graphic.geometry,
+            Geometry::Text { text, at, rotation: 270, align: TextAlign::Middle, .. } if text == "V+" && at.x_nm < 0 && at.y_nm == -2_540_000))));
+
+    let default = import(&source.replace("(pin_names (offset 0.127))", ""), "Pin text").unwrap();
+    let unit = default.project.symbols()[0].unit_definition();
+    assert_eq!(unit.pins()[0].appearance.as_ref().unwrap().name_offset_nm, Some(508_000));
+}
+
+#[test]
+fn shared_symbol_contacts_preserve_pin_identity_and_nets_through_reopen() {
+    let fixture = |items: &str| {
+        format!(
+            r#"(kicad_sch (version 20231120)
+            (lib_symbols (symbol "L:Stack" (property "Reference" "U")
+              (symbol "Stack_1_1"
+                (pin passive line (at 0 0 0) (length 2.54) (number "1"))
+                (pin passive line (at 0 0 0) (length 2.54) (number "2")))))
+            (symbol (lib_id "L:Stack") (at 0 0 0) (unit 1) (property "Reference" "U1"))
+            (symbol (lib_id "L:Stack") (at 20 0 0) (unit 1) (property "Reference" "U2"))
+            {items})"#
+        )
+    };
+    let separate = BTreeSet::from([net(&["U1.1", "U1.2"]), net(&["U2.1", "U2.2"])]);
+    let bare = import(&fixture(""), "Bare contacts").unwrap().project;
+    assert_eq!(nets(&bare), separate);
+    let marked = import(&fixture("(no_connect (at 0 0))"), "Marked contact").unwrap().project;
+    assert_eq!(nets(&marked), separate);
+    let report = marked.check_no_connects(0);
+    assert_eq!(report.total_markers, 2);
+    assert!(report.markers.iter().all(|marker| marker.issues.is_empty()));
+    assert_eq!(report.total_findings, 2, "the two pins of the unmarked second symbol are unused");
+
+    let mut session = crate::Session::default();
+    session.open_snapshot(bare);
+    session
+        .apply(
+            crate::DRAW_WIRE,
+            &json!({"from":{"x_nm":10_000_000,"y_nm":0},"to":{"x_nm":10_000_000,"y_nm":5_000_000},"bends":[],"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let route = &session.project().unwrap().wires()[0];
+    let route_id = route.id();
+    let free_end = route.endpoints()[0].inspect()["junction"].clone();
+    session
+        .apply(
+            crate::MOVE_WIRE_SEGMENT,
+            &json!({"wire":route_id,"at":{"x_nm":10_000_000,"y_nm":2_000_000},"to":{"x_nm":0,"y_nm":2_000_000},
+                "connect_ends":[free_end],"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let project = session.project().unwrap();
+    assert_eq!(project.wires()[0].terminals().len(), 1);
+    assert_eq!(nets(project), separate);
+
+    let wired = import(&fixture(&wire(&[(0.0, 0.0), (20.0, 0.0)])), "Wired contacts").unwrap().project;
+    let saved = encode_documents(wired).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let expected = BTreeSet::from([net(&["U1.1", "U1.2", "U2.1", "U2.2"])]);
+    assert_eq!(nets(&reopened), expected);
+    assert_eq!(reopened.wires().len(), 1);
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+    for symbol in reopened.symbols() {
+        assert_eq!(symbol.definition.format(), crate::library::SYMBOL_FORMAT_V7);
+        assert_eq!(symbol.terminals().len(), 2);
+        let copy = crate::authoring::Item::from_symbol(&symbol.definition).unwrap().native().unwrap();
+        assert_eq!(copy["format"], crate::library::SYMBOL_FORMAT_V7);
+        copy["units"][0]["pins"].as_array().filter(|pins| pins.len() == 2).expect("both terminal appearances");
+    }
+}
+
+#[test]
 fn no_connect_marks_land_on_pins() {
     let items = [place("T:Tri", "Q1", 0.0, 0.0, 0, ""), "(no_connect (at 3.81 -1.27))".into(), "(no_connect (at 50 50))".into()].concat();
     let imported = import(&file(&items), "NC").unwrap();
@@ -373,7 +484,7 @@ fn the_net_check_refuses_a_project_whose_connections_differ_from_the_file() {
         .lib_symbols
         .iter()
         .map(|(name, symbol)| {
-            (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut symbols::MAX_DRAWING_WORK.clone(), &mut report).unwrap())
+            (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut symbols::MAX_DRAWING_WORK.clone(), &mut report, false).unwrap())
         })
         .collect();
     // The import places symbols in file order, so the n-th native placement is the n-th KiCad one.
@@ -505,6 +616,7 @@ fn a_wire_ending_where_the_other_mirror_order_puts_a_pin_refuses_the_pose() {
         rotation_mdeg: 90_000,
         mirror: Mirror::X,
         unit: 1,
+        declared_unit: 1,
         body_style: 1,
         reference: "Q1".into(),
         reference_from: Default::default(),
@@ -738,7 +850,7 @@ fn a_unit_drawing_stops_at_the_native_limit_and_the_whole_import_has_a_budget() 
     assert!(imported.report.notes().any(|(what, n)| what.contains("beyond 256 strokes") && n == 1));
     let schematic = pcbcraft_kicad::read_schematic(&text).unwrap();
     let mut budget = symbols::MAX_DRAWING_WORK;
-    let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default()).unwrap();
+    let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default(), false).unwrap();
     let document: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
     assert_eq!(document["units"][0]["drawing"].as_array().unwrap().len(), 256);
     // Only what was read and converted is paid for: its one unit and one pin read, then 256
@@ -1226,4 +1338,40 @@ fn a_drawing_wider_than_every_paper_is_not_reported_as_held() {
     let report: Vec<_> = imported.report.notes().collect();
     assert!(!on_paper(&imported.project), "{:?}", imported.project.page());
     assert_eq!(report.iter().filter(|(what, _)| what.contains("paper")).collect::<Vec<_>>(), [&(PAPER_SHORT, 1)], "{report:?}");
+}
+
+#[test]
+fn imported_field_visibility_and_text_geometry_survive_native_reopen() {
+    let text = file(
+        r##"(symbol (lib_id "power:GND") (at 40 45 0) (unit 1)
+            (property "Reference" "#PWR09" (at 40 49 0) (hide yes))
+            (property "Value" "GND" (at 41.2 48.3 0) (effects (font (size 0.9 0.9)))))
+        (symbol (lib_id "T:R") (at 20 20 90) (mirror x) (unit 1)
+            (property "Reference" "R1" (at 22 17 90) (effects (font (size 1 1)) (justify right)))
+            (property "Value" "10k" (at 23 18 0) (effects (font (size 0.8 0.8)))))
+        (symbol (lib_id "T:R") (at 60 20 270) (mirror x) (unit 1)
+            (property "Reference" "R2" (at 62 17 0) (effects (font (size 1 1)) (justify left))))
+        (label "SIGNAL" (at 15 15 180) (effects (font (size 0.75 0.75))))"##,
+    );
+    let result = import(&text, "Field appearance").unwrap();
+    let saved = encode_documents(result.project).unwrap();
+    let project = decode_documents(&saved).unwrap();
+    let power = project.symbols().iter().find(|symbol| project.reference(symbol) == "#PWR09").unwrap();
+    assert!(!power.field_layout["reference"].visible);
+    assert!(power.field_layout["value"].visible);
+    assert_eq!(power.field_layout["value"].height_nm, 900_000);
+    let resistor = project.symbols().iter().find(|symbol| project.reference(symbol) == "R1").unwrap();
+    for (field, expected) in [("reference", (22_000_000, 17_000_000)), ("value", (23_000_000, 18_000_000))] {
+        let offset = resistor.field_layout[field].offset.unwrap();
+        let (x, y) = crate::schematic::place(offset.x_nm, offset.y_nm, resistor.turns(), resistor.is_mirrored());
+        assert_eq!((resistor.position.x_nm + x, resistor.position.y_nm + y), expected);
+    }
+    assert_eq!(resistor.field_layout["reference"].rotation, 0);
+    assert_eq!(resistor.field_layout["reference"].align, crate::schematic::TextAlign::Start);
+    assert_eq!(resistor.field_layout["value"].rotation, 90);
+    let rotated = project.symbols().iter().find(|symbol| project.reference(symbol) == "R2").unwrap();
+    assert_eq!(rotated.field_layout["reference"].rotation, 90);
+    assert_eq!(rotated.field_layout["reference"].align, crate::schematic::TextAlign::Start);
+    assert_eq!(project.net_labels()[0].text.as_ref().unwrap().height_nm, 750_000);
+    assert_eq!(encode_documents(project).unwrap(), saved);
 }

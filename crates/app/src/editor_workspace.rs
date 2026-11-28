@@ -580,7 +580,7 @@ impl EditorViews {
             return;
         }
         self.active.inspection.clear();
-        self.active.schematic.selected_sheet_symbol = None;
+        self.active.schematic.selected_hierarchy = None;
         self.active.schematic.selection = selection;
         self.selection_changed(session, policy);
     }
@@ -1599,7 +1599,7 @@ impl PcbApp {
                                     &view.schematic.selection,
                                     view.schematic.selected_leg.as_ref(),
                                     view.schematic.whole_wire_drag,
-                                    view.schematic.selected_sheet_symbol,
+                                    view.schematic.selected_hierarchy,
                                     &highlight,
                                     &view.inspection,
                                     view.filters,

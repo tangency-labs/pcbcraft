@@ -1,6 +1,6 @@
 //! KiCad library symbols as native symbol documents.
 //!
-//! A pin out of native range, sharing a position or carrying an unrepresentable identity refuses the
+//! A pin out of native range or carrying an unrepresentable identity refuses the
 //! symbol with a reason. Drawing details the native format holds differently are converted with
 //! a note in the report.
 
@@ -43,6 +43,8 @@ pub(super) struct Converted {
     pub(super) text: String,
     /// The native unit ID for each KiCad unit number that can be placed.
     pub(super) units: BTreeMap<u32, String>,
+    /// Content fingerprint for matching multi-unit definitions independently of local IDs.
+    pub(super) definition: [u8; 32],
     /// For a power symbol, the terminal whose net the placed Value names.
     pub(super) power_terminal: Option<String>,
     /// For a power symbol, where that terminal's pin is in the library symbol: the index of its
@@ -67,7 +69,13 @@ struct NativeUnit {
 /// is converted. Reading its units and pins, and every pin, drawing and text converted, is paid
 /// for from `budget`, in points; when it runs short, it is set to zero, conversion stops there,
 /// and the caller refuses the import. Messages show at most 16 characters of a pin number.
-pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report: &mut Report) -> Result<Converted, String> {
+pub(super) fn convert(
+    symbol: &LibSymbol,
+    id: String,
+    budget: &mut usize,
+    report: &mut Report,
+    preserve_local_power: bool,
+) -> Result<Converted, String> {
     // Reading the symbol below visits each of its units and pins, and symbols can share one
     // drawing through `extends`, so that is paid for first: units before they are counted
     // through, then pins.
@@ -143,11 +151,12 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
     let mut units = BTreeMap::new();
     let mut native_units = Vec::new();
     let mut exact = false;
+    let mut shared_contacts = false;
     for (index, number) in numbers.iter().enumerate() {
         let unit_id = if single { "main".to_owned() } else { unit_letters(index) };
         let parts: Vec<&SymbolUnit> = common.iter().copied().chain(normal.iter().copied().filter(|u| u.unit == *number)).collect();
         let mut native = NativeUnit { id: unit_id.clone(), pins: Vec::new(), drawing: Vec::new() };
-        let mut positions: BTreeMap<(i64, i64), &str> = BTreeMap::new();
+        let mut positions = BTreeSet::new();
         let mut numbers_here: BTreeSet<&str> = BTreeSet::new();
         for pin in parts.iter().flat_map(|unit| &unit.pins) {
             // Electrical pins cannot be skipped if conversion exhausts its budget.
@@ -173,9 +182,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
             }
             let at = (pin.at.x_nm, -pin.at.y_nm);
             exact |= !legacy_pin_offset(at.0, at.1);
-            if let Some(other) = positions.insert(at, &pin.number) {
-                return Err(format!("pins {other} and {} share a position", pin.number));
-            }
+            shared_contacts |= !positions.insert(at);
             let mut saved = json!({"terminal": pin.number, "at_nm": [at.0, at.1]});
             if let Some(appearance) = appearance(pin, at, symbol, report) {
                 saved["appearance"] = appearance;
@@ -230,7 +237,11 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         })
         .collect();
     let mut document = json!({
-        "format": if exact { crate::library::SYMBOL_FORMAT_V6 } else { crate::library::SYMBOL_FORMAT_V4 },
+        "format": match (shared_contacts, exact) {
+            (true, _) => crate::library::SYMBOL_FORMAT_V7,
+            (_, true) => crate::library::SYMBOL_FORMAT_V6,
+            _ => crate::library::SYMBOL_FORMAT_V4,
+        },
         "id": id,
         "revision": 1,
         "name": clip(&symbol.name, 64).unwrap_or_else(|| id.clone()),
@@ -239,14 +250,27 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         "terminals": terminals,
         "units": native_units.into_iter().map(|u| json!({"id": u.id, "drawing": u.drawing, "pins": u.pins})).collect::<Vec<_>>(),
     });
-    if let Some(terminal) = &power_terminal {
+    if let Some(terminal) = &power_terminal
+        && !(preserve_local_power && symbol.power_local)
+    {
         document["behavior"] = json!({"type": "power", "terminal": terminal});
     }
+    // A per-sheet ID suffix can change when another name maps to the same slug.
+    // Compare the converted symbol content independently of that allocated ID.
+    let definition = if units.len() > 1 {
+        use sha2::Digest;
+        let native_id = document["id"].take();
+        let digest = sha2::Sha256::digest(document.to_string().as_bytes()).into();
+        document["id"] = native_id;
+        digest
+    } else {
+        [0; 32]
+    };
     let text = document.to_string();
     if text.len() > MAX_FILE_BYTES {
         return Err(format!("its native document would take {} KiB; a library file holds at most {} KiB", text.len() >> 10, MAX_FILE_BYTES >> 10));
     }
-    Ok(Converted { id, text, units, power_terminal, power_pin })
+    Ok(Converted { id, text, definition, units, power_terminal, power_pin })
 }
 
 /// A pin's logical terminal: its name and native electrical type. Fails for a number the native
@@ -322,14 +346,21 @@ fn appearance(pin: &Pin, at: (i64, i64), symbol: &LibSymbol, report: &mut Report
             "line"
         }
     };
+    let offset = symbol.pin_name_offset_nm.clamp(0, 100_000_000);
+    let name_height = pin.name_height_nm.clamp(100_000, 5_000_000);
+    let number_height = pin.number_height_nm.clamp(100_000, 5_000_000);
+    if (offset, name_height, number_height) != (symbol.pin_name_offset_nm, pin.name_height_nm, pin.number_height_nm) {
+        report.note("pin text dimensions outside native bounds clamped");
+    }
     Some(json!({
         "orientation": orientation,
         "length_nm": pin.length_nm,
         "style": style,
         "show_name": !symbol.pin_names_hidden && !pin.name.is_empty(),
         "show_number": !symbol.pin_numbers_hidden,
-        "name_height_nm": 1_270_000,
-        "number_height_nm": 1_270_000,
+        "name_height_nm": name_height,
+        "number_height_nm": number_height,
+        "name_offset_nm": offset,
     }))
 }
 

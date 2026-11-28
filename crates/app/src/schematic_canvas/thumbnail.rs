@@ -20,7 +20,7 @@ pub(crate) struct Thumbnail {
     symbols: Vec<Symbol>,
     wires: Vec<Vec<Pos2>>,
     blocks: Vec<(Rect, String)>,
-    labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction)>,
+    labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction, pcbcraft_engine::schematic::PinOrientation)>,
     /// The sheet's paper and its frame lines, in grid steps. Frame texts are too small to read
     /// on a card and are left out.
     paper: Option<(Rect, Vec<[Pos2; 2]>)>,
@@ -92,7 +92,7 @@ impl Thumbnail {
             .map(|label| {
                 let at = grid_pos(label.at);
                 bounds = bounds.union(Rect::from_pos(at));
-                (at, label.name.clone(), label.direction)
+                (at, label.name.clone(), label.direction, label.orientation())
             })
             .collect();
         let paper = project.page().zip(project.frame()).map(|(page, frame)| {
@@ -138,14 +138,10 @@ impl Thumbnail {
         for (bounds, name) in &self.blocks {
             let bounds = Rect::from_min_max(screen(bounds.min), screen(bounds.max));
             painter.rect_stroke(bounds, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text), egui::StrokeKind::Middle);
-            if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-                painter.text(bounds.left_top() - egui::vec2(0., t.space_4), Align2::LEFT_BOTTOM, name, FontId::proportional(t.font_small), t.text);
-            }
+            crate::hierarchy::paint_title(&painter, bounds, name, step, t.text);
         }
-        if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-            for (at, name, direction) in &self.labels {
-                crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, t.schematic_wire);
-            }
+        for (at, name, direction, orientation) in &self.labels {
+            crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, *orientation, step, t.schematic_wire);
         }
         for symbol in &self.symbols {
             let placement = &symbol.placement;

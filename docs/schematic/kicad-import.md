@@ -1,9 +1,10 @@
 # KiCad schematic import
 
-PCBcraft can open a self-contained KiCad schematic as a new, editable project
-([#60](https://github.com/tangency-labs/pcbcraft/issues/60)). This first slice
-covers one `.kicad_sch` file written by KiCad 6 to 10. Board import follows once
-the representation of footprints that arrive without a schematic is agreed.
+PCBcraft can import a KiCad schematic as a new, editable project
+([#60](https://github.com/tangency-labs/pcbcraft/issues/60)). The command line
+loads the root `.kicad_sch` and its child sheets, including repeated
+occurrences of a source sheet. The headless engine command accepts one
+self-contained sheet. Board import is tracked separately.
 
 The import is exact or refused: a project it produces connects the same pins
 the file describes. Anything that would change a connection refuses the whole
@@ -24,7 +25,10 @@ out and listed.
   client that escapes it) can exceed that, and the CLI has no such limit.
 - **Command line:** `pcbcraft-cli import-kicad SCHEMATIC DESTINATION` writes a
   new project folder, or a `.pc` package when the destination ends in `.pc`, and
-  prints the report. Existing destinations are never replaced.
+  prints the report. Keep referenced files within the root schematic’s
+  directory tree. Paths resolve relative to the sheet that declares them.
+  The CLI accepts up to 8 MiB of source text and 64 sheet occurrences.
+  Existing destinations are never replaced.
 
 An open editor doesn't offer the import: live MCP and the in-app Assistant
 leave it out of their command lists and refuse it. In an editor the import
@@ -33,6 +37,10 @@ finishes; a live request may also be at most 64 KiB. Offering it there needs the
 and checked again against the request, the project and unsaved work before it
 replaces anything. There is no desktop menu entry yet.
 
+A symbol pin placed directly on a sheet pin or hierarchical port requires a
+wire between separate endpoints before import. The importer reports the source
+file, sheet occurrence, and contact coordinates.
+
 ## What is imported
 
 | KiCad | PCBcraft |
@@ -40,12 +48,14 @@ replaces anything. There is no desktop menu entry yet.
 | Symbols in the file's `lib_symbols`, including ones that `extends` another | Native definitions pinned in the project under a library `kicad-…` named by a digest of the converted symbols (so different imports never claim one identity for different content; the `kicad-` prefix is a naming convention, not reserved), with the library name *Imported from KiCad* and license `NOASSERTION`, since a design's embedded symbols carry their own terms |
 | Units 1 to 32 and the common unit 0 | One native unit per KiCad unit (`main` for single-unit symbols, else `a`, `b`, …), each with the common pins and drawing |
 | Pins, with electrical type, name, number, length, direction and inverted/clock marks | Terminals at their exact coordinates with integrated pin appearance. `free` pins become `unspecified` |
+| Distinct pins at one connection point within a unit | A shared electrical contact in `pcbcraft-symbol/7`, preserving each terminal ID |
 | Pinless units and symbols | Drawings without electrical terminals. Pinless units and pins outside the legacy grid or offset use [`pcbcraft-symbol/6`](../libraries/symbol-schema.md) |
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
-| Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
-| Power symbols | Parts whose power terminal joins the global net their Value names. A local power symbol (KiCad 10's `(power local)`) imports as a global one, reported: on the single sheet this slice imports, both reach the same pins. Importing sub-sheets will have to keep the local scope or refuse such files. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
-| Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
+| Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes. Reference and Value retain their visibility, position, size, horizontal alignment, and supported rotation; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
+| Power symbols | Parts whose power terminal joins the global net their Value names. In a hierarchy, KiCad 10’s local power symbols use sheet-scoped named anchors. The standalone import reports conversion of a local power symbol to a global one on its single sheet. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
+| Child sheet symbols, parent pins and hierarchical labels | Native sheet occurrences, exact parent pin positions and separate child-side anchors. Repeated labels on a child port become local anchors for that port |
+| Wires, junction dots, local and global labels | Native wire routes, junctions and net labels with their source text size |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
 | The paper (`paper`), A4 to A1, landscape or portrait | The sheet's paper and orientation, its top-left corner at the origin the file measures from, so the drawing sits on the paper as in KiCad |
 
@@ -73,8 +83,10 @@ replaces anything. There is no desktop menu entry yet.
   group of two or more pins, or with *duplicate pin numbers are jumpers* set
   (even if no number repeats), including through `extends`. The message names
   the part and the joined pins.
-- Sub-sheets, hierarchical labels, buses and bus entries
-  ([#43](https://github.com/tangency-labs/pcbcraft/issues/43)).
+- Buses and bus entries ([#43](https://github.com/tangency-labs/pcbcraft/issues/43)).
+- Missing sheet files, cycles, conflicting occurrence records, and parent pins
+  without a matching child label. Sub-sheets or hierarchical labels supplied
+  through the single-sheet headless command also fail.
 - Diagonal wires, and symbols turned by other than a quarter turn.
 - Pins of two ordinary symbols touching without a wire. Power symbols and labels
   on pins connect as in KiCad.
@@ -92,7 +104,7 @@ replaces anything. There is no desktop menu entry yet.
   most 64 characters. Other Values are shortened or fall back to the symbol's
   default, reported.
 - Symbols the native format can't hold exactly: pins more than 100 mm from
-  the symbol's origin on either axis, two pins at one position, pin
+  the symbol's origin on either axis, pin
   numbers other than 1 to 8 letters, digits, `+`, `-` or `_`, a number with a
   different name or type in different units, more than 32 units, hidden power
   pins on ordinary symbols, which KiCad joins to a net by name, and an alternate
@@ -129,7 +141,7 @@ also what a misplaced pin would leave behind.
 
 ## What is left out, and reported
 
-Sheet text and drawings, images, text boxes and tables; field text positions,
+Sheet text and drawings, images, text boxes and tables; custom-field text positions,
 which use the native defaults; global label shapes; alternate (De Morgan) body
 styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not

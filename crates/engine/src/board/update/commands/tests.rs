@@ -29,6 +29,54 @@ fn plan(session: &mut Session) -> Value {
     result["board_update_preview"].clone()
 }
 
+#[test]
+fn an_imported_pinless_component_can_complete_the_first_board_update() {
+    let fixture = r#"(kicad_sch (version 20231120)
+        (lib_symbols (symbol "L:Marker" (property "Reference" "FID")
+            (symbol "Marker_1_1" (circle (center 0 0) (radius 1)))))
+        (symbol (lib_id "L:Marker") (at 20 20 0) (unit 1) (property "Reference" "FID1")))"#;
+    let imported = crate::kicad_import::import(fixture, "Pinless board update").unwrap();
+    let mut session = Session::default();
+    session.open_snapshot(imported.project);
+    edit(&mut session, crate::board::identity::CREATE_BOARD, json!({"name":"Board"}));
+    let id = *session.project().unwrap().components.keys().next().unwrap();
+    assert!(session.project().unwrap().components[&id].definition.pins().is_empty());
+
+    let missing = plan(&mut session);
+    assert_eq!(missing["can_apply"], false);
+    assert_eq!(missing["changes"]["blockers"].as_array().unwrap().len(), 1);
+    assert_eq!(missing["changes"]["components"].as_array().unwrap().len(), 1);
+
+    // Use an existing package to exercise explicit unconnected copper on a pinless part.
+    let mut assignment = json!({
+        "component":format!("component-{id}"), "library":"basic-components",
+        "definition":"resistor-0402", "definition_revision":4, "mapping":{},
+        "expected_revision":session.revision()
+    });
+    let error = session.apply(ASSIGN_FOOTPRINT, &assignment).unwrap_err();
+    assert!(error.to_string().contains("Map every terminal and pad exactly once"));
+    assignment["unconnected_pads"] = json!(["1", "2"]);
+    edit(&mut session, ASSIGN_FOOTPRINT, assignment);
+    let reviewed = plan(&mut session);
+    assert_eq!(reviewed["can_apply"], true);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":reviewed["plan_token"]}));
+    edit(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":format!("component-{id}"),"x_nm":0,"y_nm":0}));
+
+    let reopened = decode_packed(&encode_packed(session.snapshot().unwrap()).unwrap()).unwrap().project;
+    let baseline = reopened.board.baseline.as_deref().unwrap();
+    assert!(baseline.components[&id].terminals.is_empty());
+    assert!(baseline.nets.is_empty());
+    let [footprint] = reopened.board.footprints() else { panic!("expected one placed footprint") };
+    assert_eq!(footprint.component, id);
+    assert_eq!(footprint.unconnected_pads, ["1", "2"]);
+    assert!(footprint.mapping.as_ref().unwrap().is_empty());
+
+    session.open_snapshot(reopened);
+    let reopened = plan(&mut session);
+    assert_eq!(reopened["can_apply"], true);
+    assert_eq!(reopened["changes"]["components"], json!([]));
+}
+
 /// Capability authority is distinct from source incarnation and numeric revision.
 #[test]
 fn preview_tokens_are_ephemeral_replaced_cancelled_and_not_history() {

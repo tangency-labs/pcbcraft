@@ -233,6 +233,7 @@ impl SymbolDefinition {
     /// Native schema retained when pinning or exporting an unchanged definition.
     pub fn format(&self) -> &'static str {
         match self.format_version {
+            7 => crate::library::SYMBOL_FORMAT_V7,
             6 => crate::library::SYMBOL_FORMAT_V6,
             5 => crate::library::SYMBOL_FORMAT_V5,
             4 => crate::library::SYMBOL_FORMAT_V4,

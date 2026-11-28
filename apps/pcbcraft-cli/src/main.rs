@@ -17,7 +17,7 @@ const USAGE: &str = "Usage: pcbcraft-cli mcp [--read-only] [--project FILE_OR_FO
                         Convert a previous split project to a new destination. A .pc destination
                         creates a ZIP package; other names create a new project folder.
        pcbcraft-cli import-kicad SCHEMATIC DESTINATION
-                        Import a self-contained KiCad 6-10 schematic (.kicad_sch) as a new project
+                        Import a KiCad schematic (.kicad_sch) and its referenced sheets as a new project
                         at DESTINATION, a .pc package or a new folder, and list what was left out.
        pcbcraft-cli --help, -h
                         Print this usage information.
@@ -81,27 +81,25 @@ fn main() -> ExitCode {
 /// refused, too large or the destination is taken.
 fn import_kicad(source: &Path, destination: &Path) -> Result<(), String> {
     use std::io::Read;
-    let failed = |e: std::io::Error| format!("{}: {e}", source.display());
-    if !std::fs::metadata(source).map_err(failed)?.is_file() {
-        return Err(format!("{} is not a regular file", source.display()));
-    }
-    // Read one byte past the limit, so a file that grows or lies about its size is still bounded.
-    let limit = pcbcraft_engine::kicad_import::MAX_TEXT_BYTES;
-    let mut bytes = Vec::new();
-    std::fs::File::open(source).map_err(failed)?.take(limit as u64 + 1).read_to_end(&mut bytes).map_err(failed)?;
-    if bytes.len() > limit {
-        return Err(format!("{} is larger than the {} MiB a KiCad schematic import accepts", source.display(), limit >> 20));
-    }
-    let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", source.display()))?;
-    let name = source.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "Imported".to_owned());
-    let mut session = pcbcraft_engine::Session::default();
-    let result =
-        session.execute(pcbcraft_engine::kicad_import::IMPORT, &serde_json::json!({"name": name, "text": text})).map_err(|e| e.to_string())?;
-    let project = session.snapshot().ok_or("the import produced no project")?;
-    pcbcraft_storage::conversion::create(project, destination, pcbcraft_storage::conversion::encoding_for(destination))?;
+    let source = source.canonicalize().map_err(|error| format!("{}: {error}", source.display()))?;
+    let folder = source.parent().ok_or("the KiCad schematic has no parent directory")?;
+    let root = source.file_name().and_then(|name| name.to_str()).ok_or("the KiCad schematic filename is not UTF-8")?;
+    let occurrences = pcbcraft_engine::kicad_import::hierarchy::load(root, |file, remaining| {
+        let path = folder.join(file).canonicalize().map_err(|error| error.to_string())?;
+        if !path.starts_with(folder) || !path.is_file() {
+            return Err("sheet source is outside the project directory or is not a regular file".into());
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path).and_then(|source| source.take(remaining as u64 + 1).read_to_end(&mut bytes)).map_err(|error| error.to_string())?;
+        String::from_utf8(bytes).map_err(|_| "sheet source is not UTF-8 text".to_owned())
+    })
+    .map_err(|error| error.to_string())?;
+    let name = source.file_stem().map(|stem| stem.to_string_lossy()).unwrap_or_else(|| "Imported".into());
+    let imported = pcbcraft_engine::kicad_import::hierarchy::import(&occurrences, &name).map_err(|error| error.to_string())?;
+    pcbcraft_storage::conversion::create(imported.project, destination, pcbcraft_storage::conversion::encoding_for(destination))?;
     println!("Imported project written to {}", destination.display());
-    for note in result["report"].as_array().into_iter().flatten() {
-        println!("  left out or changed: {} ({}×)", note["what"].as_str().unwrap_or_default(), note["count"]);
+    for (note, count) in imported.report.notes() {
+        println!("  left out or changed: {note} ({count}×)");
     }
     Ok(())
 }

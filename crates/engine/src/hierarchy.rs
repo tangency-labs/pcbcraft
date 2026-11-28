@@ -64,8 +64,73 @@ pub struct Label {
     pub name: String,
     pub direction: Direction,
     pub at: Point,
+    /// The direction the child-side glyph extends from its wire anchor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<schematic::PinOrientation>,
+    /// Additional named anchors imported for this port on the same sheet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imported_aliases: Vec<u64>,
     /// Stable side-local slot: removing another label never moves this pin.
     pub slot: u8,
+    /// An explicitly positioned parent pin, independent of its electrical direction.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "parent_pin_layout")]
+    pub parent_pin: Option<ParentPin>,
+}
+
+fn automatic_offset(slot: u8) -> i64 {
+    (i64::from(slot) + 2) * 2 * schematic::GRID_NM
+}
+
+pub(crate) fn available_pin_slot<'a>(labels: impl Iterator<Item = &'a Label> + Clone, direction: Direction, explicit: bool) -> Option<u8> {
+    let right = direction.right();
+    let edge = if right { PinEdge::Right } else { PinEdge::Left };
+    (0..MAX_LABELS as u8).find(|&slot| {
+        !labels.clone().any(|label| {
+            (label.direction.right() == right && label.slot == slot)
+                || (!explicit && label.parent_pin.is_some_and(|pin| pin.edge == edge && pin.offset_nm == automatic_offset(slot)))
+        })
+    })
+}
+
+impl Label {
+    pub fn orientation(&self) -> schematic::PinOrientation {
+        use schematic::PinOrientation::{Left, Right};
+        self.orientation.unwrap_or(if self.direction.right() { Right } else { Left })
+    }
+}
+
+fn parent_pin_layout<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<ParentPin>, D::Error> {
+    ParentPin::deserialize(input).map(Some)
+}
+
+/// Which edge of a sheet symbol holds an interface pin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PinEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Distance along the edge from its top or left corner, in nanometers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParentPin {
+    pub edge: PinEdge,
+    pub offset_nm: i64,
+}
+
+impl ParentPin {
+    fn on_border(self, origin: Point, size: Point) -> Point {
+        let (x, y) = match self.edge {
+            PinEdge::Left => (0, self.offset_nm),
+            PinEdge::Right => (size.x_nm, self.offset_nm),
+            PinEdge::Top => (self.offset_nm, 0),
+            PinEdge::Bottom => (self.offset_nm, size.y_nm),
+        };
+        Point { x_nm: origin.x_nm.saturating_add(x), y_nm: origin.y_nm.saturating_add(y) }
+    }
 }
 
 /// A sheet symbol refers to one child identity, independently of its name or filename.
@@ -89,6 +154,7 @@ fn sheet_size<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<Point
 pub struct SheetPin<'a> {
     pub label: &'a Label,
     pub at: Point,
+    pub edge: PinEdge,
 }
 
 impl Project {
@@ -166,30 +232,31 @@ impl Project {
 
     /// Pins derive names/directions from child records while stable slots preserve other pins.
     pub fn sheet_pins<'a>(&'a self, block: &'a SheetSymbol) -> impl Iterator<Item = SheetPin<'a>> + 'a {
-        let width = self.sheet_symbol_size(block).x_nm;
+        let size = self.sheet_symbol_size(block);
         self.sheets.iter().find(|s| s.sheet_id == block.child).into_iter().flat_map(move |s| {
-            s.labels.iter().map(move |label| SheetPin {
-                at: Point {
-                    x_nm: block.at.x_nm.saturating_add(if label.direction.right() { width } else { 0 }),
-                    y_nm: block.at.y_nm.saturating_add((i64::from(label.slot) + 2) * 2 * schematic::GRID_NM),
-                },
-                label,
+            s.labels.iter().map(move |label| {
+                let pin = label.parent_pin.unwrap_or(ParentPin {
+                    edge: if label.direction.right() { PinEdge::Right } else { PinEdge::Left },
+                    offset_nm: automatic_offset(label.slot),
+                });
+                SheetPin { at: pin.on_border(block.at, size), edge: pin.edge, label }
             })
         })
     }
 
     /// Minimum editable extent with clearance below all occupied pin slots.
     pub fn sheet_symbol_min_size(&self, block: &SheetSymbol) -> Point {
-        let slots = self
-            .sheets
-            .iter()
-            .find(|s| s.sheet_id == block.child)
-            .into_iter()
-            .flat_map(|s| s.labels.iter())
-            .map(|label| i64::from(label.slot) + 1)
-            .max()
-            .unwrap_or(0);
-        Point { x_nm: 8 * schematic::GRID_NM, y_nm: (slots * 2 + 4).max(6) * schematic::GRID_NM }
+        let mut size = Point { x_nm: 8 * schematic::GRID_NM, y_nm: 6 * schematic::GRID_NM };
+        if let Some(child) = self.sheets.iter().find(|s| s.sheet_id == block.child) {
+            for label in child.labels.iter() {
+                match label.parent_pin {
+                    Some(ParentPin { edge: PinEdge::Top | PinEdge::Bottom, offset_nm }) => size.x_nm = size.x_nm.max(offset_nm),
+                    Some(ParentPin { offset_nm, .. }) => size.y_nm = size.y_nm.max(offset_nm),
+                    None => size.y_nm = size.y_nm.max((i64::from(label.slot) * 2 + 6) * schematic::GRID_NM),
+                }
+            }
+        }
+        size
     }
 
     /// Authored size or legacy defaults, grown as needed when child pins are added.
@@ -230,6 +297,10 @@ impl Project {
                 persistence::validate_id(&mut ids, label.id)?;
                 check_label_name(&label.name)?;
                 if !wire::valid_point(&label.at)
+                    || label.parent_pin.is_some_and(|pin| !(0..=2 * MAX_CENTER_NM).contains(&pin.offset_nm))
+                    || label.imported_aliases.len() > crate::net_labels::MAX_LABELS
+                    || label.imported_aliases.windows(2).any(|pair| pair[0] >= pair[1])
+                    || label.imported_aliases.iter().any(|id| !(1..=crate::MAX_OBJECT_ID).contains(id))
                     || usize::from(label.slot) >= MAX_LABELS
                     || !names.insert(&label.name)
                     || !slots.insert((label.direction.right(), label.slot))
@@ -239,6 +310,10 @@ impl Project {
             }
             for block in sheet.subsheets.iter() {
                 persistence::validate_id(&mut ids, block.id)?;
+                let mut occupied = BTreeSet::new();
+                if self.sheet_pins(block).any(|pin| !occupied.insert((pin.at.x_nm, pin.at.y_nm))) {
+                    return Err("parent sheet pins must occupy distinct positions".into());
+                }
                 if block.size.is_some_and(|size| {
                     size.x_nm < 8 * schematic::GRID_NM
                         || size.y_nm < 6 * schematic::GRID_NM
@@ -274,7 +349,7 @@ impl Project {
 }
 
 /// Hierarchy names are unique, case-sensitive interface names within a sheet.
-fn check_label_name(name: &str) -> Result<(), String> {
+pub(crate) fn check_label_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name.trim() != name || name.chars().count() > MAX_NAME || name.chars().any(char::is_control) {
         return Err("hierarchical label name must contain 1–200 characters without surrounding whitespace or control characters".into());
     }
@@ -372,12 +447,16 @@ impl Session {
                 if existing.is_none() && project.labels.len() >= MAX_LABELS {
                     return Err(CommandError::CapExceeded("sheet already has 64 hierarchical labels".into()));
                 }
+                let explicit_pin = existing.and_then(|index| project.labels[index].parent_pin);
                 let slot = existing
                     .filter(|&i| project.labels[i].direction.right() == direction.right())
                     .map(|i| project.labels[i].slot)
                     .or_else(|| {
-                        (0..MAX_LABELS as u8)
-                            .find(|slot| !project.labels.iter().any(|label| label.slot == *slot && label.direction.right() == direction.right()))
+                        available_pin_slot(
+                            project.labels.iter().enumerate().filter(|(index, _)| Some(*index) != existing).map(|(_, label)| label),
+                            direction,
+                            explicit_pin.is_some(),
+                        )
                     })
                     .ok_or_else(|| CommandError::CapExceeded("no free sheet pin slot".into()))?;
                 let label = Label {
@@ -389,15 +468,29 @@ impl Session {
                     direction,
                     at: at()?,
                     slot,
+                    parent_pin: explicit_pin,
+                    orientation: existing.and_then(|index| project.labels[index].orientation),
+                    imported_aliases: existing.map_or_else(Vec::new, |index| project.labels[index].imported_aliases.clone()),
                 };
-                let labels = Arc::make_mut(&mut project.sheet_mut().labels);
                 if let Some(index) = existing {
-                    if labels[index] == label {
+                    let old = &project.labels[index];
+                    if *old == label {
                         return Ok(());
                     }
-                    labels[index] = label;
+                    if old.name != label.name && !label.imported_aliases.is_empty() {
+                        let old_name = old.name.clone();
+                        for alias in Arc::make_mut(&mut project.sheet_mut().net_labels) {
+                            if alias.name == old_name
+                                && alias.style == crate::net_labels::Style::Local
+                                && label.imported_aliases.binary_search(&alias.id).is_ok()
+                            {
+                                alias.name.clone_from(&label.name);
+                            }
+                        }
+                    }
+                    Arc::make_mut(&mut project.sheet_mut().labels)[index] = label;
                 } else {
-                    labels.push(label);
+                    Arc::make_mut(&mut project.sheet_mut().labels).push(label);
                 }
             }
             DELETE_LABEL => {

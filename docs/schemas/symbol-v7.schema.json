@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:symbol:7",
+  "title": "PCBcraft published symbol definition, format 7",
+  "description": "Format 7 permits distinct terminals at a shared electrical contact within one unit. See symbol-schema.md for semantic checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "revision",
+    "name",
+    "reference_prefix",
+    "default_value",
+    "terminals",
+    "units"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-symbol/7"
+    },
+    "id": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/id"
+    },
+    "revision": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/revision"
+    },
+    "name": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/name"
+    },
+    "reference_prefix": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/reference_prefix"
+    },
+    "default_value": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/default_value"
+    },
+    "terminals": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/terminals"
+    },
+    "units": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/units"
+    },
+    "behavior": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/behavior"
+    },
+    "defaults": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/defaults"
+    },
+    "category": {
+      "$ref": "urn:pcbcraft:schema:symbol:6#/properties/category"
+    }
+  }
+}

@@ -16,6 +16,17 @@ pub fn layout_no_wrap(painter: &Painter, text: String, font: FontId, color: Colo
     layout(painter, text, font, color, Align::Min)
 }
 
+/// Ellipsize one line when it exceeds the available canvas width.
+pub fn layout_bounded(painter: &Painter, text: String, mut font: FontId, color: Color32, width: f32) -> Arc<Galley> {
+    let requested = font.size;
+    let raster = raster_size(requested);
+    font.size = raster;
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    job.wrap.max_width = width * (raster / requested);
+    job.wrap.max_rows = 1;
+    scaled(painter.layout_job(job), requested / raster, color)
+}
+
 /// Lay out canvas text with explicit line alignment, including multiline pad annotations.
 /// This is for painted labels and their visual hit bounds, not editable text/caret geometry.
 /// Beyond the largest raster bucket the mesh continues scaling without unbounded font sizes.

@@ -13,6 +13,7 @@
 //! is checked against KiCad's nets, worked out from the file alone. Text, drawings and other
 //! appearance the native model doesn't hold are left out and listed in the [`Report`].
 
+pub mod hierarchy;
 mod symbols;
 mod wiring;
 
@@ -20,9 +21,10 @@ mod wiring;
 mod tests;
 
 use crate::library::sources::{Kind, LOAD};
-use crate::schematic::{MAX_CENTER_NM, Terminal, Wire, WireEndpoint, check_reference, check_value};
+use crate::schematic::fields::{Layout, Layouts};
+use crate::schematic::{MAX_CENTER_NM, SymbolPlacement, Terminal, TextAlign, Wire, WireEndpoint, check_reference, check_value};
 use crate::sheets::page::{Orientation, Page, Paper, SET_PAGE};
-use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session};
+use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session, SheetTarget};
 use pcbcraft_kicad::Point;
 use pcbcraft_kicad::schematic::{LabelKind, Mirror, PlacedSymbol, Schematic};
 use serde_json::{Value, json};
@@ -50,6 +52,19 @@ pub const MAX_WIRE_PIECES: usize = 4000;
 /// of the converted documents, so one identity, item and revision always means one content,
 /// as native sources require, and imports of different schematics never conflict.
 const LIBRARY_PREFIX: &str = "kicad-";
+#[derive(Default)]
+struct PlacementState {
+    components: BTreeMap<(String, String), ImportedComponent>,
+    references: BTreeSet<String>,
+    reserved: BTreeSet<String>,
+}
+
+struct ImportedComponent {
+    id: u64,
+    units: BTreeSet<u32>,
+    definition: [u8; 32],
+}
+
 /// The scratch session's source registration.
 const SOURCE: &str = "kicad-import";
 /// The report line for a paper the sheet can't take where the file puts it.
@@ -180,8 +195,35 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(CommandError::CapExceeded(format!("A KiCad schematic may be at most {} MiB.", MAX_TEXT_BYTES >> 20)));
     }
-    let mut schematic =
+    let schematic =
         pcbcraft_kicad::read_schematic(text).map_err(|e| CommandError::InvalidParams(format!("The KiCad schematic can't be read: {e}")))?;
+    import_sheet(schematic, name, None, &mut PlacementState::default()).map(|(imported, _)| imported)
+}
+
+type SheetNets = BTreeSet<BTreeSet<hierarchy::Contact>>;
+
+fn import_sheet(
+    mut schematic: Schematic,
+    name: &str,
+    scope: Option<(Arc<Project>, SheetTarget)>,
+    placement: &mut PlacementState,
+) -> Result<(Imported, SheetNets), CommandError> {
+    let mut interface_labels = Vec::new();
+    let mut interface_pins = Vec::new();
+    let hierarchical = scope.is_some();
+    if hierarchical {
+        // The tree builder has already created the native ports and their repeated anchors.
+        interface_pins.extend(schematic.sheets.iter().flat_map(|sheet| sheet.pins.iter().map(|pin| pin.at)));
+        schematic.sheets.clear();
+        schematic.labels.retain(|label| {
+            if label.kind == LabelKind::Hierarchical {
+                interface_labels.push((label.name.clone(), label.at));
+                false
+            } else {
+                true
+            }
+        });
+    }
     let mut report = Report::default();
     for (what, count) in schematic.notes.iter() {
         report.add(what, count);
@@ -234,7 +276,7 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         let base = symbols::native_id(name);
         let id = (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|id| !ids.contains(id)).unwrap_or(base);
         ids.insert(id.clone());
-        match symbols::convert(symbol, id, &mut budget, &mut report) {
+        match symbols::convert(symbol, id, &mut budget, &mut report, hierarchical) {
             Ok(symbol) => {
                 bytes = bytes.saturating_add(symbol.text.len());
                 converted.insert(name, symbol);
@@ -259,7 +301,7 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     // pin number is checked when they are recognized. A refused symbol has no pins, so the
     // power-flag reasons below are complete only when every placed symbol converted.
     let pins = LibraryPins::new(&schematic, converted.keys().copied().chain(flags.iter().map(|f| f.lib_symbol.as_str())));
-    refuse_name_clashes(&schematic, &converted, &mut refusals);
+    refuse_name_clashes(&schematic, &converted, hierarchical, &mut refusals);
     check_values(&schematic, &converted, &mut refusals, &mut report);
     // One sheet is the whole schematic here (sub-sheets are refused above), so a net that stays
     // on its sheet reaches the same pins as a global one. Importing sub-sheets must keep the
@@ -270,7 +312,11 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         .filter(|s| converted.get(s.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some()))
         .filter(|s| schematic.lib_symbols.get(&s.lib_symbol).is_some_and(|lib| lib.power_local))
         .count();
-    report.add("local power symbols imported as global ones (the same net on a single sheet)", local_power);
+    if hierarchical {
+        report.add("local power symbols kept with sheet-scoped net anchors", local_power);
+    } else {
+        report.add("local power symbols imported as global ones (the same net on a single sheet)", local_power);
+    }
     let poses: Vec<Option<(u8, bool)>> = schematic.symbols.iter().map(pose).collect();
     for (symbol, pose) in schematic.symbols.iter().zip(&poses) {
         if pose.is_none() {
@@ -290,7 +336,8 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         }
     };
     if !flags.is_empty() && segments.len() <= MAX_WIRE_PIECES {
-        match flags_that_join(&schematic, &flags, &segments, &converted, &pins)? {
+        let interfaces = hierarchical.then_some(FlagInterfaces { pins: &interface_pins, labels: &interface_labels });
+        match flags_that_join(&schematic, &flags, &segments, &converted, &pins, interfaces.as_ref())? {
             Joining::None => {}
             Joining::Each(culprits) => {
                 for flag in culprits {
@@ -314,13 +361,19 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     }
     refusals.check()?;
 
-    let mut builder = Builder::new(name, &converted)?;
-    let placed = builder.place(&schematic, &converted, &pins, &poses, &mut report)?;
+    let mut builder = Builder::new(name, &converted, scope)?;
+    let placed = builder.place(&schematic, &converted, &pins, &poses, placement, &mut report)?;
     builder.wire(&schematic, &segments, &placed, &converted, &pins, &mut report)?;
     builder.page(schematic.paper.as_ref(), &mut report)?;
     let project = builder.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
-    check_nets(&schematic, &segments, &placed, &converted, &project)?;
-    Ok(Imported { project, report })
+    let groups = if hierarchical {
+        let sheet = builder.project()?;
+        hierarchy::source_nets(&schematic, &segments, &placed, &converted, &sheet, &interface_labels)?
+    } else {
+        check_nets(&schematic, &segments, &placed, &converted, &project)?;
+        BTreeSet::new()
+    };
+    Ok((Imported { project, report }, groups))
 }
 
 /// The order to place symbols in: first every symbol that keeps its KiCad reference, then the
@@ -343,6 +396,11 @@ fn placement_order(schematic: &Schematic) -> Vec<usize> {
     keep
 }
 
+struct FlagInterfaces<'a> {
+    pins: &'a [Point],
+    labels: &'a [(String, Point)],
+}
+
 /// The file's nets as groups of `(symbol index, pin number)`, worked out from its geometry with
 /// [`wiring::kicad_nets`], with `extra` pins (keyed past the placed symbols) joining in too.
 fn file_nets(
@@ -351,6 +409,7 @@ fn file_nets(
     converted: &BTreeMap<&str, symbols::Converted>,
     pins: &LibraryPins,
     extra: &[(usize, String, Point)],
+    interfaces: Option<&FlagInterfaces<'_>>,
 ) -> Result<BTreeSet<BTreeSet<(usize, String)>>, CommandError> {
     let mut contacts = wiring::Contacts { pins: Vec::new(), labels: Vec::new(), power: Vec::new() };
     let mut cuts: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).collect();
@@ -360,7 +419,11 @@ fn file_nets(
             if power == Some(number.as_str())
                 && let Some(value) = symbol.property("Value")
             {
-                contacts.power.push(((index, number.clone()), value.to_owned()));
+                if interfaces.is_some() && schematic.lib_symbols.get(&symbol.lib_symbol).is_some_and(|lib| lib.power_local) {
+                    contacts.labels.push(("local", value.to_owned(), at));
+                } else {
+                    contacts.power.push(((index, number.clone()), value.to_owned()));
+                }
             }
             cuts.insert(at);
             contacts.pins.push(((index, number), at));
@@ -371,8 +434,12 @@ fn file_nets(
         contacts.pins.push(((*key, number.clone()), *at));
     }
     for label in &schematic.labels {
-        contacts.labels.push((if label.kind == LabelKind::Global { "global" } else { "local" }, label.name.clone(), label.at));
+        let scope = if interfaces.is_none() && label.kind == LabelKind::Global { "global" } else { "local" };
+        contacts.labels.push((scope, label.name.clone(), label.at));
         cuts.insert(label.at);
+    }
+    if let Some(interfaces) = interfaces {
+        contacts.labels.extend(interfaces.labels.iter().map(|(name, at)| ("local", name.clone(), *at)));
     }
     Ok(wiring::kicad_nets(&wiring::split(segments, &cuts), &contacts))
 }
@@ -405,19 +472,24 @@ fn flags_that_join(
     segments: &[wiring::Segment],
     converted: &BTreeMap<&str, symbols::Converted>,
     pins: &LibraryPins,
+    interfaces: Option<&FlagInterfaces<'_>>,
 ) -> Result<Joining, CommandError> {
     let first_extra = schematic.symbols.len();
     let first_label = first_extra + flags.len();
-    let labels: Vec<(usize, String, Point)> =
-        schematic.labels.iter().enumerate().map(|(j, label)| (first_label + j, String::new(), label.at)).collect();
-    let without = file_nets(schematic, segments, converted, pins, &labels)?;
+    let mut points: Vec<_> = schematic.labels.iter().map(|label| label.at).collect();
+    if let Some(interfaces) = interfaces {
+        points.extend_from_slice(interfaces.pins);
+        points.extend(interfaces.labels.iter().map(|(_, at)| *at));
+    }
+    let labels: Vec<_> = points.iter().enumerate().map(|(index, at)| (first_label + index, String::new(), *at)).collect();
+    let without = file_nets(schematic, segments, converted, pins, &labels, interfaces)?;
     let net_of: BTreeMap<&(usize, String), usize> = without.iter().enumerate().flat_map(|(i, group)| group.iter().map(move |pin| (pin, i))).collect();
     let mut extra = labels.clone();
     for (i, flag) in flags.iter().enumerate() {
         extra.extend(pins_of(flag, pins)?.into_iter().map(|(number, at)| (first_extra + i, number, at)));
     }
     let mut joining = BTreeSet::new();
-    for group in file_nets(schematic, segments, converted, pins, &extra)? {
+    for group in file_nets(schematic, segments, converted, pins, &extra, interfaces)? {
         let nets: BTreeSet<usize> = group.iter().filter_map(|pin| net_of.get(pin).copied()).collect();
         if nets.len() > 1 {
             joining.extend(group.iter().filter(|(index, _)| (first_extra..first_label).contains(index)).map(|(index, _)| index - first_extra));
@@ -427,7 +499,7 @@ fn flags_that_join(
         return Ok(Joining::None);
     }
     // Where wires already meet, a flag adds nothing; leave those out of the one-by-one checks.
-    let mut met: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).chain(schematic.labels.iter().map(|l| l.at)).collect();
+    let mut met: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).chain(points).collect();
     met.extend(segments.iter().flat_map(|(a, b)| [*a, *b]));
     for symbol in &schematic.symbols {
         met.extend(pins_of(symbol, pins)?.into_iter().map(|(_, at)| at));
@@ -445,7 +517,7 @@ fn flags_that_join(
     for flag in &candidates {
         let mut alone = labels.clone();
         alone.extend(pins_of(flag, pins)?.into_iter().map(|(number, at)| (first_extra, number, at)));
-        let joins = file_nets(schematic, segments, converted, pins, &alone)?
+        let joins = file_nets(schematic, segments, converted, pins, &alone, interfaces)?
             .iter()
             .any(|group| group.iter().filter_map(|pin| net_of.get(pin)).collect::<BTreeSet<_>>().len() > 1);
         if joins {
@@ -469,10 +541,10 @@ fn is_power_flag(symbol: &pcbcraft_kicad::schematic::LibSymbol) -> bool {
 }
 
 /// Refuse a net name used by more than one kind of named marker: local labels, global labels,
-/// power symbols and local power symbols (KiCad 10's `(power local)`). PCBCraft joins every
-/// marker of one name on a sheet; whether KiCad does across those kinds isn't confirmed, so
-/// such files are refused rather than guessed at.
-fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, refusals: &mut Refusals) {
+/// power symbols and local power symbols (KiCad 10's `(power local)`). The hierarchy importer
+/// handles per-occurrence naming for local and global labels and local power symbols. Other
+/// mixes keep the existing conservative check.
+fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, hierarchical: bool, refusals: &mut Refusals) {
     let mut kinds: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for label in &schematic.labels {
         kinds.entry(label.name.as_str()).or_default().insert(if label.kind == LabelKind::Global { "global label" } else { "local label" });
@@ -486,6 +558,10 @@ fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols
         }
     }
     for (name, kinds) in kinds.iter().filter(|(_, kinds)| kinds.len() > 1) {
+        if hierarchical && !kinds.contains("power symbol") {
+            // Verified against KiCad's export: these markers join by name within one occurrence.
+            continue;
+        }
         let kinds: Vec<&str> = kinds.iter().copied().collect();
         refusals.add(format!("the name `{name}` is used by a {}; how KiCad joins those isn't confirmed", kinds.join(" and a ")));
     }
@@ -642,6 +718,7 @@ struct Placed {
 /// The scratch session the project is built in, with the converted symbols' digests.
 struct Builder {
     session: Session,
+    sheet: Option<SheetTarget>,
     /// The library identity the converted symbols are pinned under.
     library: String,
     /// The project's highest allocated ordinal before the latest command, to find what it added.
@@ -653,10 +730,16 @@ struct Builder {
 impl Builder {
     /// A scratch session with a new project and the converted symbols loaded as one source.
     /// Fails, naming the symbol and the loader's reason, when a converted document is refused.
-    fn new(name: &str, converted: &BTreeMap<&str, symbols::Converted>) -> Result<Self, CommandError> {
+    fn new(name: &str, converted: &BTreeMap<&str, symbols::Converted>, scope: Option<(Arc<Project>, SheetTarget)>) -> Result<Self, CommandError> {
         let mut session = Session::default();
-        let name = symbols::clip(name, 64).unwrap_or_else(|| "Imported".to_owned());
-        session.apply("project.new", &json!({"name": name})).map_err(step("creating the project"))?;
+        let sheet = if let Some((project, sheet)) = scope {
+            session.open_snapshot(project);
+            Some(sheet)
+        } else {
+            let name = symbols::clip(name, 64).unwrap_or_else(|| "Imported".to_owned());
+            session.apply("project.new", &json!({"name": name})).map_err(step("creating the project"))?;
+            None
+        };
         let mut documents: BTreeMap<String, String> =
             converted.values().map(|symbol| (format!("symbols/{}.json", symbol.id), symbol.text.clone())).collect();
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
@@ -691,12 +774,17 @@ impl Builder {
             }
         }
         refusals.check()?;
-        Ok(Self { session, library, high: 0, digests })
+        Ok(Self { session, sheet, library, high: 0, digests })
     }
 
     /// Run one project command at the current revision. Wire edits keep their authored routes.
     fn apply(&mut self, id: &str, mut params: Value, what: &str) -> Result<(), CommandError> {
         params["expected_revision"] = json!(self.session.revision());
+        if let Some(sheet) = self.sheet
+            && crate::sheets::scoped_command(id)
+        {
+            params["sheet"] = json!(sheet.id());
+        }
         self.high = self.session.project().map_or(0, Project::highest_id);
         self.session.apply(id, &params).map(|_| ()).map_err(step(what))
     }
@@ -745,7 +833,11 @@ impl Builder {
 
     /// The open project; always present once [`Builder::new`] succeeded.
     fn project(&self) -> Result<Arc<Project>, CommandError> {
-        self.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))
+        let project = self.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
+        match self.sheet {
+            Some(sheet) => project.for_sheet(sheet).map(Arc::new).ok_or_else(|| CommandError::InvalidParams("the imported sheet is missing".into())),
+            None => Ok(project),
+        }
     }
 
     /// Place every symbol, each component's further units, and set references, values and fields.
@@ -755,12 +847,18 @@ impl Builder {
         converted: &BTreeMap<&str, symbols::Converted>,
         pins: &LibraryPins,
         poses: &[Option<(u8, bool)>],
+        placement: &mut PlacementState,
         report: &mut Report,
     ) -> Result<Vec<Placed>, CommandError> {
+        let mut incoming_units = BTreeMap::<_, BTreeSet<_>>::new();
+        for symbol in &schematic.symbols {
+            if !symbol.reference.ends_with('?') {
+                incoming_units.entry((symbol.reference.as_str(), symbol.lib_symbol.as_str())).or_default().insert(symbol.unit);
+            }
+        }
+        let mut unit_copies = BTreeMap::new();
+        let mut local_parts = BTreeMap::new();
         let mut placed = Vec::new();
-        // Annotated units of one component share a reference and a library symbol.
-        let mut components: BTreeMap<(String, String), (u64, BTreeSet<u32>)> = BTreeMap::new();
-        let mut references: BTreeSet<String> = BTreeSet::new();
         for source in placement_order(schematic) {
             let (Some(symbol), Some(pose)) = (schematic.symbols.get(source), poses.get(source)) else { continue };
             let (Some(c), Some((turns, mirrored))) = (converted.get(symbol.lib_symbol.as_str()), *pose) else { continue };
@@ -769,10 +867,23 @@ impl Builder {
             let rotation = u16::from(if mirrored { (4 - turns) % 4 } else { turns }) * 90;
             let annotated = !symbol.reference.ends_with('?');
             let key = (symbol.reference.clone(), symbol.lib_symbol.clone());
-            // A unit already placed under this reference is a copy KiCad allows: a new part.
-            let existing = annotated.then(|| components.get(&key).cloned()).flatten().filter(|(_, units)| !units.contains(&symbol.unit));
-            match &existing {
-                Some((component, _)) => {
+            // The first copy can join earlier sheets only when every unit in this
+            // occurrence is still free. Later copies stay within this occurrence.
+            let group = annotated.then(|| {
+                let count = unit_copies.entry((symbol.reference.as_str(), symbol.lib_symbol.as_str(), symbol.unit)).or_insert(0);
+                let group = (symbol.reference.as_str(), symbol.lib_symbol.as_str(), *count);
+                *count += 1;
+                group
+            });
+            let earlier = group.filter(|(_, _, copy)| *copy == 0).and_then(|(reference, library, _)| {
+                placement.components.get(&key).filter(|part| part.units.is_disjoint(&incoming_units[&(reference, library)]))
+            });
+            if earlier.is_some_and(|part| part.definition != c.definition) {
+                return Err(CommandError::InvalidParams(format!("{} has different symbol definitions on its placed units.", symbol.reference)));
+            }
+            let existing = group.and_then(|group| local_parts.get(&group).copied()).or_else(|| earlier.map(|part| part.id));
+            match existing {
+                Some(component) => {
                     let params = json!({"component": format!("component-{component}"), "unit": unit, "rotation": rotation,
                         "x_nm": symbol.at.x_nm, "y_nm": symbol.at.y_nm, "auto_heal": false});
                     self.apply(PLACE_UNIT, params, &format!("placing {} unit {}", symbol.reference, symbol.unit))?;
@@ -798,13 +909,33 @@ impl Builder {
                     "mirroring a symbol",
                 )?;
             }
-            if existing.is_none() {
-                self.set_fields(symbol, ordinal, annotated, &mut references, report)?;
-                if annotated {
-                    components.entry(key).or_insert((component, BTreeSet::from([symbol.unit])));
+            if let Some(group) = group {
+                local_parts.insert(group, component);
+                if group.2 == 0 {
+                    let part = placement.components.entry(key).or_insert_with(|| ImportedComponent {
+                        id: component,
+                        units: BTreeSet::new(),
+                        definition: c.definition,
+                    });
+                    if part.id == component {
+                        part.units.insert(symbol.unit);
+                    }
                 }
-            } else if let Some((_, units)) = components.get_mut(&key) {
-                units.insert(symbol.unit);
+            }
+            if existing.is_none() {
+                self.set_fields(symbol, ordinal, annotated, placement, report)?;
+            } else {
+                let project = self.project()?;
+                let id = crate::schematic::symbol_id(ordinal);
+                let native = project.symbol(&id).ok_or_else(|| CommandError::NotFound("the imported unit is missing".into()))?;
+                let layouts = field_layouts(symbol, native, report);
+                if !layouts.is_empty() {
+                    self.apply(
+                        crate::SET_SYMBOL_FIELDS,
+                        json!({"symbol":id,"reference":project.reference(native),"value":project.value(native),"field_layout":layouts}),
+                        &format!("setting the field appearance of {} unit {}", symbol.reference, symbol.unit),
+                    )?;
+                }
             }
             let pins = pins_of(symbol, pins)?;
             placed.push(Placed { source, symbol: ordinal, component, pins });
@@ -819,7 +950,7 @@ impl Builder {
         symbol: &PlacedSymbol,
         ordinal: u64,
         annotated: bool,
-        references: &mut BTreeSet<String>,
+        placement: &mut PlacementState,
         report: &mut Report,
     ) -> Result<(), CommandError> {
         if symbol.reference_from == pcbcraft_kicad::schematic::ReferenceSource::OtherRecord {
@@ -834,14 +965,23 @@ impl Builder {
             report.note("unannotated references numbered automatically");
         } else if check_reference(&symbol.reference).is_err() {
             report.note("references longer than 32 characters or containing spaces numbered automatically");
-        } else if !references.insert(symbol.reference.clone()) {
+        } else if !placement.references.insert(symbol.reference.clone()) {
             report.note("references used by two different parts numbered automatically");
         } else {
             reference = symbol.reference.clone();
         }
+        if reference != symbol.reference && placement.reserved.contains(&reference) {
+            let prefix = &part.definition.reference_prefix;
+            reference = (part.reference_number + 1..=crate::MAX_REFERENCE_NUMBER)
+                .map(|number| format!("{prefix}{number}"))
+                .find(|candidate| !placement.reserved.contains(candidate) && !project.components.values().any(|part| part.reference() == candidate))
+                .ok_or_else(|| CommandError::CapExceeded("no unreserved automatic reference number is available".into()))?;
+        }
         let value = part.value().to_owned();
         let metadata = metadata(symbol, report)?;
-        let params = json!({"symbol": crate::schematic::symbol_id(ordinal), "reference": reference, "value": value, "metadata": metadata});
+        let field_layout = field_layouts(symbol, native, report);
+        let params = json!({"symbol": crate::schematic::symbol_id(ordinal), "reference": reference, "value": value,
+            "metadata": metadata, "field_layout": field_layout});
         self.apply(crate::SET_SYMBOL_FIELDS, params, &format!("setting the fields of {}", symbol.reference))
     }
 
@@ -865,7 +1005,27 @@ impl Builder {
         let labels: BTreeSet<Point> = schematic.labels.iter().map(|l| l.at).collect();
         let no_connects: BTreeSet<Point> = schematic.no_connects.iter().map(|m| m.at).collect();
         let dots: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).collect();
+        let project = self.project()?;
+        let mut interfaces = BTreeMap::new();
+        for (endpoint, point) in project.hierarchy_endpoints() {
+            let point = Point { x_nm: point.x_nm, y_nm: point.y_nm };
+            if matches!(endpoint, WireEndpoint::Label(_) | WireEndpoint::SheetPin(_)) && pins_at.contains_key(&point) {
+                return Err(CommandError::InvalidParams(format!(
+                    "symbol pin directly touches a hierarchy port at ({:.3}, {:.3}) mm; add a wire between separate endpoints before importing",
+                    point.x_nm as f64 / 1e6,
+                    point.y_nm as f64 / 1e6
+                )));
+            }
+            if interfaces.insert(point, endpoint).is_some() {
+                return Err(CommandError::InvalidParams(format!(
+                    "overlapping hierarchy anchors at ({:.3}, {:.3}) mm",
+                    point.x_nm as f64 / 1e6,
+                    point.y_nm as f64 / 1e6
+                )));
+            }
+        }
         let mut cuts: BTreeSet<Point> = pins_at.keys().copied().collect();
+        cuts.extend(interfaces.keys().copied());
         cuts.extend(labels.iter());
         cuts.extend(dots.iter());
         let pieces = wiring::split(segments, &cuts);
@@ -882,7 +1042,10 @@ impl Builder {
                     .and_then(|p| schematic.symbols.get(p.source))
                     .is_some_and(|s| converted.get(s.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some()))
             };
-            if here.len() > 1 && here.iter().filter(|pin| !power(pin)).count() > 1 {
+            let mut ordinary = here.iter().filter(|pin| !power(pin));
+            if let Some((first, _, _)) = ordinary.next()
+                && ordinary.any(|(symbol, _, _)| symbol != first)
+            {
                 refusals.add(format!("pins touch without a wire at ({:.2} mm, {:.2} mm)", at.x_nm as f64 / 1e6, at.y_nm as f64 / 1e6));
             }
         }
@@ -897,7 +1060,7 @@ impl Builder {
         }
         let loose: BTreeSet<Point> = degree
             .iter()
-            .filter(|(p, n)| **n == 1 && !pins_at.contains_key(p) && !labels.contains(p) && !no_connects.contains(p))
+            .filter(|(p, n)| **n == 1 && !pins_at.contains_key(p) && !interfaces.contains_key(p) && !labels.contains(p) && !no_connects.contains(p))
             .map(|(p, _)| *p)
             .collect();
         report.add("wire ends that touch nothing", loose.len());
@@ -933,10 +1096,11 @@ impl Builder {
             let ends = [route.from, route.to];
             let anchors: Vec<Value> = ends
                 .iter()
-                .map(|end| match (pins_at.get(end).and_then(|pins| pins.first()), junctions.get(end)) {
-                    (Some((symbol, _, number)), _) => json!({"symbol": crate::schematic::symbol_id(*symbol), "terminal": number}),
-                    (None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
-                    (None, None) => json!({"x_nm": end.x_nm, "y_nm": end.y_nm}),
+                .map(|end| match (interfaces.get(end), pins_at.get(end).and_then(|pins| pins.first()), junctions.get(end)) {
+                    (Some(interface), _, _) => interface.inspect(),
+                    (None, Some((symbol, _, number)), _) => json!({"symbol": crate::schematic::symbol_id(*symbol), "terminal": number}),
+                    (None, None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
+                    (None, None, None) => json!({"x_nm": end.x_nm, "y_nm": end.y_nm}),
                 })
                 .collect();
             let bends: Vec<Value> = route.bends.iter().map(|b| at(*b)).collect();
@@ -963,20 +1127,41 @@ impl Builder {
                 report.note("global label shapes left out");
             }
             let style = if label.kind == LabelKind::Global { "global" } else { "local" };
-            let params = json!({"name": label.name, "style": style, "x_nm": label.at.x_nm, "y_nm": label.at.y_nm, "rotation": rotation});
+            let text = label_layout(label, rotation as u16);
+            let params =
+                json!({"name": label.name, "style": style, "x_nm": label.at.x_nm, "y_nm": label.at.y_nm, "rotation": rotation, "text": text});
             self.apply(crate::net_labels::ADD, params, &format!("placing label {}", label.name))?;
         }
 
-        for mark in &no_connects {
-            let target = match (pins_at.get(mark).and_then(|pins| pins.first()), junctions.get(mark)) {
-                (Some((_, component, number)), _) => json!({"part": format!("component-{component}"), "terminal": number}),
-                (None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
-                (None, None) => {
-                    report.note("no-connect marks not on a pin or wire end left out");
-                    continue;
+        if self.sheet.is_some() {
+            for part in placed {
+                let source = &schematic.symbols[part.source];
+                if schematic.lib_symbols.get(&source.lib_symbol).is_some_and(|lib| lib.power_local)
+                    && let Some(terminal) = converted.get(source.lib_symbol.as_str()).and_then(|lib| lib.power_terminal.as_deref())
+                    && let Some((_, point)) = part.pins.iter().find(|(number, _)| number == terminal)
+                    && let Some(name) = source.property("Value")
+                {
+                    self.apply(
+                        crate::net_labels::ADD,
+                        json!({"name":name,"style":"local","x_nm":point.x_nm,"y_nm":point.y_nm,"rotation":0}),
+                        &format!("placing local power anchor for {}", source.reference),
+                    )?;
                 }
-            };
-            self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a no-connect")?;
+            }
+        }
+
+        for mark in &no_connects {
+            if let Some(pins) = pins_at.get(mark) {
+                for (_, component, number) in pins {
+                    let target = json!({"part": format!("component-{component}"), "terminal": number});
+                    self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a no-connect")?;
+                }
+            } else if let Some(junction) = junctions.get(mark) {
+                let target = json!({"junction": format!("junction-{junction}")});
+                self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a wire-end no-connect")?;
+            } else {
+                report.note("no-connect marks not on a pin or wire end left out");
+            }
         }
         Ok(())
     }
@@ -1113,9 +1298,6 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
         let value = kept;
         fields.insert(id, json!({"name": name, "value": value}));
     }
-    if symbol.properties.iter().any(|p| p.at.is_some() && matches!(p.key.as_str(), "Reference" | "Value")) {
-        report.note("field text positions left out (shown at their native defaults)");
-    }
     Ok(json!({"fields": fields, "attributes": {
         "do_not_populate": symbol.dnp,
         "exclude_from_bom": !symbol.in_bom,
@@ -1123,6 +1305,71 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
         "exclude_from_simulation": symbol.exclude_from_sim,
         "exclude_from_position_files": !symbol.in_pos_files,
     }}))
+}
+
+/// Placed field anchors are in KiCad's sheet frame. The native editor stores their offsets
+/// relative to the symbol's unturned drawing so they follow later placement edits.
+fn field_layouts(symbol: &PlacedSymbol, native: &SymbolPlacement, report: &mut Report) -> Layouts {
+    [("Reference", "reference"), ("Value", "value")]
+        .into_iter()
+        .filter_map(|(key, id)| {
+            let property = symbol.properties.iter().find(|property| property.key == key)?;
+            let offset = property.at.and_then(|at| {
+                let (x_nm, y_nm) =
+                    crate::schematic::unplace(at.x_nm - symbol.at.x_nm, at.y_nm - symbol.at.y_nm, native.turns(), native.is_mirrored());
+                if [x_nm, y_nm].iter().any(|value| value.unsigned_abs() > MAX_CENTER_NM as u64) {
+                    report.note("field positions outside the native range reset to defaults");
+                    return None;
+                }
+                Some(crate::Point { x_nm, y_nm })
+            });
+            let field_angle = if property.rotation_mdeg % 90_000 == 0 {
+                property.rotation_mdeg
+            } else {
+                report.note("fields at other than a quarter turn rounded to the symbol orientation");
+                0
+            };
+            let angle = (symbol.rotation_mdeg + field_angle).rem_euclid(360_000);
+            let vertical = angle % 180_000 != 0;
+            // KiCad reads mirrored lettering upright and swaps its justification along
+            // whichever screen axis was reflected.
+            let reversed = (angle >= 180_000)
+                ^ match symbol.mirror {
+                    Mirror::None => false,
+                    Mirror::X => vertical,
+                    Mirror::Y => !vertical,
+                };
+            let align = match (property.justify, reversed) {
+                (pcbcraft_kicad::schematic::Justify::Center, _) => TextAlign::Middle,
+                (pcbcraft_kicad::schematic::Justify::Left, false) | (pcbcraft_kicad::schematic::Justify::Right, true) => TextAlign::Start,
+                _ => TextAlign::End,
+            };
+            let rotation = if vertical { 90 } else { 0 };
+            Some((
+                id.to_owned(),
+                Layout {
+                    offset,
+                    visible: !property.hidden,
+                    rotation,
+                    align,
+                    height_nm: property.size_nm.clamp(100_000, 10_000_000),
+                    ..Layout::default()
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Keep an imported net label's authored text size on its existing electrical anchor.
+fn label_layout(label: &pcbcraft_kicad::schematic::Label, rotation: u16) -> Layout {
+    let align = if label.kind == LabelKind::Global {
+        TextAlign::Middle
+    } else if rotation == 180 {
+        TextAlign::End
+    } else {
+        TextAlign::Start
+    };
+    Layout { rotation: rotation % 180, align, height_nm: label.size_nm.clamp(100_000, 10_000_000), ..Layout::default() }
 }
 
 /// Check that the native project connects exactly the pins KiCad does. Both sides are grouped by

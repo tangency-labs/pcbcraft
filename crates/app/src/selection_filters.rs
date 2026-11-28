@@ -194,9 +194,7 @@ impl PcbApp {
                 view.schematic.selected_leg = None;
                 view.schematic.whole_wire_drag = false;
             }
-            if !next.sheets {
-                view.schematic.selected_sheet_symbol = None;
-            }
+            view.schematic.selected_hierarchy = view.schematic.selected_hierarchy.filter(|(kind, _)| kind.allowed(next));
             if !next.footprints {
                 view.board.selection.clear();
                 view.board.reference = Default::default();

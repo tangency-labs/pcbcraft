@@ -182,17 +182,20 @@ impl Project {
     /// alone do not. Missing/type-changed records produce findings instead of suppressing others.
     pub fn check_no_connects(&self, revision: u64) -> Report {
         let mut locations = BTreeMap::new();
-        let mut wired = BTreeSet::new();
+        let graph = self.borrowed_electrical_connectivity();
+        // A shared symbol contact is a net even when it has no external connection.
+        let wired_nets: BTreeSet<_> = self
+            .sheets
+            .iter()
+            .flat_map(|sheet| sheet.wires.iter())
+            .flat_map(|wire| wire.terminals())
+            .filter_map(|terminal| graph.net_index_for(terminal))
+            .collect();
         for sheet in self.sheets.iter() {
             let target = SheetTarget { project: self.id(), sheet: sheet.sheet_id };
             let Some(view) = self.for_sheet(target) else { continue };
             for symbol in view.symbols() {
                 locations.insert(symbol.ordinal, (target, symbol.clone()));
-                for terminal in symbol.terminals() {
-                    if view.connectivity().net_index_for(terminal).is_some() {
-                        wired.insert(terminal);
-                    }
-                }
             }
         }
         let appearances = |component, token: &str| {
@@ -204,7 +207,11 @@ impl Project {
                 })
                 .collect::<Vec<_>>()
         };
-        let connected = |component, token: &str| self.component_terminals(component, token).any(|terminal| wired.contains(&terminal));
+        let connected = |component, token: &str| {
+            self.component_terminals(component, token)
+                .filter_map(|terminal| graph.net_index_for(terminal))
+                .any(|net| wired_nets.contains(&net) || !graph.net_names(net).is_empty())
+        };
         let mut report = Report {
             project: self.id(),
             revision,

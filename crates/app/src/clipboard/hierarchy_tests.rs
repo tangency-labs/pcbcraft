@@ -29,7 +29,7 @@ fn tree() -> Harness<'static, PcbApp> {
     let at = h.state().views.active.camera.screen(Point { x_nm: 8 * GRID_NM, y_nm: 5 * GRID_NM }, rect);
     click_canvas_at(&mut h, at);
     h.run();
-    assert!(h.state().views.active.schematic.selected_sheet_symbol.is_some());
+    assert!(h.state().views.active.schematic.selected_hierarchy.is_some());
     h
 }
 /// Inspect only the platform text output, retaining no source-session memory in the receiver.
@@ -74,7 +74,7 @@ fn sheet_tree_copies_between_instances_and_previews_keep_stable_child_ids() {
     assert_eq!(to.state().message, None);
     assert_eq!(to.state().session.project().unwrap().sheets().len(), 3);
     assert_eq!(to.state().session.project().unwrap().components().count(), 1);
-    assert!(to.state().views.active.schematic.selected_sheet_symbol.is_some());
+    assert!(to.state().views.active.schematic.selected_hierarchy.is_some());
     to.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     to.run();
     crate::tests::assert_same_content(&before, &to.state().session.snapshot().unwrap());
@@ -209,10 +209,10 @@ fn floating_panel_blocks_stale_hierarchy_hover_clipboard_targets() {
         h.run();
         let over_panel = h.get_by_label("Move Selection filters").rect().center();
         let project = h.state().views.active.snapshot(&h.state().session).unwrap();
-        assert!(crate::hierarchy::hovered(&project, &h.state().views.active.camera, over_panel, h.state().views.active.filters));
+        assert!(crate::hierarchy::hovered(&project, &h.state().views.active.camera, &h.ctx, over_panel, h.state().views.active.filters));
         assert!(h.ctx.layer_id_at(over_panel).is_some_and(|layer| layer.order != egui::Order::Background));
         if action < 3 {
-            h.state_mut().views.active.schematic.selected_sheet_symbol = None;
+            h.state_mut().views.active.schematic.selected_hierarchy = None;
         }
         h.hover_at(over_panel);
         h.run();

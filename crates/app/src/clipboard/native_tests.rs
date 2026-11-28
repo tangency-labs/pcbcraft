@@ -64,7 +64,8 @@ impl eframe::App for Peer {
                 } else {
                     if self.hierarchy {
                         self.app.select(Default::default());
-                        self.app.views.active.schematic.selected_sheet_symbol = Some(self.app.session.project().unwrap().sheet_symbols()[0].id);
+                        self.app.views.active.schematic.selected_hierarchy =
+                            Some((crate::hierarchy::Kind::Sheet, self.app.session.project().unwrap().sheet_symbols()[0].id));
                     } else {
                         let id = self.app.session.project().unwrap().symbols()[0].id();
                         self.app.select(pcbcraft_engine::selection::Selection::one_symbol(id));

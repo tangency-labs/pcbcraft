@@ -150,7 +150,7 @@ pub(crate) enum Click {
     NetLabelRotate(u16),
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
-    SelectSheetSymbol(u64),
+    SelectHierarchy(crate::hierarchy::Kind, u64),
     HierarchyPlace(Point),
     HierarchyClipboard(crate::hierarchy::Kind, u64, tool_menu::Action, egui::Context),
     HierarchyAction(crate::hierarchy::Kind, u64, crate::hierarchy::Action),
@@ -315,7 +315,7 @@ pub(crate) fn show(
     selected: &Selection,
     selected_leg: Option<&LegTarget>,
     whole_wire_drag: bool,
-    selected_sheet: Option<u64>,
+    selected_hierarchy: Option<(crate::hierarchy::Kind, u64)>,
     highlighted: &Selection,
     inspection: &[pcbcraft_engine::board::correspondence::Source],
     filters: crate::selection_filters::Filters,
@@ -522,7 +522,7 @@ pub(crate) fn show(
     overlap_index.paint(ui, response.id, project, camera, rect);
     crate::no_connect::paint(ui, &painter, project, camera, rect, selected, highlighted);
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_placement, selected, editing);
-    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
+    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_hierarchy);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
         && matches!(tool, None | Some(Tool::Reshape { .. }))
@@ -624,7 +624,7 @@ pub(crate) fn show(
     {
         return click;
     }
-    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet, filters) {
+    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_hierarchy, filters) {
         return click;
     }
     // Inspection cannot turn a press on a pin into a drag of its owning definition.
@@ -917,7 +917,7 @@ pub(crate) fn show(
                 }
                 menu::separator(ui);
             }
-            if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_sheet.is_some()) {
+            if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_hierarchy.is_some()) {
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
             menu::separator(ui);
