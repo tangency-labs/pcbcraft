@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{OnPath, heal, locate, path_contains_point, valid_point};
 use crate::{
     CommandError, JOIN_WIRES, Project, Session,
-    schematic::{Point, Wire},
+    schematic::{Point, Wire, WireEndpoint},
 };
 
 /// The refusal for a point where the wires touch without an ordinary crossing.
@@ -229,10 +229,34 @@ impl Session {
         let mut edit = heal::Edit::new(project, self.revision());
         let first = edit.split(join.wires[0], join.at)?;
         let second = edit.split(join.wires[1], join.at)?;
-        edit.merge(first, second)?;
+        let junction = edit.merge(first, second)?;
+        separate_parallel_pieces(&mut edit, junction)?;
         let candidate = edit.finish(false)?;
         self.change(candidate)
     }
+}
+
+/// Wires that already shared an end now have two pieces between that end and the new
+/// junction. A native wire pair must be unique, so, as drawing a second route between joined
+/// points does, the bent piece of each such pair is split at its first corner into a transit
+/// junction; the drawn routes stay the same. Two straight pieces between the same points
+/// would overlap, which the crossing check excludes.
+fn separate_parallel_pieces(edit: &mut heal::Edit, junction: WireEndpoint) -> Result<(), CommandError> {
+    let pieces: Vec<_> = edit
+        .project
+        .wires
+        .iter()
+        .filter(|wire| wire.endpoints.contains(&junction))
+        .map(|wire| (wire.endpoints.into_iter().find(|end| *end != junction), wire.ordinal, edit.project.wire_path(wire)))
+        .collect();
+    for (index, (far, id, route)) in pieces.iter().enumerate() {
+        let Some((_, twin, twin_route)) = pieces[..index].iter().find(|(other, _, _)| other == far) else { continue };
+        let (bent, route) = if route.len() > 2 { (*id, route) } else { (*twin, twin_route) };
+        if let Some(&corner) = route.get(1).filter(|_| route.len() > 2) {
+            edit.split(bent, corner)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

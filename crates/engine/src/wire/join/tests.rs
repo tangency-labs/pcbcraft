@@ -268,3 +268,67 @@ fn drawn_and_moved_crossings_stay_disconnected_after_a_join() {
     let graph = s.project().unwrap().connectivity();
     assert_ne!(graph.net_index_for(pins[1]), graph.net_index_for(pins[0]), "a moved crossing stays separate");
 }
+
+/// The ends of a wire, by ID.
+fn ends(s: &Session, id: &str) -> [WireEndpoint; 2] {
+    s.project().unwrap().wires().iter().find(|wire| wire.id() == id).unwrap().endpoints()
+}
+
+/// Two wires that already share an end junction and also cross: the join keeps both routes,
+/// passes the encoder, survives save/reopen and undoes in one step, and the shared check the
+/// editor row uses agrees with Apply.
+#[test]
+fn wires_sharing_an_end_join_where_they_cross_again() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+    let a = wire(&mut s, &[p(0, 0), p(10, 0)]);
+    let start = ends(&s, &a)[0];
+    run(&mut s, DRAW_WIRE, json!({"from":start.inspect(),"to":p(5, 2),"bends":[p(-2, 0), p(-2, -2), p(5, -2)],"auto_heal":false})).unwrap();
+    let b = s.project().unwrap().wires().last().unwrap().id();
+    let before = s.snapshot().unwrap();
+    let check = before.wire_join(&a, &b, None).map(|join| before.inspect_wire_join(&join));
+    assert_eq!(check.as_ref().map(|report| report["already_connected"].clone()).ok(), Some(json!(true)), "{check:?}");
+
+    let preview = run(&mut s, JOIN, json!({"wire":a,"other":b,"dry_run":true}));
+    assert!(preview.is_ok(), "dry run: {preview:?}");
+    let applied = run(&mut s, JOIN, json!({"wire":a,"other":b}));
+    assert!(applied.is_ok(), "apply: {applied:?}");
+    let after = s.snapshot().unwrap();
+    assert_eq!(applied.unwrap()["at"], json!(p(5, 0)));
+    let old: Vec<_> = routes(&before).into_iter().flat_map(|(_, route)| route.windows(2).map(|leg| (leg[0], leg[1])).collect::<Vec<_>>()).collect();
+    let new: Vec<_> = routes(&after).into_iter().flat_map(|(_, route)| route.windows(2).map(|leg| (leg[0], leg[1])).collect::<Vec<_>>()).collect();
+    // Splitting a leg at the crossing adds a point; compare the drawn lines, not the record count.
+    let covered = |legs: &[(Point, Point)], at: Point| legs.iter().any(|(from, to)| crate::wire::path_contains_point(&[*from, *to], at));
+    for x in -2..=10 {
+        for y in -2..=2 {
+            assert_eq!(covered(&old, p(x, y)), covered(&new, p(x, y)), "geometry at ({x}, {y})");
+        }
+    }
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        let bytes = persistence::diagnostic_test_file(after.clone(), encoding).unwrap();
+        let (loaded, _) = persistence::decode_diagnostic_file(&bytes).unwrap();
+        assert_eq!(persistence::diagnostic_test_file(loaded.clone(), encoding).unwrap(), bytes);
+        assert_eq!(routes(&loaded), routes(&after));
+    }
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
+}
+
+/// Wires already on one net through a third wire, with no shared junction, join normally and
+/// the report says they were already connected.
+#[test]
+fn wires_connected_through_a_third_wire_report_already_connected() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+    let a = wire(&mut s, &[p(-8, 0), p(8, 0)]);
+    let b = wire(&mut s, &[p(0, -6), p(0, 6)]);
+    let (left, top) = (ends(&s, &a)[0], ends(&s, &b)[0]);
+    run(&mut s, DRAW_WIRE, json!({"from":left.inspect(),"to":top.inspect(),"bends":[p(-8, -6)],"auto_heal":false})).unwrap();
+    let preview = run(&mut s, JOIN, json!({"wire":a,"other":b,"dry_run":true})).unwrap();
+    assert_eq!(preview["already_connected"], true);
+    let applied = run(&mut s, JOIN, json!({"wire":a,"other":b})).unwrap();
+    assert_eq!(applied["already_connected"], true);
+    assert_eq!(applied["at"], json!(p(0, 0)));
+}
