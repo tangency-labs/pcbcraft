@@ -761,14 +761,20 @@ impl Outline {
         around % 2 == 1
     }
 
-    /// The copper's first core anchor that is off the board and the closed drawings around it,
-    /// or `None` when every anchor is on the board. The list is empty when that anchor lies
-    /// outside every closed contour; otherwise it lies inside a cut-out of the listed drawings.
+    /// A marker point of copper that is off the board, and the closed drawings around the
+    /// copper's first off-board core anchor, or `None` when every anchor is on the board. The
+    /// list is empty when that anchor lies outside every closed contour; otherwise it lies inside
+    /// a cut-out of the listed drawings. The marker is the first off-board anchor that is not on
+    /// an outline edge, so copper starting on the outline is marked where it is outside; when
+    /// every off-board anchor touches an edge, it is the first one.
     pub(super) fn off_board(&self, contour: &Contour) -> Option<(Point, Vec<Uuid>)> {
-        let point = contour.core.iter().copied().find(|point| !self.on_board(*point))?;
+        let mut off = contour.core.iter().copied().filter(|point| !self.on_board(*point));
+        let point = off.next()?;
+        let on_edge = |p: Point| self.edges.iter().any(|edge| courtyard::segments_meet(p, p, edge.start, edge.end));
+        let marker = std::iter::once(point).chain(off).find(|p| !on_edge(*p)).unwrap_or(point);
         let around =
             self.polygons.iter().zip(&self.drawings).filter(|(polygon, _)| in_polygon(point, polygon)).map(|(_, drawing)| *drawing).collect();
-        Some((point, around))
+        Some((marker, around))
     }
 
     /// The innermost closed drawing enclosing the copper's first off-board anchor when that
