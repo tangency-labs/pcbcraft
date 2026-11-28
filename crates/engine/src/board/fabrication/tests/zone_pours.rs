@@ -593,7 +593,7 @@ fn boards_without_zones_export_exactly_as_before() {
 
 /// Export writes only the fill DRC uses for the current board: a pending fill (also after an
 /// edit makes the previous one stale), removed pours and a failed fill are refused, naming Pour
-/// copper where a pour helps, without editing the board; a fill completed by DRC is exported.
+/// copper as the way to retry, without editing the board; a fill completed by DRC is exported.
 #[test]
 fn fabrication_writes_only_the_current_pour() {
     use std::sync::Arc;
@@ -631,7 +631,7 @@ fn fabrication_writes_only_the_current_pour() {
     route(&mut s, back, &[at(0, 32 * MM), at(2 * MM, 32 * MM)]).unwrap();
     let job = s.prepare_zone_fill(view(&s).target, false).unwrap();
     assert!(s.fail_zone_fill(job.source(), "Kernel refused the pour.".into()));
-    refused(&mut s, "Copper zones could not be poured: Kernel refused the pour.");
+    refused(&mut s, "Copper zones could not be poured: Kernel refused the pour. Use Pour copper to try again.");
 }
 
 /// The Manufacturing review opens a package with pours and draws their copper: the marks a pour

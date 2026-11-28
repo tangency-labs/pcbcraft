@@ -103,7 +103,11 @@ impl Pours {
         }
         let fill = match view.filled_zones() {
             Some(Ok(fill)) if fill.board == view.target => fill,
-            Some(Err(message)) => return Err(format!("Copper zones could not be poured: {message} No fabrication files were generated.")),
+            Some(Err(message)) => {
+                return Err(format!(
+                    "Copper zones could not be poured: {message} Use Pour copper to try again. No fabrication files were generated."
+                ));
+            }
             _ => {
                 return Err(
                     "Copper zones are not poured for the current board yet. Use Pour copper and let it finish before generating fabrication outputs."
