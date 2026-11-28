@@ -138,14 +138,10 @@ impl Thumbnail {
         for (bounds, name) in &self.blocks {
             let bounds = Rect::from_min_max(screen(bounds.min), screen(bounds.max));
             painter.rect_stroke(bounds, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text), egui::StrokeKind::Middle);
-            if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-                painter.text(bounds.left_top() - egui::vec2(0., t.space_4), Align2::LEFT_BOTTOM, name, FontId::proportional(t.font_small), t.text);
-            }
+            crate::hierarchy::paint_title(&painter, bounds, name, step, t.text);
         }
-        if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-            for (at, name, direction) in &self.labels {
-                crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, t.schematic_wire);
-            }
+        for (at, name, direction) in &self.labels {
+            crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, step, t.schematic_wire);
         }
         for symbol in &self.symbols {
             let placement = &symbol.placement;

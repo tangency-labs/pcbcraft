@@ -209,7 +209,7 @@ fn floating_panel_blocks_stale_hierarchy_hover_clipboard_targets() {
         h.run();
         let over_panel = h.get_by_label("Move Selection filters").rect().center();
         let project = h.state().views.active.snapshot(&h.state().session).unwrap();
-        assert!(crate::hierarchy::hovered(&project, &h.state().views.active.camera, over_panel, h.state().views.active.filters));
+        assert!(crate::hierarchy::hovered(&project, &h.state().views.active.camera, &h.ctx, over_panel, h.state().views.active.filters));
         assert!(h.ctx.layer_id_at(over_panel).is_some_and(|layer| layer.order != egui::Order::Background));
         if action < 3 {
             h.state_mut().views.active.schematic.selected_sheet_symbol = None;

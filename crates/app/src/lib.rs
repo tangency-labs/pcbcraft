@@ -2380,7 +2380,7 @@ impl PcbApp {
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
                     selected_net_label
                         || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
-                            hierarchy::hovered(&project, &self.views.active.camera, pointer, self.views.active.filters)
+                            hierarchy::hovered(&project, &self.views.active.camera, ctx, pointer, self.views.active.filters)
                                 || net_labels::hovered(&project, &self.views.active.camera, ctx, pointer, self.views.active.filters)
                         })
                 });

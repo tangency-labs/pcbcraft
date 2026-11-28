@@ -6,10 +6,10 @@ use crate::{
     schematic_canvas::{Camera, Click, Tool},
 };
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Stroke, Ui, Vec2};
-use pcbcraft_chrome::{MenuItem, Tokens, shell, theme};
+use pcbcraft_chrome::{MenuItem, Tokens, canvas_text, shell, theme};
 use pcbcraft_engine::{
     Project, SheetTarget,
-    hierarchy::{self as engine, Direction},
+    hierarchy::{self as engine, Direction, PinEdge},
     schematic::{GRID_NM, Point},
 };
 use serde_json::json;
@@ -111,6 +111,15 @@ pub(super) fn direction_name(direction: Direction) -> &'static str {
     }
 }
 
+// Hierarchy annotations use the same schematic grid units as ordinary net labels.
+const TITLE_GAP: f32 = 0.3;
+const PIN_LENGTH: f32 = 0.65;
+const PIN_TEXT_GAP: f32 = 0.3;
+
+fn show_text(step: f32) -> bool {
+    step >= theme::SCHEMATIC_MIN_GRID_SPACING
+}
+
 /// Paint native hierarchy geometry with shared chrome colors, metrics and typography.
 pub(super) fn paint(
     painter: &Painter,
@@ -122,6 +131,7 @@ pub(super) fn paint(
     selected: Option<u64>,
 ) {
     let tokens = Tokens::get();
+    let step = camera.unit_step();
     let moving = match tool {
         Some(Tool::Hierarchy { kind, id, offset, .. }) => Some((*kind, *id, pointer.map(|p| camera.snap(p + *offset, rect)))),
         _ => None,
@@ -133,30 +143,37 @@ pub(super) fn paint(
         let color = if selected == Some(block.id) { tokens.accent } else { tokens.text };
         let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
         painter.rect_stroke(bounds, 0, stroke, egui::StrokeKind::Middle);
-        paint_bounded_text(
-            painter,
-            bounds.left_top() - egui::vec2(0., tokens.space_4),
-            project.child_name(block),
-            FontId::proportional(tokens.font_button),
-            color,
-            bounds.width(),
-            Align2::LEFT_BOTTOM,
-        );
+        paint_title(painter, bounds, project.child_name(block), step, color);
         for pin in project.sheet_pins(block) {
             let point = Point { x_nm: pin.at.x_nm + at.x_nm - block.at.x_nm, y_nm: pin.at.y_nm + at.y_nm - block.at.y_nm };
             let pos = camera.screen(point, rect);
-            let right = pin.label.direction.right();
-            let dx = if right { -tokens.space_8 } else { tokens.space_8 };
-            painter.line_segment([pos, pos + egui::vec2(dx, 0.)], stroke);
-            paint_bounded_text(
-                painter,
-                pos + egui::vec2(dx * 1.5, 0.),
-                &pin.label.name,
-                FontId::proportional(tokens.font_small),
-                tokens.text,
-                (bounds.width() / 2. - tokens.space_16).max(0.),
-                if right { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
-            );
+            let (inward, align, width) = match pin.edge {
+                PinEdge::Left => (Vec2::X, Align2::LEFT_CENTER, bounds.width() / 2. - step),
+                PinEdge::Right => (-Vec2::X, Align2::RIGHT_CENTER, bounds.width() / 2. - step),
+                PinEdge::Top | PinEdge::Bottom => {
+                    let (inward, left, right) = if pin.edge == PinEdge::Top {
+                        (Vec2::Y, Align2::LEFT_TOP, Align2::RIGHT_TOP)
+                    } else {
+                        (-Vec2::Y, Align2::LEFT_BOTTOM, Align2::RIGHT_BOTTOM)
+                    };
+                    let to_left = pos.x - bounds.left();
+                    let to_right = bounds.right() - pos.x;
+                    let (align, width) = if to_left > to_right { (right, to_left) } else { (left, to_right) };
+                    (inward, align, width)
+                }
+            };
+            painter.line_segment([pos, pos + inward * (step * PIN_LENGTH)], stroke);
+            if show_text(step) {
+                paint_bounded_text(
+                    painter,
+                    pos + inward * (step * (PIN_LENGTH + PIN_TEXT_GAP)),
+                    &pin.label.name,
+                    FontId::proportional(step * 0.8),
+                    tokens.text,
+                    width,
+                    align,
+                );
+            }
         }
         if (selected == Some(block.id) || pointer.is_some_and(|p| bounds.expand(theme::SCHEMATIC_HANDLE_HIT_RADIUS).contains(p)))
             && matches!(tool, None | Some(Tool::SheetGesture { .. }))
@@ -174,7 +191,7 @@ pub(super) fn paint(
     }
     for label in project.hierarchical_labels() {
         let at = moving.filter(|(kind, id, _)| *kind == Kind::Label && *id == Some(label.id)).and_then(|(_, _, at)| at).unwrap_or(label.at);
-        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, tokens.schematic_wire);
+        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, step, tokens.schematic_wire);
     }
     if let Some((kind, None, Some(at))) = moving {
         let pos = camera.screen(at, rect);
@@ -187,19 +204,30 @@ pub(super) fn paint(
                 egui::StrokeKind::Middle,
             );
         } else {
-            paint_label(painter, pos, "Label", Direction::Input, tokens.accent);
+            paint_label(painter, pos, "Label", Direction::Input, step, tokens.accent);
         }
     }
 }
 
-/// Keep pin names on their own half of the symbol, with ellipses at small zoom levels.
+fn title_layout(painter: &Painter, bounds: Rect, name: &str, step: f32, color: egui::Color32) -> (Rect, std::sync::Arc<egui::Galley>) {
+    let at = bounds.left_top() - Vec2::Y * (step * TITLE_GAP);
+    let galley = canvas_text::layout_bounded(painter, name.to_owned(), FontId::proportional(step), color, bounds.width());
+    (Align2::LEFT_BOTTOM.anchor_size(at, galley.size()), galley)
+}
+
+pub(super) fn paint_title(painter: &Painter, bounds: Rect, name: &str, step: f32, color: egui::Color32) {
+    if show_text(step) {
+        let (text, galley) = title_layout(painter, bounds, name, step, color);
+        painter.galley(text.min, galley, color);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_bounded_text(painter: &Painter, at: Pos2, text: &str, font: FontId, color: egui::Color32, width: f32, align: Align2) {
-    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
-    job.wrap.max_width = width;
-    job.wrap.max_rows = 1;
-    let galley = painter.layout_job(job);
-    painter.galley(align.anchor_size(at, galley.size()).min, galley, color);
+    if width > 0. {
+        let galley = canvas_text::layout_bounded(painter, text.to_owned(), font, color, width);
+        painter.galley(align.anchor_size(at, galley.size()).min, galley, color);
+    }
 }
 
 /// Derive the same screen rectangle for outlines, selection, title hit tests and handles.
@@ -208,10 +236,13 @@ fn block_rect(project: &Project, block: &engine::SheetSymbol, camera: &Camera, r
     Rect::from_min_max(camera.screen(block.at, rect), camera.screen(Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }, rect))
 }
 
-/// Include the external sheet name in body selection and movement, without moving the outline.
-fn body_rect(bounds: Rect) -> Rect {
-    let t = Tokens::get();
-    Rect::from_min_max(bounds.min - egui::vec2(0., t.font_button + t.space_8), bounds.max)
+/// The visible title is part of the selectable sheet symbol.
+fn hits_sheet(painter: &Painter, bounds: Rect, name: &str, step: f32, pointer: Pos2, color: egui::Color32) -> bool {
+    bounds.contains(pointer)
+        || (show_text(step)
+            && pointer.y <= bounds.top()
+            && (bounds.left()..=bounds.right()).contains(&pointer.x)
+            && title_layout(painter, bounds, name, step, color).0.contains(pointer))
 }
 
 /// All four corners use the same geometry for drawing and pointer hit testing.
@@ -224,22 +255,22 @@ fn corners(rect: Rect) -> [(Pos2, Corner); 4] {
     ]
 }
 
-/// The interface anchor is the pointed end; direction also appears in the properties dialog.
-pub(super) fn paint_label(painter: &Painter, pos: Pos2, name: &str, direction: Direction, color: egui::Color32) {
-    let t = Tokens::get();
+fn label_geometry(pos: Pos2, direction: Direction, step: f32) -> ([Pos2; 3], Pos2, Align2) {
     let sign = if direction.right() { 1. } else { -1. };
-    let back = pos + egui::vec2(sign * t.space_8, 0.);
-    painter.add(egui::Shape::line(
-        vec![back - egui::vec2(0., t.space_4), pos, back + egui::vec2(0., t.space_4)],
-        Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
-    ));
-    painter.text(
-        back + egui::vec2(sign * t.space_4, 0.),
-        if sign < 0. { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
-        name,
-        FontId::proportional(t.font_button),
-        color,
-    );
+    let back = pos + Vec2::X * (sign * step * PIN_LENGTH);
+    let rise = Vec2::Y * (step * PIN_TEXT_GAP);
+    let text = back + Vec2::X * (sign * step * PIN_TEXT_GAP);
+    let align = if sign < 0. { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    ([back - rise, pos, back + rise], text, align)
+}
+
+/// The interface anchor is the pointed end; direction also appears in the properties dialog.
+pub(super) fn paint_label(painter: &Painter, pos: Pos2, name: &str, direction: Direction, step: f32, color: egui::Color32) {
+    let (points, text, align) = label_geometry(pos, direction, step);
+    painter.add(egui::Shape::line(points.to_vec(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color)));
+    if show_text(step) {
+        canvas_text::paint(painter, text, align, name.to_owned(), FontId::proportional(step), color);
+    }
 }
 
 /// Resolve an editor-local hierarchy hover for clipboard keys, using current view geometry and
@@ -250,22 +281,39 @@ pub(super) fn clipboard_hover(project: &Project, camera: &Camera, ctx: &egui::Co
     if !rect.contains(pointer) {
         return None;
     }
-    hit(project, camera, rect, pointer, filters).map(|(kind, id, _)| format!("{}-{id}", if kind == Kind::Sheet { "sheet-symbol" } else { "label" }))
+    hit(project, camera, ctx, rect, pointer, filters)
+        .map(|(kind, id, _)| format!("{}-{id}", if kind == Kind::Sheet { "sheet-symbol" } else { "label" }))
 }
 
 /// Hit label text before block interiors; pin anchors retain wire-target priority on plain clicks.
-fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, filters: crate::selection_filters::Filters) -> Option<(Kind, u64, Point)> {
-    let t = Tokens::get();
+fn hit(
+    project: &Project,
+    camera: &Camera,
+    ctx: &egui::Context,
+    rect: Rect,
+    pointer: Pos2,
+    filters: crate::selection_filters::Filters,
+) -> Option<(Kind, u64, Point)> {
+    let step = camera.unit_step();
+    let painter = ctx.debug_painter();
+    let tokens = Tokens::get();
     for label in project.hierarchical_labels().iter().rev().filter(|_| filters.labels) {
         let pos = camera.screen(label.at, rect);
-        let width = (label.name.chars().count() as f32 * t.font_button).max(t.space_24);
-        let offset = if label.direction.right() { 0. } else { -width };
-        if Rect::from_min_size(pos + egui::vec2(offset, -t.space_8), egui::vec2(width, t.space_16)).contains(pointer) {
+        let (points, text, align) = label_geometry(pos, label.direction, step);
+        let marker = Rect::from_points(&points).expand(theme::SCHEMATIC_PIN_HIT_RADIUS);
+        if marker.contains(pointer) {
+            return Some((Kind::Label, label.id, label.at));
+        }
+        let over_text = show_text(step) && {
+            let galley = canvas_text::layout_no_wrap(&painter, label.name.clone(), FontId::proportional(step), tokens.schematic_wire);
+            align.anchor_size(text, galley.size()).contains(pointer)
+        };
+        if over_text {
             return Some((Kind::Label, label.id, label.at));
         }
     }
     for block in project.sheet_symbols().iter().rev().filter(|_| filters.sheets) {
-        if body_rect(block_rect(project, block, camera, rect)).contains(pointer) {
+        if hits_sheet(&painter, block_rect(project, block, camera, rect), project.child_name(block), step, pointer, tokens.text) {
             return Some((Kind::Sheet, block.id, block.at));
         }
     }
@@ -274,8 +322,8 @@ fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, filters: c
 
 /// Let a hovered hierarchy object handle its edit/delete shortcuts before an older component
 /// selection. The canvas repeats the hit test against current layout before issuing an action.
-pub(super) fn hovered(project: &Project, camera: &Camera, pointer: Pos2, filters: crate::selection_filters::Filters) -> bool {
-    camera.schematic_rect().is_some_and(|rect| rect.contains(pointer) && hit(project, camera, rect, pointer, filters).is_some())
+pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, pointer: Pos2, filters: crate::selection_filters::Filters) -> bool {
+    camera.schematic_rect().is_some_and(|rect| rect.contains(pointer) && hit(project, camera, ctx, rect, pointer, filters).is_some())
 }
 
 /// Consume hierarchy placement, body/corner drags, shortcuts and menus before component selection.
@@ -338,7 +386,9 @@ pub(super) fn input(
                 .find(|(pos, _)| pos.distance_sq(origin) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS.powi(2))
                 .map(|(_, corner)| corner);
             let pin = project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(origin) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2));
-            if corner.is_some() || (body_rect(bounds).contains(origin) && !pin) {
+            if corner.is_some()
+                || (!pin && hits_sheet(ui.painter(), bounds, project.child_name(block), camera.unit_step(), origin, Tokens::get().text))
+            {
                 let drag = Drag { block: block.clone(), start: camera.snap(origin, rect), size: project.sheet_symbol_size(block), corner };
                 return Some(Some(Click::GrabSheetGesture(Box::new(drag))));
             }
@@ -355,7 +405,7 @@ pub(super) fn input(
     }
     let menu_id = response.id.with("hierarchy_target");
     if response.secondary_clicked() {
-        let target = response.interact_pointer_pos().and_then(|p| hit(project, camera, rect, p, filters));
+        let target = response.interact_pointer_pos().and_then(|p| hit(project, camera, ui.ctx(), rect, p, filters));
         ui.data_mut(|data| match target {
             Some(value) => {
                 data.insert_temp(menu_id, value);
@@ -411,7 +461,7 @@ pub(super) fn input(
             ui.ctx().set_cursor_icon(if corner.left == corner.top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
         }
     }
-    let hovered = response.hover_pos().and_then(|p| hit(project, camera, rect, p, filters));
+    let hovered = response.hover_pos().and_then(|p| hit(project, camera, ui.ctx(), rect, p, filters));
     let (kind, id, _) = hovered.or_else(|| {
         selected.filter(|_| filters.sheets).and_then(|id| project.sheet_symbols().iter().find(|s| s.id == id).map(|s| (Kind::Sheet, id, s.at)))
     })?;
@@ -638,6 +688,55 @@ impl PcbApp {
             }
         } else if !(closing || cancel) {
             self.dialog = Dialog::Hierarchy(edit);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hierarchy_text_tracks_grid_scale_and_disappears_at_overview() {
+        let ctx = egui::Context::default();
+        pcbcraft_chrome::install(&ctx);
+        let steps = [4., 8., 24.];
+        let views = steps.map(|step| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let origin = Pos2::new(400., 200.);
+                let bounds = Rect::from_min_size(origin, egui::vec2(16., 10.) * step);
+                let color = egui::Color32::WHITE;
+                paint_title(ui.painter(), bounds, "Fan Control", step, color);
+                paint_label(ui.painter(), origin + Vec2::Y * (20. * step), "Fan Power Select", Direction::Input, step, color);
+                if show_text(step) {
+                    paint_bounded_text(
+                        ui.painter(),
+                        bounds.left_center(),
+                        "Fan Power Select",
+                        FontId::proportional(step * 0.8),
+                        color,
+                        bounds.width() / 2. - step,
+                        Align2::LEFT_CENTER,
+                    );
+                }
+                assert_eq!(hits_sheet(ui.painter(), bounds, "Fan Control", step, origin - Vec2::Y * step, color), show_text(step));
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::Shape::Text(text) => Some((text.galley.size() / step, text.galley.elided)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(views[0].is_empty());
+        assert_eq!(views[1].len(), 3);
+        assert_eq!(views[2].len(), 3);
+        for ((small, small_elided), (large, large_elided)) in views[1].iter().zip(&views[2]) {
+            assert!((*small - *large).length() < 0.001);
+            assert!(!small_elided && !large_elided);
         }
     }
 }
