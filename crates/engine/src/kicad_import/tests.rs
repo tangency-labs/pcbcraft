@@ -279,9 +279,6 @@ fn symbols_the_native_format_cant_hold_are_refused_by_name() {
     };
     let far = message(symbol(r#"(pin passive line (at 100.001 0 180) (length 2.54) (number "1"))"#));
     assert!(far.contains("`L:Wide`") && far.contains("100 mm"), "{far}");
-    let stacked =
-        message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "1")) (pin passive line (at 0 0 0) (length 2.54) (number "2"))"#));
-    assert!(stacked.contains("share a position"), "{stacked}");
     let hidden = message(symbol(r#"(pin power_in line (at 0 0 0) (length 2.54) hide (name "VCC") (number "1"))"#));
     assert!(hidden.contains("hidden power pin"), "{hidden}");
     let long_number = message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "123456789"))"#));
@@ -329,6 +326,68 @@ fn exact_pins_and_pinless_mechanical_symbols_survive_native_reopen() {
         session.apply(crate::MOVE_SYMBOL, &json!({"symbol":part_id,"x_nm":crate::MAX_CENTER_NM,"y_nm":0,"expected_revision":revision})).unwrap_err();
     assert!(matches!(error, CommandError::InvalidParams(message) if message.contains("pin outside the schematic bounds")));
     assert_eq!(session.revision(), revision);
+}
+
+#[test]
+fn shared_symbol_contacts_preserve_pin_identity_and_nets_through_reopen() {
+    let fixture = |items: &str| {
+        format!(
+            r#"(kicad_sch (version 20231120)
+            (lib_symbols (symbol "L:Stack" (property "Reference" "U")
+              (symbol "Stack_1_1"
+                (pin passive line (at 0 0 0) (length 2.54) (number "1"))
+                (pin passive line (at 0 0 0) (length 2.54) (number "2")))))
+            (symbol (lib_id "L:Stack") (at 0 0 0) (unit 1) (property "Reference" "U1"))
+            (symbol (lib_id "L:Stack") (at 20 0 0) (unit 1) (property "Reference" "U2"))
+            {items})"#
+        )
+    };
+    let separate = BTreeSet::from([net(&["U1.1", "U1.2"]), net(&["U2.1", "U2.2"])]);
+    let bare = import(&fixture(""), "Bare contacts").unwrap().project;
+    assert_eq!(nets(&bare), separate);
+    let marked = import(&fixture("(no_connect (at 0 0))"), "Marked contact").unwrap().project;
+    assert_eq!(nets(&marked), separate);
+    let report = marked.check_no_connects(0);
+    assert_eq!(report.total_markers, 2);
+    assert!(report.markers.iter().all(|marker| marker.issues.is_empty()));
+    assert_eq!(report.total_findings, 2, "the two pins of the unmarked second symbol are unused");
+
+    let mut session = crate::Session::default();
+    session.open_snapshot(bare);
+    session
+        .apply(
+            crate::DRAW_WIRE,
+            &json!({"from":{"x_nm":10_000_000,"y_nm":0},"to":{"x_nm":10_000_000,"y_nm":5_000_000},"bends":[],"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let route = &session.project().unwrap().wires()[0];
+    let route_id = route.id();
+    let free_end = route.endpoints()[0].inspect()["junction"].clone();
+    session
+        .apply(
+            crate::MOVE_WIRE_SEGMENT,
+            &json!({"wire":route_id,"at":{"x_nm":10_000_000,"y_nm":2_000_000},"to":{"x_nm":0,"y_nm":2_000_000},
+                "connect_ends":[free_end],"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let project = session.project().unwrap();
+    assert_eq!(project.wires()[0].terminals().len(), 1);
+    assert_eq!(nets(project), separate);
+
+    let wired = import(&fixture(&wire(&[(0.0, 0.0), (20.0, 0.0)])), "Wired contacts").unwrap().project;
+    let saved = encode_documents(wired).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let expected = BTreeSet::from([net(&["U1.1", "U1.2", "U2.1", "U2.2"])]);
+    assert_eq!(nets(&reopened), expected);
+    assert_eq!(reopened.wires().len(), 1);
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+    for symbol in reopened.symbols() {
+        assert_eq!(symbol.definition.format(), crate::library::SYMBOL_FORMAT_V7);
+        assert_eq!(symbol.terminals().len(), 2);
+        let copy = crate::authoring::Item::from_symbol(&symbol.definition).unwrap().native().unwrap();
+        assert_eq!(copy["format"], crate::library::SYMBOL_FORMAT_V7);
+        copy["units"][0]["pins"].as_array().filter(|pins| pins.len() == 2).expect("both terminal appearances");
+    }
 }
 
 #[test]

@@ -1479,7 +1479,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
         if used.insert(path.clone()) {
             let value: serde_json::Value = parse(documents, &path)?;
-            refuse_newer_format(&path, value["format"].as_str().unwrap_or_default(), crate::library::SYMBOL_FORMAT_V6)?;
+            refuse_newer_format(&path, value["format"].as_str().unwrap_or_default(), crate::library::SYMBOL_FORMAT_V7)?;
             let definition = crate::library::read_saved_copy(value.clone()).map_err(|error| format!("{path}: {error}"))?;
             if definition.library != component.library
                 || definition.id != component.definition

@@ -882,7 +882,10 @@ impl Builder {
                     .and_then(|p| schematic.symbols.get(p.source))
                     .is_some_and(|s| converted.get(s.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some()))
             };
-            if here.len() > 1 && here.iter().filter(|pin| !power(pin)).count() > 1 {
+            let mut ordinary = here.iter().filter(|pin| !power(pin));
+            if let Some((first, _, _)) = ordinary.next()
+                && ordinary.any(|(symbol, _, _)| symbol != first)
+            {
                 refusals.add(format!("pins touch without a wire at ({:.2} mm, {:.2} mm)", at.x_nm as f64 / 1e6, at.y_nm as f64 / 1e6));
             }
         }
@@ -968,15 +971,17 @@ impl Builder {
         }
 
         for mark in &no_connects {
-            let target = match (pins_at.get(mark).and_then(|pins| pins.first()), junctions.get(mark)) {
-                (Some((_, component, number)), _) => json!({"part": format!("component-{component}"), "terminal": number}),
-                (None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
-                (None, None) => {
-                    report.note("no-connect marks not on a pin or wire end left out");
-                    continue;
+            if let Some(pins) = pins_at.get(mark) {
+                for (_, component, number) in pins {
+                    let target = json!({"part": format!("component-{component}"), "terminal": number});
+                    self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a no-connect")?;
                 }
-            };
-            self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a no-connect")?;
+            } else if let Some(junction) = junctions.get(mark) {
+                let target = json!({"junction": format!("junction-{junction}")});
+                self.apply(crate::no_connect::SET, json!({"target": target, "marked": true}), "marking a wire-end no-connect")?;
+            } else {
+                report.note("no-connect marks not on a pin or wire end left out");
+            }
         }
         Ok(())
     }

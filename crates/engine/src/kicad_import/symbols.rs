@@ -1,6 +1,6 @@
 //! KiCad library symbols as native symbol documents.
 //!
-//! A pin out of native range, sharing a position or carrying an unrepresentable identity refuses the
+//! A pin out of native range or carrying an unrepresentable identity refuses the
 //! symbol with a reason. Drawing details the native format holds differently are converted with
 //! a note in the report.
 
@@ -143,11 +143,12 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
     let mut units = BTreeMap::new();
     let mut native_units = Vec::new();
     let mut exact = false;
+    let mut shared_contacts = false;
     for (index, number) in numbers.iter().enumerate() {
         let unit_id = if single { "main".to_owned() } else { unit_letters(index) };
         let parts: Vec<&SymbolUnit> = common.iter().copied().chain(normal.iter().copied().filter(|u| u.unit == *number)).collect();
         let mut native = NativeUnit { id: unit_id.clone(), pins: Vec::new(), drawing: Vec::new() };
-        let mut positions: BTreeMap<(i64, i64), &str> = BTreeMap::new();
+        let mut positions = BTreeSet::new();
         let mut numbers_here: BTreeSet<&str> = BTreeSet::new();
         for pin in parts.iter().flat_map(|unit| &unit.pins) {
             // Electrical pins cannot be skipped if conversion exhausts its budget.
@@ -173,9 +174,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
             }
             let at = (pin.at.x_nm, -pin.at.y_nm);
             exact |= !legacy_pin_offset(at.0, at.1);
-            if let Some(other) = positions.insert(at, &pin.number) {
-                return Err(format!("pins {other} and {} share a position", pin.number));
-            }
+            shared_contacts |= !positions.insert(at);
             let mut saved = json!({"terminal": pin.number, "at_nm": [at.0, at.1]});
             if let Some(appearance) = appearance(pin, at, symbol, report) {
                 saved["appearance"] = appearance;
@@ -230,7 +229,11 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         })
         .collect();
     let mut document = json!({
-        "format": if exact { crate::library::SYMBOL_FORMAT_V6 } else { crate::library::SYMBOL_FORMAT_V4 },
+        "format": match (shared_contacts, exact) {
+            (true, _) => crate::library::SYMBOL_FORMAT_V7,
+            (_, true) => crate::library::SYMBOL_FORMAT_V6,
+            _ => crate::library::SYMBOL_FORMAT_V4,
+        },
         "id": id,
         "revision": 1,
         "name": clip(&symbol.name, 64).unwrap_or_else(|| id.clone()),

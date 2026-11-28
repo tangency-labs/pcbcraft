@@ -238,7 +238,13 @@ impl Edit {
             .copied()
             .find(|pin| matches!(pin, WireEndpoint::NetLabel(_)) || self.project.power_terminals().any(|(end, _, _)| end == *pin));
         if named.is_none() && pins.len() > 1 {
-            return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
+            let WireEndpoint::Terminal(first) = pins[0] else {
+                return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
+            };
+            if pins.iter().any(|end| !matches!(end, WireEndpoint::Terminal(pin) if pin.symbol == first.symbol)) {
+                return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
+            }
+            return Ok(Some(preferred.filter(|end| pins.contains(end)).unwrap_or(pins[0])));
         }
         if let Some(preferred) = preferred
             && ((named.is_some() && self.project.endpoint_position(preferred) == Some(point)) || pins.contains(&preferred))

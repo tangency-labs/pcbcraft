@@ -548,7 +548,7 @@ fn newer_document_formats_are_refused_as_newer() {
         path if path.ends_with("/instances.json") => CURRENT_INSTANCES_FORMAT,
         path if path.ends_with("/board.json") => CURRENT_BOARD_FORMAT,
         path if path.starts_with("sheets/") => CURRENT_SHEET_FORMAT,
-        path if path.starts_with("library/symbols/") => crate::library::SYMBOL_FORMAT_V6,
+        path if path.starts_with("library/symbols/") => crate::library::SYMBOL_FORMAT_V7,
         path if path.starts_with("library/footprints/") => crate::board::definition::CURRENT_FORMAT,
         path => panic!("unexpected versioned document {path}"),
     };

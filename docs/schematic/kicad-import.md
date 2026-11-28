@@ -40,6 +40,7 @@ replaces anything. There is no desktop menu entry yet.
 | Symbols in the file's `lib_symbols`, including ones that `extends` another | Native definitions pinned in the project under a library `kicad-…` named by a digest of the converted symbols (so different imports never claim one identity for different content; the `kicad-` prefix is a naming convention, not reserved), with the library name *Imported from KiCad* and license `NOASSERTION`, since a design's embedded symbols carry their own terms |
 | Units 1 to 32 and the common unit 0 | One native unit per KiCad unit (`main` for single-unit symbols, else `a`, `b`, …), each with the common pins and drawing |
 | Pins, with electrical type, name, number, length, direction and inverted/clock marks | Terminals at their exact coordinates with integrated pin appearance. `free` pins become `unspecified` |
+| Distinct pins at one connection point within a unit | A shared electrical contact in `pcbcraft-symbol/7`, preserving each terminal ID |
 | Pinless units and symbols | Drawings without electrical terminals. Pinless units and pins outside the legacy grid or offset use [`pcbcraft-symbol/6`](../libraries/symbol-schema.md) |
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
@@ -92,7 +93,7 @@ replaces anything. There is no desktop menu entry yet.
   most 64 characters. Other Values are shortened or fall back to the symbol's
   default, reported.
 - Symbols the native format can't hold exactly: pins more than 100 mm from
-  the symbol's origin on either axis, two pins at one position, pin
+  the symbol's origin on either axis, pin
   numbers other than 1 to 8 letters, digits, `+`, `-` or `_`, a number with a
   different name or type in different units, more than 32 units, hidden power
   pins on ordinary symbols, which KiCad joins to a net by name, and an alternate

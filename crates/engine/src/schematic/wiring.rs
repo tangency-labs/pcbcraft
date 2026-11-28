@@ -37,7 +37,7 @@ impl PinNumber {
     }
 }
 
-/// An exact terminal on a symbol. Coincident coordinates never establish a connection.
+/// An exact terminal on a symbol, including each member of a shared contact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Terminal {
     pub(crate) symbol: u64,
@@ -233,12 +233,12 @@ impl Connectivity {
         json!({"nets": nets, "unconnected": self.unconnected.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()})
     }
 
-    /// Walk explicit endpoint identities; crossings and coincident distinct points stay separate.
+    /// Walk endpoint identities and shared symbol contacts; ordinary overlapping geometry stays separate.
     pub(crate) fn build(symbols: &[SymbolPlacement], wires: &[Wire]) -> Self {
         Self::build_linked(symbols, wires, std::iter::empty())
     }
 
-    /// Include explicit hierarchy edges without merging names or coincident coordinates.
+    /// Include caller-supplied edges and the electrical contacts declared by symbol definitions.
     pub(crate) fn build_linked(symbols: &[SymbolPlacement], wires: &[Wire], links: impl IntoIterator<Item = [WireEndpoint; 2]>) -> Self {
         let mut adjacency = BTreeMap::<WireEndpoint, Vec<WireEndpoint>>::new();
         for wire in wires {
@@ -249,6 +249,19 @@ impl Connectivity {
         for [from, to] in links {
             adjacency.entry(from).or_default().push(to);
             adjacency.entry(to).or_default().push(from);
+        }
+        // A version-7 symbol declares a shared contact when several pin appearances occupy
+        // one local point in its unit. The contact joins them even without a wire.
+        for symbol in symbols.iter().filter(|symbol| symbol.definition.format_version >= 7) {
+            let mut by_point = BTreeMap::new();
+            for (pin, def) in symbol.terminals().into_iter().zip(symbol.unit_definition().pins()) {
+                let end = WireEndpoint::Terminal(pin);
+                let key = (def.offset.x_nm, def.offset.y_nm);
+                if let Some(first) = by_point.insert(key, end) {
+                    adjacency.entry(first).or_default().push(end);
+                    adjacency.entry(end).or_default().push(first);
+                }
+            }
         }
         // Repeated appearances of the same logical terminal are electrical aliases, including
         // shared supply pins. Unit IDs and coordinates never establish separate physical pins.
