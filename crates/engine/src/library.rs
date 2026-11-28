@@ -88,13 +88,13 @@ pub struct Defaults {
 pub const LIBRARY_FORMAT: &str = "pcbcraft-library/1";
 
 /// Most strokes in one symbol drawing.
-const MAX_SHAPES: usize = 256;
+pub(crate) const MAX_SHAPES: usize = 256;
 /// Most points in one polyline.
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
 pub(crate) const MAX_DRAWING_NM: i64 = 100_000_000;
-/// Most terminals in one symbol, and so in one part's terminal-to-pad map. A pin may sit on only
-/// 441 grid spots in one unit, so symbols this large divide their pins among units.
+/// Most terminals in one symbol, and so in one part's terminal-to-pad map. Legacy units
+/// have only 441 grid positions for pin appearances, while exact units allow more.
 pub(crate) const MAX_TERMINALS: usize = 1024;
 /// Longest text label in a drawing, in characters.
 const MAX_LABEL: usize = 16;

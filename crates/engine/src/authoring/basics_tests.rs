@@ -42,6 +42,38 @@ fn symbol_arrays_keep_unique_terminals_and_integrated_leads() {
     }
     assert_eq!(item.encode().unwrap(), Item::decode(&item.encode().unwrap()).unwrap().encode().unwrap());
 }
+#[test]
+fn exact_symbol_editor_accepts_the_full_native_unit_capacity() {
+    let terminals: Vec<_> = (1..=crate::library::MAX_TERMINALS).map(|index| json!({"id": index.to_string(), "electrical_type": "passive"})).collect();
+    let pins: Vec<_> =
+        (1..=crate::library::MAX_TERMINALS).map(|index| json!({"terminal": index.to_string(), "at_nm": [index * 10_000, 0]})).collect();
+    let drawing: Vec<_> =
+        (1..=library::MAX_SHAPES).map(|index| json!({"type": "line", "from_nm": [0, index * 10_000], "to_nm": [100_000, index * 10_000]})).collect();
+    let native = json!({
+        "format": library::SYMBOL_FORMAT_V6,
+        "library": "test-library",
+        "id": "dense",
+        "revision": 1,
+        "name": "Dense symbol",
+        "reference_prefix": "U",
+        "default_value": "Dense",
+        "terminals": terminals,
+        "units": [
+            {"id": "marker", "drawing": [], "pins": []},
+            {"id": "dense", "drawing": drawing, "pins": pins}
+        ]
+    });
+    let definition = library::read_saved_copy(native.clone()).unwrap();
+    for open in [Item::edit_symbol, Item::from_symbol] {
+        let item = open(&definition).unwrap();
+        let mut editor = Session::new(item, false).unwrap();
+        apply(&mut editor, Action::SelectUnit { unit: "dense".into() });
+        let edited = editor.snapshot().native().unwrap();
+        assert!(edited["units"] == native["units"], "editing must preserve the two units and their geometry");
+        assert!(edited["terminals"] == native["terminals"], "editing must preserve all logical terminals");
+    }
+}
+
 /// Alphanumeric oval plated pads and layered editable curves survive native and editor round trips.
 #[test]
 fn footprint_arrays_and_layered_artwork_roundtrip() {

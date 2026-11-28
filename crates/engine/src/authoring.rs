@@ -23,9 +23,10 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Maximum editor document size, including metadata and stable primitive identities.
 pub const MAX_BYTES: usize = 1 << 20;
 const MAX_SYMBOL_OBJECTS: usize = 512;
+const MAX_EXACT_SYMBOL_OBJECTS: usize = library::MAX_TERMINALS + library::MAX_SHAPES;
 /// Maximum primitives in one footprint drawing; no document kind accepts more, so it also bounds object-ID lists.
 pub const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWORK + 256;
-const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_SYMBOL_OBJECTS);
+const _: () = assert!(MAX_FOOTPRINT_OBJECTS >= MAX_EXACT_SYMBOL_OBJECTS && MAX_EXACT_SYMBOL_OBJECTS >= MAX_SYMBOL_OBJECTS);
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
@@ -818,9 +819,10 @@ impl Item {
         }
     }
 
-    /// Maximum primitives permitted in the active drawing for this document kind.
+    /// Maximum primitives permitted in each drawing for this document kind and format.
     pub(super) fn max_objects(&self) -> usize {
         match self.kind {
+            Kind::Symbol if self.format == EXACT_SYMBOL_FORMAT => MAX_EXACT_SYMBOL_OBJECTS,
             Kind::Symbol => MAX_SYMBOL_OBJECTS,
             Kind::Footprint => MAX_FOOTPRINT_OBJECTS,
         }
@@ -829,6 +831,7 @@ impl Item {
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
+        let limit = self.max_objects();
         if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT)
             || (self.kind == Kind::Footprint && self.format != self.footprint_format())
             || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
@@ -842,8 +845,8 @@ impl Item {
             || self.other_units.len() >= 32
             || unique.len() != all_objects.len()
             || all_objects.iter().any(|(id, _)| **id == 0 || **id > self.allocation.object)
-            || self.other_units.values().any(|objects| objects.len() > MAX_SYMBOL_OBJECTS)
-            || self.objects.len() > self.max_objects()
+            || self.other_units.values().any(|objects| objects.len() > limit)
+            || self.objects.len() > limit
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
             || self.revision > self.allocation.revision
