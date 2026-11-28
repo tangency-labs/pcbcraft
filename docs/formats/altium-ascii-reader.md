@@ -5,6 +5,13 @@ board and schematic saves. It is read-only: it takes any buffered input and neve
 writes it. It is the base for importing such saves; it does not yet create
 PCBCraft documents, and nothing in the editor, CLI or MCP calls it yet.
 
+Altium import ([#567](https://github.com/tangency-labs/pcbcraft/issues/567))
+follows the path the [KiCad schematic import](../schematic/kicad-import.md)
+set: a format reader that knows nothing of PCBCraft's model and is independent
+of the GUI and CLI, like `crates/kicad`, then the engine's validated, atomic
+import with its report of what was left out. This crate is the reader's first
+layer; converting records into a project is later work on that shared path.
+
 ## Records and properties
 
 A save is a sequence of records, each a list of `NAME=VALUE` properties separated
