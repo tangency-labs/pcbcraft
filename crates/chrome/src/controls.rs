@@ -231,7 +231,11 @@ impl Choice {
     pub fn show_ui<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
         let width = self.width.unwrap_or(ui.spacing().combo_width).min(ui.available_width().max(0.0));
         let mut inner = None;
-        let draw = |ui: &mut Ui| kit::bounded_dropdown_menu(ui, self.id, &self.selected, width, |ui| inner = Some(add(ui)));
+        let draw = |ui: &mut Ui| {
+            let response = kit::bounded_dropdown_menu(ui, self.id, &self.selected, width, |ui| inner = Some(add(ui)));
+            crate::shell::keep_dropdown_above(ui, &response);
+            response
+        };
         let response = if let Some(label) = &self.label {
             ui.horizontal(|ui| {
                 let label = ui.label(label);

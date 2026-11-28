@@ -121,3 +121,36 @@ fn external_conversion_form_stays_in_its_initiating_host() {
     click(&mut h, "Cancel");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Press and release the primary button within one frame, as a quick native click arrives (the
+/// harness queue would split them over two frames), so egui hit-tests the layers as for a user.
+fn pointer_click(h: &mut egui_kittest::Harness<'_, PcbApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run();
+    let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([button(true), button(false)]);
+    h.run();
+}
+
+/// A dropdown reopened after a click elsewhere in its dialog draws above the dialog and takes the
+/// pick, as it does the first time it opens.
+#[test]
+fn a_dialog_dropdown_reopened_after_a_click_in_the_dialog_stays_on_top() {
+    let mut h = harness();
+    h.state_mut().run("project.new", &json!({}));
+    h.run();
+    h.event(Event::Paste("A\nB".into()));
+    h.run();
+    let global = |h: &egui_kittest::Harness<'_, PcbApp>| matches!(&h.state().dialog, Dialog::ExternalPasteOptions(d) if d.global);
+    let scope = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Scope").rect().center();
+    pointer_click(&mut h, scope);
+    let option = h.query_all_by_label("Global").last().unwrap().rect().center();
+    pointer_click(&mut h, option);
+    assert!(global(&h), "the first open takes the pick");
+    let spacing = h.get_by_label("Spacing").rect().center();
+    pointer_click(&mut h, spacing);
+    pointer_click(&mut h, scope);
+    let option = h.query_all_by_label("Local").last().unwrap().rect().center();
+    pointer_click(&mut h, option);
+    assert!(!global(&h), "the reopened list was hidden behind the dialog and the pick missed it");
+}
