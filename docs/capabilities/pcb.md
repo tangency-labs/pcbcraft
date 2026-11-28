@@ -200,6 +200,12 @@
 
 ## Implementation notes
 
+The engine can [compare board objects by UUID](../pcb/board-object-diff.md) across two
+revisions of the same board. The Rust API returns a bounded JSON-serializable
+report for authored tracks, vias, drawings and zone outlines; boards with
+circular arc tracks or via teardrops are refused. There is no file
+comparison command, connectivity or rule analysis, or visual overlay yet.
+
 The physical stack also exposes [derived and named layer groups](../pcb/board-materials.md#layer-groups).
 Physical stackup stages copper roles and named memberships; `pcb.inspect_layer_groups`
 reads the same IDs/names headlessly. Rule-scoping consumers and live simulation links

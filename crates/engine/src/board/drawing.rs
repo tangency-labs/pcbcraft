@@ -108,23 +108,29 @@ impl BoardView<'_> {
         if let Some(data) = &self.project().board.drawings {
             return data.items.clone();
         }
-        self.outline()
-            .and_then(|outline| {
-                let layers = self.layers();
-                let mut edge = layers.iter().filter(|layer| layer.purpose == LayerPurpose::Outline);
-                let layer = edge.next()?;
-                // Older rectangles were not layer-addressed. A fresh compatibility layer avoids
-                // choosing an arbitrary layer when the old setup has several outline layers.
-                let id = if edge.next().is_some() { compatibility_id(self.target.board, b"pcbcraft:board-edge-layer:1\0") } else { layer.id };
-                Some(vec![Drawing {
-                    id: compatibility_id(self.target.board, b"pcbcraft:legacy-outline:1\0"),
-                    layer: id,
-                    points: outline.corners().to_vec(),
-                    closed: true,
-                    stroke_nm: None,
-                }])
-            })
-            .unwrap_or_default()
+        self.legacy_outline_drawing().into_iter().collect()
+    }
+
+    /// Project the retained rectangle, if not yet materialized, as the exact drawing an edit
+    /// would capture. Does not copy the authored drawings or change the board.
+    pub(super) fn legacy_outline_drawing(self) -> Option<Drawing> {
+        if self.project().board.drawings.is_some() {
+            return None;
+        }
+        let outline = self.outline()?;
+        let layers = self.layers();
+        let mut edge = layers.iter().filter(|layer| layer.purpose == LayerPurpose::Outline);
+        let layer = edge.next()?;
+        // Older rectangles were not layer-addressed. A compatibility layer avoids choosing
+        // an arbitrary layer when the old setup has several outline layers.
+        let id = if edge.next().is_some() { compatibility_id(self.target.board, b"pcbcraft:board-edge-layer:1\0") } else { layer.id };
+        Some(Drawing {
+            id: compatibility_id(self.target.board, b"pcbcraft:legacy-outline:1\0"),
+            layer: id,
+            points: outline.corners().to_vec(),
+            closed: true,
+            stroke_nm: None,
+        })
     }
 }
 
