@@ -62,11 +62,71 @@ it. A `pcb.check_design` request can override the fixed defaults for that run. S
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
 
+### Set up the board
+
+In **Layout → Setup**, select the copper count and the board layers you need.
+Use **Physical stackup** to review the construction. When the settings are
+ready, choose **Apply board setup**.
+
+[![Board setup showing the two copper layers, Board Outline, physical stackup navigation, and Apply board setup.](book/images/board-settings.png)](book/images/board-settings.png)
+
+### Bring the schematic onto the board
+
+Use **Update PCB** to review the parts and connections that will transfer. In
+this two-resistor example, Update PCB is waiting for a footprint for R2. Choose
+**Assign footprint to R2** to resolve the error, then review the mappings and
+connections before applying the update. If **Place new footprints after updating**
+is checked, the new footprints follow the pointer until you click to place them.
+
+[![Update PCB from Schematic lists the proposed footprint and net changes and offers Assign footprint to R2 beside the missing-package error.](book/images/update-pcb.png)](book/images/update-pcb.png)
+
+[![After applying the update, both resistor footprints are attached to the pointer and ready to place as a group.](book/images/place-footprints.png)](book/images/place-footprints.png)
+
+### Draw the outline and route copper
+
+Set **Board Outline** as the active layer, then choose **Draw → Rectangle** and
+click opposite corners to create a closed outline. On the routed LED flasher
+example, the outline is the white rectangle around the footprints and copper.
+
+[![Drawing a rectangle on the Board Outline layer, with the second corner previewed before clicking.](book/images/outline-preview.png)](book/images/outline-preview.png)
+
+[![PCB Layout with the LED flasher's rectangular Board Outline, Top and Bottom layers, and footprint, track, via and unrouted counts.](book/images/board-view.png)](book/images/board-view.png)
+
+Select a copper layer and choose **Layout → Track** (or press **X**). Start on a
+pad, then move toward another pad or copper on the same net. The router
+highlights that net and previews the new copper before you commit. To
+practice on a copy of the flasher, remove a short track segment first to
+make an airwire visible. **V** inserts a through via during routing.
+
+[![Route preview on the LED flasher highlights the top-layer net and shows the repair from R1's pad toward the existing track.](book/images/route-preview.png)](book/images/route-preview.png)
+
+### Check the board
+
+Choose **Analyze → DRC**. The DRC card lists findings and the canvas shows where
+they occur. Select a finding to center it, then run the check again after
+editing. The removed track from the routing exercise produces the unrouted
+connection in this example.
+
+[![DRC reports one unrouted connection on the LED flasher and marks it on the board.](book/images/drc-unrouted.png)](book/images/drc-unrouted.png)
+
+### Export and review fabrication files
+
+After checking the board, choose **Manufacture → Outputs** to save the Gerber
+and drill ZIP. Open the **Manufacturing** workspace and choose **Open ZIP** to
+inspect the package you saved. Toggle layers separately to review copper,
+silkscreen, the board outline and drill hits.
+
+[![Manufacture ribbon in PCB Layout with the Outputs button for saving the fabrication ZIP.](book/images/manufacture-ribbon.png)](book/images/manufacture-ribbon.png)
+
+[![Manufacturing preview of the LED flasher ZIP showing the verified package, preflight, layer toggles, and plated drill sizes and counts.](book/images/manufacturing-review.png)](book/images/manufacturing-review.png)
+
 ## Preview the board in 3D
 
 On desktop, choose **3D render** from the workspace picker. Open it beside
 PCB Layout to watch outline and hole changes as you edit or undo. **Browse…**
 chooses another board in the open project without switching the layout pane.
+
+[![The native 3D render workspace with the LED flasher substrate, holes and surface tracks in an isometric view.](book/images/board-3d.png)](book/images/board-3d.png)
 
 Drag to orbit, middle-drag to pan, and scroll to zoom. Use the compass to look
 along a board axis or return to the isometric view. **Fit** frames the board in

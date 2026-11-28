@@ -1,4 +1,4 @@
-# Dual LED flasher (second demo)
+# Dual LED flasher
 
 This example is a complete two-transistor astable circuit with 14 physical
 components, eight named nets and a routed 40 × 30 mm, two-layer board. Both
@@ -28,12 +28,16 @@ board checker reports no clearance, short, unrouted, outline or courtyard findin
 with its default rules. [Footprint sources and dimensions](../docs/libraries/footprint-library.md)
 record the package definitions and their qualification scope.
 
+[![The completed LED flasher PCB in PCB Layout with red top copper, blue bottom copper, and the board summary.](../docs/book/images/board-view.png)](../docs/book/images/board-view.png)
+
 ## Open a copy
+
+[![Open Project presents Project file or archive and Project folder choices.](../docs/book/images/open-project.png)](../docs/book/images/open-project.png)
 
 On desktop, choose **Open Project → Project file or archive…** and open
 [`dual-led/project.json`](dual-led/project.json). Use **File → Save As… → Project
 folder…** before editing the checkout's copy. In the browser, upload
-[`dual-led.pc`](dual-led.pc), which contains the same project and dependencies. The [sensor node](README.md) is the primary demo.
+[`dual-led.pc`](dual-led.pc), which contains the same project and dependencies.
 Share the complete folder or archive rather than `project.json` alone.
 
 **Fit schematic** frames the circuit. **G** or held dragging moves a symbol with

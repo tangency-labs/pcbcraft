@@ -1,5 +1,7 @@
 # Parts Library workspace scope (#315)
 
+[![Parts Library with the built-in source selected, search filtered to resistor 0603, and its footprint preview.](../book/images/parts-library.png)](../book/images/parts-library.png)
+
 The implementation follows the browse and orderable-parts renders supplied by
 @travle1 in [#315](https://github.com/tangency-labs/pcbcraft/issues/315). Their
 composition is the reference; the running application's pinned Craft controls,

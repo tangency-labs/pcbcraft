@@ -86,6 +86,9 @@ actions under Library.
 Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
 same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
 bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
+
+[![Preferences on the Appearance page, showing theme, schematic canvas and interface scale controls.](book/images/preferences.png)](book/images/preferences.png)
+
 The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
 **Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered
 between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
@@ -212,6 +215,8 @@ Hover a symbol and press **G**, or choose **Grab (keep connected)** from its con
 menu, to move it without holding a mouse button. Attached wires follow the symbol;
 press **R** to rotate the preview and click to finish, or use **Esc** or right-click
 to cancel. Ordinary symbol dragging keeps the same connected movement and supports **R**.
+
+[![Grabbing D1 in the flasher schematic moves the symbol preview while the wires bend to follow its pins.](book/images/grab-symbol.png)](book/images/grab-symbol.png)
 
 Press **M** with a symbol selected, or hover a symbol with no selection, to pick
 it up while leaving its wiring in place. Click to place it elsewhere, or press
@@ -551,6 +556,8 @@ stay in place and target that view. The large Parts Catalog captures its opening
 view/revision; compact placement captures the current view when the gesture starts.
 A stale drag or modal choice cannot edit a different view or newer project state. Selecting a sheet in Browser or
 switching workspace changes that pane without adding document tabs.
+
+[![Workspace picker with actions to switch to PCB Layout, open it beside the schematic, or open it in another window.](book/images/workspace-picker.png)](book/images/workspace-picker.png)
 
 On the desktop, **View → New window** opens another view without moving an
 existing one. Multiple native windows and splits can coexist, and each detached
@@ -1090,6 +1097,9 @@ Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
 **File → Save As…** offers **Project folder…** and **Packed project (.pc)…**.
 Commit the folder to Git; use the archive to share the complete project.
+
+[![Save Project As offers Project folder and Packed project (.pc).](book/images/save-as.png)](book/images/save-as.png)
+
 To archive an open working folder to a compressed `.pc`, use
 **File → Archive Project Folder…**. Choose a path outside the working folder.
 PCBcraft saves and verifies the archive, switches to it, and keeps the original
