@@ -474,3 +474,42 @@ fn resizing_sheet_previews_and_commits_attached_wire_geometry() {
     h.run();
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Press and release the primary button within one frame, as a quick native click arrives (the
+/// harness queue would split them over two frames), so egui hit-tests the layers as for a user.
+fn quick_click(h: &mut Harness<'_, PcbApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([button(true), button(false)]);
+    h.run();
+}
+
+/// The Direction list of a reopened hierarchical label form opens above the form: picking a
+/// direction keeps the form open and the label is created with that direction.
+#[test]
+fn a_reopened_label_form_takes_its_direction_pick() {
+    let mut h = hierarchy_harness(1400.);
+    let direction = |h: &Harness<'_, PcbApp>| h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Direction").rect().center();
+    h.key_press(Key::H);
+    h.run();
+    click(&mut h, "Schematic canvas");
+    let at = direction(&h);
+    quick_click(&mut h, at);
+    h.key_press(Key::Escape);
+    h.run();
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None), "{:?}", h.state().dialog);
+    h.key_press(Key::H);
+    h.run();
+    click(&mut h, "Schematic canvas");
+    let at = direction(&h);
+    quick_click(&mut h, at);
+    let option = h.query_all_by_label("Bidirectional").last().unwrap().rect().center();
+    quick_click(&mut h, option);
+    assert!(matches!(h.state().dialog, Dialog::Hierarchy(_)), "the pick closed the form: {:?}", h.state().dialog);
+    name(&mut h, "ENABLE");
+    let project = h.state().views.active.snapshot(&h.state().session).unwrap();
+    let label = &project.hierarchical_labels()[0];
+    assert_eq!((label.name.as_str(), format!("{:?}", label.direction).as_str()), ("ENABLE", "Bidirectional"));
+}
