@@ -420,11 +420,13 @@ fn assemble(loops: &[Vec<Segment>], entries: &[usize], joins: &[Vec<Join>], stat
 
 /// Segments sorted into horizontal bands by the Y range they span, so a horizontal ray only
 /// looks at the segments of its own band. Written segments are straight or within one quadrant,
-/// so their end points bound their Y range.
+/// so their end points bound their Y range. A segment spanning more than two bands is kept once
+/// in `long` instead, which every ray also looks at, so the index stays linear in its segments.
 struct Bands {
     low: i64,
     height: i64,
     bands: Vec<Vec<(usize, usize)>>,
+    long: Vec<(usize, usize)>,
 }
 
 impl Bands {
@@ -434,29 +436,35 @@ impl Bands {
         let total: usize = loops.iter().map(Vec::len).sum();
         let count = (total / 8).clamp(1, 1 << 16) as i64;
         let height = ((high - low) / count + 1).max(1);
-        let mut bands = vec![Vec::new(); ((high - low) / height + 1) as usize];
+        let (mut bands, mut long) = (vec![Vec::new(); ((high - low) / height + 1) as usize], Vec::new());
         for (l, segments) in loops.iter().enumerate() {
             let n = segments.len();
             for k in 0..n {
                 let (a, b) = (segments[k].start.1, segments[(k + 1) % n].start.1);
-                for band in &mut bands[((a.min(b) - low) / height) as usize..=((a.max(b) - low) / height) as usize] {
+                let (first, last) = (((a.min(b) - low) / height) as usize, ((a.max(b) - low) / height) as usize);
+                if last - first > 1 {
+                    long.push((l, k));
+                    continue;
+                }
+                for band in &mut bands[first..=last] {
                     band.push((l, k));
                 }
             }
         }
-        Self { low, height, bands }
+        Self { low, height, bands, long }
     }
 
     /// The segments whose Y range may contain `y`.
-    fn crossing(&self, y: i64) -> &[(usize, usize)] {
-        usize::try_from((y - self.low) / self.height).ok().and_then(|band| self.bands.get(band)).map_or(&[], Vec::as_slice)
+    fn crossing(&self, y: i64) -> impl Iterator<Item = &(usize, usize)> {
+        let band = usize::try_from((y - self.low) / self.height).ok().and_then(|band| self.bands.get(band));
+        band.map_or(&[][..], Vec::as_slice).iter().chain(&self.long)
     }
 }
 
 /// Find the first of `candidates` a horizontal ray from `v` in +X meets, preferring an existing
 /// vertex at the same X. Written segments are straight or within one quadrant of their circle,
 /// so each meets the ray's line at most once (a horizontal line on it is met at its nearer end).
-fn nearest(loops: &[Vec<Segment>], candidates: &[(usize, usize)], v: Vertex) -> Result<(usize, Hit), String> {
+fn nearest<'a>(loops: &[Vec<Segment>], candidates: impl Iterator<Item = &'a (usize, usize)>, v: Vertex) -> Result<(usize, Hit), String> {
     let mut best: Option<(f64, usize, Hit)> = None;
     let mut offer = |x: f64, l: usize, hit: Hit| {
         if x > v.0 as f64
@@ -620,5 +628,25 @@ mod tests {
         assert!(matches!(shape((100_000, 0), (99_500, 9_987), arc, &mut stats), Shape::Arc { .. }));
         let tiny = [Piece { start: [0.2, 0.1], arc: None }, Piece { start: [0.4, 0.3], arc: None }, Piece { start: [0.1, 0.4], arc: None }];
         assert!(written(&tiny, &mut stats).is_err());
+    }
+
+    /// Long edges are kept once, not copied into every band they span: 200 tall holes give at
+    /// most two band entries per segment.
+    #[test]
+    fn bands_hold_each_long_edge_once() {
+        let square = |x: i64, y: i64, w: i64, h: i64| {
+            [(x, y), (x + w, y), (x + w, y + h), (x, y + h)].map(|start| Segment { start, exact: float(start), shape: Shape::Line }).to_vec()
+        };
+        let mut loops = vec![square(0, 0, 1_000 * MM, 100 * MM)];
+        loops.extend((0..200).map(|i| square((i * 5 + 1) * MM, MM, MM, 98 * MM)));
+        let total: usize = loops.iter().map(Vec::len).sum();
+        let bands = Bands::new(&loops);
+        let entries = bands.bands.iter().map(Vec::len).sum::<usize>() + bands.long.len();
+        assert!(entries <= 2 * total, "{entries} band entries for {total} segments");
+        assert_eq!(
+            bands.crossing(50 * MM).filter(|&&(l, k)| loops[l][k].start.0 == loops[l][(k + 1) % 4].start.0).count(),
+            402,
+            "every vertical edge"
+        );
     }
 }
