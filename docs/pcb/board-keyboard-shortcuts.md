@@ -113,7 +113,7 @@ zone. The next refill, the ratsnest and DRC show any connection lost that way.
 | Backspace | Undo last step | While routing: undoes a via at the last corner first, then the corner itself; with no draft, does nothing. In zone/drawing outlines: removes the last point |
 | Slash | Flip track posture | While the route tool is armed, swaps the bend direction of future corners |
 | V | Place via mid-route | While routing with the pointer on the canvas, drops a via at the pointer and switches to the paired layer |
-| Ctrl (hold) | Bypass grid | While routing, holding the physical **Ctrl** key lets corners land off-grid; copper contacts still snap. Physical Ctrl on macOS too — an exception to the modifier note above |
+| Ctrl (hold) | Bypass grid | While routing, holding the physical **Ctrl** key lets corners land off-grid; copper contacts still snap. With **Snap to grid** off it changes nothing. Physical Ctrl on macOS too — an exception to the modifier note above |
 | Esc / right-click | Cancel | Follows the layered order above; right-click cancels the gesture directly |
 | Double-click | Finish | During a route or a drawing-line outline: commits the current shape |
 

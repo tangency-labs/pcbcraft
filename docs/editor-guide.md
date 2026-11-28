@@ -128,6 +128,14 @@ one chosen is kept with your preferences, not in the project. Schematic and PCB 
 remember their spacing separately, so changing the board grid does not replace the
 schematic's startup choice (and the reverse). Schematic panes start at 50 mil and PCB panes
 at 10 mil until changed; a saved choice, including an explicit 50 mil board grid, is kept.
+**Snap to grid**, the first row of the Grid menu, turns snapping off and on for the focused
+pane. With it off, the button reads *Grid 50 mil · snap off*, and placing, moving and pasting
+parts, drawing wires, net labels, tracks, vias and board outlines land at the pointer's exact
+position; pins, pads, track ends and vias still attract as they do with the grid. Held **Ctrl**
+then changes nothing, since there is no grid to bypass. Hiding the grid only changes the
+drawing; snapping stays on until this row turns it off. Like the spacing, the setting belongs to
+each pane through focus changes, splits, detaching and docking, schematic and PCB panes remember
+it separately, and changing it never edits the project, its revision or Undo and Redo.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays
@@ -813,7 +821,8 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 (0.25 mm by default). The crosshair follows the pointer, while a dot marks where a
 click will land in free space or a ring marks a nearby copper connection. Free
 points snap when the grid point is close to the cursor. Hold **Ctrl** to bypass
-the grid while pads, track ends and vias still snap to their exact positions.
+the grid while pads, track ends and vias still snap to their exact positions; with
+**Snap to grid** off in the Grid menu, free points are exact without Ctrl.
 Click to start a route or fix the current target. The preview uses clearance-aware
 45° walkaround around fixed copper, with a wider release radius for magnetic contacts.
 Clicked targets wait for full-path validation; blocked or incomplete searches fix no

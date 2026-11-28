@@ -546,6 +546,14 @@ impl EditorViews {
         }
     }
 
+    /// Seed every live and cached view with the remembered schematic and PCB snapping, as
+    /// [`Self::set_grid_defaults`] does for the spacing.
+    pub(super) fn set_snap_defaults(&mut self, schematic: bool, board: bool) {
+        for view in self.all_mut() {
+            view.set_snap_defaults(schematic, board);
+        }
+    }
+
     /// Bind all live and cached views after successful file adoption, preserving host placement
     /// and workspace choices. This explicit project replacement precedes saved-layout restoration;
     /// ordinary synchronization must still retain genuinely missing document placeholders.
@@ -1262,6 +1270,20 @@ impl PcbApp {
             match workspace {
                 Workspace::Schematic => self.preferences.schematic_grid_nm = spacing_nm,
                 Workspace::Board => self.preferences.board_grid_nm = spacing_nm,
+            }
+        }
+    }
+
+    /// Turn snapping on or off in one view and remember it for its workspace, as
+    /// [`Self::set_view_grid`] does for the spacing: presentation only, so the project, its
+    /// revision, unsaved state and undo history stay as they are, nothing moves, and other views
+    /// keep their own setting.
+    pub(super) fn set_view_snap(&mut self, id: ViewId, enabled: bool) {
+        if let Some(view) = self.views.view_mut(id) {
+            view.camera.set_snap_enabled(enabled);
+            match view.workspace {
+                Workspace::Schematic => self.preferences.schematic_grid_snap = enabled,
+                Workspace::Board => self.preferences.board_grid_snap = enabled,
             }
         }
     }

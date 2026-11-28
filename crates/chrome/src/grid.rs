@@ -217,19 +217,34 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
 /// annotation for a hidden grid. Style is read-only here and configured through Preferences.
 /// The field's text is kept in egui's temporary memory under the button. Menu and accessible
 /// labels include `unit`; the status-bar caption shares the adjacent unit switch instead of
-/// repeating its suffix. A number typed without a unit is read in it. Returns true when the spacing changed.
-pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32, unit: Unit, style: Style) -> bool {
+/// repeating its suffix. A number typed without a unit is read in it. The first row turns `snap`
+/// on or off, and the caption ends in "snap off" while it is off. Returns true when the spacing
+/// changed; the caller compares `snap` itself.
+#[allow(clippy::too_many_arguments)]
+pub fn spacing_menu(
+    ui: &mut Ui,
+    spacing_nm: &mut i64,
+    snap: &mut bool,
+    presets: &[i64],
+    default_nm: i64,
+    every: u32,
+    unit: Unit,
+    style: Style,
+) -> bool {
     let t = Tokens::get();
     let before = *spacing_nm;
     let current = spacing_label(*spacing_nm, unit);
-    let text = if every > 1 && style != Style::Off {
+    let mut text = if every > 1 && style != Style::Off {
         let marks = if style == Style::Lines { "lines" } else { "dots" };
         format!("Grid {current} · {marks} {}", spacing_label(spacing_nm.saturating_mul(i64::from(every)), unit))
     } else {
         format!("Grid {current}")
     };
+    if !*snap {
+        text.push_str(" · snap off");
+    }
     let caption = text.replace(&format!(" {}", unit.symbol()), "");
-    let response = solidcraft_ui_kit::text_button(ui, &caption, true).on_hover_text("Grid spacing of the focused view (N, Shift+N)");
+    let response = solidcraft_ui_kit::text_button(ui, &caption, true).on_hover_text("Grid spacing and snapping of the focused view (N, Shift+N)");
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &text));
     let field_id = response.id.with("custom_spacing");
     egui::Popup::menu(&response)
@@ -242,6 +257,10 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
             // A fixed width, as Help has: rows fill what they are given, and messages wrap in it.
             ui.set_width(t.control_height * 8.0);
             ui.spacing_mut().item_spacing.y = 0.0;
+            if MenuItem::new("Snap to grid").toggle(*snap).show(ui) {
+                *snap = !*snap;
+            }
+            menu::separator(ui);
             for &preset in presets {
                 let label = spacing_label(preset, unit);
                 let label = if preset == default_nm { format!("{label} (default)") } else { label };

@@ -981,14 +981,20 @@ mod live {
         WindowCommand {
             id: "view.set_grid",
             title: "Grid Spacing",
-            summary: "Set the view's snap grid spacing, as the status bar's grid menu does. Later views start from it.",
+            summary: "Set the view's snap grid spacing, snapping or both, as the status bar's grid menu does. Later views start from them.",
             params: &[
                 VIEW,
                 Param {
                     name: "spacing_nm",
                     summary: "The spacing in nanometres (50 mil is 1270000)",
-                    required: true,
+                    required: false,
                     kind: Kind::Integer { min: *grid::SPACING_RANGE_NM.start(), max: *grid::SPACING_RANGE_NM.end(), step: 1 },
+                },
+                Param {
+                    name: "snap",
+                    summary: "Snap placement and drags to the grid; false places at the exact pointer position",
+                    required: false,
+                    kind: Kind::Bool,
                 },
             ],
         },
@@ -1572,7 +1578,7 @@ mod live {
             .flat_map(|(id, host)| host.layout.views().into_iter().map(move |view| (*id, host.focused == view, view)))
             .filter_map(|(window, focused, id)| {
                 let view = app.views.view(id)?;
-                Some(json!({
+                let mut entry = json!({
                     "id": id.0,
                     "window": window.0,
                     "focused": focused,
@@ -1618,7 +1624,10 @@ mod live {
                         "drawing_selection": view.board.drawing.selected,
                         "drawing_tool": view.board.drawing.tool.map(|tool| match tool {crate::board_drawing::Tool::Lines=>"lines",crate::board_drawing::Tool::Rectangle=>"rectangle"}),
                     })),
-                }))
+                });
+                // Added outside the literal above, which is at serde_json's macro recursion limit.
+                entry["grid_snap"] = json!(view.camera.snap_enabled());
+                Some(entry)
             })
             .collect();
         json!({
@@ -2008,7 +2017,18 @@ mod live {
                     )?;
                 }
                 ("view.set_selection_filters", Some((view, _)), _) => self.set_selection_filters(view, params)?,
-                ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
+                ("view.set_grid", Some((view, _)), _) => {
+                    let (spacing, snap) = (params["spacing_nm"].as_i64(), params["snap"].as_bool());
+                    if spacing.is_none() && snap.is_none() {
+                        return Err("view.set_grid needs spacing_nm, snap or both".into());
+                    }
+                    if let Some(spacing) = spacing {
+                        self.set_view_grid(view, spacing);
+                    }
+                    if let Some(snap) = snap {
+                        self.set_view_snap(view, snap);
+                    }
+                }
                 ("view.select" | "view.select_footprints", Some((view, _)), _)
                     if self.views.view(view).map(|view| view.workspace)
                         != Some(if id == "view.select" { Workspace::Schematic } else { Workspace::Board }) =>

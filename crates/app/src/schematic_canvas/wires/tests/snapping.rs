@@ -91,6 +91,53 @@ fn ctrl_temporarily_bypasses_grid_for_the_complete_wire_gesture() {
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }
 
+/// With the view's snapping off, plain clicks start, bend and preview the wire at the pointer,
+/// held Ctrl changes nothing, and the wire still finishes on a pin's exact terminal.
+#[test]
+fn snap_off_places_the_wire_gesture_at_the_pointer_and_ctrl_changes_nothing() {
+    let mut h = harness();
+    let s = &mut h.state_mut().session;
+    s.apply("project.new", &json!({"name":"Snap off"})).unwrap();
+    s.apply(
+        pcbcraft_engine::PLACE_SYMBOL,
+        &json!({"definition":"resistor","x_nm":grid(8,14).x_nm,"y_nm":grid(8,14).y_nm,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let terminal = s.project().unwrap().symbols()[0].terminals()[0];
+    let pin = s.project().unwrap().endpoint_position(pcbcraft_engine::schematic::WireEndpoint::Terminal(terminal)).unwrap();
+    h.state_mut().browser.open = false;
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    h.run();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    click(&mut h, "Draw wire (W)");
+    let start = screen(&h, grid(-8, 8)) + vec2(3.0, 2.0);
+    crate::tests::click_canvas_at(&mut h, start);
+    let from = match h.state().views.active.schematic.tool {
+        Some(Tool::Wire { start: Some(Anchor::Free(point)), .. }) => point,
+        _ => panic!("a click starts a free wire"),
+    };
+    assert_eq!(from, h.state().views.active.camera.unsnapped(start, rect));
+    assert!(from.x_nm % GRID_NM != 0 && from.y_nm % GRID_NM != 0);
+    let corner = screen(&h, grid(0, 8)) + vec2(4.0, 3.0);
+    crate::tests::click_canvas_at(&mut h, corner);
+    let end = screen(&h, grid(6, 4)) + vec2(2.0, 4.0);
+    for held in [false, true, false] {
+        point_with_ctrl(&mut h, end, held);
+        assert!(preview_ends_at(&h, end), "Ctrl held: {held}");
+    }
+    let near_pin = screen(&h, pin) + vec2(3.0, 2.0);
+    crate::tests::click_canvas_at(&mut h, near_pin);
+    assert_eq!(h.state().message, None);
+    let project = h.state().session.project().unwrap();
+    let wire = &project.wires()[0];
+    let route = project.wire_path(wire);
+    assert_eq!(route[0], from);
+    assert!(route.contains(&h.state().views.active.camera.unsnapped(corner, rect)));
+    assert!(wire.endpoints().contains(&pcbcraft_engine::schematic::WireEndpoint::Terminal(terminal)), "the pin still takes the wire");
+    assert_eq!(*route.last().unwrap(), pin);
+}
+
 /// Grid bypass still finishes on an exact pin identity or splits a stroke at its projected
 /// off-grid coordinate, rather than creating a disconnected free end nearby.
 #[test]

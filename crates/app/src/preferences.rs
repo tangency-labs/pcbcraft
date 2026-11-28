@@ -144,6 +144,12 @@ pub struct Preferences {
     /// it when the app starts and keep their own spacing afterward, independently of the
     /// schematic preference. It is presentation only and never saved in the project.
     pub board_grid_nm: i64,
+    /// Whether schematic views snap to their grid, last chosen in any schematic view. Like
+    /// [`Self::schematic_grid_nm`] it seeds every schematic view at startup, after which each
+    /// view keeps its own setting. Off places at the pointer's exact position.
+    pub schematic_grid_snap: bool,
+    /// Whether PCB views snap to their grid, remembered separately from the schematic choice.
+    pub board_grid_snap: bool,
     /// Clean up touched wire routes after editing. Explicit Heal is available in either mode.
     /// This is a user preference, never part of a project or its undo history.
     pub auto_heal_wires: bool,
@@ -188,6 +194,8 @@ impl Default for Preferences {
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
             board_grid_nm: grid::BOARD_SPACING_DEFAULT_NM,
+            schematic_grid_snap: true,
+            board_grid_snap: true,
             auto_heal_wires: true,
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
@@ -873,6 +881,8 @@ mod tests {
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
             board_grid_nm: 10 * grid::NM_PER_MIL,
+            schematic_grid_snap: false,
+            board_grid_snap: false,
             auto_heal_wires: false,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
@@ -952,6 +962,10 @@ mod tests {
         assert_eq!(Preferences::default().board_grid_nm, 254_000, "the PCB grid defaults to 10 mil");
         assert_eq!(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm, 635_000);
         assert_eq!(Preferences::parse("{\"board_grid_nm\":254000}").board_grid_nm, 254_000);
+        // Settings saved before snapping could be turned off snap in both workspaces.
+        assert!(older.schematic_grid_snap && older.board_grid_snap);
+        let unsnapped = Preferences::parse("{\"board_grid_snap\":false}");
+        assert!(unsnapped.schematic_grid_snap && !unsnapped.board_grid_snap);
         // An out-of-range spacing resets only itself; a value of the wrong type is unreadable,
         // so everything falls back.
         for bad in ["0", "-1270000", "999999999999"] {
@@ -1021,6 +1035,8 @@ mod tests {
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
             board_grid_nm: 25 * grid::NM_PER_MIL,
+            schematic_grid_snap: true,
+            board_grid_snap: true,
             auto_heal_wires: false,
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,

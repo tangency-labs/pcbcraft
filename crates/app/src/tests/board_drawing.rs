@@ -386,6 +386,27 @@ fn lines_open_close_vertex_drag_and_stale_cancellation() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), concurrent);
 }
 
+/// With the view's snapping off, Board Outline lines put each vertex at the pointer.
+#[test]
+fn snap_off_draws_outline_vertices_at_the_pointer() {
+    let mut h = board();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
+    let positions = [at(&h, -15_000_000, -8_000_000), at(&h, 10_000_000, -3_000_000), at(&h, 4_000_000, 8_000_000)].map(|p| p + egui::vec2(3.0, 2.0));
+    for pos in positions {
+        click_canvas_at(&mut h, pos);
+        h.run_steps(20);
+    }
+    h.key_press(Key::Enter);
+    h.run();
+    let rect = h.get_by_label("PCB canvas").rect();
+    let expected: Vec<_> = positions.iter().map(|&pos| h.state().views.active.camera.unsnapped(pos, rect)).collect();
+    assert_eq!(drawings(&h)[0].points, expected);
+    assert!(expected.iter().all(|p| p.x_nm % h.state().views.active.camera.snap_nm() != 0));
+}
+
 /// Whether the most recent frame painted a Board Outline path through this screen point.
 fn painted_path_through(h: &Harness<'_, PcbApp>, point: egui::Pos2) -> bool {
     h.output().shapes.iter().any(|shape| {

@@ -161,6 +161,29 @@ fn paste_between_split_views_uses_the_destination_camera() {
     );
 }
 
+/// With the destination view's snapping off, a paste lands where the pointer clicks, off the grid.
+#[test]
+fn paste_with_snapping_off_lands_at_the_pointer() {
+    let mut h = source();
+    h.set_size(egui::vec2(1400., 900.));
+    h.state_mut().browser.open = false;
+    h.run();
+    let text = copied_text(&mut h);
+    h.run();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_snap(id, false);
+    h.event(Event::Paste(text));
+    h.run();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let at = h.state().views.active.camera.screen(Point { x_nm: 8 * GRID_NM, y_nm: 8 * GRID_NM }, rect) + egui::vec2(3.0, 2.0);
+    let exact = h.state().views.active.camera.unsnapped(at, rect);
+    crate::tests::click_canvas_at(&mut h, at);
+    let symbols = h.state().session.project().unwrap().symbols();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[1].position, exact);
+    assert_ne!(exact.x_nm % GRID_NM, 0);
+}
+
 /// A delayed platform response may never move a captured menu request into a newer revision.
 #[test]
 fn late_clipboard_reads_do_not_retarget_after_a_competing_edit() {

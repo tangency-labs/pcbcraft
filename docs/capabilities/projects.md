@@ -43,8 +43,8 @@
   Catalog with cross-library/MPN search, a dense expanded list, independent symbol/package zoom
   previews, remembered window/divider sizing and a compact dock/float presentation, once/repeat part
   and power placement, theme/scale/navigation preferences.
-- Per-view schematic and PCB grid spacing with separate remembered preferences and presets, and
-  shared opacity.
+- Per-view schematic and PCB grid spacing and grid snapping with separate remembered preferences
+  and presets, and shared opacity.
 - PCB grid hidden by default, with Off/Dots/Lines in Preferences.
 - Mil/mm display units with a pointer coordinate readout and unit-aware spacing entry.
 

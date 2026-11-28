@@ -434,8 +434,19 @@ impl EditorView {
         self.parked_camera.set_snap_nm(parked);
     }
 
+    /// Seed the active and parked workspace cameras' snapping from the remembered choices, as
+    /// [`Self::set_grid_defaults`] does for the spacing.
+    pub(super) fn set_snap_defaults(&mut self, schematic: bool, board: bool) {
+        let (active, parked) = match self.workspace {
+            Workspace::Schematic => (schematic, board),
+            Workspace::Board => (board, schematic),
+        };
+        self.camera.set_snap_enabled(active);
+        self.parked_camera.set_snap_enabled(parked);
+    }
+
     /// Start a successfully opened project's default document in this workspace. Runtime identity,
-    /// each workspace's snap spacing and selection-filter choices survive, while old document
+    /// each workspace's snap spacing and snapping, and selection-filter choices survive, while old document
     /// addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
     /// Definition panes retain their document while refreshing the parked project presentation.
@@ -444,14 +455,14 @@ impl EditorView {
         let library = self.library.take();
         let manufacturing = self.manufacturing.take();
         let workspace = self.workspace;
-        let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
+        let (camera, parked_camera) = (self.camera.clone(), self.parked_camera.clone());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
         let panels = self.panels.clone();
         *self = Self::new_in_workspace(self.id, workspace);
         (self.filters, self.filters_collapsed, self.filters_open) = filters;
         self.panels = panels;
-        self.camera.set_snap_nm(snap_nm);
-        self.parked_camera.set_snap_nm(parked_snap_nm);
+        self.camera.keep_grid(&camera);
+        self.parked_camera.keep_grid(&parked_camera);
         self.sync(session);
         self.definition = definition;
         self.library = library;
@@ -876,7 +887,7 @@ impl EditorView {
         let binding = Binding::current(session, self.workspace, board_target, self.sheet);
         let changed = self.binding != binding;
         if changed {
-            let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
+            let (camera, parked_camera) = (self.camera.clone(), self.parked_camera.clone());
             let workspace = self.workspace;
             let sheet = self.sheet;
             let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -885,8 +896,8 @@ impl EditorView {
             (self.filters, self.filters_collapsed, self.filters_open) = filters;
             self.panels = panels;
             self.sheet = sheet;
-            self.camera.set_snap_nm(snap_nm);
-            self.parked_camera.set_snap_nm(parked_snap_nm);
+            self.camera.keep_grid(&camera);
+            self.parked_camera.keep_grid(&parked_camera);
             self.binding = binding;
         }
         self.board.target = board_target;
