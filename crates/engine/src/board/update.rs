@@ -489,7 +489,6 @@ impl Baseline {
                 || component.revision == 0
                 || !super::definition::valid_id(&component.library)
                 || !super::definition::valid_id(&component.definition)
-                || component.terminals.is_empty()
                 || component.terminals.len() > crate::library::MAX_TERMINALS
                 || !strictly_sorted(&component.terminals)
                 || component.terminals.iter().any(|terminal| PinNumber::new(terminal).is_none())

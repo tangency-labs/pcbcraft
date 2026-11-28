@@ -318,6 +318,11 @@ enrich or upgrade an older baseline. Formats 1/2 omit the new field and retain
 their previous bytes on no-op saves. Older apps reject format 3 instead of
 discarding its metadata; no enclosing board/project vocabulary changes.
 
+Pinless mechanical components carry an empty terminal list and an empty package
+mapping. Each numbered pad in their assigned footprint is recorded as explicitly
+unconnected. The component participates in footprint review without contributing
+an electrical terminal to any accepted net.
+
 Accepted baseline format `pcbcraft-board-baseline/4` retains formats 1–3 and
 requires a bounded nonempty `display_name` on each accepted net. This freezes
 generated reference/pin text and project-wide occurrence qualification separately

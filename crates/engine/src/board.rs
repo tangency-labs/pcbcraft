@@ -179,7 +179,7 @@ impl Footprint {
                     && definition::valid_id(&self.definition)
                     && self.definition_revision > 0
                     && self.pin_1_pad == 0
-                    && self.mapping.as_ref().is_some_and(|m| !m.is_empty() && m.len() <= crate::library::MAX_TERMINALS)
+                    && self.mapping.as_ref().is_some_and(|m| m.len() <= crate::library::MAX_TERMINALS)
             }
             None => {
                 self.definition == FOOTPRINT_DEFINITION
@@ -602,7 +602,7 @@ impl Board {
 /// Resolution separately checks actual identities and complete pad ownership.
 pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, crate::library::parts::PadIds>> {
     let object = value.as_object()?;
-    if object.is_empty() || object.len() > crate::library::MAX_TERMINALS {
+    if object.len() > crate::library::MAX_TERMINALS {
         return None;
     }
     object
