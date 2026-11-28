@@ -274,7 +274,9 @@ fn cut_ins(contour: &[ReadSegment]) -> usize {
         .iter()
         .enumerate()
         .filter(|(i, s)| {
-            s.arc.is_none() && (s.from.y_nm == s.to.y_nm || s.from.x_nm == s.to.x_nm) && contour[i + 1..].iter().any(|t| t.arc.is_none() && t.from == s.to && t.to == s.from)
+            s.arc.is_none()
+                && (s.from.y_nm == s.to.y_nm || s.from.x_nm == s.to.x_nm)
+                && contour[i + 1..].iter().any(|t| t.arc.is_none() && t.from == s.to && t.to == s.from)
         })
         .count()
 }
@@ -524,6 +526,27 @@ fn pours_are_conductor_regions_named_like_their_pads() {
         }
     }
     assert!(pour_nets.contains("ACCEPTED") && pour_nets.len() == 2, "{pour_nets:?}");
+}
+
+/// A foreign track whose clearance leaves a 500 nm copper strip beside another one: the facing
+/// edges could touch under the ±0.5 µm perturbation of Gerber §4.14.2, so export is refused
+/// with a message naming the zone, and nothing about the fill changes.
+#[test]
+fn pours_that_cannot_be_written_safely_are_refused_naming_the_zone() {
+    let mut s = notched_board();
+    let front = copper_layers(&s)[0];
+    let v = view(&s);
+    let margin = v.effective_rules().values.clearance_nm + crate::board::fill::CLEARANCE_RESERVE_NM;
+    let width = v.tracks()[0].width_nm;
+    // Beside the foreign track along x = 4 mm.
+    let x = 4 * MM + width + 2 * margin + 500;
+    route(&mut s, front, &[at(x, 0), at(x, 10 * MM)]).unwrap();
+    add_pours(&mut s, Connection::Solid, true);
+    let error = s.export_fabrication(&json!({})).unwrap_err();
+    let layer = view(&s).layers().into_iter().find(|layer| layer.id == front).unwrap().name;
+    for part in ["ACCEPTED", layer.as_str(), "1 µm"] {
+        assert!(format!("{error:?}").contains(part), "{error:?} names {part:?}");
+    }
 }
 
 /// The test reader refuses a pour contour that retraces one line and encloses nothing, and

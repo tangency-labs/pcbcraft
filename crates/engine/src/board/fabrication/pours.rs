@@ -172,16 +172,22 @@ fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
 /// output resolution, a hole cannot be joined or the written boundary would lie more than
 /// [`MAX_DEVIATION_NM`] from the fill.
 pub(super) fn contour(boundary: &Boundary, frame: Frame, stats: &mut Stats) -> Result<Vec<Segment>, String> {
+    let tolerated = |own: &Stats| {
+        if own.deviation_nm <= MAX_DEVIATION_NM {
+            return Ok(());
+        }
+        Err(format!(
+            "A short arc written as a line would lie {:.0} nm from the fill, more than the {MAX_DEVIATION_NM:.0} nm tolerance.",
+            own.deviation_nm
+        ))
+    };
     let mut own = Stats::default();
     let outer = oriented(written(&pieces(&boundary.outer, frame), &mut own)?, true)?;
     let holes = boundary.holes.iter().map(|hole| oriented(written(&pieces(hole, frame), &mut own)?, false)).collect::<Result<Vec<_>, _>>()?;
+    // The loops' own lines are checked first; cut-ins can only split arcs further.
+    tolerated(&own)?;
     let contour = bridge(outer, holes, &mut own)?;
-    if own.deviation_nm > MAX_DEVIATION_NM {
-        return Err(format!(
-            "A short arc written as a line would lie {:.0} nm from the fill, more than the {MAX_DEVIATION_NM:.0} nm tolerance.",
-            own.deviation_nm
-        ));
-    }
+    tolerated(&own)?;
     stats.deviation_nm = stats.deviation_nm.max(own.deviation_nm);
     stats.segments += contour.len();
     stats.arcs += contour.iter().filter(|segment| segment.shape != Shape::Line).count();
@@ -386,8 +392,8 @@ impl Turn {
 }
 
 /// Join every hole to the outer contour with cut-ins all in one direction, trying the next
-/// direction when one would leave a cut-in tangent to an arc or too close to its own hole, and
-/// refusing with the first direction's reason when none works.
+/// direction when one would leave a cut-in tangent to an arc, too close to its own hole or within
+/// 1 µm of another edge, and refusing with the first direction's reason when none works.
 fn bridge(outer: Vec<Segment>, holes: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>, String> {
     let mut loops = vec![outer];
     loops.extend(holes);
@@ -419,7 +425,8 @@ fn grazes(segment: &Segment, at: Vertex) -> bool {
 /// so taking holes from the largest X down, cut-ins never cross holes or each other. Rays are
 /// answered from horizontal bands of segments and the contour is assembled in one pass, so the
 /// work grows with the number of segments, not with holes times segments, for loops spread over
-/// the region. Refuses a cut-in tangent to an arc at either end (§4.10).
+/// the region. Refuses a cut-in tangent to an arc at either end (§4.10) and a contour with
+/// pieces that do not meet but come within 1 µm of each other (§4.14.2).
 fn bridge_in(loops: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>, String> {
     let entries: Vec<usize> = loops
         .iter()
@@ -465,8 +472,207 @@ fn bridge_in(loops: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>
         // A quarter-turn arc's chord grows along its travel, so `along` orders points on any segment.
         list.sort_by(|a, b| ((a.segment + n - entry) % n).cmp(&((b.segment + n - entry) % n)).then(a.along.total_cmp(&b.along)));
     }
+    let cut_ins: Vec<_> = joins.iter().enumerate().flat_map(|(l, list)| list.iter().map(move |join| (l, join))).collect();
+    separated(
+        &loops,
+        cut_ins.iter().map(|&(l, join)| {
+            (join.h, loops[join.hole][entries[join.hole]].start, [(l, join.segment, join.along), (join.hole, entries[join.hole], 0.)])
+        }),
+    )?;
     stats.cut_ins += loops.len() - 1;
     Ok(assemble(&loops, &entries, &joins, stats))
+}
+
+/// Closest distance that §4.14.2 allows between points and segments that are not coincident.
+const MIN_SEPARATION_NM: f64 = 1_000.;
+
+/// One straight or circular piece of a contour for the separation check: its end points, its
+/// circle (centre, radius, clockwise) when it is an arc, how far a valid reading of the arc may
+/// stray from that circle (§4.7.2), and what it belongs to.
+struct Part {
+    a: Vertex,
+    b: Vertex,
+    arc: Option<([f64; 2], f64, bool)>,
+    fuzz: f64,
+    owner: Owner,
+}
+
+/// A loop segment (loop, index), or a cut-in whose two ends lie on loop segments, each given as
+/// (loop, index, distance along the segment from its start).
+#[derive(Clone, Copy)]
+enum Owner {
+    Loop(usize, usize),
+    Cut([(usize, usize, f64); 2]),
+}
+
+/// Check that pieces which do not meet stay 1 µm apart (§4.14.2), so no allowed perturbation
+/// makes the contour cross itself. Pieces sharing an end point meet there, a cut-in meets the
+/// segments its ends lie on, and pieces joined along one loop by less than 1 µm are one
+/// sub-micrometre corner of the fill rather than a gap; everything else is measured. Candidate
+/// pairs come from a sweep over X-sorted bounding boxes, which bound every quadrant-sized arc.
+fn separated(loops: &[Vec<Segment>], cut_ins: impl Iterator<Item = (Vertex, Vertex, [(usize, usize, f64); 2])>) -> Result<(), String> {
+    let mut parts = Vec::new();
+    let mut along = Vec::with_capacity(loops.len());
+    for (l, segments) in loops.iter().enumerate() {
+        let n = segments.len();
+        let mut prefix = Vec::with_capacity(n + 1);
+        prefix.push(0.);
+        for k in 0..n {
+            let (a, b) = (segments[k].start, segments[(k + 1) % n].start);
+            let (arc, fuzz) = match segments[k].shape {
+                Shape::Arc { center, clockwise, .. } => {
+                    let (c, ra, rb) = (float(center), distance(float(a), float(center)), distance(float(b), float(center)));
+                    (Some((c, (ra + rb) / 2., clockwise)), (ra - rb).abs())
+                }
+                Shape::Line => (None, 0.),
+            };
+            parts.push(Part { a, b, arc, fuzz, owner: Owner::Loop(l, k) });
+            prefix.push(prefix[k] + distance(float(a), float(b)));
+        }
+        along.push(prefix);
+    }
+    parts.extend(cut_ins.map(|(h, v, ends)| Part { a: v, b: h, arc: None, fuzz: 0., owner: Owner::Cut(ends) }));
+    let boxes: Vec<_> =
+        parts.iter().map(|part| [part.a.0.min(part.b.0), part.a.1.min(part.b.1), part.a.0.max(part.b.0), part.a.1.max(part.b.1)]).collect();
+    let reach = MIN_SEPARATION_NM.ceil() as i64 + 1;
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by_key(|&i| boxes[i][0]);
+    for (at, &i) in order.iter().enumerate() {
+        for &j in order[at + 1..].iter().take_while(|&&j| boxes[j][0] <= boxes[i][2] + reach) {
+            if boxes[j][1] > boxes[i][3] + reach || boxes[i][1] > boxes[j][3] + reach || meet(&parts[i], &parts[j], &along) {
+                continue;
+            }
+            let gap = gap(&parts[i], &parts[j]);
+            if gap < MIN_SEPARATION_NM + parts[i].fuzz + parts[j].fuzz {
+                return Err(format!(
+                    "Two of its edges that do not meet are {gap:.0} nm apart, less than the 1 µm Gerber §4.14.2 requires, so processing could make them touch."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether two pieces meet by construction (see [`separated`]), so their distance is not checked.
+fn meet(p: &Part, q: &Part, along: &[Vec<f64>]) -> bool {
+    if [p.a, p.b].iter().any(|end| *end == q.a || *end == q.b) {
+        return true;
+    }
+    // Distance along loop `l` from the point `offset` into segment `k` to segment `j`, either way.
+    let apart = |l: usize, k: usize, offset: f64, j: usize| {
+        let prefix = &along[l];
+        let total = prefix[prefix.len() - 1];
+        let at = prefix[k] + offset;
+        (prefix[j] - at).rem_euclid(total).min((at - prefix[j + 1]).rem_euclid(total))
+    };
+    match (p.owner, q.owner) {
+        (Owner::Loop(l, i), Owner::Loop(m, j)) if l == m => {
+            let (i, j) = (i.min(j), i.max(j));
+            apart(l, i, along[l][i + 1] - along[l][i], j) < MIN_SEPARATION_NM
+        }
+        (Owner::Loop(l, j), Owner::Cut(ends)) | (Owner::Cut(ends), Owner::Loop(l, j)) => {
+            ends.iter().any(|&(m, k, offset)| m == l && (k == j || apart(l, k, offset, j) < MIN_SEPARATION_NM))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `p` lies within the sweep of the arc from `a` to `b` about `c` (at most a half turn).
+fn within(p: [f64; 2], c: [f64; 2], a: Vertex, b: Vertex, clockwise: bool) -> bool {
+    let (u, v, w) = ([a.0 as f64 - c[0], a.1 as f64 - c[1]], [b.0 as f64 - c[0], b.1 as f64 - c[1]], [p[0] - c[0], p[1] - c[1]]);
+    let (from, to) = (u[0] * w[1] - u[1] * w[0], w[0] * v[1] - w[1] * v[0]);
+    if clockwise { from <= 0. && to <= 0. } else { from >= 0. && to >= 0. }
+}
+
+/// Distance from a point to a piece.
+fn reach_to(p: [f64; 2], part: &Part) -> f64 {
+    let (a, b) = (float(part.a), float(part.b));
+    match part.arc {
+        Some((c, r, clockwise)) if within(p, c, part.a, part.b, clockwise) => (distance(p, c) - r).abs(),
+        Some(_) => distance(p, a).min(distance(p, b)),
+        None => {
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1])).clamp(0., 1.);
+            distance(p, [a[0] + t * d[0], a[1] + t * d[1]])
+        }
+    }
+}
+
+/// Whether two pieces cross or touch: exact orientation tests for two lines, circle
+/// intersections checked against each sweep otherwise.
+fn crossing(p: &Part, q: &Part) -> bool {
+    let orient =
+        |a: Vertex, b: Vertex, c: Vertex| (i128::from(b.0 - a.0) * i128::from(c.1 - a.1) - i128::from(b.1 - a.1) * i128::from(c.0 - a.0)).signum();
+    let on_line = |part: &Part, x: [f64; 2]| {
+        let (a, b) = (float(part.a), float(part.b));
+        let t = ((x[0] - a[0]) * (b[0] - a[0]) + (x[1] - a[1]) * (b[1] - a[1])) / ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2));
+        (0. ..=1.).contains(&t)
+    };
+    let on = |part: &Part, x: [f64; 2]| match part.arc {
+        Some((c, _, clockwise)) => within(x, c, part.a, part.b, clockwise),
+        None => on_line(part, x),
+    };
+    match (p.arc, q.arc) {
+        (None, None) => {
+            let (d1, d2, d3, d4) = (orient(q.a, q.b, p.a), orient(q.a, q.b, p.b), orient(p.a, p.b, q.a), orient(p.a, p.b, q.b));
+            d1 * d2 < 0 && d3 * d4 < 0
+        }
+        (Some((c, r, _)), None) | (None, Some((c, r, _))) => {
+            let line = if p.arc.is_none() { p } else { q };
+            let (a, b) = (float(line.a), float(line.b));
+            let (d, f) = ([b[0] - a[0], b[1] - a[1]], [a[0] - c[0], a[1] - c[1]]);
+            let (qa, qb, qc) = (d[0] * d[0] + d[1] * d[1], 2. * (f[0] * d[0] + f[1] * d[1]), f[0] * f[0] + f[1] * f[1] - r * r);
+            let disc = qb * qb - 4. * qa * qc;
+            disc >= 0.
+                && [-1., 1.].iter().any(|sign| {
+                    let t = (-qb + sign * disc.sqrt()) / (2. * qa);
+                    (0. ..=1.).contains(&t) && on(p, [a[0] + t * d[0], a[1] + t * d[1]]) && on(q, [a[0] + t * d[0], a[1] + t * d[1]])
+                })
+        }
+        (Some((c1, r1, _)), Some((c2, r2, _))) => {
+            let d = distance(c1, c2);
+            if d == 0. || d > r1 + r2 || d < (r1 - r2).abs() {
+                return false;
+            }
+            let x = (d * d + r1 * r1 - r2 * r2) / (2. * d);
+            let y = (r1 * r1 - x * x).max(0.).sqrt();
+            let (ux, uy) = ((c2[0] - c1[0]) / d, (c2[1] - c1[1]) / d);
+            [-1., 1.].iter().any(|sign| {
+                let point = [c1[0] + x * ux - sign * y * uy, c1[1] + x * uy + sign * y * ux];
+                on(p, point) && on(q, point)
+            })
+        }
+    }
+}
+
+/// Shortest distance between two pieces: zero when they cross, otherwise the least of the end
+/// point distances and, for arcs, of the arc points facing the other piece (along the line's
+/// normal, or along the line between the two centres).
+fn gap(p: &Part, q: &Part) -> f64 {
+    if crossing(p, q) {
+        return 0.;
+    }
+    let mut best = [reach_to(float(p.a), q), reach_to(float(p.b), q), reach_to(float(q.a), p), reach_to(float(q.b), p)]
+        .into_iter()
+        .fold(f64::INFINITY, f64::min);
+    for (arc, other) in [(p, q), (q, p)] {
+        let Some((c, r, clockwise)) = arc.arc else { continue };
+        let toward = match other.arc {
+            Some((o, ..)) => [o[0] - c[0], o[1] - c[1]],
+            None => [-(float(other.b)[1] - float(other.a)[1]), float(other.b)[0] - float(other.a)[0]],
+        };
+        let length = toward[0].hypot(toward[1]);
+        if length == 0. {
+            continue;
+        }
+        for sign in [-1., 1.] {
+            let point = [c[0] + sign * r * toward[0] / length, c[1] + sign * r * toward[1] / length];
+            if within(point, c, arc.a, arc.b, clockwise) {
+                best = best.min(reach_to(point, other));
+            }
+        }
+    }
+    best
 }
 
 /// Walk the loops from the outer one, each from its entry vertex, entering every joined hole
@@ -753,6 +959,30 @@ mod tests {
         let boundaries = material.boundaries().unwrap();
         let error = contour(&boundaries[0], Frame::BOARD_ZERO, &mut Stats::default()).unwrap_err();
         assert!(error.contains("100 nm"), "{error}");
+    }
+
+    /// Facing edges of two holes 500 nm apart could touch under the ±0.5 µm perturbation of
+    /// §4.14.2, so the contour is refused, for straight edges and for arcs; 1 µm or more apart it
+    /// is written.
+    #[test]
+    fn segments_closer_than_one_micrometre_are_refused() {
+        let square = |x: i64| Regions::polygon(&[[x, 2 * MM], [x + MM, 2 * MM], [x + MM, 4 * MM], [x, 4 * MM]]).unwrap();
+        let disc = |x: i64| Regions::circle([x + MM / 2, 3 * MM], MM).unwrap();
+        let cases: [(&dyn Fn(i64) -> Regions, i64, bool); 4] =
+            [(&square, 500, false), (&square, 1_000, true), (&disc, 500, false), (&disc, 1_500, true)];
+        for (hole, gap, ok) in cases {
+            let material = rect(0, 0, 100, 100)
+                .boolean(&hole(2 * MM), Operation::Difference)
+                .unwrap()
+                .boolean(&hole(3 * MM + gap), Operation::Difference)
+                .unwrap();
+            let boundaries = material.boundaries().unwrap();
+            let result = contour(&boundaries[0], Frame::BOARD_ZERO, &mut Stats::default());
+            assert_eq!(result.is_ok(), ok, "gap {gap}: {:?}", result.err());
+            if let Err(error) = result {
+                assert!(error.contains("1 µm"), "{error}");
+            }
+        }
     }
 
     /// A cut-in never meets a circular segment tangentially (§4.10.3). The +X ray from the left
