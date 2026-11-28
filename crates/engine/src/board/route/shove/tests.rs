@@ -1484,3 +1484,181 @@ fn highlight_mixed_width_return_uses_both_radii() {
         assert_eq!(plan.outcome, expected, "gap {gap}");
     }
 }
+
+/// Add a through via at `at` with one follower per entry, each ending on the via center, and
+/// return the via ID with the followers in authored order.
+fn via_with_followers(s: &mut Session, at: Point, followers: &[(Uuid, Point, i64)]) -> (Uuid, Vec<crate::board::track::Track>) {
+    s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
+    let via = view(s).vias().iter().find(|v| v.at == at).unwrap().id;
+    let mut tracks = Vec::new();
+    for &(layer, from, width) in followers {
+        let ids = add_on(s, layer, vec![from, at], width);
+        tracks.push(view(s).tracks().iter().find(|t| t.id == ids[0]).unwrap().clone());
+    }
+    (via, tracks)
+}
+
+/// Author one track chain on `layer` and return the new segment IDs.
+fn add_on(s: &mut Session, layer: Uuid, points: Vec<Point>, width: i64) -> Vec<Uuid> {
+    let old: BTreeSet<_> = view(s).tracks().iter().map(|t| t.id).collect();
+    s.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":width,"points":points,"expected_revision":s.revision()})).unwrap();
+    view(s).tracks().iter().filter(|t| !old.contains(&t.id)).map(|t| t.id).collect()
+}
+
+/// An authored zone keeps through vias fixed during via-enabled route planning and refuses a
+/// shove-aware connected drag. The refused drag leaves copper, the revision and Undo history alone.
+#[test]
+fn an_authored_zone_keeps_vias_fixed_and_refuses_shove_drag() {
+    let mut s = crate::board::track::tests::routed_fixture();
+    let layers = copper_layers(&s);
+    // The fixture footprints sit near the origin; the joint fixture stays 20 mm below them.
+    let y = -200;
+    let at = p(50, y);
+    let (via, followers) = via_with_followers(&mut s, at, &[(layers[0], p(50, y - 30), 250_000), (layers[1], p(50, y - 30), 250_000)]);
+    let a = add(&mut s, vec![p(20, y + 40), p(80, y + 40)], 250_000)[0];
+    let b = add(&mut s, vec![p(20, y + 60), p(20, y + 40)], 250_000)[0];
+    let request = Request { head: p(20, y + 3), target: p(80, y + 3), mode: Mode::ShoveVias, ..request(&s) };
+    let without_zone = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(without_zone.via_moves.len(), 1, "the same route moves the via before a zone exists: {without_zone:?}");
+
+    let unzoned = encode_documents(s.snapshot().unwrap()).unwrap();
+    let anchor = s.snapshot().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    s.apply(
+        crate::board::zones::ADD_ZONE,
+        &json!({"layer":layers[0],"target":{"kind":"derived","anchor":anchor},
+        "points":[{"x_nm":0,"y_nm":50_000_000},{"x_nm":10_000_000,"y_nm":50_000_000},{"x_nm":10_000_000,"y_nm":60_000_000}],
+        "expected_revision":s.revision()}),
+    )
+    .unwrap();
+    assert_eq!(view(&s).zones().len(), 1);
+    let zoned = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+
+    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert!(plan.via_moves.is_empty(), "{plan:?}");
+    assert!(plan.replacements.iter().all(|r| followers.iter().all(|f| f.id != r.track)), "{plan:?}");
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, at);
+
+    for mode in ["shove", "shove_vias"] {
+        let params = json!({"tracks":[{"track":a,"start":p(20,y+1),"end":p(80,y+1)},{"track":b,"start":p(20,y+60),"end":p(20,y+1)}],
+            "mode":mode,"expected_revision":revision});
+        let error = s.apply(crate::RESHAPE_TRACKS, &params).unwrap_err().to_string();
+        assert!(error.contains("zones"), "{mode}: {error}");
+        assert_eq!(s.revision(), revision);
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), zoned);
+    }
+    // The zone stays the latest Undo step: the refused drags recorded nothing.
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), unzoned);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), zoned);
+}
+
+/// On four copper layers a moved through via carries followers of three widths on outer and
+/// inner copper. Each keeps its ID, layer, width and far end, meets the new via center and stays
+/// in the via's copper island, apart from the incoming route, with no clearance violation.
+#[test]
+fn a_multilayer_via_move_keeps_mixed_width_followers() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":s.revision()})).unwrap();
+    crate::board::drc::tests::outline(&mut s);
+    let outer = copper_layers(&s);
+    let inner: Vec<_> = view(&s)
+        .layers()
+        .into_iter()
+        .filter(|l| l.purpose == crate::board::setup::LayerPurpose::Copper && !outer.contains(&l.id))
+        .map(|l| l.id)
+        .collect();
+    assert_eq!(inner.len(), 2);
+    let at = p(50, 0);
+    let (via, followers) =
+        via_with_followers(&mut s, at, &[(outer[0], p(50, -30), 250_000), (inner[0], p(20, -30), 400_000), (outer[1], p(80, -30), 200_000)]);
+    let request = Request { head: p(20, 3), target: p(80, 3), mode: Mode::ShoveVias, ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.via_moves.len(), 1, "{plan:?}");
+    assert_eq!(plan.replacements.len(), followers.len(), "{plan:?}");
+    let moved = plan.via_moves[0].at;
+    assert!(moved.y_nm < at.y_nm, "{plan:?}");
+    commit(&mut s, &request, &plan);
+
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, moved);
+    for original in &followers {
+        let track = view(&s).tracks().iter().find(|t| t.id == original.id).unwrap().clone();
+        assert_eq!((track.layer, track.width_nm, track.start, track.end), (original.layer, original.width_nm, original.start, moved));
+    }
+    let snapshot = query(&s);
+    let island = |id: Uuid| snapshot.objects().iter().find(|o| o.name == id.to_string()).unwrap().island;
+    assert!(followers.iter().all(|t| island(t.id) == island(via)));
+    let routed = view(&s).tracks().iter().find(|t| t.layer == request.layer && t.start == request.head).unwrap().id;
+    assert_ne!(island(routed), island(via));
+    assert!(!snapshot.exhaustive_pairs().decisions.iter().any(|d| d.clearance_violation || d.conflicting_nets));
+}
+
+/// The via land keeps its edge clearance on every layer it spans. In open board space a route
+/// just above the via pushes it down; beside the bottom edge the same route moves it up, away
+/// from the edge, and its followers on the other copper layer follow. Neither result leaves an
+/// edge-clearance or outside-board finding.
+#[test]
+fn a_via_move_keeps_its_board_edge_clearance() {
+    for (y, down) in [(100, true), (-42, false)] {
+        let mut s = board();
+        crate::board::drc::tests::outline(&mut s);
+        let bottom = copper_layers(&s)[1];
+        let at = p(50, y);
+        let (via, followers) = via_with_followers(&mut s, at, &[(bottom, p(10, y), 250_000), (bottom, p(90, y), 250_000)]);
+        let request = Request { head: p(20, y + 3), target: p(80, y + 3), mode: Mode::ShoveVias, ..request(&s) };
+        let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.via_moves.len(), 1, "y {y}: {plan:?}");
+        let moved = plan.via_moves[0].at;
+        assert_eq!(moved.y_nm < at.y_nm, down, "y {y}: {plan:?}");
+        commit(&mut s, &request, &plan);
+        assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, moved);
+        for original in &followers {
+            let track = view(&s).tracks().iter().find(|t| t.id == original.id).unwrap().clone();
+            assert_eq!((track.layer, track.width_nm, track.start, track.end), (original.layer, original.width_nm, original.start, moved));
+        }
+        let report = view(&s).check_design(crate::board::drc::Rules::default());
+        let edge =
+            report.violations.iter().filter(|v| matches!(v.kind, crate::board::drc::Kind::EdgeClearance | crate::board::drc::Kind::OutsideBoard));
+        assert_eq!(edge.count(), 0, "y {y}: {report:#?}");
+    }
+}
+
+/// A directly locked through via stays fixed. A compound commit that still names its earlier
+/// move is refused without changing copper, the revision or history, and a new plan leaves it.
+#[test]
+fn a_directly_locked_via_stays_fixed() {
+    let mut s = board();
+    let at = p(50, 0);
+    let layers = copper_layers(&s);
+    let (via, followers) = via_with_followers(&mut s, at, &[(layers[0], p(50, -30), 250_000), (layers[1], p(50, -30), 250_000)]);
+    let request = Request { head: p(20, 3), target: p(80, 3), mode: Mode::ShoveVias, ..request(&s) };
+    let earlier = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(earlier.via_moves.len(), 1, "{earlier:?}");
+    let unlocked = encode_documents(s.snapshot().unwrap()).unwrap();
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"vias":[via],"locked":true,"expected_revision":s.revision()})).unwrap();
+    let locked = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+
+    let stale = json!({"layer":request.layer,"width_nm":request.width_nm,"points":earlier.points,"via_moves":earlier.via_moves,
+        "replacements":earlier.replacements,"expected_revision":revision});
+    assert!(s.apply(ADD_TRACKS, &stale).is_err());
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), locked);
+
+    let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
+    assert!(plan.via_moves.is_empty(), "{plan:?}");
+    assert!(plan.replacements.iter().all(|r| followers.iter().all(|f| f.id != r.track)), "{plan:?}");
+    assert_eq!(s.revision(), revision);
+    // The lock stays the latest Undo step: the refused commit recorded nothing.
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), unlocked);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), locked);
+    if plan.outcome == Outcome::Reached {
+        commit(&mut s, &request, &plan);
+    }
+    assert_eq!(view(&s).vias().iter().find(|v| v.id == via).unwrap().at, at);
+    assert!(followers.iter().all(|f| view(&s).tracks().contains(f)));
+}

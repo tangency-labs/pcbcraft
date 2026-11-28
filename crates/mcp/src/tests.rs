@@ -2973,3 +2973,79 @@ fn the_live_client_refuses_the_kicad_import_without_connecting() {
     assert_eq!(refused.code(), "unavailable", "{refused}");
     assert!(refused.message().contains("headless"), "{refused}");
 }
+
+/// MCP runs the editor's shove-aware connected drag: one revision-checked reshape stretches the
+/// connected pair, pushes the neighboring rail exactly as the engine command does, refuses a
+/// stale retry without a change, and undoes as one step.
+#[test]
+fn connected_shove_drag_over_mcp_matches_the_editor_command() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let board = setup.project().unwrap().board_target().unwrap();
+    let layer = setup
+        .project()
+        .unwrap()
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+        .unwrap()
+        .id;
+    let p = |x: i64, y: i64| json!({"x_nm":x * 100_000,"y_nm":y * 100_000});
+    let mut add = |points: Value, width: i64| {
+        let old: Vec<_> = setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|t| t.id).collect();
+        setup
+            .apply(
+                pcbcraft_engine::ADD_TRACKS,
+                &json!({"board":board.board,"layer":layer,"width_nm":width,"points":points,"expected_revision":setup.revision()}),
+            )
+            .unwrap();
+        setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|t| t.id).find(|id| !old.contains(id)).unwrap()
+    };
+    let a = add(json!([p(20, 20), p(80, 20)]), 250_000);
+    let b = add(json!([p(20, 40), p(20, 20)]), 250_000);
+    let rail = add(json!([p(0, 0), p(100, 0)]), 500_000);
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let params = json!({"board":board.board,"tracks":[{"track":a,"start":p(20,1),"end":p(80,1)},{"track":b,"start":p(20,40),"end":p(20,1)}],
+        "mode":"shove","expected_revision":before["revision"]});
+
+    let dragged = call(&mut server, "execute", json!({"command":pcbcraft_engine::RESHAPE_TRACKS,"params":params}));
+    assert_ne!(dragged["isError"], true, "{dragged}");
+    let dragged = body(&dragged);
+    assert_eq!(dragged["revision"], before["revision"].as_u64().unwrap() + 1);
+    let tracks = dragged["project"]["boards"][0]["tracks"].as_array().unwrap();
+    let track = |id: Value| tracks.iter().find(|t| t["id"] == id).unwrap();
+    assert_eq!((&track(json!(a))["start"], &track(json!(a))["end"]), (&p(20, 1), &p(80, 1)));
+    assert_eq!(track(json!(b))["end"], p(20, 1));
+    assert_ne!(track(json!(rail))["end"], p(100, 0), "the rail is pushed away");
+
+    let mut editor_params = params.clone();
+    editor_params["expected_revision"] = json!(setup.revision());
+    setup.apply(pcbcraft_engine::RESHAPE_TRACKS, &editor_params).unwrap();
+    // New displaced segments get fresh IDs; compare their geometry and every retained ID.
+    let kept = [json!(a), json!(b), json!(rail)];
+    let shape = |tracks: Vec<Value>| {
+        let mut shapes: Vec<_> = tracks
+            .into_iter()
+            .map(|mut t| {
+                if !kept.contains(&t["id"]) {
+                    t["id"] = Value::Null;
+                }
+                t.to_string()
+            })
+            .collect();
+        shapes.sort();
+        shapes
+    };
+    let editor = setup.project().unwrap().board_view(board).unwrap().tracks().iter().map(|t| t.inspect()).collect();
+    assert_eq!(shape(tracks.clone()), shape(editor));
+
+    let stale = call(&mut server, "execute", json!({"command":pcbcraft_engine::RESHAPE_TRACKS,"params":params}));
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), dragged);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"][0]["tracks"], before["project"]["boards"][0]["tracks"]);
+}
