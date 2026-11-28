@@ -67,7 +67,13 @@ struct NativeUnit {
 /// is converted. Reading its units and pins, and every pin, drawing and text converted, is paid
 /// for from `budget`, in points; when it runs short, it is set to zero, conversion stops there,
 /// and the caller refuses the import. Messages show at most 16 characters of a pin number.
-pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report: &mut Report) -> Result<Converted, String> {
+pub(super) fn convert(
+    symbol: &LibSymbol,
+    id: String,
+    budget: &mut usize,
+    report: &mut Report,
+    preserve_local_power: bool,
+) -> Result<Converted, String> {
     // Reading the symbol below visits each of its units and pins, and symbols can share one
     // drawing through `extends`, so that is paid for first: units before they are counted
     // through, then pins.
@@ -242,7 +248,9 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         "terminals": terminals,
         "units": native_units.into_iter().map(|u| json!({"id": u.id, "drawing": u.drawing, "pins": u.pins})).collect::<Vec<_>>(),
     });
-    if let Some(terminal) = &power_terminal {
+    if let Some(terminal) = &power_terminal
+        && !(preserve_local_power && symbol.power_local)
+    {
         document["behavior"] = json!({"type": "power", "terminal": terminal});
     }
     let text = document.to_string();

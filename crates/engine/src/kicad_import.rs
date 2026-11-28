@@ -23,7 +23,7 @@ mod tests;
 use crate::library::sources::{Kind, LOAD};
 use crate::schematic::{MAX_CENTER_NM, Terminal, Wire, WireEndpoint, check_reference, check_value};
 use crate::sheets::page::{Orientation, Page, Paper, SET_PAGE};
-use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session};
+use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session, SheetTarget};
 use pcbcraft_kicad::Point;
 use pcbcraft_kicad::schematic::{LabelKind, Mirror, PlacedSymbol, Schematic};
 use serde_json::{Value, json};
@@ -181,8 +181,28 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(CommandError::CapExceeded(format!("A KiCad schematic may be at most {} MiB.", MAX_TEXT_BYTES >> 20)));
     }
-    let mut schematic =
+    let schematic =
         pcbcraft_kicad::read_schematic(text).map_err(|e| CommandError::InvalidParams(format!("The KiCad schematic can't be read: {e}")))?;
+    import_sheet(schematic, name, None).map(|(imported, _)| imported)
+}
+
+type SheetNets = BTreeSet<BTreeSet<hierarchy::Contact>>;
+
+fn import_sheet(mut schematic: Schematic, name: &str, scope: Option<(Arc<Project>, SheetTarget)>) -> Result<(Imported, SheetNets), CommandError> {
+    let mut interface_labels = Vec::new();
+    let hierarchical = scope.is_some();
+    if hierarchical {
+        // The tree builder has already created the native ports and their repeated anchors.
+        schematic.sheets.clear();
+        schematic.labels.retain(|label| {
+            if label.kind == LabelKind::Hierarchical {
+                interface_labels.push((label.name.clone(), label.at));
+                false
+            } else {
+                true
+            }
+        });
+    }
     let mut report = Report::default();
     for (what, count) in schematic.notes.iter() {
         report.add(what, count);
@@ -235,7 +255,7 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         let base = symbols::native_id(name);
         let id = (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|id| !ids.contains(id)).unwrap_or(base);
         ids.insert(id.clone());
-        match symbols::convert(symbol, id, &mut budget, &mut report) {
+        match symbols::convert(symbol, id, &mut budget, &mut report, hierarchical) {
             Ok(symbol) => {
                 bytes = bytes.saturating_add(symbol.text.len());
                 converted.insert(name, symbol);
@@ -271,7 +291,11 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         .filter(|s| converted.get(s.lib_symbol.as_str()).is_some_and(|c| c.power_terminal.is_some()))
         .filter(|s| schematic.lib_symbols.get(&s.lib_symbol).is_some_and(|lib| lib.power_local))
         .count();
-    report.add("local power symbols imported as global ones (the same net on a single sheet)", local_power);
+    if hierarchical {
+        report.add("local power symbols kept with sheet-scoped net anchors", local_power);
+    } else {
+        report.add("local power symbols imported as global ones (the same net on a single sheet)", local_power);
+    }
     let poses: Vec<Option<(u8, bool)>> = schematic.symbols.iter().map(pose).collect();
     for (symbol, pose) in schematic.symbols.iter().zip(&poses) {
         if pose.is_none() {
@@ -315,13 +339,19 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     }
     refusals.check()?;
 
-    let mut builder = Builder::new(name, &converted)?;
+    let mut builder = Builder::new(name, &converted, scope)?;
     let placed = builder.place(&schematic, &converted, &pins, &poses, &mut report)?;
     builder.wire(&schematic, &segments, &placed, &converted, &pins, &mut report)?;
     builder.page(schematic.paper.as_ref(), &mut report)?;
     let project = builder.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
-    check_nets(&schematic, &segments, &placed, &converted, &project)?;
-    Ok(Imported { project, report })
+    let groups = if hierarchical {
+        let sheet = builder.project()?;
+        hierarchy::source_nets(&schematic, &segments, &placed, &converted, &sheet, &interface_labels)?
+    } else {
+        check_nets(&schematic, &segments, &placed, &converted, &project)?;
+        BTreeSet::new()
+    };
+    Ok((Imported { project, report }, groups))
 }
 
 /// The order to place symbols in: first every symbol that keeps its KiCad reference, then the
@@ -643,6 +673,7 @@ struct Placed {
 /// The scratch session the project is built in, with the converted symbols' digests.
 struct Builder {
     session: Session,
+    sheet: Option<SheetTarget>,
     /// The library identity the converted symbols are pinned under.
     library: String,
     /// The project's highest allocated ordinal before the latest command, to find what it added.
@@ -654,10 +685,16 @@ struct Builder {
 impl Builder {
     /// A scratch session with a new project and the converted symbols loaded as one source.
     /// Fails, naming the symbol and the loader's reason, when a converted document is refused.
-    fn new(name: &str, converted: &BTreeMap<&str, symbols::Converted>) -> Result<Self, CommandError> {
+    fn new(name: &str, converted: &BTreeMap<&str, symbols::Converted>, scope: Option<(Arc<Project>, SheetTarget)>) -> Result<Self, CommandError> {
         let mut session = Session::default();
-        let name = symbols::clip(name, 64).unwrap_or_else(|| "Imported".to_owned());
-        session.apply("project.new", &json!({"name": name})).map_err(step("creating the project"))?;
+        let sheet = if let Some((project, sheet)) = scope {
+            session.open_snapshot(project);
+            Some(sheet)
+        } else {
+            let name = symbols::clip(name, 64).unwrap_or_else(|| "Imported".to_owned());
+            session.apply("project.new", &json!({"name": name})).map_err(step("creating the project"))?;
+            None
+        };
         let mut documents: BTreeMap<String, String> =
             converted.values().map(|symbol| (format!("symbols/{}.json", symbol.id), symbol.text.clone())).collect();
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
@@ -692,12 +729,17 @@ impl Builder {
             }
         }
         refusals.check()?;
-        Ok(Self { session, library, high: 0, digests })
+        Ok(Self { session, sheet, library, high: 0, digests })
     }
 
     /// Run one project command at the current revision. Wire edits keep their authored routes.
     fn apply(&mut self, id: &str, mut params: Value, what: &str) -> Result<(), CommandError> {
         params["expected_revision"] = json!(self.session.revision());
+        if let Some(sheet) = self.sheet
+            && crate::sheets::scoped_command(id)
+        {
+            params["sheet"] = json!(sheet.id());
+        }
         self.high = self.session.project().map_or(0, Project::highest_id);
         self.session.apply(id, &params).map(|_| ()).map_err(step(what))
     }
@@ -746,7 +788,11 @@ impl Builder {
 
     /// The open project; always present once [`Builder::new`] succeeded.
     fn project(&self) -> Result<Arc<Project>, CommandError> {
-        self.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))
+        let project = self.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
+        match self.sheet {
+            Some(sheet) => project.for_sheet(sheet).map(Arc::new).ok_or_else(|| CommandError::InvalidParams("the imported sheet is missing".into())),
+            None => Ok(project),
+        }
     }
 
     /// Place every symbol, each component's further units, and set references, values and fields.
@@ -866,7 +912,20 @@ impl Builder {
         let labels: BTreeSet<Point> = schematic.labels.iter().map(|l| l.at).collect();
         let no_connects: BTreeSet<Point> = schematic.no_connects.iter().map(|m| m.at).collect();
         let dots: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).collect();
+        let project = self.project()?;
+        let mut interfaces = BTreeMap::new();
+        for (endpoint, point) in project.hierarchy_endpoints() {
+            let point = Point { x_nm: point.x_nm, y_nm: point.y_nm };
+            if interfaces.insert(point, endpoint).is_some() {
+                return Err(CommandError::InvalidParams(format!(
+                    "overlapping hierarchy anchors at ({:.3}, {:.3}) mm",
+                    point.x_nm as f64 / 1e6,
+                    point.y_nm as f64 / 1e6
+                )));
+            }
+        }
         let mut cuts: BTreeSet<Point> = pins_at.keys().copied().collect();
+        cuts.extend(interfaces.keys().copied());
         cuts.extend(labels.iter());
         cuts.extend(dots.iter());
         let pieces = wiring::split(segments, &cuts);
@@ -901,7 +960,7 @@ impl Builder {
         }
         let loose: BTreeSet<Point> = degree
             .iter()
-            .filter(|(p, n)| **n == 1 && !pins_at.contains_key(p) && !labels.contains(p) && !no_connects.contains(p))
+            .filter(|(p, n)| **n == 1 && !pins_at.contains_key(p) && !interfaces.contains_key(p) && !labels.contains(p) && !no_connects.contains(p))
             .map(|(p, _)| *p)
             .collect();
         report.add("wire ends that touch nothing", loose.len());
@@ -937,10 +996,11 @@ impl Builder {
             let ends = [route.from, route.to];
             let anchors: Vec<Value> = ends
                 .iter()
-                .map(|end| match (pins_at.get(end).and_then(|pins| pins.first()), junctions.get(end)) {
-                    (Some((symbol, _, number)), _) => json!({"symbol": crate::schematic::symbol_id(*symbol), "terminal": number}),
-                    (None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
-                    (None, None) => json!({"x_nm": end.x_nm, "y_nm": end.y_nm}),
+                .map(|end| match (interfaces.get(end), pins_at.get(end).and_then(|pins| pins.first()), junctions.get(end)) {
+                    (Some(interface), _, _) => interface.inspect(),
+                    (None, Some((symbol, _, number)), _) => json!({"symbol": crate::schematic::symbol_id(*symbol), "terminal": number}),
+                    (None, None, Some(junction)) => json!({"junction": format!("junction-{junction}")}),
+                    (None, None, None) => json!({"x_nm": end.x_nm, "y_nm": end.y_nm}),
                 })
                 .collect();
             let bends: Vec<Value> = route.bends.iter().map(|b| at(*b)).collect();
@@ -969,6 +1029,23 @@ impl Builder {
             let style = if label.kind == LabelKind::Global { "global" } else { "local" };
             let params = json!({"name": label.name, "style": style, "x_nm": label.at.x_nm, "y_nm": label.at.y_nm, "rotation": rotation});
             self.apply(crate::net_labels::ADD, params, &format!("placing label {}", label.name))?;
+        }
+
+        if self.sheet.is_some() {
+            for part in placed {
+                let source = &schematic.symbols[part.source];
+                if schematic.lib_symbols.get(&source.lib_symbol).is_some_and(|lib| lib.power_local)
+                    && let Some(terminal) = converted.get(source.lib_symbol.as_str()).and_then(|lib| lib.power_terminal.as_deref())
+                    && let Some((_, point)) = part.pins.iter().find(|(number, _)| number == terminal)
+                    && let Some(name) = source.property("Value")
+                {
+                    self.apply(
+                        crate::net_labels::ADD,
+                        json!({"name":name,"style":"local","x_nm":point.x_nm,"y_nm":point.y_nm,"rotation":0}),
+                        &format!("placing local power anchor for {}", source.reference),
+                    )?;
+                }
+            }
         }
 
         for mark in &no_connects {

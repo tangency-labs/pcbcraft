@@ -677,8 +677,8 @@ encoder retries with compact records.
 
 ### Current sheet records
 
-The native writer uses sheet/10 for all sheets and retains the sheet UUID and
-registered path. Every sheet has `net_labels`, `labels`, `subsheets`,
+The native writer retains the sheet UUID and registered path. It writes sheet/10
+for ordinary sheets and sheet/11 for sheets with explicit parent pin positions. Every sheet has `net_labels`, `labels`, `subsheets`,
 `symbols`, `junctions` and `wires` arrays, including empty arrays when
 appropriate. Optional fields include symbol field layout and mirroring,
 net-name appearance, generated contact legs, no-connect wire ends, paper and
@@ -1024,6 +1024,14 @@ height; explicit resizing refuses a rectangle smaller than current pin clearance
 `schematic.resize_sheet` accepts a complete origin/width/height rectangle and
 commits it atomically, preserving all endpoint identities. Right-side pins follow
 the authored width while vertical slots remain stable.
+
+Sheet/11 can record an explicit `parent_pin` on a hierarchical label. Its
+`edge` is `left`, `right`, `top` or `bottom`, and `offset_nm` measures
+from the top on vertical edges or from the left on horizontal edges. This
+preserves pin locations imported from KiCad, including locations outside the
+native pin slots. The pin moves with its parent symbol and follows its edge
+when the symbol is resized. Sheets without explicit pin positions still use
+sheet/10.
 
 A stored `{"label":<id>}` endpoint addresses a child label; `{"sheet_pin":<id>}`
 addresses its distinct parent-side pin. Both resolve only within their owning

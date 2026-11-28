@@ -88,6 +88,7 @@ const WIRE_END_SHEET_FORMAT: &str = "pcbcraft-sheet/8";
 const PAGE_SHEET_FORMAT: &str = "pcbcraft-sheet/9";
 /// Current sheet write format. Raw snapshots may omit paper until opened for editing.
 pub const CURRENT_SHEET_FORMAT: &str = "pcbcraft-sheet/10";
+pub(super) const SHEET_PIN_FORMAT: &str = "pcbcraft-sheet/11";
 const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -851,7 +852,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
         let mut sheet: SheetDocument = parse_versioned(documents, &reference.file)?;
-        let current = sheet.format == CURRENT_SHEET_FORMAT;
+        let explicit_pins = sheet.format == SHEET_PIN_FORMAT;
+        let current = explicit_pins || sheet.format == CURRENT_SHEET_FORMAT;
+        let has_pin_positions = sheet.labels.as_ref().is_some_and(|labels| labels.iter().any(|label| label.parent_pin.is_some()));
+        if explicit_pins != has_pin_positions {
+            return Err(format!("{}: explicit parent pin positions require sheet format 11, and format 11 requires a position", reference.file));
+        }
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
             (SHEET_FORMAT, false, false, false)
             | (HIERARCHY_FORMAT, true, true, false)
@@ -861,7 +867,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (MIRROR_SHEET_FORMAT, true, true, true)
             | (GENERATED_SHEET_FORMAT, true, true, true)
             | (WIRE_END_SHEET_FORMAT, true, true, true)
-            | (PAGE_SHEET_FORMAT | CURRENT_SHEET_FORMAT, true, true, true) => {}
+            | (PAGE_SHEET_FORMAT | CURRENT_SHEET_FORMAT | SHEET_PIN_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
         if !current
@@ -1828,7 +1834,7 @@ impl Versioned for InstancesDocument {
 }
 
 impl Versioned for SheetDocument {
-    const NEWEST: &'static str = CURRENT_SHEET_FORMAT;
+    const NEWEST: &'static str = SHEET_PIN_FORMAT;
     fn format(&self) -> &str {
         &self.format
     }
@@ -2930,7 +2936,8 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
 
 /// Begin a sheet in the current format, retaining any authored paper and its parameters.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<(), String> {
-    write!(bytes, "{{\n  \"format\": \"{CURRENT_SHEET_FORMAT}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
+    let format = if sheet.labels.iter().any(|label| label.parent_pin.is_some()) { SHEET_PIN_FORMAT } else { CURRENT_SHEET_FORMAT };
+    write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
     if let Some(page) = sheet.page {
         writeln!(bytes, "  \"page\": {},", json(&page.record())?).map_err(|e| e.to_string())?;
         write_parameters(bytes, &sheet.parameters)?;

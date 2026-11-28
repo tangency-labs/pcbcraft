@@ -434,7 +434,7 @@ fn the_net_check_refuses_a_project_whose_connections_differ_from_the_file() {
         .lib_symbols
         .iter()
         .map(|(name, symbol)| {
-            (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut symbols::MAX_DRAWING_WORK.clone(), &mut report).unwrap())
+            (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut symbols::MAX_DRAWING_WORK.clone(), &mut report, false).unwrap())
         })
         .collect();
     // The import places symbols in file order, so the n-th native placement is the n-th KiCad one.
@@ -800,7 +800,7 @@ fn a_unit_drawing_stops_at_the_native_limit_and_the_whole_import_has_a_budget() 
     assert!(imported.report.notes().any(|(what, n)| what.contains("beyond 256 strokes") && n == 1));
     let schematic = pcbcraft_kicad::read_schematic(&text).unwrap();
     let mut budget = symbols::MAX_DRAWING_WORK;
-    let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default()).unwrap();
+    let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default(), false).unwrap();
     let document: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
     assert_eq!(document["units"][0]["drawing"].as_array().unwrap().len(), 256);
     // Only what was read and converted is paid for: its one unit and one pin read, then 256
