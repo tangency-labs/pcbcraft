@@ -32,7 +32,19 @@ enum Column {
 }
 
 impl Column {
-    /// The header text, which is also the grouped edit's field choice.
+    /// The grouped edit's field choice. Unlike the label it tells a custom field apart from a
+    /// standard column with the same header.
+    fn key(&self) -> String {
+        match self {
+            Self::Reference => "reference".into(),
+            Self::Value => "value".into(),
+            Self::Footprint => "footprint".into(),
+            Self::Standard(id) => format!("field:{id}"),
+            Self::Named(name) => format!("named:{}", name.to_lowercase()),
+        }
+    }
+
+    /// The header text, which is also the field choice's readable name.
     fn label(&self) -> String {
         match self {
             Self::Reference => "Reference".into(),
@@ -55,9 +67,11 @@ impl Column {
     }
 }
 
-/// The custom field of `row` with this name, compared without case.
+/// The custom field of `row` with this name, compared without case the way `columns` groups
+/// names and the engine refuses duplicates.
 fn named<'a>(row: &'a ComponentRow, name: &str) -> Option<(&'a String, &'a fields::Field)> {
-    row.fields.iter().find(|(id, field)| !STANDARD.iter().any(|(key, _)| key == id) && field.name.eq_ignore_ascii_case(name))
+    let name = name.to_lowercase();
+    row.fields.iter().find(|(id, field)| !STANDARD.iter().any(|(key, _)| key == id) && field.name.to_lowercase() == name)
 }
 
 /// Fixed columns, then the description when any part has one, then every custom field name in
@@ -261,8 +275,9 @@ impl PcbApp {
                 nested: false,
             })
             .collect();
-        if !headers.contains(&table.field) {
-            table.field = "Value".into();
+        let keys: Vec<String> = columns.iter().map(Column::key).collect();
+        if !keys.contains(&table.field) {
+            table.field = Column::Value.key();
         }
         let (mut preview, mut apply, mut cancel, mut close) = (false, false, false, false);
         let mut clicked = None;
@@ -274,9 +289,9 @@ impl PcbApp {
             {
                 clicked = Some((index, ui.input(|i| i.modifiers)));
             }
-            let options: Vec<(&str, String)> = header_refs.iter().map(|label| (*label, (*label).to_owned())).collect();
+            let options: Vec<(&str, String)> = keys.iter().zip(&headers).map(|(key, label)| (key.as_str(), label.clone())).collect();
             properties::choice(ui, "Field", "component_table_field", &mut table.field, &options);
-            if table.field == "Footprint" {
+            if table.field == Column::Footprint.key() {
                 let catalog = project.footprint_catalog();
                 let keys: Vec<String> = catalog.iter().map(|d| footprint_key(&d.library, &d.id, d.revision)).collect();
                 let footprints: Vec<(&str, String)> = catalog
@@ -337,7 +352,7 @@ impl PcbApp {
         if preview {
             table.preview = None;
             table.error = None;
-            let column = columns.iter().find(|column| column.label() == table.field).cloned().unwrap_or(Column::Value);
+            let column = columns.iter().find(|column| column.key() == table.field).cloned().unwrap_or(Column::Value);
             match table.edits(&project, &targets, &column) {
                 Ok(edits) => {
                     let revision = self.session.revision();

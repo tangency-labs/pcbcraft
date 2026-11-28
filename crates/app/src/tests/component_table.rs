@@ -319,3 +319,50 @@ fn a_footprint_is_assigned_to_selected_parts_with_their_default_mapping() {
     assert_eq!(assigned, ["R3", "R4"]);
     assert!(rows.iter().all(|row| row.footprint.as_ref().is_none_or(|footprint| footprint.definition == "resistor-0402")));
 }
+
+/// Give the component with this reference one custom field through the shared edit command.
+fn set_field(h: &mut Harness<'_, PcbApp>, reference: &str, id: &str, name: &str, value: &str) {
+    let component = h.state().session.project().unwrap().components().find(|part| part.reference() == reference).unwrap().id();
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run("part.set_fields", &json!({"edits":[{"component":component,"fields":{id:{"name":name,"value":value}}}],"expected_revision":revision}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run();
+}
+
+/// Custom field names that differ only in non-ASCII case share one column, every row shows its
+/// own value there, and an edit changes the existing field instead of adding a second one.
+#[test]
+fn custom_fields_differing_only_in_non_ascii_case_share_one_column_and_edit_in_place() {
+    let mut h = editor();
+    set_field(&mut h, "R2", "8b1e5c2d-3f4a-4b6c-9d7e-1a2b3c4d5e6f", "Étage", "upper");
+    set_field(&mut h, "R3", "9c2f6d3e-4a5b-4c7d-8e9f-2b3c4d5e6f70", "étage", "lower");
+    open(&mut h);
+    assert!(h.query_by_label("lower").is_some(), "R3 shows its own value in the shared column");
+    row(&mut h, "R3", Modifiers::NONE);
+    field(&mut h, "Étage");
+    value(&mut h, "middle");
+    click(&mut h, "Preview change to 1 selected");
+    click(&mut h, "Apply");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(field_of(&h, "R3", "9c2f6d3e-4a5b-4c7d-8e9f-2b3c4d5e6f70").as_deref(), Some("middle"));
+    let part = h.state().session.project().unwrap().components().find(|part| part.reference() == "R3").unwrap();
+    assert_eq!(part.metadata.fields.values().filter(|field| field.name.to_lowercase() == "étage").count(), 1, "no second field was added");
+}
+
+/// A custom field named like a standard column is its own field choice: editing it changes
+/// that field and never writes the standard one.
+#[test]
+fn a_custom_field_named_like_a_standard_column_is_edited_as_itself() {
+    let mut h = editor();
+    set_field(&mut h, "R4", "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "Manufacturer", "Custom Co");
+    open(&mut h);
+    row(&mut h, "R4", Modifiers::NONE);
+    field(&mut h, "Manufacturer");
+    value(&mut h, "New Co");
+    click(&mut h, "Preview change to 1 selected");
+    click(&mut h, "Apply");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(field_of(&h, "R4", "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d").as_deref(), Some("New Co"));
+    assert_eq!(field_of(&h, "R4", "manufacturer"), None, "the standard field stays absent");
+}
