@@ -155,7 +155,8 @@ fn a_multi_unit_component_is_one_row_and_edited_once() {
 }
 
 /// The engine refuses a duplicate reference and an incompatible footprint mapping; the table
-/// shows its message, offers no Apply and leaves the project and history unchanged.
+/// shows its message naming the component by its reference, offers no Apply and leaves the
+/// project and history unchanged.
 #[test]
 fn duplicate_references_and_incompatible_footprints_are_refused_unchanged() {
     let mut h = editor();
@@ -168,6 +169,9 @@ fn duplicate_references_and_incompatible_footprints_are_refused_unchanged() {
     value(&mut h, "R9");
     click(&mut h, "Preview change to 2 selected");
     h.get_by_label_contains("another component is already R9");
+    let named =
+        |h: &Harness<'_, PcbApp>, reference: &str| h.query_by_label_contains(&format!("{reference}: another component is already R9")).is_some();
+    assert!(named(&h, "R1") || named(&h, "R2"), "the refusal names the component by its reference");
     assert!(h.query_by_label("Apply").is_none());
     row(&mut h, "U1", Modifiers::NONE);
     field(&mut h, "Footprint");

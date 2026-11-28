@@ -224,6 +224,13 @@ impl Table {
     }
 }
 
+/// Name the component a refusal starts with by its reference; the engine names it by its id.
+fn refusal(error: &str, rows: &[ComponentRow]) -> String {
+    let named =
+        error.split_once(": ").and_then(|(id, rest)| rows.iter().find(|row| row.component == id).map(|row| format!("{}: {rest}", row.reference)));
+    named.unwrap_or_else(|| error.to_owned())
+}
+
 impl PcbApp {
     /// Open the table over the current project; nothing is captured until a preview.
     pub(super) fn open_component_table(&mut self) {
@@ -286,7 +293,7 @@ impl PcbApp {
             }
             preview = controls::enabled_button(ui, !targets.is_empty(), format!("Preview change to {} selected", targets.len())).clicked();
             if let Some(error) = &table.error {
-                ui.label(shell::error(error.clone()));
+                ui.label(shell::error(refusal(error, &rows)));
             }
             if let Some(review) = &table.preview {
                 if review.changes.is_empty() {
