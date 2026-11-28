@@ -530,6 +530,80 @@ pub(super) fn leg_at(project: &Project, camera: &Camera, rect: Rect, pointer: Po
     Some(LegTarget { wire: id, route, leg, split, breakable, revision })
 }
 
+/// Two selected wires and the crossing their group menu offers to join, captured when the menu
+/// opened so the edit names exactly what the designer saw.
+#[derive(Clone, Debug)]
+pub(crate) struct JoinTarget {
+    pub(crate) wires: [String; 2],
+    /// Both drawn routes, for the hover preview.
+    pub(crate) routes: [Vec<Point>; 2],
+    /// The one ordinary crossing within the node hit radius of the right-click, if there is
+    /// exactly one.
+    pub(crate) at: Option<Point>,
+    /// Which nets would join, or why the shared check refuses the join.
+    pub(crate) outcome: Result<String, String>,
+    /// The revision the menu was opened at; an edit after another change is refused.
+    pub(crate) revision: u64,
+}
+
+impl JoinTarget {
+    /// Capture a join when exactly two wires and nothing else are selected. The right-click must
+    /// fall within the node hit radius, in screen points, of exactly one of their crossings: a
+    /// click away from every crossing, or near several at a low zoom, is refused rather than
+    /// guessed. The engine's own check then decides whether the join is allowed.
+    pub(crate) fn at(
+        project: &Project,
+        camera: &Camera,
+        rect: Rect,
+        pointer: Pos2,
+        selected: &pcbcraft_engine::selection::Selection,
+        revision: u64,
+    ) -> Option<Self> {
+        if selected.len() != 2 || selected.wires.len() != 2 {
+            return None;
+        }
+        let mut ids = selected.wires.iter().cloned();
+        let wires = [ids.next()?, ids.next()?];
+        let check = |at| project.wire_join(&wires[0], &wires[1], at).map(|join| describe_join(&join.report)).map_err(|error| error.to_string());
+        let crossings = project.wire_crossings(&wires[0], &wires[1]);
+        let near: Vec<_> =
+            crossings.iter().copied().filter(|&point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS).collect();
+        let (at, outcome) = match near.as_slice() {
+            [point] => (Some(*point), check(Some(*point))),
+            // No ordinary crossing at all: the shared check says why.
+            [] if crossings.is_empty() => (None, check(None)),
+            [] => (None, Err("right-click the crossing to join there".to_owned())),
+            _ => (None, Err("more than one crossing is under the pointer; zoom in to choose one".to_owned())),
+        };
+        let route = |id: &str| project.wires().iter().find(|wire| wire.id() == id).map(|wire| project.wire_path(wire)).unwrap_or_default();
+        Some(Self { routes: [route(&wires[0]), route(&wires[1])], wires, at, outcome, revision })
+    }
+}
+
+/// Say in one line which nets a join connects, from the shared command's report.
+fn describe_join(report: &serde_json::Value) -> String {
+    if report["already_connected"] == true {
+        return "Adds a junction; these wires are already on one net".to_owned();
+    }
+    let net = |net: &serde_json::Value| {
+        let pins = net["terminals"].as_u64().unwrap_or_default();
+        format!("{} ({pins} {})", net["net"].as_str().unwrap_or_default(), if pins == 1 { "pin" } else { "pins" })
+    };
+    format!("Joins {} with {} at this crossing", net(&report["nets"][0]), net(&report["nets"][1]))
+}
+
+/// Preview a hovered Join at Crossing: both routes in the accent colour and the junction dot
+/// the edit will add.
+pub(super) fn paint_join_preview(painter: &Painter, rect: Rect, camera: &Camera, join: &JoinTarget) {
+    let tokens = Tokens::get();
+    for route in &join.routes {
+        paint_emphasized(painter, rect, camera, route.clone(), tokens.accent, 2.0 * theme::SCHEMATIC_SYMBOL_STROKE);
+    }
+    if let Some(at) = join.at {
+        painter.circle_filled(camera.screen(at, rect), theme::SCHEMATIC_JUNCTION_RADIUS, tokens.accent);
+    }
+}
+
 /// Squared screen distance from `pointer` to the segment `a`–`b`.
 fn distance_sq(pointer: Pos2, a: Pos2, b: Pos2) -> f32 {
     let delta = b - a;

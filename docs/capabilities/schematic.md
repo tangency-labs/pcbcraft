@@ -70,6 +70,8 @@
 - Slice, Heal and Delete in the ribbon.
 - Contextual Break releases one or both attached ends, with free movement of detached straight
   pieces, guarded departure and reconnection on return.
+- **Join at Crossing** on two selected wires connects them at one ordinary crossing with a
+  junction, after a preview of the nets that join (`schematic.join_wires`, with `dry_run`).
 - A selected wire’s **Net appearance** in Properties sets the color and width for all wires on
   that logical net, with width shown as a percentage of the default stroke. The same commands
   are available through MCP.

@@ -11927,6 +11927,58 @@
         "type": "object"
       }
     },
+    "schematic.join_wires": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "additionalProperties": false,
+            "properties": {
+              "x_nm": {
+                "maximum": 987300000,
+                "minimum": -987300000,
+                "type": "integer"
+              },
+              "y_nm": {
+                "maximum": 987300000,
+                "minimum": -987300000,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "x_nm",
+              "y_nm"
+            ],
+            "type": "object"
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "other": {
+            "pattern": "^wire-[1-9][0-9]*$",
+            "type": "string"
+          },
+          "sheet": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "wire": {
+            "pattern": "^wire-[1-9][0-9]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire",
+          "other",
+          "expected_revision"
+        ],
+        "type": "object"
+      }
+    },
     "schematic.mirror_items": {
       "params": {
         "additionalProperties": false,
