@@ -173,17 +173,7 @@ impl Contour {
     /// rounding outward to whole nanometres. Overlapping cores use a common point. This is
     /// display geometry only: it does not change the checking distance or predicate.
     pub fn nearest_pair_bounds(&self, other: &Self) -> [Point; 2] {
-        let shared =
-            self.core.iter().find(|&&point| other.contains_core(point)).or_else(|| other.core.iter().find(|&&point| self.contains_core(point)));
-        let (a, b) = if let Some(&point) = shared {
-            let point = point_xy(point);
-            (point, point)
-        } else {
-            self.edges()
-                .flat_map(|(a, b)| other.edges().map(move |(c, d)| closest_segment_pair(a, b, c, d)))
-                .min_by(|left, right| witness_distance_sq(*left).total_cmp(&witness_distance_sq(*right)))
-                .unwrap_or_else(|| (point_xy(self.core[0]), point_xy(other.core[0])))
-        };
+        let (a, b) = self.nearest_core_pair(other);
         [
             Point {
                 x_nm: (a.0 - self.radius).min(b.0 - other.radius).floor() as i64,
@@ -194,6 +184,33 @@ impl Contour {
                 y_nm: (a.1 + self.radius).max(b.1 + other.radius).ceil() as i64,
             },
         ]
+    }
+
+    /// The middle of the gap between two contours: halfway between the nearest points of their
+    /// copper boundaries, rounded to whole nanometres. Each nearest core point moves out by its
+    /// own radius towards the other; cores that cross or overlap give a point they share. Like
+    /// [`Self::nearest_pair_bounds`], display geometry only.
+    pub fn gap_midpoint(&self, other: &Self) -> Point {
+        let ((ax, ay), (bx, by)) = self.nearest_core_pair(other);
+        let (dx, dy) = (bx - ax, by - ay);
+        let length = dx.hypot(dy);
+        let shift = if length > 0. { (self.radius - other.radius) / 2. / length } else { 0. };
+        Point { x_nm: ((ax + bx) / 2. + dx * shift).round() as i64, y_nm: ((ay + by) / 2. + dy * shift).round() as i64 }
+    }
+
+    /// The nearest pair of core points, in caller order. A core point inside the other core is
+    /// shared; otherwise the closest witnesses of every pair of core edges decide.
+    fn nearest_core_pair(&self, other: &Self) -> Witness {
+        let shared =
+            self.core.iter().find(|&&point| other.contains_core(point)).or_else(|| other.core.iter().find(|&&point| self.contains_core(point)));
+        if let Some(&point) = shared {
+            let point = point_xy(point);
+            return (point, point);
+        }
+        self.edges()
+            .flat_map(|(a, b)| other.edges().map(move |(c, d)| closest_segment_pair(a, b, c, d)))
+            .min_by(|left, right| witness_distance_sq(*left).total_cmp(&witness_distance_sq(*right)))
+            .unwrap_or_else(|| (point_xy(self.core[0]), point_xy(other.core[0])))
     }
 
     /// Bounds for pruning pad contact and clearance candidates before testing their contours.
@@ -331,6 +348,19 @@ mod nearest_pair_tests {
         );
         let via = Contour::capsule(at(20, 30), at(20, 30), 10.0);
         assert_eq!(pad.nearest_pair_bounds(&via), [at(10, 20), at(30, 40)]);
+    }
+
+    /// The gap midpoint lies halfway between the copper boundaries, not the centres, in either
+    /// argument order; crossing cores give their crossing point.
+    #[test]
+    fn gap_midpoint_is_halfway_between_the_copper_boundaries() {
+        let track = Contour::capsule(at(-10_000, 0), at(10_000, 0), 50.);
+        let via = Contour::capsule(at(250, 1_000), at(250, 1_000), 100.);
+        assert_eq!(track.gap_midpoint(&via), at(250, 475));
+        assert_eq!(via.gap_midpoint(&track), at(250, 475));
+        let a = Contour::capsule(at(-1_000, 10), at(1_000, 10), 31.5);
+        let b = Contour::capsule(at(20, -1_000), at(20, 1_000), 25.0);
+        assert_eq!(a.gap_midpoint(&b), at(20, 10));
     }
 }
 

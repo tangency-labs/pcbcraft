@@ -66,7 +66,10 @@ behavior and other refusal cases.
 `pcb.check_design` checks the addressed board without editing it; `execute` returns
 `design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
 representative `at` point and `items`), `counts` per kind and the `total`, listing at
-most 1000 findings. Saved board defaults apply unless a request supplies a
+most 1000 findings. A `clearance` finding's `at` is the middle of the gap between the
+nearest copper of its two objects, an `outside_board` finding's is a point of the copper
+that is off the board, and an `edge_clearance` finding's is the middle of the gap to the
+nearest board edge, or where the copper crosses it. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,

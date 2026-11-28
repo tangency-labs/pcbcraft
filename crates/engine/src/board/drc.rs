@@ -174,6 +174,13 @@ fn midpoint(a: Point, b: Point) -> Point {
     Point { x_nm: a.x_nm / 2 + b.x_nm / 2, y_nm: a.y_nm / 2 + b.y_nm / 2 }
 }
 
+/// Mark a clearance finding in the gap itself, halfway between the nearest copper of the two
+/// objects. The pair is taken in name order, so the marker does not depend on object order.
+fn clearance_marker(a: &Item, b: &Item) -> Point {
+    let (first, second) = if a.name <= b.name { (a, b) } else { (b, a) };
+    first.contour.gap_midpoint(&second.contour)
+}
+
 /// Keep the existing copper diagnostics and identify mechanical openings in both DRC paths.
 fn clearance_message(a: &Item, b: &Item, distance: f64, clearance_nm: i64) -> String {
     if a.mechanical || b.mechanical {
@@ -325,7 +332,7 @@ impl BoardView<'_> {
                 let message = clearance_message(a, b, decision.gap_nm, decision.clearance_nm);
                 let mut names = vec![a.name.clone(), b.name.clone()];
                 names.sort();
-                found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
+                found.push(Violation { kind: Kind::Clearance, message, at: clearance_marker(a, b), items: names, nets: Vec::new() });
             }
         }
 
@@ -590,7 +597,7 @@ impl BoardView<'_> {
         for item in items {
             let subject = if item.mechanical { "Non-plated hole" } else { "Copper" };
             let rules = context.map_or(rules, |context| context.limits_for(&item.name, rules));
-            if let Some(around) = outline.off_board(&item.contour) {
+            if let Some((at, around)) = outline.off_board(&item.contour) {
                 let mut names = vec![item.name.clone()];
                 let message = if around.is_empty() {
                     format!("{subject} lies outside the Board Outline")
@@ -598,7 +605,7 @@ impl BoardView<'_> {
                     names.extend(outline.blocking_edge(&item.contour, true).map(|(drawing, _, _)| drawing.to_string()));
                     format!("{subject} lies inside a board cut-out")
                 };
-                found.push(Violation { kind: Kind::OutsideBoard, message, at: item.at, items: names, nets: Vec::new() });
+                found.push(Violation { kind: Kind::OutsideBoard, message, at, items: names, nets: Vec::new() });
                 continue;
             }
             let (distance, crosses) = edge_gap(edges, &item.contour);
@@ -610,7 +617,7 @@ impl BoardView<'_> {
                     } else {
                         format!("{subject} is {} from the board edge, below the {} rule", mm(distance.max(0.)), mm(rules.edge_clearance_nm as f64))
                     },
-                    at: item.at,
+                    at: edge_marker(edges, &item.contour).unwrap_or(item.at),
                     items: vec![item.name.clone()],
                     nets: Vec::new(),
                 });
@@ -714,6 +721,16 @@ pub(super) fn edge_gap(edges: &[OutlineEdge], contour: &Contour) -> (f64, bool) 
     })
 }
 
+/// Mark an edge finding between the copper and the edge that decides it: a crossing edge
+/// before a merely near one, then the smallest gap, then drawing order. `None` without edges.
+fn edge_marker(edges: &[OutlineEdge], contour: &Contour) -> Option<Point> {
+    let (edge, _) = edges
+        .iter()
+        .map(|edge| (edge, edge.measure(contour)))
+        .min_by(|(_, (a_gap, a_crosses)), (_, (b_gap, b_crosses))| b_crosses.cmp(a_crosses).then_with(|| a_gap.total_cmp(b_gap)))?;
+    Some(contour.gap_midpoint(&Contour::capsule(edge.start, edge.end, 0.)))
+}
+
 impl Outline {
     /// Closed outlines constrain copper placement and enforce the effective edge clearance.
     pub(super) fn allows_copper(&self, contour: &Contour, clearance_nm: i64) -> bool {
@@ -744,12 +761,14 @@ impl Outline {
         around % 2 == 1
     }
 
-    /// The closed drawings around the copper's first core anchor that is off the board, or
-    /// `None` when every anchor is on the board. The list is empty when that anchor lies
+    /// The copper's first core anchor that is off the board and the closed drawings around it,
+    /// or `None` when every anchor is on the board. The list is empty when that anchor lies
     /// outside every closed contour; otherwise it lies inside a cut-out of the listed drawings.
-    pub(super) fn off_board(&self, contour: &Contour) -> Option<Vec<Uuid>> {
+    pub(super) fn off_board(&self, contour: &Contour) -> Option<(Point, Vec<Uuid>)> {
         let point = contour.core.iter().copied().find(|point| !self.on_board(*point))?;
-        Some(self.polygons.iter().zip(&self.drawings).filter(|(polygon, _)| in_polygon(point, polygon)).map(|(_, drawing)| *drawing).collect())
+        let around =
+            self.polygons.iter().zip(&self.drawings).filter(|(polygon, _)| in_polygon(point, polygon)).map(|(_, drawing)| *drawing).collect();
+        Some((point, around))
     }
 
     /// The innermost closed drawing enclosing the copper's first off-board anchor when that
