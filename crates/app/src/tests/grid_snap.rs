@@ -198,6 +198,34 @@ fn reopening_a_split_keeps_the_restored_panes_snapping() {
     assert_eq!(grid(&h), [Some((false, 25 * MIL)), Some((true, 25 * MIL))], "pane 1 keeps its snapping; spacing follows navigation");
 }
 
+/// The startup spare first shown beside a pane in another workspace keeps the snapping it is
+/// given there when a later reopen seeds it from a pane in its own workspace.
+#[test]
+fn a_spare_first_shown_beside_another_workspace_keeps_its_snapping_on_reopen() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400.0, 900.0));
+    new_project(&mut h);
+    h.state_mut().browser.open = false;
+    let switch = |h: &mut Harness<'_, PcbApp>, workspace| {
+        let app = h.state_mut();
+        app.views.switch_workspace(ViewId(0), workspace, &app.session);
+        h.run();
+    };
+    switch(&mut h, crate::Workspace::Board);
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    assert!(h.state().views.is_split());
+    assert_eq!(h.state().views.view(ViewId(1)).unwrap().workspace, crate::Workspace::Schematic);
+    h.state_mut().set_view_snap(ViewId(1), false);
+    switch(&mut h, crate::Workspace::Schematic);
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    click(&mut h, "Split editor views");
+    click(&mut h, "Split editor views");
+    assert!(h.state().views.is_split());
+    let snap = |h: &Harness<'_, PcbApp>| [0, 1].map(|id| h.state().views.view(ViewId(id)).unwrap().camera.snap_enabled());
+    assert_eq!(snap(&h), [true, false], "the spare keeps the snapping chosen while it was shown");
+}
+
 /// At startup each workspace takes its own remembered snapping, as it does its spacing, and a
 /// view switching between schematic and PCB keeps one setting for each.
 #[test]

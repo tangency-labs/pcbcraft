@@ -352,9 +352,7 @@ impl EditorViews {
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
                 let camera = self.view(id)?.camera.clone().fork_navigation();
-                if self.view(parked)?.workspace == self.view(id)?.workspace {
-                    self.seed_navigation(parked, camera);
-                }
+                self.seed_navigation(parked, camera, self.view(id)?.workspace);
                 parked
             } else {
                 self.duplicate(id, true)?
@@ -1116,19 +1114,20 @@ impl EditorViews {
         true
     }
 
-    /// Seed a parked view with navigation forked from another view. The startup spare, never
-    /// shown yet, takes it whole like a new view; a view being restored keeps its own snapping.
-    fn seed_navigation(&mut self, id: ViewId, camera: crate::canvas_camera::Camera) {
+    /// Show a parked view, seeding it with navigation forked from a view in `workspace` when it
+    /// shows the same one. The startup spare is seeded whole like a new view only the first time
+    /// it is shown, whatever its workspace; a view being restored keeps its own snapping.
+    fn seed_navigation(&mut self, id: ViewId, camera: crate::canvas_camera::Camera, workspace: Workspace) {
         let spare = self.spare == Some(id);
-        if let Some(view) = self.view_mut(id) {
+        if spare {
+            self.spare = None;
+        }
+        if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
             if spare {
                 view.camera = camera;
             } else {
                 view.camera.adopt_navigation(camera);
             }
-        }
-        if spare {
-            self.spare = None;
         }
     }
 
@@ -1144,9 +1143,7 @@ impl EditorViews {
             if let Some(layout) = collapsed.filter(|layout| matches!(layout, Layout::Split { .. })) {
                 for id in layout.views().into_iter().filter(|id| *id != source) {
                     let camera = self.active.camera.fork_navigation();
-                    if self.view(id).is_some_and(|view| view.workspace == self.active.workspace) {
-                        self.seed_navigation(id, camera);
-                    }
+                    self.seed_navigation(id, camera, self.active.workspace);
                 }
                 if let Some(host) = self.hosts.get_mut(&self.host) {
                     host.layout = layout;
@@ -1170,9 +1167,7 @@ impl EditorViews {
                         }
                     }
                     let camera = self.active.camera.fork_navigation();
-                    if self.view(id).is_some_and(|view| view.workspace == self.active.workspace) {
-                        self.seed_navigation(id, camera);
-                    }
+                    self.seed_navigation(id, camera, self.active.workspace);
                     if let Some(host) = self.hosts.get_mut(&self.host) {
                         host.layout.insert(source, id);
                     }
