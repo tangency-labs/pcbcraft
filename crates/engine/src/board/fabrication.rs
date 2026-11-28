@@ -7,7 +7,8 @@
 //! footprint holes, when present, go in a separate non-plated Excellon file. Each drill file
 //! names its content in XNC standard-comment file attributes (`Plated,1,N,PTH` or
 //! `NonPlated,1,N,NPTH` over all N copper layers). A drill chart lists every tool of those
-//! files with its hole count, from the same hole census. Every coordinate
+//! files with its hole count, from the same hole census. An outline view gives the closed
+//! outline contours and the board's overall dimensions. Every coordinate
 //! is written in the board's output frame: measured from its placement origin with Y up, seen
 //! from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
@@ -20,9 +21,11 @@
 //! Track and Board Outline strokes remain linear. Export refuses boards with copper zones.
 mod drill_chart;
 mod object_attributes;
+mod outline_view;
 
 pub use self::drill_chart::{DrillChart, DrillChartRow};
 use self::object_attributes::{Object, RoutedNets};
+pub use self::outline_view::OutlineView;
 use super::{
     definition::{GraphicPurpose, PadShape},
     geometry::Contour,
@@ -74,7 +77,12 @@ pub struct Fabrication {
     pub files: Vec<Output>,
     /// Every tool of the drill files among `files`, with its hole count; empty without drill files.
     pub drill_chart: DrillChart,
+    /// The closed outline contours of the profile file and the board's overall dimensions;
+    /// `None` for outputs that do not draw the board edge, such as assembly layers.
+    pub outline: Option<OutlineView>,
 }
+
+const OUTLINE_REQUIRED: &str = "Draw a closed Board Outline before generating fabrication outputs.";
 
 /// Integrity of the exact bytes of one generated artifact, not a design-state identity.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -661,10 +669,12 @@ impl BoardView<'_> {
             .filter(|drawing| drawing.closed && layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
             .collect();
         if closed_outline.is_empty() {
-            return Err("Draw a closed Board Outline before generating fabrication outputs.".into());
+            return Err(OUTLINE_REQUIRED.into());
         }
         let origin = self.placement_origin()?;
         let frame = origin.frame();
+        let outline_view =
+            OutlineView::new(frame, closed_outline.iter().map(|drawing| (drawing.points.as_slice(), drawing.closed))).ok_or(OUTLINE_REQUIRED)?;
         let plated = self.plated_drill_hits()?;
         let frame_id = same_coordinates_id(origin);
         let non_plated = self.non_plated_drill_hits()?;
@@ -783,7 +793,7 @@ impl BoardView<'_> {
                 .push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::NonPlated, span, non_plated) });
         }
         unique_file_names(&mut files, copper_count);
-        Ok(Fabrication { origin, files, drill_chart })
+        Ok(Fabrication { origin, files, drill_chart, outline: Some(outline_view) })
     }
 
     /// Group via and plated pad drill hits by diameter.
@@ -930,8 +940,8 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// Return file text, resolved origin, the drill chart and the same member records as the
-    /// ZIP manifest.
+    /// Return file text, resolved origin, the drill chart, the outline view and the same member
+    /// records as the ZIP manifest.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
         let manifest = Manifest::from_outputs(&fabrication.files);
@@ -939,6 +949,7 @@ impl Session {
             "files": fabrication.files,
             "origin": fabrication.origin,
             "drill_chart": fabrication.drill_chart,
+            "outline": fabrication.outline,
             "manifest": manifest,
         }))
     }

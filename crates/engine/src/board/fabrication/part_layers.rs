@@ -97,8 +97,9 @@ impl BoardView<'_> {
                 contents: writer.finish_in_frame(&format!("Component,L{layer},{side}"), "Positive", None),
             })
             .collect();
-        // Assembly layers carry no drill files, so they have no drill tools.
-        Ok(Fabrication { origin, files, drill_chart: DrillChart::default() })
+        // Assembly layers carry no drill files and no board edge, so they have no drill tools
+        // and no outline view.
+        Ok(Fabrication { origin, files, drill_chart: DrillChart::default(), outline: None })
     }
 
     /// The Gerber export does not select a vendor profile. Use an explicit centroid from

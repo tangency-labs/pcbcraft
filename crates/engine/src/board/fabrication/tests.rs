@@ -1168,6 +1168,7 @@ fn rounded_pad_macros_read_back_radius_and_orientation() {
                         "files": fabrication.files,
                         "origin": fabrication.origin,
                         "drill_chart": fabrication.drill_chart,
+                        "outline": fabrication.outline,
                         "manifest": embedded_manifest(&capture),
                     })
                 );
@@ -2205,6 +2206,7 @@ fn aperture_exports_preserve_revision_storage_and_history() {
             "files": direct.files,
             "origin": direct.origin,
             "drill_chart": direct.drill_chart,
+            "outline": direct.outline,
             "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records},
         })
     );
@@ -2853,6 +2855,65 @@ fn drill_chart_counts_equal_the_drill_file_census() {
         reported["fabrication"]["drill_chart"]["rows"][2],
         json!({"plating":"non_plated","tool":1,"diameter_nm":2_000_000,"size_mm":"2.000","count":1})
     );
+}
+
+/// The outline view encloses exactly the profile the outline Gerber draws, in its output frame,
+/// and states the overall size to 0.01 mm. A cut-out is a contour but does not widen the box;
+/// an open outline line is not the board edge and is left out even when it lies farther out.
+#[test]
+fn outline_view_dimensions_equal_the_profile_bounding_box() {
+    use crate::board::drc::tests::outline_square;
+    let mut s = routed_fixture();
+    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let edge = [(-5_000_000, -5_000_000), (25_004_999, -5_000_000), (31_000_000, 15_000_000), (25_000_000, 35_000_003), (-7_123_456, 20_000_000)]
+        .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":edge,"closed":true,"expected_revision":s.revision()})).unwrap();
+    outline_square(&mut s, 5, 15, 10);
+    let stray = [Point { x_nm: 60_000_000, y_nm: 0 }, Point { x_nm: 70_000_000, y_nm: 0 }];
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":1_000_003,"y_nm":-2_000_007},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+
+    let fabrication = view(&s).fabrication().unwrap();
+    let outline = fabrication.outline.clone().unwrap();
+    // The board's edge as an outline reader sees it: every stroke with the Profile function.
+    let read = read_gerber(&fabrication.files, ("-Outline.gbr", "Profile,NP", "Positive"));
+    let ends: Vec<Point> =
+        read.strokes.iter().filter(|(.., aperture)| aperture.function == Some("Profile")).flat_map(|&(from, to, _)| [from, to]).collect();
+    let low = Point { x_nm: ends.iter().map(|p| p.x_nm).min().unwrap(), y_nm: ends.iter().map(|p| p.y_nm).min().unwrap() };
+    let high = Point { x_nm: ends.iter().map(|p| p.x_nm).max().unwrap(), y_nm: ends.iter().map(|p| p.y_nm).max().unwrap() };
+    assert_eq!((outline.min, outline.max), (low, high), "the view encloses the drawn profile");
+    assert_eq!((outline.width_nm, outline.height_nm), (high.x_nm - low.x_nm, high.y_nm - low.y_nm));
+    // Board X -7.123456..31 mm and Y -5..35.000003 mm, measured from (1.000003, -2.000007) mm, Y up.
+    assert_eq!((low, high), (Point { x_nm: -8_123_459, y_nm: -37_000_010 }, Point { x_nm: 29_999_997, y_nm: 2_999_993 }));
+    assert_eq!((outline.width_mm.as_str(), outline.height_mm.as_str()), ("38.12", "40.00"));
+    for (written, exact) in [(&outline.width_mm, outline.width_nm), (&outline.height_mm, outline.height_nm)] {
+        let (whole, hundredths) = written.split_once('.').unwrap();
+        let written_nm = whole.parse::<i64>().unwrap() * 1_000_000 + hundredths.parse::<i64>().unwrap() * 10_000;
+        assert_eq!(hundredths.len(), 2);
+        assert!((written_nm - exact).abs() <= 5_000, "{written} mm is within 0.01 mm of {exact} nm");
+    }
+    let frame = fabrication.origin.frame();
+    let cut_out = [(5_000_000, 15_000_000), (15_000_000, 15_000_000), (15_000_000, 25_000_000), (5_000_000, 25_000_000)]
+        .map(|(x_nm, y_nm)| frame.to_output(Point { x_nm, y_nm }));
+    // Contours follow drawing-id order, and fresh drawing ids are random, so compare them as a set.
+    let points = |contour: &Vec<Point>| contour.iter().map(|point| (point.x_nm, point.y_nm)).collect::<Vec<_>>();
+    let mut contours = outline.contours.clone();
+    let mut expected = vec![edge.map(|point| frame.to_output(point)).to_vec(), cut_out.to_vec()];
+    contours.sort_by_key(points);
+    expected.sort_by_key(points);
+    assert_eq!(contours, expected);
+
+    let revision = s.revision();
+    let reported = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(reported["fabrication"]["outline"], json!(outline));
+    assert_eq!(reported["fabrication"]["outline"]["width_mm"], "38.12");
+    assert_eq!(s.revision(), revision, "reporting the outline view edits nothing");
+    assert_eq!(view(&s).gerber_part_layers().unwrap().outline, None, "assembly layers draw no board edge");
 }
 
 /// Read the JSON actually stored in a captured ZIP.
