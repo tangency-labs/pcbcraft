@@ -277,10 +277,8 @@ fn symbols_the_native_format_cant_hold_are_refused_by_name() {
         Err(CommandError::InvalidParams(message)) => message,
         other => panic!("expected a refusal, got {other:?}"),
     };
-    let far = message(symbol(r#"(pin passive line (at 15.24 0 180) (length 2.54) (number "1"))"#));
-    assert!(far.contains("`L:Wide`") && far.contains("12.7 mm"), "{far}");
-    let off_grid = message(symbol(r#"(pin passive line (at 1 0 180) (length 2.54) (number "1"))"#));
-    assert!(off_grid.contains("grid"), "{off_grid}");
+    let far = message(symbol(r#"(pin passive line (at 100.001 0 180) (length 2.54) (number "1"))"#));
+    assert!(far.contains("`L:Wide`") && far.contains("100 mm"), "{far}");
     let stacked =
         message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "1")) (pin passive line (at 0 0 0) (length 2.54) (number "2"))"#));
     assert!(stacked.contains("share a position"), "{stacked}");
@@ -288,6 +286,49 @@ fn symbols_the_native_format_cant_hold_are_refused_by_name() {
     assert!(hidden.contains("hidden power pin"), "{hidden}");
     let long_number = message(symbol(r#"(pin passive line (at 0 0 0) (length 2.54) (number "123456789"))"#));
     assert!(long_number.contains("1 to 8"), "{long_number}");
+}
+
+#[test]
+fn exact_pins_and_pinless_mechanical_symbols_survive_native_reopen() {
+    let text = r#"(kicad_sch (version 20231120)
+      (lib_symbols
+        (symbol "L:Wide" (property "Reference" "U")
+          (symbol "Wide_1_1"
+            (pin passive line (at 15.24 0.75 180) (length 2.54) (number "1"))
+            (pin passive line (at 25.01 0.75 0) (length 2.54) (number "2"))))
+        (symbol "L:Marker" (property "Reference" "FID")
+          (symbol "Marker_1_1" (circle (center 0 0) (radius 1)))))
+      (symbol (lib_id "L:Wide") (at 0 0 0) (unit 1) (property "Reference" "U1"))
+      (symbol (lib_id "L:Marker") (at 20 2 0) (unit 1) (property "Reference" "FID1"))
+      (wire (pts (xy 15.24 -0.75) (xy 25.01 -0.75))))"#;
+    let imported = import(text, "Exact pins").unwrap();
+    let saved = encode_documents(imported.project).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let part = reopened.symbols().iter().find(|s| reopened.reference(s) == "U1").unwrap();
+    assert_eq!(part.definition.format(), crate::library::SYMBOL_FORMAT_V6);
+    let positions: Vec<_> = part.pins().into_iter().map(|point| (point.x_nm, point.y_nm)).collect();
+    assert_eq!(positions, [(15_240_000, -750_000), (25_010_000, -750_000)]);
+    assert_eq!(nets(&reopened), BTreeSet::from([net(&["U1.1", "U1.2"])]));
+    let marker = reopened.symbols().iter().find(|s| reopened.reference(s) == "FID1").unwrap();
+    assert!(marker.terminals().is_empty());
+    assert!(marker.definition.pins().is_empty());
+    assert!(!marker.unit_definition().graphics().is_empty());
+    for symbol in [part, marker] {
+        let item = crate::authoring::Item::from_symbol(&symbol.definition).unwrap();
+        let native = item.native().unwrap();
+        assert_eq!(native["format"], crate::library::SYMBOL_FORMAT_V6);
+        let edited_copy = crate::library::read_saved_copy(native).unwrap();
+        assert_eq!(edited_copy.default_unit().pins(), symbol.unit_definition().pins());
+    }
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+    let part_id = part.id();
+    let mut session = crate::Session::default();
+    session.open_snapshot(reopened);
+    let revision = session.revision();
+    let error =
+        session.apply(crate::MOVE_SYMBOL, &json!({"symbol":part_id,"x_nm":crate::MAX_CENTER_NM,"y_nm":0,"expected_revision":revision})).unwrap_err();
+    assert!(matches!(error, CommandError::InvalidParams(message) if message.contains("pin outside the schematic bounds")));
+    assert_eq!(session.revision(), revision);
 }
 
 #[test]

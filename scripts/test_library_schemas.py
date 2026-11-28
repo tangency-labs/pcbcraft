@@ -105,6 +105,23 @@ class LibrarySchemaTests(unittest.TestCase):
             changed["units"] = [symbol["units"][0]] * count
             self.assertFalse(self.checks[checker.FORMATS["pcbcraft-symbol/4"]].is_valid(changed))
 
+    def test_exact_pin_positions_and_pinless_units_require_version_six(self):
+        exact = copy.deepcopy(self.symbol)
+        exact["format"] = "pcbcraft-symbol/6"
+        exact["units"][0]["pins"][0]["at_nm"] = [-15000001, 750000]
+        validator = self.checks["urn:pcbcraft:schema:symbol"]
+        validator.validate(exact)
+        legacy = copy.deepcopy(exact)
+        legacy["format"] = "pcbcraft-symbol/5"
+        self.assertFalse(validator.is_valid(legacy))
+        exact["units"][0]["pins"][0]["at_nm"] = [100000001, 0]
+        self.assertFalse(validator.is_valid(exact))
+        exact["units"][0]["pins"] = []
+        exact["terminals"] = []
+        validator.validate(exact)
+        exact["format"] = "pcbcraft-symbol/5"
+        self.assertFalse(validator.is_valid(exact))
+
     def test_alternate_pin_functions_are_versioned_and_bounded(self):
         symbol = checker.read_json(ROOT / "examples/native-parts/symbols/dual-amplifier.json")
         symbol["format"] = "pcbcraft-symbol/5"

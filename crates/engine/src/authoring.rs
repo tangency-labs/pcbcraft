@@ -31,6 +31,7 @@ const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
 const SLOT_FORMAT: &str = "pcbcraft-library-item/4";
 const PIN_FUNCTION_FORMAT: &str = "pcbcraft-library-item/5";
+const EXACT_SYMBOL_FORMAT: &str = "pcbcraft-library-item/6";
 const HISTORY: usize = 64;
 
 /// A definition editor is distinct from schematic-sheet and board-placement editors.
@@ -597,8 +598,10 @@ impl Item {
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
         }
-        if definition.format() == library::SYMBOL_FORMAT_V5 {
-            item.format = PIN_FUNCTION_FORMAT.into();
+        match definition.format() {
+            library::SYMBOL_FORMAT_V6 => item.format = EXACT_SYMBOL_FORMAT.into(),
+            library::SYMBOL_FORMAT_V5 => item.format = PIN_FUNCTION_FORMAT.into(),
+            _ => {}
         }
         if !fork {
             item.library = definition.library.clone();
@@ -755,7 +758,8 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":library::SYMBOL_FORMAT_V5,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let format = if self.format == EXACT_SYMBOL_FORMAT { library::SYMBOL_FORMAT_V6 } else { library::SYMBOL_FORMAT_V5 };
+            let mut value = json!({"format":format,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -825,10 +829,10 @@ impl Item {
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
-        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT)
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT)
             || (self.kind == Kind::Footprint && self.format != self.footprint_format())
             || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
-            || (self.format != PIN_FUNCTION_FORMAT && self.has_alternate_functions())
+            || (!matches!(self.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) && self.has_alternate_functions())
             || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
                 && (self.unit_order.len() != self.other_units.len() + 1
@@ -1056,7 +1060,7 @@ impl Session {
                         if next.kind != Kind::Symbol || !footprint::valid_id(&unit) || unit == next.unit || next.other_units.contains_key(&unit) {
                             return Err("A new symbol unit needs an unused portable identity.".into());
                         }
-                        if next.format != PIN_FUNCTION_FORMAT {
+                        if !matches!(next.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) {
                             next.format = MULTI_UNIT_FORMAT.into();
                         }
                         if next.unit_order.is_empty() {
@@ -1216,7 +1220,7 @@ impl Session {
                         alternates.clone_from(shared_alternates);
                     }
                 }
-                if next.format != PIN_FUNCTION_FORMAT && next.has_alternate_functions() {
+                if !matches!(next.format.as_str(), PIN_FUNCTION_FORMAT | EXACT_SYMBOL_FORMAT) && next.has_alternate_functions() {
                     next.format = PIN_FUNCTION_FORMAT.into();
                 }
                 next.revision = self.next_content_revision;

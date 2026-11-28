@@ -1,7 +1,6 @@
-//! KiCad library symbols as native `pcbcraft-symbol/4` documents.
+//! KiCad library symbols as native symbol documents.
 //!
-//! Electrical content converts exactly or not at all: a pin that is off the native grid, out of
-//! reach, sharing a position or carrying an identity the native format can't hold refuses the
+//! A pin out of native range, sharing a position or carrying an unrepresentable identity refuses the
 //! symbol with a reason. Drawing details the native format holds differently are converted with
 //! a note in the report.
 
@@ -10,10 +9,7 @@ use pcbcraft_kicad::schematic::{Electrical, Fill, Graphic, Justify, LibSymbol, P
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The native schematic grid, on which every pin must sit.
-const GRID_NM: i64 = crate::schematic::GRID_NM;
-/// How far a native pin may sit from its symbol's origin on either axis.
-const PIN_REACH_NM: i64 = crate::schematic::MAX_PIN_OFFSET_NM;
+use crate::schematic::{MAX_EXACT_PIN_OFFSET_NM, legacy_pin_offset};
 /// How far any native drawing point may sit from the origin on either axis.
 const DRAWING_REACH_NM: i64 = 100_000_000;
 /// The most units a native symbol holds.
@@ -146,6 +142,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
     let mut terminal_order: Vec<String> = Vec::new();
     let mut units = BTreeMap::new();
     let mut native_units = Vec::new();
+    let mut exact = false;
     for (index, number) in numbers.iter().enumerate() {
         let unit_id = if single { "main".to_owned() } else { unit_letters(index) };
         let parts: Vec<&SymbolUnit> = common.iter().copied().chain(normal.iter().copied().filter(|u| u.unit == *number)).collect();
@@ -153,9 +150,10 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         let mut positions: BTreeMap<(i64, i64), &str> = BTreeMap::new();
         let mut numbers_here: BTreeSet<&str> = BTreeSet::new();
         for pin in parts.iter().flat_map(|unit| &unit.pins) {
-            // Pins can't be left out; a short budget only makes the caller refuse. Each unit
-            // holds few pins, as positions may not repeat on the bounded grid.
-            pay(budget, 1);
+            // Electrical pins cannot be skipped if conversion exhausts its budget.
+            if !pay(budget, 1) {
+                return Err("it has more pins than the remaining import budget".into());
+            }
             let terminal = terminal(pin, symbol, power_terminal.as_deref(), report)?;
             match terminals.get(&pin.number) {
                 Some(existing) if *existing != terminal => {
@@ -170,11 +168,11 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
             if !numbers_here.insert(&pin.number) {
                 return Err(format!("pin number {} appears twice in one unit", pin.number));
             }
-            let at = (pin.at.x_nm, -pin.at.y_nm);
-            let on_grid = |v: i64| v % GRID_NM == 0 && (-PIN_REACH_NM..=PIN_REACH_NM).contains(&v);
-            if !on_grid(at.0) || !on_grid(at.1) {
-                return Err(format!("pin {} is off the 1.27 mm grid or more than 12.7 mm from the symbol's origin", pin.number));
+            if [pin.at.x_nm, pin.at.y_nm].into_iter().any(|nm| nm.unsigned_abs() > MAX_EXACT_PIN_OFFSET_NM as u64) {
+                return Err(format!("pin {} is more than 100 mm from the symbol's origin", pin.number));
             }
+            let at = (pin.at.x_nm, -pin.at.y_nm);
+            exact |= !legacy_pin_offset(at.0, at.1);
             if let Some(other) = positions.insert(at, &pin.number) {
                 return Err(format!("pins {other} and {} share a position", pin.number));
             }
@@ -184,9 +182,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
             }
             native.pins.push(saved);
         }
-        if native.pins.is_empty() {
-            return Err(format!("unit {number} has no pins"));
-        }
+        exact |= native.pins.is_empty();
         // Stop at the native limit rather than converting everything and cutting it back: a
         // common part is drawn again in every unit, and a file can share one large drawing
         // among many symbols.
@@ -234,7 +230,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         })
         .collect();
     let mut document = json!({
-        "format": "pcbcraft-symbol/4",
+        "format": if exact { crate::library::SYMBOL_FORMAT_V6 } else { crate::library::SYMBOL_FORMAT_V4 },
         "id": id,
         "revision": 1,
         "name": clip(&symbol.name, 64).unwrap_or_else(|| id.clone()),

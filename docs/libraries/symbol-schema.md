@@ -14,6 +14,7 @@ The machine-readable schemas describe canonical standalone library files:
 | `pcbcraft-symbol/3` | [Version 3](../schemas/symbol-v3.schema.json) | An explicit default category binding |
 | `pcbcraft-symbol/4` | [Version 4](../schemas/symbol-v4.schema.json) | Up to 32 independently placed units sharing logical terminals; category remains optional |
 | `pcbcraft-symbol/5` | [Version 5](../schemas/symbol-v5.schema.json) | Optional alternate functions on logical terminals |
+| `pcbcraft-symbol/6` | [Version 6](../schemas/symbol-v6.schema.json) | Exact pin coordinates and units that may have no terminals |
 
 [The dispatcher](../schemas/symbol.schema.json) accepts these versions. All schemas
 use JSON Schema Draft 2020-12 and registered URNs; validation needs no network
@@ -34,9 +35,9 @@ library revision do not determine the pinned identity.
 
 `format` versions the readable contract. `revision` versions immutable content.
 The symbol editor's native export and publication write `pcbcraft-symbol/5`
-for every new definition, with either one or several units. The schema supports
-optional category, electrical behavior, instance defaults and alternate pin
-functions. Removing optional records leaves the output at version 5. Published
+for new definitions, with either one or several units. Editing or copying a
+version-6 definition retains its format. The schema supports optional category,
+electrical behavior, instance defaults and alternate pin functions. Published
 files stay byte-for-byte intact, and project pins retain the original schema and
 revision address.
 
@@ -46,9 +47,12 @@ Version 1 refuses electrical behavior/default fields, and versions 1–2 refuse
 The [symbol guide](symbol-library.md) defines the existing geometry, pin
 appearance, defaults and power behavior. A unit can contain at most 441 pins on
 the 1.27 mm grid. Formats 1–3 have one unit and therefore accept at most 441
-terminals; formats 4 and 5 allow up to 1,024 logical terminals across multiple
-units. The schema and engine validate the declared supported
-fields rather than accepting arbitrary extension properties.
+terminals. Formats 4–6 allow up to 1,024 logical terminals across multiple units.
+
+In version 6, the wire end of each pin is an exact integer nanometer coordinate
+within ±100 mm of the symbol origin on each axis. Pin positions in a unit must
+be distinct. A unit may have no pins, including in a symbol with no terminals
+such as a fiducial. The schematic editing grid does not round stored pin positions.
 
 A placed part instance also owns `designator_locked`, independently of its
 symbol definition and unit drawings. All placed units share that flag; unit
@@ -69,8 +73,8 @@ have an integrated pin lead; the choice does not override the lead's name visibi
 Alternates and their order belong to the shared terminal, not its individual unit drawings.
 Formats 1–4 refuse the field. Adding an alternate adopts the
 `pcbcraft-library-item/5` draft envelope, which that editor item retains after
-the last alternate is removed. Native export and publication use
-`pcbcraft-symbol/5` throughout.
+the last alternate is removed. Editing a version-6 definition uses
+`pcbcraft-library-item/6`, which also supports alternate functions.
 
 A placed part can select one alternate per terminal. Selection does not renumber,
 swap or move terminals or change connectivity. See [placed-part storage](../formats/native-project-storage.md#alternate-pin-function-records).

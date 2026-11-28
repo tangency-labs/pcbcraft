@@ -37,9 +37,10 @@ replaces anything. There is no desktop menu entry yet.
 
 | KiCad | PCBcraft |
 | --- | --- |
-| Symbols in the file's `lib_symbols`, including ones that `extends` another | Native `pcbcraft-symbol/4` definitions pinned in the project under a library `kicad-…` named by a digest of the converted symbols (so different imports never claim one identity for different content; the `kicad-` prefix is a naming convention, not reserved), with the library name *Imported from KiCad* and license `NOASSERTION`, since a design's embedded symbols carry their own terms |
+| Symbols in the file's `lib_symbols`, including ones that `extends` another | Native definitions pinned in the project under a library `kicad-…` named by a digest of the converted symbols (so different imports never claim one identity for different content; the `kicad-` prefix is a naming convention, not reserved), with the library name *Imported from KiCad* and license `NOASSERTION`, since a design's embedded symbols carry their own terms |
 | Units 1 to 32 and the common unit 0 | One native unit per KiCad unit (`main` for single-unit symbols, else `a`, `b`, …), each with the common pins and drawing |
-| Pins, with electrical type, name, number, length, direction and inverted/clock marks | Terminals and integrated pin appearance; `free` pins become `unspecified` |
+| Pins, with electrical type, name, number, length, direction and inverted/clock marks | Terminals at their exact coordinates with integrated pin appearance. `free` pins become `unspecified` |
+| Pinless units and symbols | Drawings without electrical terminals. Pinless units and pins outside the legacy grid or offset use [`pcbcraft-symbol/6`](../libraries/symbol-schema.md) |
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
 | Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
@@ -90,8 +91,8 @@ replaces anything. There is no desktop menu entry yet.
 - A power symbol whose Value, its net name, isn't a valid one-line Value of at
   most 64 characters. Other Values are shortened or fall back to the symbol's
   default, reported.
-- Symbols the native format can't hold exactly: pins off the 1.27 mm grid or
-  more than 12.7 mm from the symbol's origin, two pins at one position, pin
+- Symbols the native format can't hold exactly: pins more than 100 mm from
+  the symbol's origin on either axis, two pins at one position, pin
   numbers other than 1 to 8 letters, digits, `+`, `-` or `_`, a number with a
   different name or type in different units, more than 32 units, hidden power
   pins on ordinary symbols, which KiCad joins to a net by name, and an alternate
