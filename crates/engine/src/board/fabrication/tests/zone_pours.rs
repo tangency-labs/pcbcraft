@@ -526,6 +526,25 @@ fn pours_are_conductor_regions_named_like_their_pads() {
     assert!(pour_nets.contains("ACCEPTED") && pour_nets.len() == 2, "{pour_nets:?}");
 }
 
+/// The test reader refuses a pour contour that retraces one line and encloses nothing, and
+/// still reads a two-segment contour that encloses area: an arc closed by its chord.
+#[test]
+fn reader_rejects_a_retraced_two_line_pour_contour() {
+    let s = pour_board(Connection::Thermal);
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let (suffix, function, polarity) = TOP_COPPER;
+    let text = file(&outputs, suffix);
+    // A pour with arcs, so circular mode is enabled before it.
+    let open = "G75*\n%TA.AperFunction,Conductor*%\nG36*\n";
+    let start = text.find(open).unwrap() + open.len();
+    let end = start + text[start..].find("G37*\n").unwrap();
+    let with = |contour: &str| format!("{}{contour}{}", &text[..start], &text[end..]);
+    let retraced = with("X0Y0D02*\nX1000000Y0D01*\nX0Y0D01*\n");
+    assert_eq!(try_read_gerber(&retraced, function, polarity).unwrap_err(), "region contour not closed");
+    let half_disc = with("X0Y0D02*\nG03*\nX2000000Y0I1000000J0D01*\nG01*\nX0Y0D01*\n");
+    assert!(try_read_gerber(&half_disc, function, polarity).is_ok());
+}
+
 /// Remove pour regions (each with its .N scope) from a copper file's text.
 fn without_pours(text: &str) -> String {
     let lines: Vec<_> = text.lines().collect();

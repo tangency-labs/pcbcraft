@@ -899,7 +899,13 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             read.drawn.push(if function == "Conductor" { Drawn::Pour(read.pours.len()) } else { Drawn::Region });
         } else if line == "G37*" {
             let (function, contours) = region.take().ok_or("region end without start")?;
-            if contours.is_empty() || contours.iter().any(|points| points.len() < 3 || points.first().map(|p| p.0) != points.last().map(|p| p.0)) {
+            // Two linear segments only retrace one line; an arc closed by its chord encloses area.
+            let open = |points: &Vec<(Point, Option<(Point, bool)>)>| {
+                points.len() < 3
+                    || (points.len() == 3 && points.iter().all(|point| point.1.is_none()))
+                    || points.first().map(|p| p.0) != points.last().map(|p| p.0)
+            };
+            if contours.is_empty() || contours.iter().any(open) {
                 return Err("region contour not closed");
             }
             if mode != "G01*" {
