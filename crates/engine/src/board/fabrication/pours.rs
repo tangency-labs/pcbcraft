@@ -6,9 +6,9 @@
 //! centre is rounded once to the file's 1 nm resolution (format 4.6 mm). Arcs use `G75`
 //! multi-quadrant circular interpolation (§4.7). They are split at the quarter-turn angles, so
 //! no written arc exceeds 90° and every extreme point of a loop is a vertex. A piece whose
-//! rounded end points are less than 1 µm apart is written as a line, because such an arc can
-//! turn into a nearly full circle under the processing perturbation the specification allows
-//! (§4.14.2).
+//! rounded end points are less than 1 + √2 µm (about 2.41 µm) apart is written as a line:
+//! §4.14.2 lets processing move each coordinate by up to 0.5 µm, so each end point by up to
+//! √2/2 µm, and an arc whose end points come closer than 1 µm can turn into a nearly full circle.
 //!
 //! Holes, the clearances around other copper, are joined to their outer contour with
 //! horizontal cut-ins: pairs of fully-coincident linear segments (§§4.10.3, 4.10.4.7). No clear
@@ -28,8 +28,9 @@ use pcbcraft_geometry::planar::{Boundary, Edge};
 use std::{collections::BTreeMap, f64::consts::FRAC_PI_2, fmt::Write as _};
 use uuid::Uuid;
 
-/// Shortest chord written as a circular arc (Ucamco Gerber 2026.05 §4.14.2).
-const MIN_ARC_CHORD_NM: f64 = 1_000.;
+/// Shortest chord written as a circular arc: 1 µm plus the √2 µm by which the §4.14.2
+/// perturbation (±0.5 µm per coordinate of each end point) can shorten it (Ucamco Gerber 2026.05).
+const MIN_ARC_CHORD_NM: f64 = 1_000. * (1. + std::f64::consts::SQRT_2);
 
 /// A written coordinate pair in output nanometres.
 pub(super) type Vertex = (i64, i64);
@@ -224,7 +225,7 @@ fn written(pieces: &[Piece], stats: &mut Stats) -> Result<Vec<Segment>, String> 
 }
 
 /// Choose how a written segment from `start` to `end` follows its analytic piece. An arc keeps
-/// the circular interpolation unless its chord is under 1 µm; its written centre minimises the
+/// the circular interpolation unless its chord is under [`MIN_ARC_CHORD_NM`]; its written centre minimises the
 /// deviation bound over the nine nanometre points around the analytic centre (ties keep the
 /// first in a fixed order, so the choice is deterministic). Records the bound in `stats`.
 fn shape(start: Vertex, end: Vertex, arc: Option<([f64; 2], f64, bool)>, stats: &mut Stats) -> Shape {
@@ -617,7 +618,7 @@ mod tests {
         assert!((super::area(&contour) - area).abs() < 2. * 7_000_000., "{} against {area}", super::area(&contour));
     }
 
-    /// Arcs shorter than 1 µm are lines with their sagitta in the bound, and a loop that rounds
+    /// Arcs under the minimum chord are lines with their sagitta in the bound, and a loop that rounds
     /// away entirely is refused rather than written empty.
     #[test]
     fn short_arcs_become_lines_and_collapsed_loops_are_refused() {
@@ -628,6 +629,18 @@ mod tests {
         assert!(matches!(shape((100_000, 0), (99_500, 9_987), arc, &mut stats), Shape::Arc { .. }));
         let tiny = [Piece { start: [0.2, 0.1], arc: None }, Piece { start: [0.4, 0.3], arc: None }, Piece { start: [0.1, 0.4], arc: None }];
         assert!(written(&tiny, &mut stats).is_err());
+    }
+
+    /// An arc is written only when its end points stay at least 1 µm apart after each moves by
+    /// the ±0.5 µm per coordinate that §4.14.2 allows. A 1131 nm chord can close to 1 nm and
+    /// flip a quarter arc into a nearly full circle, so it is a line; a 2.5 µm chord stays an arc.
+    #[test]
+    fn arcs_keep_their_end_points_apart_under_the_allowed_perturbation() {
+        let mut stats = Stats::default();
+        let radius = 71_100f64.hypot(70_300.);
+        let arc = Some(([0., 0.], radius, false));
+        assert_eq!(shape((71_100, 70_300), (70_300, 71_100), arc, &mut stats), Shape::Line);
+        assert!(matches!(shape((72_000, 69_368), (70_232, 71_134), arc, &mut stats), Shape::Arc { .. }));
     }
 
     /// Long edges are kept once, not copied into every band they span: 200 tall holes give at
