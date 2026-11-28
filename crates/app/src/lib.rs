@@ -1848,7 +1848,7 @@ impl PcbApp {
                             &self.views.active.schematic.selection,
                             self.views.active.schematic.selected_leg.as_ref(),
                             self.views.active.schematic.whole_wire_drag,
-                            self.views.active.schematic.selected_sheet_symbol,
+                            self.views.active.schematic.selected_hierarchy,
                             &highlight,
                             &self.views.active.inspection,
                             self.views.active.filters,
@@ -1949,13 +1949,13 @@ impl PcbApp {
                     Some(Tool::NetLabel { label, revision: source.revision, drag: Some(offset), orient_to_pin: false });
             }
             (None, Click::NetLabelAction(label, action)) => self.net_label_action(source, label, action),
-            (None, Click::SelectSheetSymbol(id)) => {
+            (None, Click::SelectHierarchy(kind, id)) => {
                 self.select(Selection::default());
-                self.views.active.schematic.selected_sheet_symbol = Some(id);
+                self.views.active.schematic.selected_hierarchy = Some((kind, id));
             }
             (None, Click::GrabSheetGesture(drag)) => {
                 self.select(Selection::default());
-                self.views.active.schematic.selected_sheet_symbol = Some(drag.block.id);
+                self.views.active.schematic.selected_hierarchy = Some((hierarchy::Kind::Sheet, drag.block.id));
                 self.views.active.schematic.tool = Some(Tool::SheetGesture { drag, revision: source.revision });
             }
             (Some(Tool::SheetGesture { drag, revision }), Click::FinishSheetGesture(geometry)) => {
@@ -2375,10 +2375,12 @@ impl PcbApp {
             }
             self.consume_inspection_edit_keys(ctx);
             let selected_net_label = self.views.active.schematic.selection.single_net_label().is_some();
+            let selected_hierarchy = self.views.active.schematic.selected_hierarchy.is_some();
             let hierarchy_hovered = self.views.active.schematic.selection.len() <= 1
                 && ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M, Key::X, Key::Y].into_iter().any(|key| i.key_pressed(key)))
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
                     selected_net_label
+                        || selected_hierarchy
                         || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
                             hierarchy::hovered(&project, &self.views.active.camera, ctx, pointer, self.views.active.filters)
                                 || net_labels::hovered(&project, &self.views.active.camera, ctx, pointer, self.views.active.filters)

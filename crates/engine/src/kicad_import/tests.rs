@@ -1349,6 +1349,8 @@ fn imported_field_visibility_and_text_geometry_survive_native_reopen() {
         (symbol (lib_id "T:R") (at 20 20 90) (mirror x) (unit 1)
             (property "Reference" "R1" (at 22 17 90) (effects (font (size 1 1)) (justify right)))
             (property "Value" "10k" (at 23 18 0) (effects (font (size 0.8 0.8)))))
+        (symbol (lib_id "T:R") (at 60 20 270) (mirror x) (unit 1)
+            (property "Reference" "R2" (at 62 17 0) (effects (font (size 1 1)) (justify left))))
         (label "SIGNAL" (at 15 15 180) (effects (font (size 0.75 0.75))))"##,
     );
     let result = import(&text, "Field appearance").unwrap();
@@ -1364,8 +1366,12 @@ fn imported_field_visibility_and_text_geometry_survive_native_reopen() {
         let (x, y) = crate::schematic::place(offset.x_nm, offset.y_nm, resistor.turns(), resistor.is_mirrored());
         assert_eq!((resistor.position.x_nm + x, resistor.position.y_nm + y), expected);
     }
-    assert_eq!(resistor.field_layout["reference"].rotation, 90);
-    assert_eq!(resistor.field_layout["reference"].align, crate::schematic::TextAlign::End);
+    assert_eq!(resistor.field_layout["reference"].rotation, 0);
+    assert_eq!(resistor.field_layout["reference"].align, crate::schematic::TextAlign::Start);
+    assert_eq!(resistor.field_layout["value"].rotation, 90);
+    let rotated = project.symbols().iter().find(|symbol| project.reference(symbol) == "R2").unwrap();
+    assert_eq!(rotated.field_layout["reference"].rotation, 90);
+    assert_eq!(rotated.field_layout["reference"].align, crate::schematic::TextAlign::Start);
     assert_eq!(project.net_labels()[0].text.as_ref().unwrap().height_nm, 750_000);
     assert_eq!(encode_documents(project).unwrap(), saved);
 }

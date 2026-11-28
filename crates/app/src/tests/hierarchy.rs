@@ -36,7 +36,7 @@ fn selection_filters_block_hierarchy_picks_and_hover_edits() {
     h.key_press(Key::E);
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
-    assert!(h.state().views.active.schematic.selected_sheet_symbol.is_none());
+    assert!(h.state().views.active.schematic.selected_hierarchy.is_none());
     h.drag_at(origin);
     h.run();
     h.hover_at(origin + egui::vec2(30., 30.));
@@ -259,6 +259,33 @@ fn hierarchy_shortcuts_do_not_edit_an_old_component_selection() {
     h.run();
     assert!(h.state().session.project().unwrap().hierarchical_labels().is_empty());
     assert_eq!(h.state().session.project().unwrap().symbols()[0].id(), symbol);
+}
+
+#[test]
+fn a_clicked_hierarchical_label_remains_selected_off_hover() {
+    let mut h = hierarchy_harness(1400.);
+    let revision = h.state().session.revision();
+    h.state_mut().run(engine::ADD_LABEL, &json!({"name":"Fan Power","direction":"output","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    h.run();
+    let id = h.state().session.project().unwrap().hierarchical_labels()[0].id;
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    let text = screen(&h, Point { x_nm: 3 * grid, y_nm: 0 });
+    point_click(&mut h, text);
+    assert_eq!(h.state().views.active.schematic.selected_hierarchy, Some((crate::hierarchy::Kind::Label, id)));
+    let away = screen(&h, Point { x_nm: 0, y_nm: 4 * grid });
+    h.hover_at(away);
+    h.run();
+    h.key_press(Key::E);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Hierarchy(_)));
+    name(&mut h, "Fan Supply");
+    assert_eq!(h.state().session.project().unwrap().hierarchical_labels()[0].name, "Fan Supply");
+    h.hover_at(away);
+    h.run();
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().session.project().unwrap().hierarchical_labels().is_empty());
+    assert!(h.state().views.active.schematic.selected_hierarchy.is_none());
 }
 
 /// Build original geometry through commands and clear floating panels for coordinate gestures.

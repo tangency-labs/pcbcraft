@@ -236,8 +236,8 @@ impl PcbApp {
     /// Hover requires the current pointer on the canvas background, excluding floating panels;
     /// the preceding frame's cached model point grants no targeting authority.
     fn schematic_clipboard_objects(&self, ctx: Option<&Context>) -> std::collections::BTreeSet<String> {
-        if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
-            return [format!("sheet-symbol-{id}")].into();
+        if let Some((kind, id)) = self.views.active.schematic.selected_hierarchy {
+            return [kind.object_id(id)].into();
         }
         if !self.views.active.schematic.selection.is_empty() {
             return Default::default();
@@ -495,7 +495,7 @@ impl PcbApp {
             &selection,
             None,
             false,
-            block,
+            block.map(|id| (crate::hierarchy::Kind::Sheet, id)),
             &Default::default(),
             &[],
             self.views.active.filters,
@@ -556,7 +556,7 @@ impl PcbApp {
         let flat = selected.is_empty();
         self.select(selected);
         if flat {
-            self.views.active.schematic.selected_sheet_symbol = block;
+            self.views.active.schematic.selected_hierarchy = block.map(|id| (crate::hierarchy::Kind::Sheet, id));
         }
         self.message = None;
         Ok(())

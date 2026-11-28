@@ -21,6 +21,29 @@ pub(super) enum Kind {
     Label,
 }
 
+impl Kind {
+    pub(super) fn allowed(self, filters: crate::selection_filters::Filters) -> bool {
+        match self {
+            Self::Sheet => filters.sheets,
+            Self::Label => filters.labels,
+        }
+    }
+
+    pub(super) fn object_id(self, id: u64) -> String {
+        match self {
+            Self::Sheet => format!("sheet-symbol-{id}"),
+            Self::Label => format!("label-{id}"),
+        }
+    }
+
+    pub(super) fn exists(self, project: &Project, id: u64) -> bool {
+        match self {
+            Self::Sheet => project.sheet_symbols().iter().any(|sheet| sheet.id == id),
+            Self::Label => project.hierarchical_labels().iter().any(|label| label.id == id),
+        }
+    }
+}
+
 /// Actions captured by the canvas and validated by its owning view before execution.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
@@ -128,7 +151,7 @@ pub(super) fn paint(
     project: &Project,
     tool: Option<&Tool>,
     pointer: Option<Pos2>,
-    selected: Option<u64>,
+    selected: Option<(Kind, u64)>,
 ) {
     let tokens = Tokens::get();
     let step = camera.unit_step();
@@ -140,7 +163,7 @@ pub(super) fn paint(
         let at = moving.filter(|(kind, id, _)| *kind == Kind::Sheet && *id == Some(block.id)).and_then(|(_, _, at)| at).unwrap_or(block.at);
         let size = project.sheet_symbol_size(block);
         let bounds = Rect::from_min_max(camera.screen(at, rect), camera.screen(Point { x_nm: at.x_nm + size.x_nm, y_nm: at.y_nm + size.y_nm }, rect));
-        let color = if selected == Some(block.id) { tokens.accent } else { tokens.text };
+        let color = if selected == Some((Kind::Sheet, block.id)) { tokens.accent } else { tokens.text };
         let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
         painter.rect_stroke(bounds, 0, stroke, egui::StrokeKind::Middle);
         paint_title(painter, bounds, project.child_name(block), step, color);
@@ -175,7 +198,7 @@ pub(super) fn paint(
                 );
             }
         }
-        if (selected == Some(block.id) || pointer.is_some_and(|p| bounds.expand(theme::SCHEMATIC_HANDLE_HIT_RADIUS).contains(p)))
+        if (selected == Some((Kind::Sheet, block.id)) || pointer.is_some_and(|p| bounds.expand(theme::SCHEMATIC_HANDLE_HIT_RADIUS).contains(p)))
             && matches!(tool, None | Some(Tool::SheetGesture { .. }))
         {
             for (pos, _) in corners(bounds) {
@@ -191,7 +214,8 @@ pub(super) fn paint(
     }
     for label in project.hierarchical_labels() {
         let at = moving.filter(|(kind, id, _)| *kind == Kind::Label && *id == Some(label.id)).and_then(|(_, _, at)| at).unwrap_or(label.at);
-        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, step, tokens.schematic_wire);
+        let color = if selected == Some((Kind::Label, label.id)) { tokens.accent } else { tokens.schematic_wire };
+        paint_label(painter, camera.screen(at, rect), &label.name, label.direction, step, color);
     }
     if let Some((kind, None, Some(at))) = moving {
         let pos = camera.screen(at, rect);
@@ -281,8 +305,7 @@ pub(super) fn clipboard_hover(project: &Project, camera: &Camera, ctx: &egui::Co
     if !rect.contains(pointer) {
         return None;
     }
-    hit(project, camera, ctx, rect, pointer, filters)
-        .map(|(kind, id, _)| format!("{}-{id}", if kind == Kind::Sheet { "sheet-symbol" } else { "label" }))
+    hit(project, camera, ctx, rect, pointer, filters).map(|(kind, id, _)| kind.object_id(id))
 }
 
 /// Hit label text before block interiors; pin anchors retain wire-target priority on plain clicks.
@@ -337,7 +360,7 @@ pub(super) fn input(
     rect: Rect,
     tool: Option<&Tool>,
     enabled: bool,
-    selected: Option<u64>,
+    selected: Option<(Kind, u64)>,
     filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
     if let Some(Tool::SheetGesture { drag, .. }) = tool {
@@ -415,7 +438,7 @@ pub(super) fn input(
     }
     if (enabled || response.context_menu_opened())
         && let Some((kind, id, _)) = ui.data(|data| data.get_temp::<(Kind, u64, Point)>(menu_id))
-        && (if kind == Kind::Sheet { filters.sheets } else { filters.labels })
+        && kind.allowed(filters)
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
             let rows = if kind == Kind::Sheet {
                 vec![
@@ -462,9 +485,8 @@ pub(super) fn input(
         }
     }
     let hovered = response.hover_pos().and_then(|p| hit(project, camera, ui.ctx(), rect, p, filters));
-    let (kind, id, _) = hovered.or_else(|| {
-        selected.filter(|_| filters.sheets).and_then(|id| project.sheet_symbols().iter().find(|s| s.id == id).map(|s| (Kind::Sheet, id, s.at)))
-    })?;
+    let (kind, id) =
+        hovered.map(|(kind, id, _)| (kind, id)).or_else(|| selected.filter(|(kind, id)| kind.allowed(filters) && kind.exists(project, *id)))?;
     let action = if hovered.is_some() && kind == Kind::Sheet && response.double_clicked() {
         Some(Action::Enter)
     } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::E)) {
@@ -479,15 +501,15 @@ pub(super) fn input(
     if let Some(action) = action {
         return Some(Some(Click::HierarchyAction(kind, id, action)));
     }
-    if hovered.is_some()
-        && kind == Kind::Sheet
+    if let Some((kind, id, _)) = hovered
         && response.clicked()
         && let Some(pointer) = response.hover_pos()
-        && project.sheet_symbols().iter().find(|b| b.id == id).is_some_and(|block| {
-            !project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2))
-        })
+        && (kind == Kind::Label
+            || project.sheet_symbols().iter().find(|b| b.id == id).is_some_and(|block| {
+                !project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2))
+            }))
     {
-        return Some(Some(Click::SelectSheetSymbol(id)));
+        return Some(Some(Click::SelectHierarchy(kind, id)));
     }
     None
 }

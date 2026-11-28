@@ -1237,17 +1237,28 @@ fn field_layouts(symbol: &PlacedSymbol, native: &SymbolPlacement, report: &mut R
                 }
                 Some(crate::Point { x_nm, y_nm })
             });
-            let rotation = if property.rotation_mdeg % 90_000 == 0 {
-                (property.rotation_mdeg / 1_000) as u16
+            let field_angle = if property.rotation_mdeg % 90_000 == 0 {
+                property.rotation_mdeg
             } else {
-                report.note("fields at other than a quarter turn placed level");
+                report.note("fields at other than a quarter turn rounded to the symbol orientation");
                 0
             };
-            let align = match property.justify {
-                pcbcraft_kicad::schematic::Justify::Left => TextAlign::Start,
-                pcbcraft_kicad::schematic::Justify::Center => TextAlign::Middle,
-                pcbcraft_kicad::schematic::Justify::Right => TextAlign::End,
+            let angle = (symbol.rotation_mdeg + field_angle).rem_euclid(360_000);
+            let vertical = angle % 180_000 != 0;
+            // KiCad reads mirrored lettering upright and swaps its justification along
+            // whichever screen axis was reflected.
+            let reversed = (angle >= 180_000)
+                ^ match symbol.mirror {
+                    Mirror::None => false,
+                    Mirror::X => vertical,
+                    Mirror::Y => !vertical,
+                };
+            let align = match (property.justify, reversed) {
+                (pcbcraft_kicad::schematic::Justify::Center, _) => TextAlign::Middle,
+                (pcbcraft_kicad::schematic::Justify::Left, false) | (pcbcraft_kicad::schematic::Justify::Right, true) => TextAlign::Start,
+                _ => TextAlign::End,
             };
+            let rotation = if vertical { 90 } else { 0 };
             Some((
                 id.to_owned(),
                 Layout {

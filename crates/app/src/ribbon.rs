@@ -251,9 +251,7 @@ impl Action {
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
             Self::Copy | Self::Cut | Self::Duplicate => {
-                project
-                    && schematic
-                    && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_sheet_symbol.is_some())
+                project && schematic && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_hierarchy.is_some())
             }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
@@ -299,7 +297,7 @@ impl Action {
             Self::Delete => {
                 schematic
                     && (!app.views.active.schematic.selection.is_empty()
-                        || app.views.active.schematic.selected_sheet_symbol.is_some()
+                        || app.views.active.schematic.selected_hierarchy.is_some()
                         || app.views.active.schematic.selection.single_net_label().is_some())
             }
             Self::Slice => schematic && app.views.active.schematic.selected_leg.as_ref().is_some_and(|leg| leg.split.is_some()),
@@ -433,9 +431,9 @@ impl PcbApp {
                     if let Some(source) = self.views.active.input(&self.session) {
                         self.net_label_action(source, label, crate::net_labels::Action::Delete);
                     }
-                } else if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
+                } else if let Some((kind, id)) = self.views.active.schematic.selected_hierarchy {
                     if let Some(source) = self.views.active.input(&self.session) {
-                        self.hierarchy_action(source, crate::hierarchy::Kind::Sheet, id, crate::hierarchy::Action::Delete);
+                        self.hierarchy_action(source, kind, id, crate::hierarchy::Action::Delete);
                     }
                 } else {
                     self.delete_selection();
