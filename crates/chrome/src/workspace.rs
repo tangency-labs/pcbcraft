@@ -1146,6 +1146,7 @@ pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T
             layer_choice_patch(ui, response.rect, *color);
         }
     });
+    crate::shell::keep_dropdown_above(ui, &response);
     let t = Tokens::get();
     let text_rect = response.rect.shrink2(ui.spacing().button_padding);
     let mut text = layer_choice_label(ui, selected_name);

@@ -204,6 +204,16 @@ pub fn scrolling_dialog_width(ctx: &egui::Context, id: &str, title: &str, width:
     dialog_width(ctx, id, title, width, add)
 }
 
+/// Keep a dropdown's open list above the dialog or popup that hosts it. A click in a modal
+/// raises the modal in the same frame a reopened list asks to be raised, and egui then keeps
+/// their earlier order, so the list would open behind the dialog; a sublayer stays above its parent.
+pub fn keep_dropdown_above(ui: &Ui, button: &egui::Response) {
+    let list = egui::LayerId::new(egui::Order::Foreground, button.id.with("popup"));
+    if ui.layer_id().order == list.order && egui::ComboBox::is_open(ui.ctx(), button.id) {
+        ui.ctx().set_sublayer(ui.layer_id(), list);
+    }
+}
+
 /// Draw a shared modal with a preferred content width bounded by the viewport. Callers retain
 /// their field focus, validation and actions; the title stays fixed while long bodies scroll.
 pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {

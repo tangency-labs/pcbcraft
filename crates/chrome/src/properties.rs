@@ -83,12 +83,13 @@ pub fn choice(ui: &mut Ui, label: &str, id: impl egui::AsIdSalt, value: &mut Str
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
         let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str()).to_owned();
-        solidcraft_ui_kit::dropdown_menu(ui, id, &selected, |ui| {
+        let response = solidcraft_ui_kit::dropdown_menu(ui, id, &selected, |ui| {
             for (key, text) in options {
                 ui.selectable_value(value, (*key).into(), text);
             }
-        })
-        .labelled_by(label.id)
+        });
+        crate::shell::keep_dropdown_above(ui, &response);
+        response.labelled_by(label.id)
     })
     .inner
 }
@@ -120,7 +121,9 @@ pub fn select(ui: &mut Ui, label: &str, id: egui::Id, selected: &str, add: impl 
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72., t.control_height), egui::Label::new(label).halign(Align::Min));
         ui.spacing_mut().interact_size.y = t.control_height;
-        egui::ComboBox::from_id_salt(id).width(ui.available_width()).selected_text(selected).show_ui(ui, add).response.labelled_by(label.id)
+        let response = egui::ComboBox::from_id_salt(id).width(ui.available_width()).selected_text(selected).show_ui(ui, add).response;
+        crate::shell::keep_dropdown_above(ui, &response);
+        response.labelled_by(label.id)
     })
     .inner
 }
@@ -186,7 +189,7 @@ pub fn mapping_multi_choice(ui: &mut Ui, label: &str, id: egui::Id, values: &mut
         ui.spacing_mut().interact_size.y = t.control_height;
         let label = field_name(ui, label, label_width, false);
         let selected = if values.is_empty() { "None".into() } else { values.join(", ") };
-        solidcraft_ui_kit::dropdown_menu_with_close_behavior(ui, id, &selected, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        let response = solidcraft_ui_kit::dropdown_menu_with_close_behavior(ui, id, &selected, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
             for (key, text) in options {
                 let mut checked = values.iter().any(|value| value == key);
                 if crate::controls::checkbox(ui, &mut checked, text).changed() {
@@ -197,8 +200,9 @@ pub fn mapping_multi_choice(ui: &mut Ui, label: &str, id: egui::Id, values: &mut
                     }
                 }
             }
-        })
-        .labelled_by(label.id)
+        });
+        crate::shell::keep_dropdown_above(ui, &response);
+        response.labelled_by(label.id)
     })
     .inner
 }
