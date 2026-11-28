@@ -2397,7 +2397,6 @@
                         ]
                       },
                       "maxProperties": 1024,
-                      "minProperties": 1,
                       "type": "object"
                     },
                     "unconnected_pads": {
@@ -3569,7 +3568,6 @@
               ]
             },
             "maxProperties": 1024,
-            "minProperties": 1,
             "type": "object"
           },
           "part_instance": {
@@ -3663,7 +3661,6 @@
               ]
             },
             "maxProperties": 1024,
-            "minProperties": 1,
             "type": "object"
           },
           "unconnected_pads": {
@@ -6598,7 +6595,6 @@
               ]
             },
             "maxProperties": 1024,
-            "minProperties": 1,
             "type": "object"
           },
           "pin_1_pad": {
