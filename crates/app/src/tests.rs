@@ -39,6 +39,7 @@ mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod inspection_selection;
+mod issue_report;
 #[cfg(not(target_arch = "wasm32"))]
 mod manufacturing;
 mod mirror;
@@ -575,17 +576,9 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
     harness.get_by_label("Draw wire");
     click(&mut harness, "OK");
 
-    click(&mut harness, "Help");
-    harness.get_by_label("Report an Issue…").click();
-    harness.step();
-    assert!(
-        harness
-            .output()
-            .platform_output
-            .commands
-            .iter()
-            .any(|command| matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == BUG_REPORT_URL))
-    );
+    choose(&mut harness, "Help", "Report an Issue…");
+    assert!(matches!(harness.state().dialog, Dialog::Report(_)));
+    click(&mut harness, "Close");
 
     choose(&mut harness, "Help", "Connect AI assistants…");
     assert!(matches!(harness.state().dialog, Dialog::LocalMcp { .. }));
@@ -695,15 +688,9 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     let report = harness.get_by_label("Report a bug");
     assert!(report.rect().right() < harness.get_by_label(&format!("v{}", display_version())).rect().left());
     report.click();
-    harness.step();
-    assert!(
-        harness
-            .output()
-            .platform_output
-            .commands
-            .iter()
-            .any(|command| { matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == BUG_REPORT_URL) })
-    );
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::Report(_)));
+    click(&mut harness, "Close");
 
     harness.set_size(egui::vec2(320.0, 520.0));
     harness.run();

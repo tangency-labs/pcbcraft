@@ -46,6 +46,7 @@ mod hierarchy;
 mod home;
 mod inline_text;
 mod inspection_selection;
+mod issue_report;
 mod library_editors;
 mod library_preview;
 mod library_workspace;
@@ -112,7 +113,6 @@ pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAr
 use project_files::SaveFormat;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
 #[cfg(not(target_arch = "wasm32"))]
 const RECENT_PROJECTS_KEY: &str = "pcbcraft.recent_projects";
@@ -200,19 +200,21 @@ fn display_version() -> String {
 /// Draw the utilities every workspace's app bar ends with, so they share one set, order,
 /// tooltips and breakpoints: the version and Report a bug from 950 points, Help from
 /// [`COMPACT_APP_BAR`] (narrower bars leave its rows to the Home page), Preferences, then the
-/// Assistant when `assistant` carries its open and ready state. Report a bug opens the issue
-/// form directly.
+/// Assistant when `assistant` carries its open and ready state. Report a bug opens the same
+/// local report draft as the Help menu's Report an Issue row.
 fn utilities(ui: &mut Ui, width: f32, assistant: Option<(bool, bool)>) -> Utilities {
     let mut picked = Utilities::default();
     if width >= 950.0 {
         ui.label(dim(format!("v{}", display_version())));
         ui.add_space(Tokens::get().space_8);
         if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
+            picked.help = Some(Help::Report);
         }
     }
-    if width >= COMPACT_APP_BAR {
-        picked.help = menu::help(ui, help_menu).flatten();
+    if width >= COMPACT_APP_BAR
+        && let Some(pick) = menu::help(ui, help_menu).flatten()
+    {
+        picked.help = Some(pick);
     }
     let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
     picked.preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
@@ -296,6 +298,8 @@ enum Dialog {
     SaveChanges(unsaved::Then),
     OpenLocation,
     SaveEncoding,
+    /// The local issue report draft every reporting entry point opens.
+    Report(Box<issue_report::Draft>),
     #[cfg(not(target_arch = "wasm32"))]
     ArchiveFolder {
         trash_source: bool,
@@ -1019,15 +1023,29 @@ impl PcbApp {
         self.dialog = Dialog::Preferences(preferences::PreferencesWindow::new(self.preferences));
     }
 
-    /// Run a Help row: a dialog, Preferences on its Shortcuts page, or the issue form.
-    fn help_action(&mut self, ctx: &egui::Context, pick: Help) {
+    /// Run a Help row: a dialog, Preferences on its Shortcuts page, or the local report draft.
+    fn help_action(&mut self, pick: Help) {
         match pick {
             Help::About => self.dialog = Dialog::About,
             Help::Shortcuts => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_shortcuts(self.preferences)),
-            Help::Report => ctx.open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL)),
+            Help::Report => self.open_report(),
             #[cfg(not(target_arch = "wasm32"))]
             Help::Connect => self.dialog = Dialog::LocalMcp { error: None, copied: false },
         }
+    }
+
+    /// Open a new report draft with technical details from the current screen.
+    fn open_report(&mut self) {
+        self.dialog = Dialog::Report(Box::new(issue_report::Draft::new(self.report_details())));
+    }
+
+    /// Technical details for a new report: version, host, screen and whether a project is open.
+    /// Status messages are left out: they can name files, projects, nets or parts.
+    fn report_details(&self) -> String {
+        let host = if IN_BROWSER { "browser".to_owned() } else { format!("desktop ({}, {})", std::env::consts::OS, std::env::consts::ARCH) };
+        let screen = if self.home { "Home" } else { self.views.active.workspace.title() };
+        let project = if self.session.project().is_some() { "open" } else { "none" };
+        format!("PCBCraft {}\nHost: {host}\nScreen: {screen}\nProject: {project}", display_version())
     }
 
     /// Save/download availability belongs to the whole open project, even if the active view's
@@ -1116,7 +1134,7 @@ impl PcbApp {
         if picked.preferences {
             self.open_preferences();
         } else if let Some(pick) = picked.help {
-            self.help_action(ctx, pick);
+            self.help_action(pick);
         }
     }
 
@@ -2679,18 +2697,26 @@ impl PcbApp {
                     self.dialog = Dialog::Agent { form, return_to };
                 }
             }
+            Dialog::Report(mut draft) => {
+                if issue_report::show(ctx, &mut draft) == issue_report::Outcome::Open {
+                    self.dialog = Dialog::Report(draft);
+                }
+            }
             Dialog::About => {
                 let mut close = false;
+                let mut reporting = false;
                 let closing = shell::dialog(ctx, "about_dialog", "About PCBCraft", |ui| {
                     ui.label(format!("PCBCraft {}", display_version()));
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
                     pcbcraft_chrome::fonts::licenses(ui);
-                    ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
+                    reporting = pcbcraft_chrome::controls::button(ui, "Report an Issue…").clicked();
                     close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
                 });
-                if !(closing || close) {
+                if reporting {
+                    self.open_report();
+                } else if !(closing || close) {
                     self.dialog = Dialog::About;
                 }
             }

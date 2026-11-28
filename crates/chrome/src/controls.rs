@@ -105,6 +105,11 @@ fn panel_disclosure_button(ui: &mut Ui, rect: egui::Rect, open: bool, accessible
     response.on_hover_cursor(egui::CursorIcon::PointingHand).backing_on_hover_text(tooltip_label)
 }
 
+/// Shared bounded multiline text input with an accessible label; the caller owns validation.
+pub fn text_area(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, rows: usize, limit: usize) -> Response {
+    kit::text_area(ui, label, id, value, rows, limit)
+}
+
 /// Render an enabled or disabled command action without changing its command ownership.
 pub fn enabled_button(ui: &mut Ui, enabled: bool, label: impl Into<WidgetText>) -> Response {
     ui.add_enabled_ui(enabled, |ui| button(ui, label)).inner
