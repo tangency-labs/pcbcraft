@@ -34,6 +34,7 @@ mod board_workspace;
 mod board_zones;
 mod canvas_camera;
 mod clipboard;
+mod component_table;
 mod definition_graphics;
 mod editor_layout;
 mod editor_view;
@@ -241,6 +242,8 @@ enum Dialog {
     #[default]
     None,
     NoConnects(Box<no_connect::Inspection>),
+    /// Project-wide component rows with a previewed grouped field edit.
+    ComponentTable(Box<component_table::Table>),
     AddLibrary(Option<String>),
     DeleteLibrary(native_sources::lifecycle::DeleteDraft),
     #[cfg(not(target_arch = "wasm32"))]
@@ -2508,6 +2511,7 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::NoConnects(inspection) => self.no_connect_dialog(ctx, inspection),
+            Dialog::ComponentTable(table) => self.component_table_dialog(ctx, table),
             Dialog::NativePart(edit) => self.native_part_properties_dialog(ctx, *edit),
             Dialog::AddLibrary(source) => self.add_library_dialog(ctx, source),
             Dialog::DeleteLibrary(draft) => self.delete_library_dialog(ctx, draft),

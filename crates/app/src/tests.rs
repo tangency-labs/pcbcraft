@@ -29,6 +29,7 @@ mod board_views;
 mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli_open;
+mod component_table;
 mod designator_locks;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;

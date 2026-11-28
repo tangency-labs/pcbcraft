@@ -320,6 +320,64 @@ pub fn table_with_reveal(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], rev
     });
 }
 
+/// The display order of a sortable table: one sorted column, or the listed order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ColumnSort(Option<(usize, kit::Sort)>);
+
+impl ColumnSort {
+    /// Order display items by the sorted column's text in natural order. The sort is stable,
+    /// so equal cells, and every item of an unsorted table, keep the listed order.
+    pub fn apply<T>(self, items: &mut [T], cell: impl Fn(&T, usize) -> &str) {
+        if let Some((column, sort)) = self.0 {
+            sort.apply(items, |item| cell(item, column));
+        }
+    }
+}
+
+/// A read-only table whose headers sort the display. A header click steps that column through
+/// A to Z, Z to A and the listed order, and resets the other columns; the host orders its rows
+/// with [`ColumnSort::apply`] and owns their identity and selection. Off-screen rows keep their
+/// space without building cells. Returns the display index of a clicked row.
+pub fn sortable_table(
+    ui: &mut Ui,
+    id: &str,
+    headers: &[&str],
+    sort: &mut ColumnSort,
+    rows: &[TableEntry],
+    empty: &str,
+    height: f32,
+) -> Option<usize> {
+    let columns: Vec<_> = headers.iter().map(|label| kit::Column::new(label, 1.0).flex().min_content_width(90.0)).collect();
+    let mut clicked = None;
+    egui::ScrollArea::vertical().id_salt((id, "vertical")).max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+        kit::table_custom(ui, id, &columns, empty, |ui, table| {
+            table.headers(ui, |ui, column| {
+                let mut order = match sort.0 {
+                    Some((sorted, order)) if sorted == column => order,
+                    _ => kit::Sort::Listed,
+                };
+                if kit::sort_header(ui, headers[column], &mut order).clicked() {
+                    *sort = ColumnSort((order != kit::Sort::Listed).then_some((column, order)));
+                }
+                true
+            });
+            for (index, entry) in rows.iter().enumerate() {
+                let response = table.row_visible(ui, &entry.key, entry.selected, false, |row| {
+                    for cell in &entry.cells {
+                        row.cell(|ui| {
+                            ui.add(egui::Label::new(cell.as_str()).selectable(false).truncate().show_tooltip_when_elided(false)).on_hover_text(cell);
+                        });
+                    }
+                });
+                if response.clicked() {
+                    clicked = Some(index);
+                }
+            }
+        });
+    });
+    clicked
+}
+
 /// Section headings retain the existing app's shared semibold face and type scale.
 pub fn heading(ui: &mut Ui, title: &str) {
     let t = Tokens::get();
