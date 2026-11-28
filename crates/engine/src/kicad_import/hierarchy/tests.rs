@@ -400,7 +400,7 @@ fn joining_power_flags_are_refused_with_only_hierarchical_contacts() {
                 "root.kicad_sch" => root.clone(),
                 "left.kicad_sch" => r#"(kicad_sch (hierarchical_label "A" (shape output) (at 20 20 0)))"#.into(),
                 "top.kicad_sch" => r#"(kicad_sch (hierarchical_label "B" (shape output) (at 20 20 0)))"#.into(),
-                _ => unreachable!(),
+                _ => return Err(format!("Unexpected fixture path: {file}")),
             })
         })
         .unwrap();
