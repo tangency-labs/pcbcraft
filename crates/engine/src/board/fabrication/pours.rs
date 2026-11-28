@@ -726,10 +726,14 @@ fn assemble(loops: &[Vec<Segment>], entries: &[usize], joins: &[Vec<Join>], stat
     out
 }
 
+/// Most bands one segment is copied into before it moves to the list every ray checks.
+const BAND_COPIES: usize = 16;
+
 /// Segments sorted into horizontal bands by the Y range they span, so a horizontal ray only
 /// looks at the segments of its own band. Written segments are straight or within one quadrant,
-/// so their end points bound their Y range. A segment spanning more than two bands is kept once
-/// in `long` instead, which every ray also looks at, so the index stays linear in its segments.
+/// so their end points bound their Y range. A segment spanning more than [`BAND_COPIES`] bands
+/// is kept once in `long` instead, which every ray also looks at, so the index stays linear in
+/// its segments while ordinary arcs, a few bands tall, stay out of every ray's way.
 struct Bands {
     low: i64,
     height: i64,
@@ -750,7 +754,7 @@ impl Bands {
             for k in 0..n {
                 let (a, b) = (segments[k].start.1, segments[(k + 1) % n].start.1);
                 let (first, last) = (((a.min(b) - low) / height) as usize, ((a.max(b) - low) / height) as usize);
-                if last - first > 1 {
+                if last - first >= BAND_COPIES {
                     long.push((l, k));
                     continue;
                 }
