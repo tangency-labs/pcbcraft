@@ -2,6 +2,7 @@
 pub(crate) mod commands;
 pub(crate) mod fields;
 pub(crate) mod storage;
+pub(crate) mod table;
 use crate::library::{
     parts::{ManufacturerPart, Reference, Requirement, SupplyRange, Value},
     sources::ResolvedPart,
@@ -11,6 +12,7 @@ pub use fields::SET_FIELDS;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, sync::Arc};
+pub use table::{ComponentRow, FootprintRow, INSPECT_FIELDS};
 
 /// Project selection pins every required native record; source locations and provider state stay outside.
 #[derive(Clone, Debug, PartialEq, Eq)]

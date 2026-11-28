@@ -18,7 +18,7 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
 }
 
 /// Five resistors and one two-unit amplifier with both units placed, without a board.
-fn fixture() -> Session {
+pub(super) fn fixture() -> Session {
     let mut s = Session::default();
     s.apply("project.new", &json!({})).unwrap();
     for i in 0..5 {
@@ -45,7 +45,7 @@ fn fixture() -> Session {
 }
 
 /// Submit one bulk edit against the current revision.
-fn run(s: &mut Session, edits: Value, dry_run: bool) -> Result<Value, CommandError> {
+pub(super) fn run(s: &mut Session, edits: Value, dry_run: bool) -> Result<Value, CommandError> {
     let params = json!({"edits":edits,"dry_run":dry_run,"expected_revision":s.revision()});
     s.execute(SET_FIELDS, &params)
 }
@@ -56,7 +56,7 @@ fn rows(s: &Session) -> Vec<Value> {
 }
 
 /// A complete two-pad footprint choice for a basic resistor.
-fn footprint(mapping: Value) -> Value {
+pub(super) fn footprint(mapping: Value) -> Value {
     json!({"library":"basic-components","definition":"resistor-0402","definition_revision":4,"mapping":mapping})
 }
 

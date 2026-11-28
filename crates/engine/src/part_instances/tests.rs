@@ -13,6 +13,7 @@ mod fields;
 mod metadata;
 mod retained;
 mod supply_range;
+mod table;
 mod voltage_rating;
 
 /// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.

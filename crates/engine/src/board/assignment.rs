@@ -266,6 +266,12 @@ impl Project {
     /// Report explicit choices and physical legacy placements as assignments without migrating
     /// their saved bytes. Marker-only legacy placements remain outside the physical catalog.
     pub fn footprint_assignments(&self) -> Vec<Value> {
+        self.effective_package_assignments().values().map(|a| a.inspect(self)).collect()
+    }
+
+    /// Explicit choices by component, plus the package of each physical legacy placement
+    /// that has no explicit choice. Saved bytes are not migrated.
+    pub(crate) fn effective_package_assignments(&self) -> BTreeMap<u64, Assignment> {
         let mut assignments = self.package_assignments().clone();
         for footprint in self.board.footprints() {
             if let Entry::Vacant(entry) = assignments.entry(footprint.component)
@@ -274,7 +280,7 @@ impl Project {
                 entry.insert(assignment);
             }
         }
-        assignments.values().map(|a| a.inspect(self)).collect()
+        assignments
     }
 }
 

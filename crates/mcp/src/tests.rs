@@ -197,6 +197,24 @@ fn component_field_changes_survive_inspect_false() {
     }
 }
 
+/// The component table's rows come back with inspection suppressed, so an agent reads the same
+/// table the GUI shows.
+#[test]
+fn component_table_rows_survive_inspect_false() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let result = crate::backend::call_session(
+        &mut session,
+        "engine.execute",
+        &json!({"command":pcbcraft_engine::part_instances::INSPECT_FIELDS,"inspect":false,"params":{}}),
+    )
+    .unwrap();
+    assert_eq!(result["revision"], json!(session.revision()));
+    assert_eq!(result["components"], json!(session.project().unwrap().component_rows()));
+    assert_eq!(result["components"][0]["reference"], "R1");
+}
+
 /// Annotation previews stay identical with inspection omitted; their distinct session-local
 /// tokens authorize only the originating session and apply one edit on either dispatcher.
 #[cfg(not(target_arch = "wasm32"))]
