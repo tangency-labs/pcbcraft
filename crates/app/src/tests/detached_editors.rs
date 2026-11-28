@@ -810,6 +810,27 @@ fn detach_and_dock_keep_each_views_snapping() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
 
+/// Detaching the only visible pane after collapsing a split brings back the parked pane with
+/// its own snapping, not the detached pane's.
+#[test]
+fn detaching_after_a_collapse_keeps_the_parked_panes_snapping() {
+    let (mut h, _peer) = multi_window();
+    let ctx = h.ctx.clone();
+    h.state_mut().split_editors(&ctx, true);
+    h.state_mut().views.bind(ViewId(0));
+    h.state_mut().set_view_snap(ViewId(0), false);
+    h.run();
+    h.state_mut().split_editors(&ctx, false);
+    h.run();
+    let snap = |h: &Harness<'_, PcbApp>, id| h.state().views.view(ViewId(id)).unwrap().camera.snap_enabled();
+    assert_eq!((snap(&h, 0), snap(&h, 1)), (false, true));
+    h.state_mut().run_window_command(&ctx, "view.detach", &json!({"view": 0})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.owner(ViewId(0)), Some(HostId(1)));
+    assert_eq!(h.state().views.active.id(), ViewId(1), "the parked pane takes the root's place");
+    assert_eq!((snap(&h, 0), snap(&h, 1)), (false, true));
+}
+
 /// Child input edits the shared session exactly once; root Delete cannot act on a highlight,
 /// while undo/redo from either window restore the same immutable project snapshots.
 #[test]

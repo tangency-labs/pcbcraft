@@ -38,6 +38,8 @@ pub(super) struct EditorViews {
     selection_source: Option<(ViewId, Workspace)>,
     report_probe: Option<ReportProbe>,
     pending_reveal: BTreeMap<ViewId, PendingReveal>,
+    /// The parked view created at startup until it is first shown, when it is seeded like a new view.
+    spare: Option<ViewId>,
 }
 
 /// A report projects stable addresses for one board and one live source revision. Neither
@@ -97,6 +99,7 @@ impl Default for EditorViews {
             selection_source: None,
             report_probe: None,
             pending_reveal: BTreeMap::new(),
+            spare: Some(ViewId(1)),
         }
     }
 }
@@ -350,7 +353,7 @@ impl EditorViews {
             let replacement = if let Some(parked) = parked {
                 let camera = self.view(id)?.camera.clone().fork_navigation();
                 if self.view(parked)?.workspace == self.view(id)?.workspace {
-                    self.view_mut(parked)?.camera = camera;
+                    self.seed_navigation(parked, camera);
                 }
                 parked
             } else {
@@ -1113,8 +1116,24 @@ impl EditorViews {
         true
     }
 
+    /// Seed a parked view with navigation forked from another view. The startup spare, never
+    /// shown yet, takes it whole like a new view; a view being restored keeps its own snapping.
+    fn seed_navigation(&mut self, id: ViewId, camera: crate::canvas_camera::Camera) {
+        let spare = self.spare == Some(id);
+        if let Some(view) = self.view_mut(id) {
+            if spare {
+                view.camera = camera;
+            } else {
+                view.camera.adopt_navigation(camera);
+            }
+        }
+        if spare {
+            self.spare = None;
+        }
+    }
+
     /// Toggle a split within this host only. Collapsing parks its other views; reopening seeds
-    /// the restored panes from the active camera, retaining their separate edit selections.
+    /// the restored panes from the active camera, retaining their separate edit selections and grid snapping.
     fn set_split(&mut self, split: bool) {
         if split == self.is_split() {
             return;
@@ -1125,9 +1144,8 @@ impl EditorViews {
             if let Some(layout) = collapsed.filter(|layout| matches!(layout, Layout::Split { .. })) {
                 for id in layout.views().into_iter().filter(|id| *id != source) {
                     let camera = self.active.camera.fork_navigation();
-                    let workspace = self.active.workspace;
-                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
-                        view.camera = camera;
+                    if self.view(id).is_some_and(|view| view.workspace == self.active.workspace) {
+                        self.seed_navigation(id, camera);
                     }
                 }
                 if let Some(host) = self.hosts.get_mut(&self.host) {
@@ -1152,9 +1170,8 @@ impl EditorViews {
                         }
                     }
                     let camera = self.active.camera.fork_navigation();
-                    let workspace = self.active.workspace;
-                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
-                        view.camera = camera;
+                    if self.view(id).is_some_and(|view| view.workspace == self.active.workspace) {
+                        self.seed_navigation(id, camera);
                     }
                     if let Some(host) = self.hosts.get_mut(&self.host) {
                         host.layout.insert(source, id);

@@ -177,6 +177,27 @@ fn each_view_keeps_its_own_snapping_and_inspection_reads_and_sets_it() {
     assert_eq!(project_state(&h), before);
 }
 
+/// Collapsing a split and opening it again restores the parked pane with its own snapping,
+/// while its navigation and spacing follow the focused pane as before.
+#[test]
+fn reopening_a_split_keeps_the_restored_panes_snapping() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400.0, 900.0));
+    new_project(&mut h);
+    h.state_mut().browser.open = false;
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    h.state_mut().set_view_snap(ViewId(0), false);
+    h.state_mut().set_view_grid(ViewId(0), 25 * MIL);
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    let grid = |h: &Harness<'_, PcbApp>| [0, 1].map(|id| h.state().views.view(ViewId(id)).map(|v| (v.camera.snap_enabled(), v.camera.snap_nm())));
+    assert_eq!(grid(&h), [Some((false, 25 * MIL)), Some((true, 50 * MIL))]);
+    click(&mut h, "Split editor views");
+    click(&mut h, "Split editor views");
+    assert!(h.state().views.is_split());
+    assert_eq!(grid(&h), [Some((false, 25 * MIL)), Some((true, 25 * MIL))], "pane 1 keeps its snapping; spacing follows navigation");
+}
+
 /// At startup each workspace takes its own remembered snapping, as it does its spacing, and a
 /// view switching between schematic and PCB keeps one setting for each.
 #[test]

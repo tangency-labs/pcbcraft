@@ -206,6 +206,12 @@ impl Camera {
         }
     }
 
+    /// Take navigation forked from another view into this existing view, keeping this view's own
+    /// snapping; a new view takes the forked camera whole instead.
+    pub(crate) fn adopt_navigation(&mut self, forked: Self) {
+        *self = Self { snap_enabled: self.snap_enabled, ..forked };
+    }
+
     /// Whether this view shows the board from below.
     pub(crate) fn mirrored(&self) -> bool {
         self.mirrored
