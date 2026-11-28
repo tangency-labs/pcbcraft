@@ -1289,3 +1289,33 @@ fn a_drawing_wider_than_every_paper_is_not_reported_as_held() {
     assert!(!on_paper(&imported.project), "{:?}", imported.project.page());
     assert_eq!(report.iter().filter(|(what, _)| what.contains("paper")).collect::<Vec<_>>(), [&(PAPER_SHORT, 1)], "{report:?}");
 }
+
+#[test]
+fn imported_field_visibility_and_text_geometry_survive_native_reopen() {
+    let text = file(
+        r##"(symbol (lib_id "power:GND") (at 40 45 0) (unit 1)
+            (property "Reference" "#PWR09" (at 40 49 0) (hide yes))
+            (property "Value" "GND" (at 41.2 48.3 0) (effects (font (size 0.9 0.9)))))
+        (symbol (lib_id "T:R") (at 20 20 90) (mirror x) (unit 1)
+            (property "Reference" "R1" (at 22 17 90) (effects (font (size 1 1)) (justify right)))
+            (property "Value" "10k" (at 23 18 0) (effects (font (size 0.8 0.8)))))
+        (label "SIGNAL" (at 15 15 180) (effects (font (size 0.75 0.75))))"##,
+    );
+    let result = import(&text, "Field appearance").unwrap();
+    let saved = encode_documents(result.project).unwrap();
+    let project = decode_documents(&saved).unwrap();
+    let power = project.symbols().iter().find(|symbol| project.reference(symbol) == "#PWR09").unwrap();
+    assert!(!power.field_layout["reference"].visible);
+    assert!(power.field_layout["value"].visible);
+    assert_eq!(power.field_layout["value"].height_nm, 900_000);
+    let resistor = project.symbols().iter().find(|symbol| project.reference(symbol) == "R1").unwrap();
+    for (field, expected) in [("reference", (22_000_000, 17_000_000)), ("value", (23_000_000, 18_000_000))] {
+        let offset = resistor.field_layout[field].offset.unwrap();
+        let (x, y) = crate::schematic::place(offset.x_nm, offset.y_nm, resistor.turns(), resistor.is_mirrored());
+        assert_eq!((resistor.position.x_nm + x, resistor.position.y_nm + y), expected);
+    }
+    assert_eq!(resistor.field_layout["reference"].rotation, 90);
+    assert_eq!(resistor.field_layout["reference"].align, crate::schematic::TextAlign::End);
+    assert_eq!(project.net_labels()[0].text.as_ref().unwrap().height_nm, 750_000);
+    assert_eq!(encode_documents(project).unwrap(), saved);
+}

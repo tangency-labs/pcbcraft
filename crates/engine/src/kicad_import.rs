@@ -21,7 +21,8 @@ mod wiring;
 mod tests;
 
 use crate::library::sources::{Kind, LOAD};
-use crate::schematic::{MAX_CENTER_NM, Terminal, Wire, WireEndpoint, check_reference, check_value};
+use crate::schematic::fields::{Layout, Layouts};
+use crate::schematic::{MAX_CENTER_NM, SymbolPlacement, Terminal, TextAlign, Wire, WireEndpoint, check_reference, check_value};
 use crate::sheets::page::{Orientation, Page, Paper, SET_PAGE};
 use crate::{CommandError, PLACE_SYMBOL, PLACE_UNIT, Project, Session, SheetTarget};
 use pcbcraft_kicad::Point;
@@ -852,6 +853,17 @@ impl Builder {
                 }
             } else if let Some((_, units)) = components.get_mut(&key) {
                 units.insert(symbol.unit);
+                let project = self.project()?;
+                let id = crate::schematic::symbol_id(ordinal);
+                let native = project.symbol(&id).ok_or_else(|| CommandError::NotFound("the imported unit is missing".into()))?;
+                let layouts = field_layouts(symbol, native, report);
+                if !layouts.is_empty() {
+                    self.apply(
+                        crate::SET_SYMBOL_FIELDS,
+                        json!({"symbol":id,"reference":project.reference(native),"value":project.value(native),"field_layout":layouts}),
+                        &format!("setting the field appearance of {} unit {}", symbol.reference, symbol.unit),
+                    )?;
+                }
             }
             let pins = pins_of(symbol, pins)?;
             placed.push(Placed { source, symbol: ordinal, component, pins });
@@ -888,7 +900,9 @@ impl Builder {
         }
         let value = part.value().to_owned();
         let metadata = metadata(symbol, report)?;
-        let params = json!({"symbol": crate::schematic::symbol_id(ordinal), "reference": reference, "value": value, "metadata": metadata});
+        let field_layout = field_layouts(symbol, native, report);
+        let params = json!({"symbol": crate::schematic::symbol_id(ordinal), "reference": reference, "value": value,
+            "metadata": metadata, "field_layout": field_layout});
         self.apply(crate::SET_SYMBOL_FIELDS, params, &format!("setting the fields of {}", symbol.reference))
     }
 
@@ -1027,7 +1041,9 @@ impl Builder {
                 report.note("global label shapes left out");
             }
             let style = if label.kind == LabelKind::Global { "global" } else { "local" };
-            let params = json!({"name": label.name, "style": style, "x_nm": label.at.x_nm, "y_nm": label.at.y_nm, "rotation": rotation});
+            let text = label_layout(label, rotation as u16);
+            let params =
+                json!({"name": label.name, "style": style, "x_nm": label.at.x_nm, "y_nm": label.at.y_nm, "rotation": rotation, "text": text});
             self.apply(crate::net_labels::ADD, params, &format!("placing label {}", label.name))?;
         }
 
@@ -1196,9 +1212,6 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
         let value = kept;
         fields.insert(id, json!({"name": name, "value": value}));
     }
-    if symbol.properties.iter().any(|p| p.at.is_some() && matches!(p.key.as_str(), "Reference" | "Value")) {
-        report.note("field text positions left out (shown at their native defaults)");
-    }
     Ok(json!({"fields": fields, "attributes": {
         "do_not_populate": symbol.dnp,
         "exclude_from_bom": !symbol.in_bom,
@@ -1206,6 +1219,60 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
         "exclude_from_simulation": symbol.exclude_from_sim,
         "exclude_from_position_files": !symbol.in_pos_files,
     }}))
+}
+
+/// Placed field anchors are in KiCad's sheet frame. The native editor stores their offsets
+/// relative to the symbol's unturned drawing so they follow later placement edits.
+fn field_layouts(symbol: &PlacedSymbol, native: &SymbolPlacement, report: &mut Report) -> Layouts {
+    [("Reference", "reference"), ("Value", "value")]
+        .into_iter()
+        .filter_map(|(key, id)| {
+            let property = symbol.properties.iter().find(|property| property.key == key)?;
+            let offset = property.at.and_then(|at| {
+                let (x_nm, y_nm) =
+                    crate::schematic::unplace(at.x_nm - symbol.at.x_nm, at.y_nm - symbol.at.y_nm, native.turns(), native.is_mirrored());
+                if [x_nm, y_nm].iter().any(|value| value.unsigned_abs() > MAX_CENTER_NM as u64) {
+                    report.note("field positions outside the native range reset to defaults");
+                    return None;
+                }
+                Some(crate::Point { x_nm, y_nm })
+            });
+            let rotation = if property.rotation_mdeg % 90_000 == 0 {
+                (property.rotation_mdeg / 1_000) as u16
+            } else {
+                report.note("fields at other than a quarter turn placed level");
+                0
+            };
+            let align = match property.justify {
+                pcbcraft_kicad::schematic::Justify::Left => TextAlign::Start,
+                pcbcraft_kicad::schematic::Justify::Center => TextAlign::Middle,
+                pcbcraft_kicad::schematic::Justify::Right => TextAlign::End,
+            };
+            Some((
+                id.to_owned(),
+                Layout {
+                    offset,
+                    visible: !property.hidden,
+                    rotation,
+                    align,
+                    height_nm: property.size_nm.clamp(100_000, 10_000_000),
+                    ..Layout::default()
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Keep an imported net label's authored text size on its existing electrical anchor.
+fn label_layout(label: &pcbcraft_kicad::schematic::Label, rotation: u16) -> Layout {
+    let align = if label.kind == LabelKind::Global {
+        TextAlign::Middle
+    } else if rotation == 180 {
+        TextAlign::End
+    } else {
+        TextAlign::Start
+    };
+    Layout { rotation: rotation % 180, align, height_nm: label.size_nm.clamp(100_000, 10_000_000), ..Layout::default() }
 }
 
 /// Check that the native project connects exactly the pins KiCad does. Both sides are grouped by

@@ -48,10 +48,10 @@ replaces anything. There is no desktop menu entry yet.
 | Pinless units and symbols | Drawings without electrical terminals. Pinless units and pins outside the legacy grid or offset use [`pcbcraft-symbol/6`](../libraries/symbol-schema.md) |
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
-| Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
+| Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes. Reference and Value retain their visibility, position, size, horizontal alignment, and supported rotation; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
 | Power symbols | Parts whose power terminal joins the global net their Value names. In a hierarchy, KiCad 10’s local power symbols use sheet-scoped named anchors. The standalone import reports conversion of a local power symbol to a global one on its single sheet. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
 | Child sheet symbols, parent pins and hierarchical labels | Native sheet occurrences, exact parent pin positions and separate child-side anchors. Repeated labels on a child port become local anchors for that port |
-| Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
+| Wires, junction dots, local and global labels | Native wire routes, junctions and net labels with their source text size |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
 | The paper (`paper`), A4 to A1, landscape or portrait | The sheet's paper and orientation, its top-left corner at the origin the file measures from, so the drawing sits on the paper as in KiCad |
 
@@ -137,7 +137,7 @@ also what a misplaced pin would leave behind.
 
 ## What is left out, and reported
 
-Sheet text and drawings, images, text boxes and tables; field text positions,
+Sheet text and drawings, images, text boxes and tables; custom-field text positions,
 which use the native defaults; global label shapes; alternate (De Morgan) body
 styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not

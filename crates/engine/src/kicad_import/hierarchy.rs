@@ -110,13 +110,14 @@ pub fn build_sheet_structure(occurrences: &[Occurrence], name: &str) -> Result<P
             for alias in extra {
                 // Repeated occurrences of a child interface name are additional local anchors.
                 // The named graph binds these to the same child port rather than adding parent pins.
+                let rotation = if alias.rotation_mdeg % 90_000 == 0 { (alias.rotation_mdeg / 1000) as u16 } else { 0 };
                 aliases.push(crate::net_labels::Label {
                     id: allocate(),
                     name: alias.name.clone(),
                     style: crate::net_labels::Style::Local,
                     at: native_point(alias.at),
-                    rotation: if alias.rotation_mdeg % 90_000 == 0 { (alias.rotation_mdeg / 1000) as u16 } else { 0 },
-                    text: None,
+                    rotation,
+                    text: Some(super::label_layout(alias, rotation)),
                 });
             }
         }
