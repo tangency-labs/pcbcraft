@@ -106,7 +106,7 @@ pub(crate) fn issue_url(title: &str, body: &str) -> (String, bool) {
 }
 
 const COPIED: &str = "Report copied. Paste it wherever you need it.";
-const OPENED: &str = "GitHub opened in your browser. Nothing is sent until you submit the form there.";
+const OPENED: &str = "GitHub opened in your browser with this report filled in. No issue is created until you submit the form there.";
 const TOO_LONG: &str = "The report is too long for a link, so it was copied. Paste it into the GitHub form that opened.";
 
 /// Show the report form in a modal. Copy works for any draft; Continue on GitHub needs a

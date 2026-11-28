@@ -62,8 +62,11 @@ fn every_report_entry_point_opens_the_local_draft() {
     assert!(h.query_by_label("Continue on GitHub").is_none());
 
     new_project(&mut h);
+    // Status messages can name files, projects, nets or parts; none of them reaches the details.
+    h.state_mut().message = Some("Could not open /home/demo-user/demo-secret-board: permission denied".into());
     assert_eq!(click_and_collect(&mut h, "Report a bug").0, Vec::<String>::new());
     assert!(details(&h).contains("Project: open"), "{}", details(&h));
+    assert!(!details(&h).contains("demo-secret-board") && !details(&h).contains("/home/"), "{}", details(&h));
     click(&mut h, "Close");
 
     choose(&mut h, "Help", "About PCBCraft");
@@ -98,7 +101,7 @@ fn the_draft_copies_and_hands_off_without_touching_the_project() {
     assert!(urls[0].starts_with("https://github.com/tangency-labs/pcbcraft/issues/new?title=%CE%A9%20wire%20%26%20label&body="), "{}", urls[0]);
     assert!(urls[0].contains("%23%23%20What%20happened%0A%0A%CE%A9%20wire%20%26%20label"), "{}", urls[0]);
     assert!(text.is_empty(), "a report that fits the link is not copied again");
-    h.get_by_label("GitHub opened in your browser. Nothing is sent until you submit the form there.");
+    h.get_by_label("GitHub opened in your browser with this report filled in. No issue is created until you submit the form there.");
 
     click(&mut h, "Close");
     assert_eq!(h.state().session().revision(), revision);

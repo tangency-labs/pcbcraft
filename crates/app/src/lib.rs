@@ -1039,17 +1039,13 @@ impl PcbApp {
         self.dialog = Dialog::Report(Box::new(issue_report::Draft::new(self.report_details())));
     }
 
-    /// Technical details for a new report: version, host, screen, whether a project is open and
-    /// the last status message. The project's name, contents and file paths are not included.
+    /// Technical details for a new report: version, host, screen and whether a project is open.
+    /// Status messages are left out: they can name files, projects, nets or parts.
     fn report_details(&self) -> String {
         let host = if IN_BROWSER { "browser".to_owned() } else { format!("desktop ({}, {})", std::env::consts::OS, std::env::consts::ARCH) };
         let screen = if self.home { "Home" } else { self.views.active.workspace.title() };
         let project = if self.session.project().is_some() { "open" } else { "none" };
-        let mut details = format!("PCBCraft {}\nHost: {host}\nScreen: {screen}\nProject: {project}", display_version());
-        if let Some(message) = &self.message {
-            details.push_str(&format!("\nLast message: {}", message.chars().take(300).collect::<String>()));
-        }
-        details
+        format!("PCBCraft {}\nHost: {host}\nScreen: {screen}\nProject: {project}", display_version())
     }
 
     /// Save/download availability belongs to the whole open project, even if the active view's

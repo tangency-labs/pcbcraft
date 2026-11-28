@@ -90,9 +90,9 @@ bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**)
 **Report a bug**, **Help → Report an Issue…** and the report button in **About PCBCraft** open the same
 report form inside the app. Describe what happened, and optionally a summary, the steps to reproduce and the
 expected result. **Technical details** is filled in for you with the version, the desktop or browser host, the
-current screen, whether a project is open and the last status message; review and edit it before sharing.
+current screen and whether a project is open; review and edit it before sharing.
 **Copy report** copies the whole draft at any time. **Continue on GitHub** needs a description and opens a
-prefilled new-issue form in your browser; nothing is sent until you submit it there. A report too long for a
+new-issue form in your browser with the report filled in; no issue is created until you submit it there. A report too long for a
 link opens the form with the title only and copies the full report for you to paste. Neither action changes
 the open project.
 
