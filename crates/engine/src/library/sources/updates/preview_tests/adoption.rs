@@ -692,10 +692,10 @@ fn replace_reviewed_footprint_refuses_key_content_and_bounds_errors() {
 
     let mut rev2 = pinned.as_ref().clone();
     rev2.revision += 1;
-    let mut empty_map = assignment;
-    empty_map.definition_revision = rev2.revision;
-    empty_map.mapping.clear();
+    let mut oversized_map = assignment;
+    oversized_map.definition_revision = rev2.revision;
+    oversized_map.mapping = (0..=crate::library::MAX_TERMINALS).map(|terminal| (terminal.to_string(), "1".into())).collect();
     let mut attempt = board.clone();
-    assert_eq!(attempt.replace_reviewed_footprint(empty_map, Arc::new(rev2)).unwrap_err(), "Replacement footprint is outside supported bounds.");
+    assert_eq!(attempt.replace_reviewed_footprint(oversized_map, Arc::new(rev2)).unwrap_err(), "Replacement footprint is outside supported bounds.");
     assert_eq!(attempt, board);
 }
