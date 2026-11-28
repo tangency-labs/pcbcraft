@@ -471,16 +471,22 @@ fn trapezoids(contours: &[Vec<Point>]) -> Vec<Mark> {
                 spans.push((left, edge));
             }
         }
+        // Spans are matched by their edge pair in sorted lists, not by scanning, so a band costs
+        // about its span count rather than its open spans times its spans.
+        let mut current = spans.clone();
+        current.sort_unstable();
         let mut kept = Vec::with_capacity(spans.len());
         for span in open.drain(..) {
-            if spans.contains(&(span.0, span.1)) {
+            if current.binary_search(&(span.0, span.1)).is_ok() {
                 kept.push(span);
             } else {
                 close(&mut marks, span, bottom);
             }
         }
+        let mut continued: Vec<_> = kept.iter().map(|span| (span.0, span.1)).collect();
+        continued.sort_unstable();
         for (left, right) in spans {
-            if !kept.iter().any(|span| (span.0, span.1) == (left, right)) {
+            if continued.binary_search(&(left, right)).is_err() {
                 kept.push((left, right, bottom));
             }
         }
