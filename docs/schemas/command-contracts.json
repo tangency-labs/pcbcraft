@@ -2319,6 +2319,14 @@
         "type": "object"
       }
     },
+    "part.inspect_fields": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      }
+    },
     "part.set_fields": {
       "params": {
         "additionalProperties": false,

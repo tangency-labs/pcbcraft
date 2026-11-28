@@ -2237,6 +2237,7 @@ const CATALOG: &[Command] = &[
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     part_instances::fields::COMMAND,
+    part_instances::table::COMMAND,
     Command {
         id: board::zones::ADD_ZONE,
         title: "Add Zone",
@@ -3894,6 +3895,7 @@ impl Session {
             | part_instances::PLACE_PART
             | part_instances::SET_PART
             | part_instances::SET_FIELDS
+            | part_instances::INSPECT_FIELDS
             | CONNECT_PINS
             | MOVE_SYMBOL
             | ROTATE_SYMBOL
@@ -4109,6 +4111,10 @@ impl Session {
         }
         if id == part_instances::SET_FIELDS {
             return self.set_part_fields(params);
+        }
+        if id == part_instances::INSPECT_FIELDS {
+            self.validate_project_command(id, params)?;
+            return self.inspect_part_fields();
         }
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
@@ -4496,6 +4502,7 @@ impl Session {
                 | part_instances::PLACE_PART
                 | part_instances::SET_PART
                 | part_instances::SET_FIELDS
+                | part_instances::INSPECT_FIELDS
                 | CONNECT_PINS
                 | MOVE_SYMBOL
                 | ROTATE_SYMBOL
@@ -4628,6 +4635,9 @@ impl Session {
             part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,
             part_groups::INSPECT | part_groups::INSPECT_GROUPS => {
                 self.part_group_query(id, params)?;
+            }
+            part_instances::INSPECT_FIELDS => {
+                self.inspect_part_fields()?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,

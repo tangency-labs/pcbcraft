@@ -494,6 +494,26 @@ still opens the context menu. Selection alone does not modify the project.
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
+### Component table
+
+**Analyze → Reports → Fields** opens a table of every physical component, one row
+each: a multi-unit part is one row. Columns show the reference, value, footprint,
+manufacturer, part number and datasheet, then the description and custom fields used in
+the project, grouped by name. The filter keeps rows whose cells contain every typed word;
+clicking a header sorts by that column, A to Z, Z to A, then back to project order. Filter
+and sort change only the display, never the saved project. Click a row to select it,
+**Shift**-click to select a range and **Ctrl**-click to add or remove one. To edit, choose
+a **Field**, type the **New value** (an empty value removes an optional field; a reference
+or value cannot be empty and is refused) or pick a footprint,
+then **Preview** lists every change, old and new, on the selected rows the filter shows;
+hidden rows are never edited, and changing the filter, selection, field or value drops the
+preview. **Apply** commits the previewed edit as one undo step and
+**Cancel** discards it. A duplicate reference, a footprint whose pins and pads do not match,
+or an edit made elsewhere since the preview is refused with the reason, and nothing changes.
+A footprint takes the catalog's default pin mapping, or matching terminal and pad numbers.
+The table reads `part.inspect_fields` and edits through `part.set_fields`, the
+[part commands](automation/part-commands.md) agents use.
+
 ## Project Browser and sheets
 
 The **Browser** floats over the left of the canvas and shows the project as

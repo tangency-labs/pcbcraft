@@ -24,6 +24,9 @@
   standard/custom component fields and population/exclusion attributes, move/delete symbols.
 - edit references, values, component fields and footprint assignments on several components as
   one undo step, with a dry run listing every change (`part.set_fields`).
+- a component table (Analyze → Reports → Fields) with one row per physical component,
+  display-only filter and column sort, and a grouped field or footprint edit that is previewed
+  before it is applied as one undo step; agents read the same rows with `part.inspect_fields`.
 - mirror a multi-item selection (symbols, wires and net labels) as one undoable edit about the
   selection center, snapped so pins stay on the grid.
 - Independently drag reference/value/custom text with per-unit visibility, name display, physical

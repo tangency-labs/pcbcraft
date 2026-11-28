@@ -67,3 +67,11 @@ applying any edits. Use fewer rows or a headless session for a large report.
 A request that changes nothing adds no undo step. A read-only session refuses
 both modes. Rows address the project's single circuit use;
 references per repeated sheet occurrence are not part of this command.
+
+`part.inspect_fields` reads the same rows without changing anything, also in a
+read-only session. The reply is `{revision, components}` in project order, one entry
+per physical component: `component`, `reference`, `value` (as the symbol inspector
+shows it), `units` (placed schematic units), `fields` (field ID to `{name, value}`)
+and `footprint` (`library`, `definition`, `definition_revision` and the definition's
+`name`, or null when no package is assigned). The editor's component table shows these
+rows.

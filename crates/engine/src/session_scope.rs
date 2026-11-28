@@ -3,7 +3,7 @@
 use crate::{
     CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_ASSEMBLY, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS,
     PREVIEW_ASSEMBLY_PROFILE, PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources,
-    net_classes, netlist, nets, no_connect, parameters, part_groups, sheet_split, sheets,
+    net_classes, netlist, nets, no_connect, parameters, part_groups, part_instances, sheet_split, sheets,
 };
 
 /// Command access set by the host when a session is created.
@@ -92,6 +92,7 @@ pub fn is_read_command(id: &str) -> bool {
             | nets::INSPECT_APPEARANCE
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
+            | part_instances::INSPECT_FIELDS
             | sources::LIST
             | sources::SEARCH
             | sources::AVAILABLE_REVISIONS

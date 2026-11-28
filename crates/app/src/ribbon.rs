@@ -76,6 +76,7 @@ enum Action {
     Erc,
     Annotate,
     Bom,
+    Components,
     Sync,
     Delete,
     Slice,
@@ -173,7 +174,10 @@ const ANALYZE: &[Group] = &[
     },
     Group {
         title: "Reports",
-        tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")],
+        tools: &[
+            tool(Action::Components, "Fields", Icon::Bom, "Review and edit component fields in a table", ""),
+            tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", ""),
+        ],
         extras: &[tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", "")],
     },
 ];
@@ -211,6 +215,7 @@ impl Action {
             self,
             Self::NoConnect
                 | Self::NoConnectCheck
+                | Self::Components
                 | Self::Rules
                 | Self::Ground
                 | Self::Label
@@ -402,6 +407,7 @@ impl PcbApp {
             Action::Wire => self.begin_wire(),
             Action::NoConnect => self.begin_no_connect(),
             Action::NoConnectCheck => self.inspect_no_connects(),
+            Action::Components => self.open_component_table(),
             Action::Move | Action::Rotate => {
                 if action == Action::Move
                     && let Some((kind, id)) = self.views.active.schematic.selected_hierarchy

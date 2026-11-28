@@ -143,6 +143,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             | nets::SHEET_OVERVIEW
             | part_groups::INSPECT
             | part_groups::INSPECT_GROUPS
+            | part_instances::INSPECT_FIELDS
             | INSPECT_LAYER_GROUPS
             | sources::LIST
             | sources::AVAILABLE_REVISIONS
