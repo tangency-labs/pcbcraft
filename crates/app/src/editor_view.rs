@@ -595,6 +595,14 @@ impl EditorView {
         view
     }
 
+    /// Copy the live camera's grid into the retained record of an unavailable view, which
+    /// rebuilds the camera when its document returns; available views have no such record.
+    pub(super) fn retain_grid(&mut self) {
+        if let Some(state) = &mut self.unavailable {
+            state.camera.keep_grid(&self.camera);
+        }
+    }
+
     /// Unavailable saved documents occupy a closeable view but never become an editing target.
     pub(super) fn unavailable(&self) -> bool {
         self.unavailable.is_some()

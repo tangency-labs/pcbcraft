@@ -1259,7 +1259,8 @@ impl PcbApp {
     /// nothing moves, and other views keep their own spacing. An in-progress gesture is left
     /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
     /// Schematic and PCB views update separate preferences, so changing one never replaces the
-    /// other workspace's startup spacing.
+    /// other workspace's startup spacing. A view whose document is unavailable keeps the choice
+    /// for when the document returns.
     pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
         let Some(workspace) = self.views.view(id).map(|view| view.workspace) else {
             return;
@@ -1267,6 +1268,7 @@ impl PcbApp {
         if let Some(view) = self.views.view_mut(id)
             && view.camera.set_snap_nm(spacing_nm)
         {
+            view.retain_grid();
             match workspace {
                 Workspace::Schematic => self.preferences.schematic_grid_nm = spacing_nm,
                 Workspace::Board => self.preferences.board_grid_nm = spacing_nm,
@@ -1281,6 +1283,7 @@ impl PcbApp {
     pub(super) fn set_view_snap(&mut self, id: ViewId, enabled: bool) {
         if let Some(view) = self.views.view_mut(id) {
             view.camera.set_snap_enabled(enabled);
+            view.retain_grid();
             match view.workspace {
                 Workspace::Schematic => self.preferences.schematic_grid_snap = enabled,
                 Workspace::Board => self.preferences.board_grid_snap = enabled,

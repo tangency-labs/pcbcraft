@@ -70,6 +70,12 @@ fn is_on(enabled: &bool) -> bool {
 }
 
 impl CameraState {
+    /// Take a live camera's spacing and snapping, so a retained view restores the latest choice.
+    pub(super) fn keep_grid(&mut self, camera: &Camera) {
+        self.snap_nm = camera.snap_nm;
+        self.snap_enabled = camera.snap_enabled;
+    }
+
     /// Validate navigation against the shared editor range before restoring it.
     pub(super) fn valid(&self) -> bool {
         (MIN_ZOOM..=MAX_ZOOM).contains(&self.zoom)
