@@ -1,6 +1,6 @@
+use super::super::{Camera, JoinTarget, theme};
 use super::*;
 use pcbcraft_engine::{net_labels, schematic::WireEndpoint};
-use super::super::{Camera, JoinTarget, theme};
 use std::sync::Arc;
 
 /// Click a model point with `modifiers`, preserving hover, press and release frames.
@@ -111,8 +111,7 @@ fn twice_crossed() -> Harness<'static, PcbApp> {
     let s = &mut h.state_mut().session;
     s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
     s.apply(DRAW_WIRE, &json!({"from":grid(-8, 0),"to":grid(24, 0),"bends":[],"expected_revision":s.revision()})).unwrap();
-    s.apply(DRAW_WIRE, &json!({"from":grid(0, -6),"to":grid(16, -6),"bends":[grid(0, 4), grid(16, 4)],"expected_revision":s.revision()}))
-        .unwrap();
+    s.apply(DRAW_WIRE, &json!({"from":grid(0, -6),"to":grid(16, -6),"bends":[grid(0, 4), grid(16, 4)],"expected_revision":s.revision()})).unwrap();
     h.state_mut().browser.open = false;
     h.run();
     click_with(&mut h, grid(-6, 0), Modifiers::NONE);
@@ -180,8 +179,11 @@ fn join_tooltip_counts_pins_on_other_sheets() {
         s.apply(DRAW_WIRE, &json!({"from":from,"to":to,"bends":[],"expected_revision":s.revision()})).unwrap();
     }
     let label = |s: &mut pcbcraft_engine::Session, sheet: String, at: Point| {
-        s.apply(net_labels::ADD, &json!({"sheet":sheet,"name":"demo-x","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":s.revision()}))
-            .unwrap();
+        s.apply(
+            net_labels::ADD,
+            &json!({"sheet":sheet,"name":"demo-x","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":s.revision()}),
+        )
+        .unwrap();
     };
     s.apply(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"demo-other","expected_revision":s.revision()})).unwrap();
     let [first, other] = [0, 1].map(|index| s.project().unwrap().sheets().nth(index).unwrap().target);
