@@ -44,6 +44,15 @@ pub(crate) fn write(_part_name: &str, _bodies: &[(&str, &KernelBody)]) -> Result
     Err(unavailable("STEP write"))
 }
 
+/// Never reached with a body, since none exists: always `kernel_unavailable`.
+pub(crate) fn write_assembly(
+    _name: &str,
+    _parts: &[(&str, Vec<(&str, &KernelBody)>)],
+    _occurrences: &[(usize, [[f64; 4]; 4], &str)],
+) -> Result<String> {
+    Err(unavailable("STEP write"))
+}
+
 /// What a file holds: its named bodies, their placements and the solid items refused. Never
 /// built without a kernel.
 #[allow(dead_code)]

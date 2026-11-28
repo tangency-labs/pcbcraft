@@ -1,9 +1,12 @@
 //! Compose the PCB document's read-only board view with the solid geometry provider.
-//! No editor, saved representation, component model or interchange format is involved.
+//! No editor or saved representation is involved. [`assembly`] writes the board with
+//! caller-supplied component models as a STEP assembly; it reads no model record.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::BTreeSet;
+
+pub mod assembly;
 
 use pcbcraft_engine::board::{
     setup::LayerPurpose,

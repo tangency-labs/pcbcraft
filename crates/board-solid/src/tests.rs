@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::BTreeMap;
+
 use pcbcraft_engine::{
     ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP,
     SET_FOOTPRINT_TRANSFORM, Session,
@@ -8,10 +10,11 @@ use pcbcraft_engine::{
     library::{LIBRARY_FORMAT, sources::LOAD},
     schematic::Point,
 };
-use pcbcraft_geometry::ErrorCode;
+use pcbcraft_geometry::{BoundingBox, ErrorCode, read_step, write_step};
 use serde_json::{Value, json};
 
 use super::*;
+use crate::assembly::{AssemblyError, Binding, BoardAssembly, PlacedComponent, component_pose};
 
 /// New two-layer board, populated only by shared commands. The minimum is deliberately
 /// different from the nominal finished declaration, to catch selecting the check value.
@@ -302,4 +305,235 @@ fn display_board_keeps_dense_interior_drills_open() {
         assert_eq!(frame_hits(&mesh, [x, y]), [false; 2]);
         assert_eq!(frame_hits(&mesh, [x + 200_000, y]), [true; 2]);
     }
+}
+
+/// The kernel-free build has no solids: a model cannot even be made.
+fn no_kernel() -> bool {
+    if cfg!(all(target_arch = "wasm32", not(feature = "wasm-kernel"))) {
+        assert_eq!(Body::cuboid("model", [0; 3], [1; 3]).unwrap_err().code(), ErrorCode::KernelUnavailable);
+        return true;
+    }
+    false
+}
+
+/// A 40 × 20 mm board with a declared 1.6 mm finished thickness and two 0603 resistors at board
+/// y = 6 mm: the first on the top at x = 10 mm turned a quarter turn, the second on the bottom
+/// at x = 30 mm unturned. SMD pads, so moving a part leaves the board solid unchanged.
+fn two_sided_board() -> (Session, [String; 2]) {
+    let mut session = board(Some(1_600_000));
+    draw(&mut session, &[[0, 0], [40_000_000, 0], [40_000_000, 20_000_000], [0, 20_000_000]], true);
+    let mut ids = Vec::new();
+    for (x_nm, rotation, side) in [(10_000_000, 90, "front"), (30_000_000, 0, "back")] {
+        apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":x_nm,"y_nm":0}));
+        let symbol = session.project().unwrap().symbols().last().unwrap().id();
+        apply(
+            &mut session,
+            PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0603","mapping":{"1":"1","2":"2"},"x_nm":x_nm,"y_nm":6_000_000}),
+        );
+        let footprint = view(&session).footprints().last().unwrap().id;
+        apply(&mut session, SET_FOOTPRINT_TRANSFORM, json!({"footprint":footprint,"x_nm":x_nm,"y_nm":6_000_000,"rotation":rotation,"side":side}));
+        ids.push(footprint);
+    }
+    (session, ids.try_into().unwrap())
+}
+
+/// Two models, each 3 mm along X from −1 mm and 2 mm along Y from −0.5 mm, so a half turn about
+/// Y can be told from one about X or a mirror. The first is 1 mm tall, the second 2 mm.
+fn models() -> [Body; 2] {
+    [
+        Body::cuboid("model-a", [-1_000_000, -500_000, 0], [3_000_000, 2_000_000, 1_000_000]).unwrap(),
+        Body::cuboid("model-b", [-1_000_000, -500_000, 0], [3_000_000, 2_000_000, 2_000_000]).unwrap(),
+    ]
+}
+
+/// The first model raised 0.2 mm by its alignment on the top part; the second on the bottom part.
+fn bindings([top, bottom]: &[String; 2]) -> BTreeMap<String, Binding> {
+    BTreeMap::from([
+        (top.clone(), Binding { model: 0, alignment: Transform::translation([0, 0, 200_000]) }),
+        (bottom.clone(), Binding { model: 1, alignment: Transform::IDENTITY }),
+    ])
+}
+
+/// Each placement read back from the assembly, by body name, with the placed body's box.
+fn read_back(step: &[u8]) -> BTreeMap<String, (Transform, BoundingBox)> {
+    let read = read_step(step).unwrap();
+    assert!(read.refused.is_empty());
+    let placed = read.placed_bodies().unwrap();
+    assert_eq!(placed.len(), read.placements.len());
+    let out: BTreeMap<_, _> = read
+        .placements
+        .iter()
+        .zip(&placed)
+        .map(|(placement, body)| (read.bodies[placement.body].name().to_owned(), (placement.transform, body.bounding_box().unwrap())))
+        .collect();
+    assert_eq!(out.len(), read.placements.len(), "each body is placed once");
+    out
+}
+
+fn assert_near(actual: &Transform, expected: &Transform) {
+    for (a, e) in actual.axes.iter().flatten().zip(expected.axes.iter().flatten()) {
+        assert!((a - e).abs() < 1e-9, "{actual:?} != {expected:?}");
+    }
+    for (a, e) in actual.translation_nm.iter().zip(&expected.translation_nm) {
+        assert!(a.abs_diff(*e) <= 1, "{actual:?} != {expected:?}");
+    }
+}
+
+fn assert_box(actual: &BoundingBox, min_nm: [i64; 3], max_nm: [i64; 3]) {
+    assert!(actual.max_deviation_nm(&BoundingBox { min_nm, max_nm }) <= 10, "{actual:?} != {min_nm:?}..{max_nm:?}");
+}
+
+/// The board solid and both models are placed in one assembly at their component poses. The
+/// expected poses and boxes are worked by hand from the placements, not from the code under test:
+/// the top part turns a quarter turn about Z and rises by its alignment; the bottom part is
+/// turned over about Y (X and Z reversed, Y kept) and hangs below the 1.6 mm board.
+#[test]
+fn exports_the_board_and_both_models_at_their_placed_transforms() {
+    if no_kernel() {
+        return;
+    }
+    let (session, ids) = two_sided_board();
+    let [a, b] = models();
+    let assembly = BoardAssembly::build(view(&session), "two-sided", &[&a, &b], &bindings(&ids)).unwrap();
+    assert_eq!(assembly.thickness_nm, 1_600_000);
+    assert!(assembly.unbound.is_empty());
+    let top = Transform { axes: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [10_000_000, -6_000_000, 200_000] };
+    let bottom = Transform { axes: [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], translation_nm: [30_000_000, -6_000_000, -1_600_000] };
+    assert_eq!(
+        assembly.components,
+        [
+            PlacedComponent { footprint: ids[0].clone(), model: 0, transform: top },
+            PlacedComponent { footprint: ids[1].clone(), model: 1, transform: bottom },
+        ]
+    );
+
+    let read = read_back(&assembly.step);
+    assert_eq!(read.len(), 3);
+    let (board, board_box) = &read["Board substrate"];
+    assert_near(board, &Transform::IDENTITY);
+    assert_box(board_box, [0, -20_000_000, -1_600_000], [40_000_000, 0, 0]);
+    let (placed, placed_box) = &read["model-a"];
+    assert_near(placed, &top);
+    assert_box(placed_box, [8_500_000, -7_000_000, 200_000], [10_500_000, -4_000_000, 1_200_000]);
+    let (placed, placed_box) = &read["model-b"];
+    assert_near(placed, &bottom);
+    assert_box(placed_box, [28_000_000, -6_500_000, -3_600_000], [31_000_000, -4_500_000, -1_600_000]);
+}
+
+/// Exporting the same board again gives the same bytes. Moving the top part 2 mm and exporting
+/// again changes that part's transform and nothing else: the board and the bottom part read back
+/// as before.
+#[test]
+fn refreshing_after_a_move_changes_only_that_parts_transform() {
+    if no_kernel() {
+        return;
+    }
+    let (mut session, ids) = two_sided_board();
+    let [a, b] = models();
+    let bindings = bindings(&ids);
+    let before = BoardAssembly::build(view(&session), "two-sided", &[&a, &b], &bindings).unwrap();
+    let again = BoardAssembly::build(view(&session), "two-sided", &[&a, &b], &bindings).unwrap();
+    assert_eq!(before.step, again.step, "an unchanged board writes the same bytes");
+
+    apply(&mut session, SET_FOOTPRINT_TRANSFORM, json!({"footprint":ids[0],"x_nm":12_000_000,"y_nm":6_000_000,"rotation":90}));
+    let after = BoardAssembly::build(view(&session), "two-sided", &[&a, &b], &bindings).unwrap();
+    assert_ne!(before.step, after.step);
+    assert_eq!(after.components[0].transform.translation_nm, [12_000_000, -6_000_000, 200_000]);
+    assert_eq!(after.components[0].transform.axes, before.components[0].transform.axes);
+    assert_eq!(after.components[1], before.components[1]);
+
+    let (old, new) = (read_back(&before.step), read_back(&after.step));
+    assert_eq!(old.keys().collect::<Vec<_>>(), new.keys().collect::<Vec<_>>());
+    for (name, (transform, bounds)) in &old {
+        let (moved, moved_bounds) = &new[name];
+        if name == "model-a" {
+            assert_eq!(moved.translation_nm[0] - transform.translation_nm[0], 2_000_000);
+            assert_eq!(moved_bounds.min_nm[0] - bounds.min_nm[0], 2_000_000);
+        } else {
+            assert_near(moved, transform);
+            assert_eq!(moved_bounds, bounds, "{name} is unchanged");
+        }
+    }
+}
+
+/// A footprint without a binding is listed and gets no body; the export still completes.
+#[test]
+fn lists_unbound_footprints_without_a_body() {
+    if no_kernel() {
+        return;
+    }
+    let (session, ids) = two_sided_board();
+    let [a, _] = models();
+    let only_top = BTreeMap::from([(ids[0].clone(), Binding { model: 0, alignment: Transform::IDENTITY })]);
+    let assembly = BoardAssembly::build(view(&session), "two-sided", &[&a], &only_top).unwrap();
+    assert_eq!(assembly.unbound, [ids[1].clone()]);
+    assert_eq!(read_back(&assembly.step).keys().collect::<Vec<_>>(), ["Board substrate", "model-a"]);
+}
+
+/// An unused model that STEP export would refuse does not block export or leak into the assembly.
+#[test]
+fn ignores_an_unused_model_that_step_cannot_export() {
+    if no_kernel() {
+        return;
+    }
+    let (session, ids) = two_sided_board();
+    let [valid, unused] = models();
+    // STEP import accepts a tab encoded in a B-rep name; export refuses control characters.
+    let step = String::from_utf8(write_step("fixture", &[unused]).unwrap()).unwrap();
+    let step = step.replacen("MANIFOLD_SOLID_BREP('model-b'", r"MANIFOLD_SOLID_BREP('model-\X2\0009\X0\b'", 1);
+    let read = read_step(step.as_bytes()).unwrap();
+    assert!(read.refused.is_empty());
+    assert_eq!(read.bodies[0].name(), "model-\tb");
+    let non_exportable = &read.bodies[0];
+    let models = [non_exportable, &valid];
+
+    let top = |model| BTreeMap::from([(ids[0].clone(), Binding { model, alignment: Transform::IDENTITY })]);
+    let baseline = BoardAssembly::build(view(&session), "two-sided", &[&valid], &top(0)).unwrap();
+    let assembly = BoardAssembly::build(view(&session), "two-sided", &models, &top(1)).unwrap();
+    assert_eq!(assembly.components[0].model, 1);
+    assert_eq!(assembly.step, baseline.step);
+    assert_eq!(read_back(&assembly.step).keys().collect::<Vec<_>>(), ["Board substrate", "model-a"]);
+    let Err(AssemblyError::Geometry(error)) = BoardAssembly::build(view(&session), "two-sided", &models, &top(0)) else {
+        panic!("the same model must be refused when bound");
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+}
+
+/// No nominal thickness stands in for an undeclared one, and a binding must name a placed
+/// footprint and a supplied model. Each refusal is reported before any geometry is made.
+#[test]
+fn refuses_undeclared_thickness_and_stale_bindings() {
+    let mut session = board(None);
+    draw(&mut session, &[[0, 0], [40_000_000, 0], [40_000_000, 20_000_000], [0, 20_000_000]], true);
+    let none = BTreeMap::new();
+    assert_eq!(BoardAssembly::build(view(&session), "board", &[], &none).unwrap_err(), AssemblyError::NoFinishedThickness);
+
+    let (session, ids) = two_sided_board();
+    let stale = BTreeMap::from([("footprint-99".to_owned(), Binding { model: 0, alignment: Transform::IDENTITY })]);
+    assert_eq!(BoardAssembly::build(view(&session), "board", &[], &stale).unwrap_err(), AssemblyError::UnknownFootprint("footprint-99".into()));
+    let missing = BTreeMap::from([(ids[0].clone(), Binding { model: 0, alignment: Transform::IDENTITY })]);
+    assert_eq!(
+        BoardAssembly::build(view(&session), "board", &[], &missing).unwrap_err(),
+        AssemblyError::UnknownModel { footprint: ids[0].clone(), model: 0 }
+    );
+}
+
+/// Quarter turns are exact, and an odd angle composes with a bottom-side turn-over in the
+/// documented order: the alignment first, then the side, then the turn and the position.
+#[test]
+fn component_pose_composes_in_the_documented_order() {
+    let at = Point { x_nm: 5_000_000, y_nm: 2_000_000 };
+    let offset = Transform::translation([1_000_000, 0, 0]);
+    // Bottom, 30°: the offset +1 mm on X is reversed by the turn-over, then turned by 30°.
+    let pose = component_pose(at, 30, true, 1_000_000, &offset);
+    let (s, c) = 30f64.to_radians().sin_cos();
+    let expected = Transform {
+        axes: [[-c, -s, 0.0], [-s, c, 0.0], [0.0, 0.0, -1.0]],
+        translation_nm: [5_000_000 - (c * 1_000_000.0).round() as i64, -2_000_000 - (s * 1_000_000.0).round() as i64, -1_000_000],
+    };
+    assert_near(&pose, &expected);
+    let quarter = component_pose(at, 270, false, 1_000_000, &Transform::IDENTITY);
+    assert_eq!(quarter.axes, [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+    assert_eq!(quarter.translation_nm, [5_000_000, -2_000_000, 0]);
 }

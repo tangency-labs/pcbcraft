@@ -423,3 +423,48 @@ fn a_surface_model_with_shells_out_of_order_reads_back_in_entity_order() {
         assert!((min_x - x_of(shell)).abs() <= ROUND_TRIP_TOLERANCE_NM as i64, "{min_x} for shell #{shell}");
     }
 }
+
+/// A part placed twice is written once and read back as one body with two placements, each
+/// where the assembly put it; a second part keeps its own placement.
+#[test]
+fn an_assembly_writes_each_part_once_and_places_every_occurrence() {
+    let (block, expected) = block();
+    let pin = Body::cuboid("Pin", [0; 3], [1_000_000; 3]).unwrap();
+    let quarter = Transform { axes: [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [20_000_000, 0, 0] };
+    let parts = [AssemblyPart { name: "block", bodies: &[&block] }, AssemblyPart { name: "pin", bodies: &[&pin] }];
+    let occurrences = [
+        Occurrence { part: 0, name: "first", transform: Transform::IDENTITY },
+        Occurrence { part: 0, name: "second", transform: quarter },
+        Occurrence { part: 1, name: "pin", transform: Transform::translation([0, 0, 5_000_000]) },
+    ];
+    let bytes = write_step_assembly("fixture", &parts, &occurrences).unwrap();
+    assert_eq!(bytes, write_step_assembly("fixture", &parts, &occurrences).unwrap());
+    let read = read_step(&bytes).unwrap();
+    assert_eq!(read.bodies.len(), 2);
+    let mut placed: Vec<_> = read.placements.iter().map(|p| (read.bodies[p.body].name().to_owned(), p.transform.translation_nm)).collect();
+    placed.sort();
+    assert_eq!(placed, [("Block".to_owned(), [0, 0, 0]), ("Block".to_owned(), [20_000_000, 0, 0]), ("Pin".to_owned(), [0, 0, 5_000_000])]);
+    let boxes: Vec<_> = read.placed_bodies().unwrap().iter().map(|b| b.bounding_box().unwrap()).collect();
+    assert!(boxes.iter().any(|b| b.max_deviation_nm(&expected) <= ROUND_TRIP_TOLERANCE_NM));
+    // The quarter turn takes x to y and y to −x: [−11.5, −3.5] mm on X before the 20 mm move.
+    let turned = BoundingBox { min_nm: [8_500_000, -2_000_000, 0], max_nm: [16_500_000, 10_500_000, 1_600_000] };
+    assert!(boxes.iter().any(|b| b.max_deviation_nm(&turned) <= ROUND_TRIP_TOLERANCE_NM), "{boxes:?}");
+}
+
+/// No occurrence, an occurrence of a missing part, a part without bodies and a placement that
+/// scales are refused as invalid parameters.
+#[test]
+fn bad_assemblies_are_refused() {
+    let (block, _) = block();
+    let parts = [AssemblyPart { name: "block", bodies: &[&block] }];
+    let at = |part, transform| [Occurrence { part, name: "o", transform }];
+    let scaled = Transform { axes: [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], translation_nm: [0; 3] };
+    for (parts, occurrences) in [
+        (&parts[..], &[][..]),
+        (&parts[..], &at(1, Transform::IDENTITY)[..]),
+        (&[AssemblyPart { name: "empty", bodies: &[] }][..], &at(0, Transform::IDENTITY)[..]),
+        (&parts[..], &at(0, scaled)[..]),
+    ] {
+        assert_eq!(write_step_assembly("fixture", parts, occurrences).unwrap_err().code(), ErrorCode::InvalidParams);
+    }
+}

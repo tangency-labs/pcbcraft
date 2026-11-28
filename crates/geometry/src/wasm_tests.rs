@@ -30,6 +30,7 @@ fn arguments_are_still_refused_before_the_kernel() {
         assert!(error.message().contains(reason), "{error}");
     };
     refused(write_step("fixture", &[]).map(|_| ()), ErrorCode::InvalidParams, "there are no bodies to write");
+    refused(write_step_assembly("fixture", &[], &[]).map(|_| ()), ErrorCode::InvalidParams, "there are no occurrences to write");
     refused(Body::cuboid("Block", [0; 3], [0, 1, 1]).map(|_| ()), ErrorCode::InvalidParams, "every cuboid size must be positive");
     refused(Body::cuboid("tab\there", [0; 3], [1; 3]).map(|_| ()), ErrorCode::InvalidParams, "the body name has a control character");
     refused(read_step(&[0xff, 0xfe]).map(|_| ()), ErrorCode::ModelUnreadable, "STEP text is not UTF-8");

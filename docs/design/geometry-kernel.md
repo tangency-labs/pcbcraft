@@ -110,6 +110,31 @@ no document, undo history, file format, viewport or STEP output changes. On a
 build without the optional browser kernel, valid substrate inputs return
 `kernel_unavailable`.
 
+### Board assembly
+
+`pcbcraft_board_solid::assembly::BoardAssembly::build` writes the board solid
+and component models as one AP242 STEP assembly, which SolidCraft's Insert STEP
+opens as a component per part. The caller supplies the models and binds each to
+a placed footprint with an alignment in the model frame. The board is one
+product at the identity, each used model one product written once, and each bound
+footprint one occurrence named `component:<footprint>` at the component pose
+in the board/1 frame:
+
+```text
+P = T(x, −y, 0) · Rz(r) · S · A
+S = I                         on the top side
+S = T(0, 0, −t) · Ry(180°)    on the bottom side
+```
+
+A bottom part is turned over about Y, not mirrored. The assembly needs a
+declared finished thickness; no nominal value stands in for it. A footprint
+without a binding is listed and gets no body. Unused models are ignored. The
+same input gives the same bytes. If a move leaves the substrate geometry
+unchanged, only the moved model occurrences change geometrically. Moving a
+footprint with drills can also move its openings in the substrate. Nothing is
+stored: the bound-model record, the Craft bridge exchange file and refreshing a
+linked board in place in SolidCraft are later work.
+
 ### Later integrations
 
 This crate takes bytes, dimensions and transforms; it does not open an external
@@ -135,6 +160,7 @@ Current operations:
 | `Body::bounding_box()` | The exact box of the body's curves and surfaces, in nanometres |
 | `read_step(bytes)` | Every solid and surface model of a file in its stated units, and each solid item refused with its entity number and reason |
 | `write_step(part_name, bodies)` | One AP242 part; the same bodies always give the same bytes (no time stamp) |
+| `write_step_assembly(name, parts, occurrences)` | One AP242 assembly: each part written once, placed by each rigid occurrence; the same input always gives the same bytes |
 | `Body::transformed(transform)` | A moved copy; the body itself is unchanged |
 | `StepRead::placements` | Every use of a body in the file's world frame: one entry for each body placed by an assembly occurrence (a single-body part used twice is one body placed twice), and each otherwise-unplaced body placed once where it is |
 | `StepRead::placed_bodies()`, `StepRead::bounding_box()` | The placed bodies, and their box in the world frame, each body measured after it is moved |
@@ -297,8 +323,9 @@ file listed under [Dependencies](../../ATTRIBUTION.md#dependencies) must include
   gives around 11 GB. This is not a measured limit or a scaling law for other
   files; shared geometry and body complexity change the cost.
 - **Writing assemblies.** `write_step` writes one part. A placed read is written
-  as one body per placement, so a part used twice is written twice; writing the
-  product structure back is left to STEP assembly export.
+  as one body per placement, so a part used twice is written twice.
+  `write_step_assembly` writes a product structure one level deep; nested
+  sub-assemblies are not written.
 - **Qualification set.** The fixtures cover planes, cylinders, holes, assemblies
   and three units. Cones, spheres, tori, B-spline surfaces, mapped items and
   bodies with voids are read by the kernel but not in the set yet.
