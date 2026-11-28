@@ -536,7 +536,7 @@ pub(super) fn input(
     {
         let hits_anchor = |at| camera.screen(at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
         let wiring_target = match kind {
-            Kind::Label => project.endpoint_position(pcbcraft_engine::WireEndpoint::Label(id)).is_some_and(hits_anchor),
+            Kind::Label => project.endpoint_position(pcbcraft_engine::schematic::WireEndpoint::Label(id)).is_some_and(hits_anchor),
             Kind::Sheet => project
                 .sheet_symbols()
                 .iter()
