@@ -972,8 +972,8 @@ mod tests {
     fn segments_closer_than_one_micrometre_are_refused() {
         let square = |x: i64| Regions::polygon(&[[x, 2 * MM], [x + MM, 2 * MM], [x + MM, 4 * MM], [x, 4 * MM]]).unwrap();
         let disc = |x: i64| Regions::circle([x + MM / 2, 3 * MM], MM).unwrap();
-        let cases: [(&dyn Fn(i64) -> Regions, i64, bool); 4] =
-            [(&square, 500, false), (&square, 1_000, true), (&disc, 500, false), (&disc, 1_500, true)];
+        type Hole<'a> = &'a dyn Fn(i64) -> Regions;
+        let cases: [(Hole, i64, bool); 4] = [(&square, 500, false), (&square, 1_000, true), (&disc, 500, false), (&disc, 1_500, true)];
         for (hole, gap, ok) in cases {
             let material = rect(0, 0, 100, 100)
                 .boolean(&hole(2 * MM), Operation::Difference)
