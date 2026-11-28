@@ -905,3 +905,32 @@ fn no_connect_focus_loss_cancels_before_disabled_input() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.revision(), revision);
 }
+
+/// Show on a finding from another sheet moves the whole editor there, as the Browser does:
+/// the breadcrumb and page follow the canvas, and the Browser can switch back afterwards.
+#[test]
+fn no_connect_show_on_another_sheet_moves_the_editor_like_the_browser() {
+    use crate::editor_view::DocumentTarget;
+    let painted =
+        |h: &Harness<'_, PcbApp>, text: &str| h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == text));
+    let mut h = editor(1400., true);
+    let main = h.state().session.project().unwrap().sheet_target();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Second","expected_revision":revision}));
+    let second = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    let revision = h.state().session.revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"sheet":second.id(),"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run();
+    assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Sheet(main)));
+    h.state_mut().inspect_no_connects();
+    h.run();
+    click(&mut h, "Show R1 pin 2");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Sheet(second)));
+    assert!(!h.state().views.active.schematic.selection.is_empty());
+    assert!(painted(&h, "Untitled › Second") && painted(&h, "2 / 2"));
+    click(&mut h, "Main");
+    assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Sheet(main)));
+    assert!(painted(&h, "Untitled › Main") && painted(&h, "1 / 2"));
+}
