@@ -460,8 +460,10 @@ impl PcbApp {
     }
 
     /// Draw project dialogs once in their owner window (normally the main host). A fields,
-    /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms can change
-    /// the focused document, so they restore the host's resulting focus rather than its old slot.
+    /// marker, package or setup/rules dialog temporarily binds its originating editor for revision validation. Sheet forms, and
+    /// any dialog that navigates (a check's Show), can change the focused document, so they restore the host's resulting
+    /// focus rather than its old slot: otherwise the canvas shows the new sheet while the Browser, breadcrumb and
+    /// Properties keep reading the old one.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.render_browse_host().is_some_and(|host| host != self.views.host) {
@@ -472,6 +474,7 @@ impl PcbApp {
         }
         let previous = self.views.active.id();
         let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
+        let focus: Vec<_> = self.views.hosts.values().map(|host| host.focused).collect();
         if let Some(source) = self.rule_dialog_source() {
             self.views.bind(source.view());
         }
@@ -497,7 +500,7 @@ impl PcbApp {
             _ => {}
         }
         self.dialogs(ctx);
-        if sheet_form {
+        if sheet_form || self.views.hosts.values().map(|host| host.focused).ne(focus) {
             self.views.bind_main();
         } else {
             self.views.bind(previous);
