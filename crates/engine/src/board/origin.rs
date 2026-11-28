@@ -137,6 +137,12 @@ impl Frame {
         Point { x_nm: point.x_nm - self.origin.x_nm, y_nm: self.origin.y_nm - point.y_nm }
     }
 
+    /// Express an analytic board point, in fractional nanometres, in output coordinates without
+    /// rounding: the same shift and Y flip as [`Self::to_output`].
+    pub fn to_output_nm(self, [x, y]: [f64; 2]) -> [f64; 2] {
+        [x - self.origin.x_nm as f64, self.origin.y_nm as f64 - y]
+    }
+
     /// Express a footprint placement in output terms. Top-side placements keep the output X
     /// and the board rotation under both conventions; `convention` decides how bottom-side rows
     /// are written.

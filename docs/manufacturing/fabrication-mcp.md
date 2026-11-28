@@ -9,9 +9,13 @@ files: Gerber X2 copper per layer, mask, paste and silkscreen for both sides, an
 outline, plus one Excellon plated drill file. Boards with placed circular non-plated
 holes also get a separate non-plated drill file. Export requires a board setup, a
 resolvable placement origin, and at least one closed Board Outline loop. The Gerber
-profile includes the closed loops and omits open outline paths. Boards with copper
-zones or non-plated holes whose diameters round to zero in the drill file are refused
-before any output is returned.
+profile includes the closed loops and omits open outline paths. Copper zones are
+written from the board's current fill as conductor regions in their layer's copper
+file ([zone output](../pcb/copper-zone-outlines.md#fabrication-output)). Export does
+not pour copper: while the fill is pending, after `pcb.unfill_zones`, or when it failed,
+the export is refused; run `pcb.refill_zones` and export again. Boards with non-plated
+holes whose diameters round to zero in the drill file are also refused before any
+output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns

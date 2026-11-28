@@ -126,7 +126,7 @@ This is #57.
 (#231/#232) draws and edits single-layer, net-addressed outlines and derives their
 conductive material. Automatic and explicit **Pour copper**, thermal connections,
 priority, island filtering, connectivity/ratsnest and zone DRC share that result.
-Fabrication output remains #233; advanced policy remains #304.
+Fabrication output writes the fill as Gerber regions (#233); advanced policy remains #304.
 
 **Behavior.**
 - Drawing a zone works like a Board Outline rectangle or polygon on a copper

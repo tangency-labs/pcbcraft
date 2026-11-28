@@ -1,0 +1,620 @@
+//! Copper pours in the Gerber copper layers. Each island of the engine's current analytic zone
+//! fill, the same material DRC checks, becomes one dark-polarity region (`G36`/`G37`,
+//! Ucamco Gerber 2026.05 §4.10). Nothing is refilled, offset or flattened here.
+//!
+//! Contours follow the fill's exact line and circular-arc boundary. Every vertex and every arc
+//! centre is rounded once to the file's 1 nm resolution (format 4.6 mm). Arcs use `G75`
+//! multi-quadrant circular interpolation (§4.7). They are split at the quarter-turn angles, so
+//! no written arc exceeds 90° and every extreme point of a loop is a vertex. A piece whose
+//! rounded end points are less than 1 µm apart is written as a line, because such an arc can
+//! turn into a nearly full circle under the processing perturbation the specification allows
+//! (§4.14.2).
+//!
+//! Holes, the clearances around other copper, are joined to their outer contour with
+//! horizontal cut-ins: pairs of fully-coincident linear segments (§§4.10.3, 4.10.4.7). No clear
+//! polarity is used, so the image does not depend on the order of objects in the file.
+//!
+//! Conversion error from the analytic boundary, per written segment: a line is within √2/2 nm
+//! (its rounded end points). An arc is within max(|r₁ − r|, |r₂ − r|) + |c′ − c|, where r and c
+//! are the analytic radius and centre, c′ the written centre and r₁, r₂ the written start and end
+//! radii: the ring that §4.7.2 allows any rendering of the arc to occupy. The written centre is
+//! the one of the nine nanometre points around c that minimises this bound, which therefore
+//! never exceeds 3√2/2 nm (about 2.1 nm). A short piece written as a line adds its sagitta.
+//! [`Stats::deviation_nm`] reports the largest bound of one export.
+
+use super::{ApertureFunction, DELETE_APERTURE_FUNCTION, Gerber, object_attributes::RoutedNets};
+use crate::board::{fill::ProblemKind, origin::Frame, view::BoardView};
+use pcbcraft_geometry::planar::{Boundary, Edge};
+use std::{collections::BTreeMap, f64::consts::FRAC_PI_2, fmt::Write as _};
+use uuid::Uuid;
+
+/// Shortest chord written as a circular arc (Ucamco Gerber 2026.05 §4.14.2).
+const MIN_ARC_CHORD_NM: f64 = 1_000.;
+
+/// A written coordinate pair in output nanometres.
+pub(super) type Vertex = (i64, i64);
+
+/// How a written segment reaches the start of the next segment of its contour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Shape {
+    Line,
+    /// A circular arc about the written `center`; `circle` keeps the analytic centre and radius.
+    Arc {
+        center: Vertex,
+        clockwise: bool,
+        circle: ([f64; 2], f64),
+    },
+}
+
+/// One written segment from `start` to the start of the next segment. `exact` is the analytic
+/// start point it was rounded from (equal to `start` for cut-ins).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Segment {
+    pub(super) start: Vertex,
+    pub(super) exact: [f64; 2],
+    pub(super) shape: Shape,
+}
+
+/// Measurements of one conversion; the module documentation derives the deviation bound.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Stats {
+    /// The largest bound, in nanometres, of any written segment from the analytic boundary.
+    pub(super) deviation_nm: f64,
+    /// Written contour segments, cut-ins included.
+    pub(super) segments: usize,
+    /// Written circular arcs.
+    pub(super) arcs: usize,
+    /// Cut-in pairs joining holes to their contour.
+    pub(super) cut_ins: usize,
+}
+
+/// One analytic boundary piece in output coordinates before rounding: its start and, for an
+/// arc, its centre, radius and direction.
+#[derive(Clone, Copy)]
+struct Piece {
+    start: [f64; 2],
+    arc: Option<([f64; 2], f64, bool)>,
+}
+
+/// One filled island of one zone: its net and one closed contour for each of its regions.
+pub(super) struct Pour {
+    net: Uuid,
+    pub(super) contours: Vec<Vec<Segment>>,
+}
+
+/// The pour regions of one export by copper layer, each layer in the fill's zone order.
+#[derive(Default)]
+pub(super) struct Pours {
+    layers: BTreeMap<Uuid, Vec<Pour>>,
+    pub(super) stats: Stats,
+}
+
+impl Pours {
+    /// Convert the board's current fill. A board without zones has no pours. Refuses, without
+    /// writing anything, when pours were removed, when the fill for the current board is still
+    /// pending or failed, or when a zone produced no fill because its net is unavailable: a
+    /// stale or missing pour is never exported as if it were current.
+    pub(super) fn new(view: BoardView<'_>, frame: Frame) -> Result<Self, String> {
+        if view.zones().is_empty() {
+            return Ok(Self::default());
+        }
+        if !view.zone_fill_enabled() {
+            return Err("Copper pours are removed. Use Pour copper to fill the zones before generating fabrication outputs.".into());
+        }
+        let fill = match view.filled_zones() {
+            Some(Ok(fill)) if fill.board == view.target => fill,
+            Some(Err(message)) => return Err(format!("Copper zones could not be poured: {message} No fabrication files were generated.")),
+            _ => {
+                return Err(
+                    "Copper zones are not poured for the current board yet. Use Pour copper and let it finish before generating fabrication outputs."
+                        .into(),
+                );
+            }
+        };
+        if let Some(problem) = fill.problems.iter().find(|problem| matches!(problem.kind, ProblemKind::NetUnavailable | ProblemKind::Unavailable)) {
+            return Err(format!("A copper zone has no fill: {} No fabrication files were generated.", problem.message));
+        }
+        let mut pours = Self::default();
+        for zone in &fill.zones {
+            for island in &zone.islands {
+                let boundaries = island.region.boundaries().map_err(|error| format!("Cannot write a copper zone to Gerber: {error}"))?;
+                let contours = boundaries.iter().map(|boundary| contour(boundary, frame, &mut pours.stats)).collect::<Result<_, _>>()?;
+                pours.layers.entry(zone.layer).or_default().push(Pour { net: zone.net, contours });
+            }
+        }
+        Ok(pours)
+    }
+
+    /// Write this layer's pours, each with the zone net's object attribute.
+    pub(super) fn write(&self, gerber: &mut Gerber, layer: Uuid, nets: &RoutedNets) {
+        for pour in self.layers.get(&layer).into_iter().flatten() {
+            gerber.object(nets.zone(pour.net), |gerber| region(&mut gerber.body, &pour.contours));
+        }
+    }
+}
+
+/// Round half up, so equal fractions round alike everywhere in the output frame.
+fn round(value: f64) -> i64 {
+    (value + 0.5).floor() as i64
+}
+
+fn vertex([x, y]: [f64; 2]) -> Vertex {
+    (round(x), round(y))
+}
+
+fn float((x, y): Vertex) -> [f64; 2] {
+    [x as f64, y as f64]
+}
+
+fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// Write one region's boundary as a single closed contour: the outer loop counter-clockwise,
+/// every hole clockwise and joined to it by a cut-in. Returns why when a loop collapses at the
+/// output resolution or a hole cannot be joined.
+pub(super) fn contour(boundary: &Boundary, frame: Frame, stats: &mut Stats) -> Result<Vec<Segment>, String> {
+    let outer = oriented(written(&pieces(&boundary.outer, frame), stats)?, true)?;
+    let holes = boundary.holes.iter().map(|hole| oriented(written(&pieces(hole, frame), stats)?, false)).collect::<Result<Vec<_>, _>>()?;
+    let contour = bridge(outer, holes, stats)?;
+    stats.segments += contour.len();
+    stats.arcs += contour.iter().filter(|segment| segment.shape != Shape::Line).count();
+    Ok(contour)
+}
+
+/// Express one analytic loop in output coordinates (Y up, so arcs change direction) and split
+/// every arc at the quarter-turn angles strictly inside its sweep, in travel order.
+fn pieces(edges: &[Edge], frame: Frame) -> Vec<Piece> {
+    let mut pieces = Vec::with_capacity(edges.len());
+    for edge in edges {
+        match *edge {
+            Edge::Line { start_nm } => pieces.push(Piece { start: frame.to_output_nm(start_nm), arc: None }),
+            Edge::Arc { start_nm, center_nm, radius_nm, sweep_rad } => {
+                let (start, center, sweep) = (frame.to_output_nm(start_nm), frame.to_output_nm(center_nm), -sweep_rad);
+                let clockwise = sweep < 0.;
+                let arc = Some((center, radius_nm, clockwise));
+                pieces.push(Piece { start, arc });
+                let from = (start[1] - center[1]).atan2(start[0] - center[0]);
+                let (low, high) = if clockwise { (from + sweep, from) } else { (from, from + sweep) };
+                let quarters = ((low / FRAC_PI_2).floor() as i64 + 1..).take_while(|&k| (k as f64) * FRAC_PI_2 < high);
+                let mut splits: Vec<_> = quarters
+                    .map(|k| {
+                        // Quarter-turn points are exact: centre plus or minus the radius on one axis.
+                        let (dx, dy) = [(1., 0.), (0., 1.), (-1., 0.), (0., -1.)][k.rem_euclid(4) as usize];
+                        Piece { start: [center[0] + dx * radius_nm, center[1] + dy * radius_nm], arc }
+                    })
+                    .collect();
+                if clockwise {
+                    splits.reverse();
+                }
+                pieces.extend(splits);
+            }
+        }
+    }
+    pieces
+}
+
+/// Round one loop. Pieces whose end points round together are dropped, and each remaining arc
+/// gets its written centre. Fewer than two remaining segments is a collapsed loop.
+fn written(pieces: &[Piece], stats: &mut Stats) -> Result<Vec<Segment>, String> {
+    let starts: Vec<_> = pieces.iter().map(|piece| vertex(piece.start)).collect();
+    let n = pieces.len();
+    let kept: Vec<_> = (0..n).filter(|&i| starts[i] != starts[(i + 1) % n]).collect();
+    if kept.len() < 2 {
+        return Err("A copper zone island is too small to write at the 1 nm Gerber resolution.".into());
+    }
+    Ok(kept
+        .iter()
+        .enumerate()
+        .map(|(j, &i)| {
+            let next = kept[(j + 1) % kept.len()];
+            let shape = shape(starts[i], starts[next], pieces[i].arc, stats);
+            if shape == Shape::Line {
+                // A written line only moves by the rounding of its two end points.
+                let rounding = distance(float(starts[i]), pieces[i].start).max(distance(float(starts[next]), pieces[next].start));
+                stats.deviation_nm = stats.deviation_nm.max(rounding);
+            }
+            Segment { start: starts[i], exact: pieces[i].start, shape }
+        })
+        .collect())
+}
+
+/// Choose how a written segment from `start` to `end` follows its analytic piece. An arc keeps
+/// the circular interpolation unless its chord is under 1 µm; its written centre minimises the
+/// deviation bound over the nine nanometre points around the analytic centre (ties keep the
+/// first in a fixed order, so the choice is deterministic). Records the bound in `stats`.
+fn shape(start: Vertex, end: Vertex, arc: Option<([f64; 2], f64, bool)>, stats: &mut Stats) -> Shape {
+    let Some((center, radius, clockwise)) = arc else { return Shape::Line };
+    let (a, b) = (float(start), float(end));
+    let chord = distance(a, b);
+    if chord < MIN_ARC_CHORD_NM {
+        let sagitta = radius - (radius * radius - chord * chord / 4.).max(0.).sqrt();
+        stats.deviation_nm = stats.deviation_nm.max(sagitta + std::f64::consts::FRAC_1_SQRT_2);
+        return Shape::Line;
+    }
+    let base = vertex(center);
+    let mut best = (base, f64::INFINITY);
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            let candidate = (base.0 + dx, base.1 + dy);
+            let c = float(candidate);
+            let bound = (distance(a, c) - radius).abs().max((distance(b, c) - radius).abs()) + distance(c, center);
+            if bound < best.1 {
+                best = (candidate, bound);
+            }
+        }
+    }
+    stats.deviation_nm = stats.deviation_nm.max(best.1);
+    Shape::Arc { center: best.0, clockwise, circle: (center, radius) }
+}
+
+/// Signed area of a written loop: the polygon through its vertices plus, for each arc, the
+/// circular segment between its chord and the arc (positive counter-clockwise).
+fn area(segments: &[Segment]) -> f64 {
+    let n = segments.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (float(segments[i].start), float(segments[(i + 1) % n].start));
+            let chord = (a[0] * b[1] - a[1] * b[0]) / 2.;
+            let Shape::Arc { center, clockwise, .. } = segments[i].shape else { return chord };
+            let c = float(center);
+            let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+            let mut theta = (u[0] * v[1] - u[1] * v[0]).atan2(u[0] * v[0] + u[1] * v[1]).abs();
+            if clockwise {
+                theta = -theta;
+            }
+            let r = (distance(a, c) + distance(b, c)) / 2.;
+            chord + r * r / 2. * (theta - theta.sin())
+        })
+        .sum()
+}
+
+/// Orient a written loop counter-clockwise for material or clockwise for a hole, so a cut-in
+/// keeps the material on one side (§4.10.3). A loop without area is refused.
+fn oriented(segments: Vec<Segment>, material: bool) -> Result<Vec<Segment>, String> {
+    let area = area(&segments);
+    if area == 0. || !area.is_finite() {
+        return Err("A copper zone contour has no area at the 1 nm Gerber resolution.".into());
+    }
+    if (area > 0.) == material {
+        return Ok(segments);
+    }
+    let n = segments.len();
+    Ok((0..n)
+        .rev()
+        .map(|i| {
+            let next = segments[(i + 1) % n];
+            let shape = match segments[i].shape {
+                Shape::Arc { center, clockwise, circle } => Shape::Arc { center, clockwise: !clockwise, circle },
+                Shape::Line => Shape::Line,
+            };
+            Segment { start: next.start, exact: next.exact, shape }
+        })
+        .collect())
+}
+
+/// Where a cut-in from a hole meets another loop.
+enum Hit {
+    /// At the start of the segment with this index.
+    Vertex(usize),
+    /// Inside the segment with this index, at this analytic X on the cut-in's line.
+    Inside(usize, f64),
+}
+
+/// A hole joined to a segment of another loop: the cut-in leaves the segment at `h`, `along`
+/// its travel from its start, and runs to the hole's rightmost vertex.
+struct Join {
+    segment: usize,
+    along: f64,
+    h: Vertex,
+    exact: [f64; 2],
+    hole: usize,
+}
+
+/// Join every hole to the outer contour. A cut-in runs from the hole's rightmost vertex in +X to
+/// the first segment it meets. That segment is on the outer loop or on a hole whose rightmost
+/// vertex lies further right, since no other loop reaches the ray; so taking holes from the
+/// largest X down, cut-ins never cross holes or each other. Rays are answered from horizontal
+/// bands of segments and the contour is assembled in one pass, so the work grows with the
+/// number of segments, not with holes times segments, for loops spread over the region.
+fn bridge(outer: Vec<Segment>, holes: Vec<Vec<Segment>>, stats: &mut Stats) -> Result<Vec<Segment>, String> {
+    let mut loops = vec![outer];
+    loops.extend(holes);
+    let entries: Vec<usize> = loops
+        .iter()
+        .enumerate()
+        .map(|(l, segments)| match l {
+            0 => 0,
+            _ => segments.iter().enumerate().max_by_key(|(_, segment)| (segment.start.0, std::cmp::Reverse(segment.start.1))).map_or(0, |(k, _)| k),
+        })
+        .collect();
+    let bands = Bands::new(&loops);
+    let mut order: Vec<usize> = (1..loops.len()).collect();
+    order.sort_by_key(|&l| {
+        let v = loops[l][entries[l]].start;
+        (std::cmp::Reverse(v.0), v.1)
+    });
+    let mut joins: Vec<Vec<Join>> = loops.iter().map(|_| Vec::new()).collect();
+    for hole in order {
+        let v = loops[hole][entries[hole]].start;
+        let (l, hit) = nearest(&loops, bands.crossing(v.1), v)?;
+        let segments = &loops[l];
+        let n = segments.len();
+        let (segment, h, exact) = match hit {
+            Hit::Vertex(k) => (k, segments[k].start, segments[k].exact),
+            Hit::Inside(k, x) => match (round(x), v.1) {
+                h if h == segments[k].start => (k, h, segments[k].exact),
+                h if h == segments[(k + 1) % n].start => ((k + 1) % n, h, segments[(k + 1) % n].exact),
+                h => (k, h, [x, v.1 as f64]),
+            },
+        };
+        if h.0 <= v.0 {
+            return Err("A copper zone hole is too close to its boundary to join at the 1 nm Gerber resolution.".into());
+        }
+        let along = distance(float(segments[segment].start), float(h));
+        joins[l].push(Join { segment, along, h, exact, hole });
+    }
+    for (l, list) in joins.iter_mut().enumerate() {
+        let (n, entry) = (loops[l].len(), entries[l]);
+        // A quarter-turn arc's chord grows along its travel, so `along` orders points on any segment.
+        list.sort_by(|a, b| ((a.segment + n - entry) % n).cmp(&((b.segment + n - entry) % n)).then(a.along.total_cmp(&b.along)));
+    }
+    stats.cut_ins += loops.len() - 1;
+    Ok(assemble(&loops, &entries, &joins, stats))
+}
+
+/// Walk the loops from the outer one, each from its entry vertex, entering every joined hole
+/// where its cut-in leaves the segment and returning along the coincident cut-in. An explicit
+/// stack keeps deeply chained holes off the call stack.
+fn assemble(loops: &[Vec<Segment>], entries: &[usize], joins: &[Vec<Join>], stats: &mut Stats) -> Vec<Segment> {
+    struct Walk {
+        l: usize,
+        step: usize,
+        next: usize,
+        at: Option<(Vertex, [f64; 2])>,
+    }
+    let cut = |start: Vertex| Segment { start, exact: float(start), shape: Shape::Line };
+    let arc_of = |segment: &Segment| match segment.shape {
+        Shape::Arc { clockwise, circle: (center, radius), .. } => Some((center, radius, clockwise)),
+        Shape::Line => None,
+    };
+    let mut out = Vec::with_capacity(loops.iter().map(Vec::len).sum::<usize>() + 2 * loops.len());
+    let mut stack = vec![Walk { l: 0, step: 0, next: 0, at: None }];
+    while let Some(walk) = stack.last_mut() {
+        let segments = &loops[walk.l];
+        let n = segments.len();
+        if walk.step == n {
+            let done = walk.l;
+            stack.pop();
+            if done != 0 {
+                out.push(cut(loops[done][entries[done]].start));
+            }
+            continue;
+        }
+        let k = (entries[walk.l] + walk.step) % n;
+        let (p, exact) = walk.at.unwrap_or((segments[k].start, segments[k].exact));
+        if let Some(join) = joins[walk.l].get(walk.next).filter(|join| join.segment == k) {
+            if join.h != p {
+                out.push(Segment { start: p, exact, shape: shape(p, join.h, arc_of(&segments[k]), stats) });
+            }
+            walk.at = Some((join.h, join.exact));
+            walk.next += 1;
+            out.push(cut(join.h));
+            stack.push(Walk { l: join.hole, step: 0, next: 0, at: None });
+            continue;
+        }
+        let shape = match walk.at {
+            None => segments[k].shape,
+            Some(_) => shape(p, segments[(k + 1) % n].start, arc_of(&segments[k]), stats),
+        };
+        out.push(Segment { start: p, exact, shape });
+        walk.at = None;
+        walk.step += 1;
+    }
+    out
+}
+
+/// Segments sorted into horizontal bands by the Y range they span, so a horizontal ray only
+/// looks at the segments of its own band. Written segments are straight or within one quadrant,
+/// so their end points bound their Y range.
+struct Bands {
+    low: i64,
+    height: i64,
+    bands: Vec<Vec<(usize, usize)>>,
+}
+
+impl Bands {
+    fn new(loops: &[Vec<Segment>]) -> Self {
+        let ys = loops.iter().flatten().map(|segment| segment.start.1);
+        let (low, high) = (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0));
+        let total: usize = loops.iter().map(Vec::len).sum();
+        let count = (total / 8).clamp(1, 1 << 16) as i64;
+        let height = ((high - low) / count + 1).max(1);
+        let mut bands = vec![Vec::new(); ((high - low) / height + 1) as usize];
+        for (l, segments) in loops.iter().enumerate() {
+            let n = segments.len();
+            for k in 0..n {
+                let (a, b) = (segments[k].start.1, segments[(k + 1) % n].start.1);
+                for band in &mut bands[((a.min(b) - low) / height) as usize..=((a.max(b) - low) / height) as usize] {
+                    band.push((l, k));
+                }
+            }
+        }
+        Self { low, height, bands }
+    }
+
+    /// The segments whose Y range may contain `y`.
+    fn crossing(&self, y: i64) -> &[(usize, usize)] {
+        usize::try_from((y - self.low) / self.height).ok().and_then(|band| self.bands.get(band)).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// Find the first of `candidates` a horizontal ray from `v` in +X meets, preferring an existing
+/// vertex at the same X. Written segments are straight or within one quadrant of their circle,
+/// so each meets the ray's line at most once (a horizontal line on it is met at its nearer end).
+fn nearest(loops: &[Vec<Segment>], candidates: &[(usize, usize)], v: Vertex) -> Result<(usize, Hit), String> {
+    let mut best: Option<(f64, usize, Hit)> = None;
+    let mut offer = |x: f64, l: usize, hit: Hit| {
+        if x > v.0 as f64
+            && best.as_ref().is_none_or(|(bx, _, current)| x < *bx || (x == *bx && matches!((current, &hit), (Hit::Inside(..), Hit::Vertex(_)))))
+        {
+            best = Some((x, l, hit));
+        }
+    };
+    for &(l, k) in candidates {
+        let segments = &loops[l];
+        let n = segments.len();
+        let (a, b) = (segments[k].start, segments[(k + 1) % n].start);
+        if a.1 == v.1 {
+            offer(a.0 as f64, l, Hit::Vertex(k));
+        }
+        if a.1 == v.1 || b.1 == v.1 || (a.1 < v.1) == (b.1 < v.1) {
+            continue;
+        }
+        let (low, high) = (a.0.min(b.0) as f64, a.0.max(b.0) as f64);
+        let x = match segments[k].shape {
+            Shape::Line => {
+                let (p, q) = (segments[k].exact, segments[(k + 1) % n].exact);
+                if p[1] == q[1] { a.0 as f64 } else { p[0] + (v.1 as f64 - p[1]) * (q[0] - p[0]) / (q[1] - p[1]) }
+            }
+            Shape::Arc { circle: (center, radius), .. } => {
+                let reach = (radius * radius - (v.1 as f64 - center[1]).powi(2)).max(0.).sqrt();
+                if (a.0 + b.0) as f64 >= 2. * center[0] { center[0] + reach } else { center[0] - reach }
+            }
+        };
+        offer(x.clamp(low, high), l, Hit::Inside(k, x.clamp(low, high)));
+    }
+    best.map(|(_, l, hit)| (l, hit)).ok_or_else(|| "A copper zone hole could not be joined to its boundary.".into())
+}
+
+/// Write one island as one region: a contour per region of the island, tagged as conductor
+/// copper (§5.6.10). `G75` precedes the region when it has arcs, because only D01, D02 and G01–G03
+/// may appear inside one (§4.10.2); linear mode is restored before it ends.
+fn region(body: &mut String, contours: &[Vec<Segment>]) {
+    if contours.iter().flatten().any(|segment| segment.shape != Shape::Line) {
+        body.push_str("G75*\n");
+    }
+    ApertureFunction::Conductor.set(body);
+    body.push_str("G36*\n");
+    let mut mode = "G01*";
+    for contour in contours {
+        let Some(first) = contour.first() else { continue };
+        let _ = writeln!(body, "X{}Y{}D02*", first.start.0, first.start.1);
+        for (i, segment) in contour.iter().enumerate() {
+            let (x, y) = contour[(i + 1) % contour.len()].start;
+            let wanted = match segment.shape {
+                Shape::Line => "G01*",
+                Shape::Arc { clockwise: true, .. } => "G02*",
+                Shape::Arc { clockwise: false, .. } => "G03*",
+            };
+            if wanted != mode {
+                let _ = writeln!(body, "{wanted}");
+                mode = wanted;
+            }
+            match segment.shape {
+                Shape::Line => {
+                    let _ = writeln!(body, "X{x}Y{y}D01*");
+                }
+                Shape::Arc { center, .. } => {
+                    let _ = writeln!(body, "X{x}Y{y}I{}J{}D01*", center.0 - segment.start.0, center.1 - segment.start.1);
+                }
+            }
+        }
+    }
+    if mode != "G01*" {
+        body.push_str("G01*\n");
+    }
+    body.push_str("G37*\n");
+    body.push_str(DELETE_APERTURE_FUNCTION);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcbcraft_geometry::planar::{Operation, Regions};
+
+    const MM: i64 = 1_000_000;
+
+    fn rect(x: i64, y: i64, w: i64, h: i64) -> Regions {
+        Regions::polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(|p| p.map(|v| v * MM / 10))).unwrap()
+    }
+
+    /// Cut the holes from a 10 mm square and write its single region.
+    fn written_board(holes: &[Regions]) -> (Vec<Segment>, Stats, f64) {
+        let mut material = rect(0, 0, 100, 100);
+        for hole in holes {
+            material = material.boolean(hole, Operation::Difference).unwrap();
+        }
+        let boundaries = material.boundaries().unwrap();
+        assert_eq!(boundaries.len(), 1);
+        let mut stats = Stats::default();
+        let contour = contour(&boundaries[0], Frame::BOARD_ZERO, &mut stats).unwrap();
+        (contour, stats, material.area().unwrap().value_nm2)
+    }
+
+    /// Straight segments of a contour between consecutive vertices.
+    fn lines(contour: &[Segment]) -> Vec<(Vertex, Vertex)> {
+        (0..contour.len()).map(|i| (contour[i].start, contour[(i + 1) % contour.len()].start)).collect()
+    }
+
+    fn turn(a: Vertex, b: Vertex, c: Vertex) -> i128 {
+        i128::from(b.0 - a.0) * i128::from(c.1 - a.1) - i128::from(b.1 - a.1) * i128::from(c.0 - a.0)
+    }
+
+    /// Holes are joined by horizontal cut-ins made of two fully-coincident segments, and the
+    /// contour has no other crossing or overlap, also when a cut-in runs into another hole's
+    /// vertex along that hole's edge and when two holes share their rightmost X.
+    #[test]
+    fn holes_join_with_horizontal_fully_coincident_cut_ins() {
+        let holes = [rect(10, 10, 20, 20), rect(10, 40, 20, 10), rect(50, 40, 10, 10), rect(70, 70, 15, 5), rect(15, 70, 10, 10)];
+        let (contour, stats, area) = written_board(&holes);
+        assert_eq!(stats.cut_ins, holes.len());
+        assert_eq!(stats.arcs, 0);
+        let lines = lines(&contour);
+        assert!(lines.iter().all(|(a, b)| a != b), "no zero-length segment");
+        let twins: Vec<_> = (0..lines.len()).filter(|&i| lines.iter().any(|&(a, b)| (b, a) == lines[i])).collect();
+        assert_eq!(twins.len(), 2 * holes.len(), "each cut-in is a pair of fully-coincident segments");
+        assert!(twins.iter().all(|&i| lines[i].0.1 == lines[i].1.1), "cut-ins are horizontal");
+        for i in 0..lines.len() {
+            for j in i + 2..lines.len() {
+                if i == 0 && j == lines.len() - 1 {
+                    continue;
+                }
+                let ((a, b), (c, d)) = (lines[i], lines[j]);
+                let proper = turn(a, b, c).signum() * turn(a, b, d).signum() < 0 && turn(c, d, a).signum() * turn(c, d, b).signum() < 0;
+                assert!(!proper, "segments {i} and {j} cross");
+                if turn(a, b, c) == 0 && turn(a, b, d) == 0 && (a, b) != (d, c) {
+                    let axis = |p: Vertex| if a.0 == b.0 { p.1 } else { p.0 };
+                    let overlap = axis(a).max(axis(b)).min(axis(c).max(axis(d))) - axis(a).min(axis(b)).max(axis(c).min(axis(d)));
+                    assert!(overlap <= 0, "collinear segments {i} and {j} overlap");
+                }
+            }
+        }
+        assert!((super::area(&contour) - area).abs() < 1., "the cut-ins add no area: {} against {area}", super::area(&contour));
+    }
+
+    /// A circular clearance stays four exact quarter arcs within the documented bound; its
+    /// rightmost point is a vertex, so the cut-in starts there.
+    #[test]
+    fn circular_holes_keep_exact_quarter_arcs() {
+        let hole = Regions::circle([3_333_333, 6_666_667], 2_000_001).unwrap();
+        let (contour, stats, area) = written_board(&[hole]);
+        assert_eq!((stats.arcs, stats.cut_ins), (4, 1));
+        assert!(stats.deviation_nm <= 3. * std::f64::consts::FRAC_1_SQRT_2, "{}", stats.deviation_nm);
+        assert!(contour.iter().any(|segment| segment.start == (4_333_334, -6_666_667)), "the rightmost point, in output axes, is a vertex");
+        assert!((super::area(&contour) - area).abs() < 2. * 7_000_000., "{} against {area}", super::area(&contour));
+    }
+
+    /// Arcs shorter than 1 µm are lines with their sagitta in the bound, and a loop that rounds
+    /// away entirely is refused rather than written empty.
+    #[test]
+    fn short_arcs_become_lines_and_collapsed_loops_are_refused() {
+        let mut stats = Stats::default();
+        let arc = Some(([0., 0.], 100_000., false));
+        assert_eq!(shape((100_000, 0), (99_999, 447), arc, &mut stats), Shape::Line);
+        assert!(stats.deviation_nm < 1.8, "{}", stats.deviation_nm);
+        assert!(matches!(shape((100_000, 0), (99_500, 9_987), arc, &mut stats), Shape::Arc { .. }));
+        let tiny = [Piece { start: [0.2, 0.1], arc: None }, Piece { start: [0.4, 0.3], arc: None }, Piece { start: [0.1, 0.4], arc: None }];
+        assert!(written(&tiny, &mut stats).is_err());
+    }
+}

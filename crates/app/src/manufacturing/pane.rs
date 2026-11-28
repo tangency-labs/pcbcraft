@@ -163,7 +163,17 @@ fn paint_mark(p: &Painter, mark: &Mark, screen: impl Fn(Point) -> Pos2, scale: f
             p.rect_filled(Rect::from_center_size(screen(*center), vec2(*w as f32, *h as f32) * scale), 0, color);
         }
         Mark::Polygon(vertices) => {
-            p.add(Shape::convex_polygon(vertices.iter().copied().map(screen).collect(), color, Stroke::NONE));
+            // An unfeathered mesh, as the board canvas draws pours: regions arrive split into
+            // adjacent convex pieces, and feathered edges would show seams between them and
+            // spikes at the sharp corners of thin pieces.
+            let mut mesh = egui::Mesh::default();
+            for &vertex in vertices.iter() {
+                mesh.colored_vertex(screen(vertex), color);
+            }
+            for index in 2..mesh.vertices.len() as u32 {
+                mesh.add_triangle(0, index - 1, index);
+            }
+            p.add(Shape::mesh(mesh));
         }
     }
 }
