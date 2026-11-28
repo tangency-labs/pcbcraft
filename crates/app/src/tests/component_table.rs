@@ -392,3 +392,22 @@ fn a_preview_is_dropped_when_the_filter_or_selection_changes() {
     assert!(h.query_by_label("Apply").is_none(), "a preview of a deselected row is still offered");
     assert_eq!(bytes(&h), before);
 }
+
+/// An empty New value removes an optional field, but a reference or value cannot be empty: the
+/// engine refuses it and nothing changes.
+#[test]
+fn an_empty_reference_or_value_is_refused_unchanged() {
+    let mut h = editor();
+    let before = bytes(&h);
+    open(&mut h);
+    row(&mut h, "R1", Modifiers::NONE);
+    field(&mut h, "Reference");
+    click(&mut h, "Preview change to 1 selected");
+    h.get_by_label_contains("reference` must be 1 to");
+    assert!(h.query_by_label("Apply").is_none());
+    field(&mut h, "Value");
+    click(&mut h, "Preview change to 1 selected");
+    h.get_by_label_contains("value` must be 1 to");
+    assert!(h.query_by_label("Apply").is_none());
+    assert_eq!(bytes(&h), before);
+}

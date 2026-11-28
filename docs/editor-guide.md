@@ -503,7 +503,8 @@ the project, grouped by name. The filter keeps rows whose cells contain every ty
 clicking a header sorts by that column, A to Z, Z to A, then back to project order. Filter
 and sort change only the display, never the saved project. Click a row to select it,
 **Shift**-click to select a range and **Ctrl**-click to add or remove one. To edit, choose
-a **Field**, type the **New value** (an empty value removes the field) or pick a footprint,
+a **Field**, type the **New value** (an empty value removes an optional field; a reference
+or value cannot be empty and is refused) or pick a footprint,
 then **Preview** lists every change, old and new, on the selected rows the filter shows;
 hidden rows are never edited, and changing the filter, selection, field or value drops the
 preview. **Apply** commits the previewed edit as one undo step and
