@@ -306,7 +306,7 @@ fn hierarchical_label_anchor_starts_wiring_and_ribbon_moves_the_selected_label()
     let text = screen(&h, Point { x_nm: 3 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
     point_click(&mut h, text);
     assert_eq!(h.state().views.active.schematic.selected_hierarchy, Some((crate::hierarchy::Kind::Label, label)));
-    click(&mut h, "Move");
+    click(&mut h, "Move selected object (M)");
     assert!(
         matches!(h.state().views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, id: Some(id), .. }) if id == label)
     );
