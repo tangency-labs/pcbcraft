@@ -261,16 +261,19 @@ fn goals(input: &LandPatternInput, inner_span_min_nm: i64) -> Result<FilletGoals
 }
 
 /// Place two rows of leads: pin 1 at the top of the left row, counting down the left row and
-/// back up the right row. Adjacent lands of a row must leave a gap.
+/// back up the right row. Adjacent lands of a row must leave a gap. Quantize the row start
+/// toward negative Y on a half-nanometer tie, then step by exact integer pitch.
 fn gull_wing_lands(input: &LandPatternInput, row_offset_nm: i64, length_nm: i64, width_nm: i64) -> Result<Vec<Land>, String> {
     let (Some(pitch), Some(pins)) = (input.pitch_nm, input.pin_count) else {
         return Err("a gull-wing land pattern needs a pitch and a pin count".into());
     };
-    if width_nm >= pitch {
+    let per_row = i64::from(pins / 2);
+    if per_row > 1 && width_nm >= pitch {
         return Err(format!("adjacent lands touch: the {width_nm} nm land width is not less than the {pitch} nm pitch"));
     }
-    let per_row = usize::from(pins / 2);
-    let row_y = |index: usize| nm(pitch as f64 * (index as f64 - (per_row as f64 - 1.) / 2.));
+    let span_nm = (per_row - 1) * pitch;
+    let first_y_nm = -((span_nm + 1) / 2);
+    let row_y = |index| first_y_nm + index * pitch;
     let left = (0..per_row).map(|index| land(&(index + 1).to_string(), -row_offset_nm, row_y(index), length_nm, width_nm));
     let right = (0..per_row).map(|index| land(&(per_row + index + 1).to_string(), row_offset_nm, row_y(per_row - 1 - index), length_nm, width_nm));
     Ok(left.chain(right).collect())

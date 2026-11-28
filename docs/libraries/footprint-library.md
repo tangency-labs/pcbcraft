@@ -132,11 +132,19 @@ The `density` level selects the A (most), B (nominal) or C (least) column. A
 gull-wing package whose `Smin` does not clear its maximum body width uses the
 reduced heel goals of note 1 to Tables 3-2 and 3-3, unless its terminal length
 tolerance exceeds 0.5 mm. Supply `body_width` for gull-wing packages when that
-tolerance is at most 0.5 mm; above it, the width is optional. The calculation
-refuses reversed or out-of-range limits, terminals that meet inside the body,
-opposite lands that would meet after nanometer rounding, gull-wing lands no
-narrower than their pitch, and lands that exceed the native footprint's size
-or coordinate limits. Tools following the later B or C revisions of IPC-7351
+tolerance is at most 0.5 mm; above it, the width is optional.
+
+Gull-wing centers are spaced at exactly the supplied pitch. If an odd
+nanometer pitch and an even number of lands per row put the centered positions
+between grid points, both rows shift by half a nanometer toward negative Y.
+Rows with two or more lands require a land width strictly less than the pitch;
+a two-pin package has only one land per row, so this check does not apply.
+
+The calculation also refuses reversed or out-of-range limits, terminals that
+meet inside the body, opposite lands that would meet after nanometer rounding,
+and lands that exceed the native footprint's size or coordinate limits. The
+actual gap between rounded opposite lands can differ from the reported
+`Gmin` equation value. Tools following the later B or C revisions of IPC-7351
 may give different values.
 
 ## Definition and placement contract

@@ -105,6 +105,27 @@ fn level_b_soic8_matches_hand_computed_lands() {
     }
 }
 
+/// Whole-row quantization preserves pitch and pin order even when centered lands are off-grid.
+#[test]
+fn gull_wing_rows_preserve_exact_pitch_and_pin_order() {
+    for (pitch_nm, pin_count, first_y_nm) in [(1_270_001, 8, -1_905_002), (1_270_000, 8, -1_905_000), (1_270_001, 6, -1_270_001)] {
+        let input = LandPatternInput { pitch_nm: Some(pitch_nm), pin_count: Some(pin_count), ..soic8() };
+        let lands = calculate(&input).unwrap().lands;
+        assert_eq!(lands.len(), usize::from(pin_count));
+        let (left, right) = lands.split_at(usize::from(pin_count / 2));
+        for (index, land) in lands.iter().enumerate() {
+            assert_eq!(land.number, (index + 1).to_string());
+        }
+        for (row, direction) in [(left, 1), (right, -1)] {
+            for pair in row.windows(2) {
+                assert_eq!(pair[1].center.y_nm - pair[0].center.y_nm, direction * pitch_nm);
+            }
+        }
+        assert_eq!(left[0].center.y_nm, first_y_nm);
+        assert_eq!(right[right.len() - 1].center.y_nm, first_y_nm);
+    }
+}
+
 /// Every density level reads its own column of Tables 3-5 and 3-2.
 #[test]
 fn density_levels_select_their_table_columns() {
@@ -245,6 +266,23 @@ fn adjacent_gull_wing_lands_must_leave_a_gap() {
         calculate(&fine_pitch(width)).unwrap_err(),
         format!("adjacent lands touch: the {width} nm land width is not less than the {width} nm pitch")
     );
+}
+
+/// A row with one land has no same-row neighbor, even at width/pitch equality.
+#[test]
+fn gull_wing_adjacency_requires_multiple_lands_per_row() {
+    let input = LandPatternInput { pin_count: Some(2), ..fine_pitch(280_000) };
+    let pattern = calculate(&input).unwrap();
+    assert_eq!(pattern.land_width_nm, 280_000);
+    let [left, right] = pattern.lands.as_slice() else { panic!("expected one land per row") };
+    assert_eq!(left.number, "1");
+    assert_eq!(right.number, "2");
+    assert_eq!((left.center.y_nm, right.center.y_nm), (0, 0));
+    assert!(left.center.x_nm < 0 && right.center.x_nm > 0);
+    assert!(2 * (right.center.x_nm - left.center.x_nm) > left.width_nm + right.width_nm);
+
+    let four = LandPatternInput { pin_count: Some(4), ..input };
+    assert_eq!(calculate(&four).unwrap_err(), "adjacent lands touch: the 280000 nm land width is not less than the 280000 nm pitch");
 }
 
 /// Each family takes only its own fields, and gull-wing rows need an even pin count.
