@@ -94,12 +94,18 @@ fn columns(rows: &[ComponentRow]) -> Vec<Column> {
     columns
 }
 
-/// A dry-run reply held for review, with the exact rows and revision Apply submits.
+/// What a preview was made from: the target components, the field choice, the typed value and
+/// the footprint choice.
+type Inputs = (Vec<String>, String, String, String);
+
+/// A dry-run reply held for review, with the exact rows and revision Apply submits and the
+/// inputs it was made from.
 #[derive(Debug)]
 struct Preview {
     edits: Value,
     revision: u64,
     changes: Vec<Value>,
+    inputs: Inputs,
 }
 
 /// Table state owned by the open dialog. Filter, sort and selection never touch the project.
@@ -160,6 +166,11 @@ fn change_field(change: &Value) -> String {
 }
 
 impl Table {
+    /// The inputs a preview of `targets` is made from now.
+    fn inputs(&self, targets: &[&ComponentRow]) -> Inputs {
+        (targets.iter().map(|row| row.component.clone()).collect(), self.field.clone(), self.value.clone(), self.footprint.clone())
+    }
+
     /// Build one `part.set_fields` row per target that sets the chosen column to the typed value.
     /// An empty value removes a field; a footprint takes the catalog default mapping, or matching
     /// terminal and pad numbers, and the engine judges whether that mapping fits.
@@ -263,6 +274,10 @@ impl PcbApp {
         let mut shown: Vec<&ComponentRow> = rows.iter().filter(|row| matches(row, &columns, &table.filter)).collect();
         table.sort.apply(&mut shown, |row, column| columns.get(column).map_or("", |c| c.cell(row)));
         let targets: Vec<&ComponentRow> = shown.iter().copied().filter(|row| table.selected.contains(&row.component)).collect();
+        // A filter, selection or field change since the preview drops it: Apply only sends what was shown.
+        if table.preview.as_ref().is_some_and(|review| review.inputs != table.inputs(&targets)) {
+            table.preview = None;
+        }
         let headers: Vec<String> = columns.iter().map(Column::label).collect();
         let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
         let entries: Vec<TableEntry> = shown
@@ -360,7 +375,7 @@ impl PcbApp {
                     match self.session.execute(SET_FIELDS, &params) {
                         Ok(reply) => {
                             let changes = reply["changes"].as_array().cloned().unwrap_or_default();
-                            table.preview = Some(Preview { edits: params["edits"].clone(), revision, changes });
+                            table.preview = Some(Preview { edits: params["edits"].clone(), revision, changes, inputs: table.inputs(&targets) });
                         }
                         Err(error) => table.error = Some(error.to_string()),
                     }

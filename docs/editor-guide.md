@@ -505,7 +505,8 @@ and sort change only the display, never the saved project. Click a row to select
 **Shift**-click to select a range and **Ctrl**-click to add or remove one. To edit, choose
 a **Field**, type the **New value** (an empty value removes the field) or pick a footprint,
 then **Preview** lists every change, old and new, on the selected rows the filter shows;
-hidden rows are never edited. **Apply** commits the previewed edit as one undo step and
+hidden rows are never edited, and changing the filter, selection, field or value drops the
+preview. **Apply** commits the previewed edit as one undo step and
 **Cancel** discards it. A duplicate reference, a footprint whose pins and pads do not match,
 or an edit made elsewhere since the preview is refused with the reason, and nothing changes.
 A footprint takes the catalog's default pin mapping, or matching terminal and pad numbers.

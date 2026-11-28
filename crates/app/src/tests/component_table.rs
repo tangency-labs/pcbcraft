@@ -366,3 +366,29 @@ fn a_custom_field_named_like_a_standard_column_is_edited_as_itself() {
     assert_eq!(field_of(&h, "R4", "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d").as_deref(), Some("New Co"));
     assert_eq!(field_of(&h, "R4", "manufacturer"), None, "the standard field stays absent");
 }
+
+/// A preview is dropped when the filter hides its rows or the selection changes, so Apply can
+/// only submit the edit for the rows the preview showed.
+#[test]
+fn a_preview_is_dropped_when_the_filter_or_selection_changes() {
+    let mut h = editor();
+    let before = bytes(&h);
+    open(&mut h);
+    row(&mut h, "R1", Modifiers::NONE);
+    value(&mut h, "22k");
+    click(&mut h, "Preview change to 1 selected");
+    h.get_by_label("Apply");
+    h.get_by_label("Filter components").click();
+    h.run();
+    h.get_by_label("Filter components").type_text("R2");
+    h.run();
+    assert!(h.query_by_label("Apply").is_none(), "a preview of a hidden row is still offered");
+    click(&mut h, "Close");
+    open(&mut h);
+    row(&mut h, "R1", Modifiers::NONE);
+    value(&mut h, "22k");
+    click(&mut h, "Preview change to 1 selected");
+    row(&mut h, "R2", Modifiers::NONE);
+    assert!(h.query_by_label("Apply").is_none(), "a preview of a deselected row is still offered");
+    assert_eq!(bytes(&h), before);
+}
