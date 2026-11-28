@@ -308,7 +308,9 @@ that would join and counts their pins on every sheet, including pins reached thr
 labels and sheet ports; hovering it highlights both wires and shows the junction dot. Clicking joins
 them there as one undo step: both routes keep their shape, the crossing gets a junction dot,
 and other wires at nearby crossings stay separate. Pressing **Esc** closes the menu without a
-change. The row is disabled, with the reason in its tooltip, when the wires do not cross at an
+change. The row is disabled, with the reason in its tooltip, when the right-click is not on
+exactly one crossing (zoom in where two crossings sit close together), when the wires do not
+cross at an
 ordinary point (each passes straight through the inside of one of its legs), when another wire
 or pin also touches that point, or when both wires are on nets with different authored names.
 An edit made after the menu opened makes the join fail with a message instead of changing the

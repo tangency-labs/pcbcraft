@@ -537,7 +537,8 @@ pub(crate) struct JoinTarget {
     pub(crate) wires: [String; 2],
     /// Both drawn routes, for the hover preview.
     pub(crate) routes: [Vec<Point>; 2],
-    /// The ordinary crossing nearest the click, if the wires cross.
+    /// The one ordinary crossing within the node hit radius of the right-click, if there is
+    /// exactly one.
     pub(crate) at: Option<Point>,
     /// Which nets would join, or why the shared check refuses the join.
     pub(crate) outcome: Result<String, String>,
@@ -546,8 +547,10 @@ pub(crate) struct JoinTarget {
 }
 
 impl JoinTarget {
-    /// Capture a join when exactly two wires and nothing else are selected, at the crossing
-    /// nearest the click. The engine's own check decides whether the join is allowed.
+    /// Capture a join when exactly two wires and nothing else are selected. The right-click must
+    /// fall within the node hit radius, in screen points, of exactly one of their crossings: a
+    /// click away from every crossing, or near several at a low zoom, is refused rather than
+    /// guessed. The engine's own check then decides whether the join is allowed.
     pub(crate) fn at(
         project: &Project,
         camera: &Camera,
@@ -561,15 +564,17 @@ impl JoinTarget {
         }
         let mut ids = selected.wires.iter().cloned();
         let wires = [ids.next()?, ids.next()?];
-        let click = camera.unsnapped(pointer, rect);
-        let at = project
-            .wire_crossings(&wires[0], &wires[1])
-            .into_iter()
-            .min_by_key(|point| (point.x_nm - click.x_nm).abs().saturating_add((point.y_nm - click.y_nm).abs()));
-        let outcome = project
-            .wire_join(&wires[0], &wires[1], at)
-            .map(|join| describe_join(&join.report))
-            .map_err(|error| error.to_string());
+        let check = |at| project.wire_join(&wires[0], &wires[1], at).map(|join| describe_join(&join.report)).map_err(|error| error.to_string());
+        let crossings = project.wire_crossings(&wires[0], &wires[1]);
+        let near: Vec<_> =
+            crossings.iter().copied().filter(|&point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS).collect();
+        let (at, outcome) = match near.as_slice() {
+            [point] => (Some(*point), check(Some(*point))),
+            // No ordinary crossing at all: the shared check says why.
+            [] if crossings.is_empty() => (None, check(None)),
+            [] => (None, Err("right-click the crossing to join there".to_owned())),
+            _ => (None, Err("more than one crossing is under the pointer; zoom in to choose one".to_owned())),
+        };
         let route = |id: &str| project.wires().iter().find(|wire| wire.id() == id).map(|wire| project.wire_path(wire)).unwrap_or_default();
         Some(Self { routes: [route(&wires[0]), route(&wires[1])], wires, at, outcome, revision })
     }

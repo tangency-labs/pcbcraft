@@ -1,6 +1,6 @@
 use super::*;
 use pcbcraft_engine::{net_labels, schematic::WireEndpoint};
-use super::super::JoinTarget;
+use super::super::{Camera, JoinTarget, theme};
 use std::sync::Arc;
 
 /// Click a model point with `modifiers`, preserving hover, press and release frames.
@@ -102,6 +102,72 @@ fn refused_and_stale_joins_change_nothing() {
     click(&mut h, "Join at Crossing");
     assert!(h.state().message.is_some(), "a stale menu reports the refusal");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Wire `a` runs along row 0 and U-shaped wire `u` crosses it twice, at (0, 0) and (16, 0).
+/// Both are selected with clicks far from the crossings.
+fn twice_crossed() -> Harness<'static, PcbApp> {
+    let mut h = harness();
+    let s = &mut h.state_mut().session;
+    s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+    s.apply(DRAW_WIRE, &json!({"from":grid(-8, 0),"to":grid(24, 0),"bends":[],"expected_revision":s.revision()})).unwrap();
+    s.apply(DRAW_WIRE, &json!({"from":grid(0, -6),"to":grid(16, -6),"bends":[grid(0, 4), grid(16, 4)],"expected_revision":s.revision()}))
+        .unwrap();
+    h.state_mut().browser.open = false;
+    h.run();
+    click_with(&mut h, grid(-6, 0), Modifiers::NONE);
+    click_with(&mut h, grid(8, 4), Modifiers::SHIFT);
+    assert_eq!(h.state().views.active.schematic.selection.wires.len(), 2);
+    h
+}
+
+/// The join the group menu would capture for a right-click at `pointer` under `camera`.
+fn target(h: &Harness<'_, PcbApp>, camera: &Camera, pointer: Pos2) -> JoinTarget {
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let state = h.state();
+    let project = state.session.project().unwrap();
+    JoinTarget::at(project, camera, rect, pointer, &state.views.active.schematic.selection, state.session.revision()).unwrap()
+}
+
+/// The join is offered only for a right-click within the node hit radius of exactly one
+/// crossing: on a crossing it joins there, and far from both or midway between them it is
+/// refused with the reason instead of picking the nearest.
+#[test]
+fn join_needs_a_right_click_on_one_crossing() {
+    let h = twice_crossed();
+    let camera = h.state().views.active.camera.clone();
+    let near = egui::vec2(theme::SCHEMATIC_PIN_HIT_RADIUS * 0.6, 0.0);
+    for crossing in [grid(0, 0), grid(16, 0)] {
+        let join = target(&h, &camera, screen(&h, crossing) + near);
+        assert_eq!(join.at, Some(crossing));
+        assert!(join.outcome.is_ok(), "{:?}", join.outcome);
+    }
+    for away in [grid(-6, 0), grid(8, 0)] {
+        let pointer = screen(&h, away);
+        assert!(pointer.distance(screen(&h, grid(0, 0))) > theme::SCHEMATIC_PIN_HIT_RADIUS);
+        let join = target(&h, &camera, pointer);
+        assert_eq!(join.at, None);
+        assert_eq!(join.outcome, Err("right-click the crossing to join there".to_owned()));
+    }
+
+    let mut h = h;
+    right_click(&mut h, grid(8, 0), egui::Vec2::ZERO);
+    assert!(h.get_by_label("Join at Crossing").accesskit_node().is_disabled());
+}
+
+/// Zoomed out until both crossings fall inside the hit radius, the join names neither of them.
+#[test]
+fn crossings_closer_than_the_hit_radius_are_not_guessed() {
+    let h = twice_crossed();
+    let mut camera = h.state().views.active.camera.clone();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let apart = camera.screen(grid(0, 0), rect).distance(camera.screen(grid(16, 0), rect));
+    camera.set_zoom(camera.zoom() * theme::SCHEMATIC_PIN_HIT_RADIUS * 0.7 / apart);
+    let first = camera.screen(grid(0, 0), rect);
+    assert!(first.distance(camera.screen(grid(16, 0), rect)) < theme::SCHEMATIC_PIN_HIT_RADIUS);
+    let join = target(&h, &camera, first);
+    assert_eq!(join.at, None);
+    assert_eq!(join.outcome, Err("more than one crossing is under the pointer; zoom in to choose one".to_owned()));
 }
 
 /// The row's tooltip counts the pins a net reaches on another sheet through a global label.
