@@ -130,8 +130,10 @@ center.
 Pins may add optional `appearance`: `orientation` (`right`, `down`, `left`, `up`)
 points from attachment toward the body; `length_nm`, `style` (`line`, `inverted`,
 `clock`, `inverted_clock`), `show_name`, `show_number`, `name_height_nm` and
-`number_height_nm` control their integrated rendering. Omission preserves legacy
-separately drawn leads and labels without changing saved bytes.
+`number_height_nm` control their integrated rendering. The optional
+`name_offset_nm` aligns text with the lead. Zero puts the name beside the lead,
+and a positive offset places it inside the symbol. Omission of `appearance`
+preserves separately drawn leads and labels.
 
 A `graphic` drawing entry wraps a shared `graphic` object with `geometry`,
 `stroke_nm` and `fill` (`none`, `solid`, `background`). Geometry is a tagged `type`

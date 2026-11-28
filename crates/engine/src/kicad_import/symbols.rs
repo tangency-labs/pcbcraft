@@ -333,14 +333,21 @@ fn appearance(pin: &Pin, at: (i64, i64), symbol: &LibSymbol, report: &mut Report
             "line"
         }
     };
+    let offset = symbol.pin_name_offset_nm.clamp(0, 100_000_000);
+    let name_height = pin.name_height_nm.clamp(100_000, 5_000_000);
+    let number_height = pin.number_height_nm.clamp(100_000, 5_000_000);
+    if (offset, name_height, number_height) != (symbol.pin_name_offset_nm, pin.name_height_nm, pin.number_height_nm) {
+        report.note("pin text dimensions outside native bounds clamped");
+    }
     Some(json!({
         "orientation": orientation,
         "length_nm": pin.length_nm,
         "style": style,
         "show_name": !symbol.pin_names_hidden && !pin.name.is_empty(),
         "show_number": !symbol.pin_numbers_hidden,
-        "name_height_nm": 1_270_000,
-        "number_height_nm": 1_270_000,
+        "name_height_nm": name_height,
+        "number_height_nm": number_height,
+        "name_offset_nm": offset,
     }))
 }
 

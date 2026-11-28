@@ -104,6 +104,8 @@ pub struct LibSymbol {
     pub properties: Vec<Property>,
     /// Whether the symbol hides its pins' names.
     pub pin_names_hidden: bool,
+    /// Pin-name offset into the body; zero places names beside the leads.
+    pub pin_name_offset_nm: i64,
     /// Whether the symbol hides its pins' numbers.
     pub pin_numbers_hidden: bool,
     /// The drawing, by unit and body style. Unit 0 is common to every unit. Symbol frame.
@@ -157,6 +159,8 @@ pub struct Pin {
     /// The pin's name; empty when the file writes `~`.
     pub name: String,
     pub number: String,
+    pub name_height_nm: i64,
+    pub number_height_nm: i64,
     /// Whether the pin is hidden. A hidden pin still connects.
     pub hidden: bool,
 }
@@ -491,6 +495,7 @@ struct RawLibSymbol {
     power_local: bool,
     properties: Vec<Property>,
     pin_names_hidden: bool,
+    pin_name_offset_nm: i64,
     pin_numbers_hidden: bool,
     units: Arc<Vec<SymbolUnit>>,
     /// The symbol's own jumper pin groups, shared with every symbol that extends it.
@@ -715,6 +720,12 @@ impl State {
             power_local: power.is_some_and(|p| p.flag("local")),
             properties,
             pin_names_hidden: node.child("pin_names").is_some_and(hidden),
+            pin_name_offset_nm: node
+                .child("pin_names")
+                .and_then(|names| names.child("offset"))
+                .and_then(|offset| offset.number(0))
+                .and_then(nm)
+                .unwrap_or(508_000),
             pin_numbers_hidden: node.child("pin_numbers").is_some_and(hidden),
             units: Arc::new(units),
             jumper_pin_groups: Arc::new(jumper_pin_groups),
@@ -755,6 +766,8 @@ impl State {
             length_nm: nm(node.child("length").and_then(|l| l.number(0)).unwrap_or(0.0)).filter(|l| *l >= 0)?,
             name: node.child("name").and_then(|n| n.text(0)).map(|n| if n == "~" { String::new() } else { n.to_owned() }).unwrap_or_default(),
             number: number.to_owned(),
+            name_height_nm: node.child("name").map_or(1_270_000, text_size),
+            number_height_nm: node.child("number").map_or(1_270_000, text_size),
             hidden: hidden(node),
         })
     }
@@ -969,6 +982,7 @@ impl State {
                     power_local: power && if own.power { own.power_local } else { drawn.power_local },
                     properties: own.properties.clone(),
                     pin_names_hidden: drawn.pin_names_hidden,
+                    pin_name_offset_nm: drawn.pin_name_offset_nm,
                     pin_numbers_hidden: drawn.pin_numbers_hidden,
                     units: Arc::clone(&drawn.units),
                     jumper_pin_groups,

@@ -54,6 +54,9 @@ pub struct PinAppearance {
     pub show_number: bool,
     pub name_height_nm: i64,
     pub number_height_nm: i64,
+    /// An explicit offset uses lead-aligned text. Zero puts the name beside the lead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_offset_nm: Option<i64>,
 }
 impl Default for PinAppearance {
     fn default() -> Self {
@@ -65,6 +68,7 @@ impl Default for PinAppearance {
             show_number: true,
             name_height_nm: 1_000_000,
             number_height_nm: 800_000,
+            name_offset_nm: None,
         }
     }
 }
@@ -83,6 +87,7 @@ impl PinAppearance {
         let end = self.end(at);
         if !(100_000..=100_000_000).contains(&self.length_nm)
             || [self.name_height_nm, self.number_height_nm].iter().any(|n| !(100_000..=5_000_000).contains(n))
+            || self.name_offset_nm.is_some_and(|offset| !(0..=100_000_000).contains(&offset))
             || [end.x_nm, end.y_nm].iter().any(|n| !(-100_000_000..=100_000_000).contains(n))
         {
             return Err("Invalid pin length, label size or lead extent.".into());
@@ -111,6 +116,34 @@ impl PinAppearance {
                 points: vec![local(self.length_nm, -d), local(self.length_nm + d, 0), local(self.length_nm, d)],
                 closed: false,
             }));
+        }
+        if let Some(offset) = self.name_offset_nm {
+            let vertical = matches!(self.orientation, PinOrientation::Up | PinOrientation::Down);
+            let rotation = if vertical { 270 } else { 0 };
+            let middle = Point { x_nm: (at.x_nm + end.x_nm) / 2, y_nm: (at.y_nm + end.y_nm) / 2 };
+            let label = |at, text: &str, height_nm, align| make(Geometry::Text { at, text: text.into(), height_nm, rotation, align });
+            if self.show_number {
+                let gap = self.number_height_nm / 2 + 350_000;
+                let point = if vertical { Point { x_nm: middle.x_nm + gap, ..middle } } else { Point { y_nm: middle.y_nm - gap, ..middle } };
+                result.push(label(point, number, self.number_height_nm, TextAlign::Middle));
+            }
+            if self.show_name
+                && let Some(name) = name.filter(|name| !name.is_empty())
+            {
+                let (point, align) = if offset == 0 {
+                    let gap = self.name_height_nm / 2 + 350_000;
+                    let point = if vertical { Point { x_nm: middle.x_nm - gap, ..middle } } else { Point { y_nm: middle.y_nm + gap, ..middle } };
+                    (point, TextAlign::Middle)
+                } else {
+                    let align = match self.orientation {
+                        PinOrientation::Right | PinOrientation::Up => TextAlign::Start,
+                        PinOrientation::Left | PinOrientation::Down => TextAlign::End,
+                    };
+                    (local(self.length_nm + offset, 0), align)
+                };
+                result.push(label(point, name, self.name_height_nm, align));
+            }
+            return result;
         }
         if self.show_number {
             let mut middle = Point { x_nm: (at.x_nm + end.x_nm) / 2, y_nm: (at.y_nm + end.y_nm) / 2 };

@@ -1018,6 +1018,11 @@
           "type": "integer",
           "minimum": 100000,
           "maximum": 5000000
+        },
+        "name_offset_nm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
         }
       }
     },

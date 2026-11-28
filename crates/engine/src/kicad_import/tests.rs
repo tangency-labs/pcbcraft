@@ -331,6 +331,56 @@ fn exact_pins_and_pinless_mechanical_symbols_survive_native_reopen() {
 }
 
 #[test]
+fn pin_labels_keep_source_scale_rotation_and_inset() {
+    use crate::{
+        library_graphics::Geometry,
+        schematic::{Shape, TextAlign},
+    };
+    let source = r#"(kicad_sch (version 20231120)
+      (lib_symbols
+        (symbol "L:Amp" (pin_names (offset 0.127)) (property "Reference" "U")
+          (symbol "Amp_1_1"
+            (pin power_in line (at 0 3.81 270) (length 2.54)
+              (name "V+" (effects (font (size 1 1)))) (number "1" (effects (font (size 0.8 0.8)))))
+            (pin power_in line (at 0 -3.81 90) (length 2.54)
+              (name "V-") (number "2")))))
+      (symbol (lib_id "L:Amp") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#;
+    let imported = import(source, "Pin text").unwrap();
+    let saved = encode_documents(imported.project).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let graphics = reopened.symbols()[0].unit_definition().graphics();
+    let text = |name: &str| {
+        graphics
+            .iter()
+            .find_map(|graphic| {
+                let Shape::Graphic(graphic) = graphic else { return None };
+                match &graphic.geometry {
+                    Geometry::Text { text, at, height_nm, rotation, align } if text == name => Some((*at, *height_nm, *rotation, *align)),
+                    _ => None,
+                }
+            })
+            .unwrap()
+    };
+    let (at, height, rotation, align) = text("V+");
+    assert_eq!((at.x_nm, at.y_nm, height, rotation, align), (0, -1_143_000, 1_000_000, 270, TextAlign::End));
+    let (at, _, rotation, align) = text("V-");
+    assert_eq!((at.y_nm, rotation, align), (1_143_000, 270, TextAlign::Start));
+    let (at, height, rotation, align) = text("1");
+    assert!(at.x_nm > 0);
+    assert_eq!((height, rotation, align), (800_000, 270, TextAlign::Middle));
+
+    let beside = import(&source.replace("(offset 0.127)", "(offset 0)"), "Pin text").unwrap();
+    let graphics = beside.project.symbols()[0].unit_definition().graphics();
+    assert!(graphics.iter().any(|shape| matches!(shape,
+        Shape::Graphic(graphic) if matches!(&graphic.geometry,
+            Geometry::Text { text, at, rotation: 270, align: TextAlign::Middle, .. } if text == "V+" && at.x_nm < 0 && at.y_nm == -2_540_000))));
+
+    let default = import(&source.replace("(pin_names (offset 0.127))", ""), "Pin text").unwrap();
+    let unit = default.project.symbols()[0].unit_definition();
+    assert_eq!(unit.pins()[0].appearance.as_ref().unwrap().name_offset_nm, Some(508_000));
+}
+
+#[test]
 fn shared_symbol_contacts_preserve_pin_identity_and_nets_through_reopen() {
     let fixture = |items: &str| {
         format!(
