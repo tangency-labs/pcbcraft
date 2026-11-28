@@ -1009,6 +1009,13 @@ impl Builder {
         let mut interfaces = BTreeMap::new();
         for (endpoint, point) in project.hierarchy_endpoints() {
             let point = Point { x_nm: point.x_nm, y_nm: point.y_nm };
+            if matches!(endpoint, WireEndpoint::Label(_) | WireEndpoint::SheetPin(_)) && pins_at.contains_key(&point) {
+                return Err(CommandError::InvalidParams(format!(
+                    "symbol pin directly touches a hierarchy port at ({:.3}, {:.3}) mm; add a wire between separate endpoints before importing",
+                    point.x_nm as f64 / 1e6,
+                    point.y_nm as f64 / 1e6
+                )));
+            }
             if interfaces.insert(point, endpoint).is_some() {
                 return Err(CommandError::InvalidParams(format!(
                     "overlapping hierarchy anchors at ({:.3}, {:.3}) mm",

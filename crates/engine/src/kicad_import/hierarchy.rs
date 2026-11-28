@@ -323,8 +323,8 @@ fn verify_nets(source: Vec<BTreeSet<Contact>>, project: &Project) -> Result<(), 
         let mut group = BTreeSet::new();
         while let Some(key) = pending.pop() {
             if let Some(next) = neighbors.remove(&key) {
-                if let Contact::Terminal(part, number) = key {
-                    group.insert((part, number));
+                if matches!(key, Contact::Terminal(..) | Contact::Interface(_)) {
+                    group.insert(key);
                 }
                 pending.extend(next);
             }
@@ -338,8 +338,22 @@ fn verify_nets(source: Vec<BTreeSet<Contact>>, project: &Project) -> Result<(), 
     let mut bare = BTreeSet::new();
     for symbol in project.all_symbols() {
         for terminal in symbol.terminals() {
-            let key = (symbol.component, terminal.number().to_owned());
+            let key = Contact::Terminal(symbol.component, terminal.number().to_owned());
             if let Some(index) = graph.net_index_for(terminal) {
+                connected.entry(index).or_default().insert(key);
+            } else {
+                bare.insert(key);
+            }
+        }
+    }
+    let mut port_names = BTreeMap::new();
+    for sheet in project.sheets.iter() {
+        for label in sheet.labels.iter() {
+            port_names.insert(label.id, format!("{} / {}", sheet.sheet_name, label.name));
+            // The native graph joins both sides of each port. Use its child anchor
+            // to compare one identity per port, just as the source partition does.
+            let key = Contact::Interface(label.id);
+            if let Some(index) = graph.overview_net_index(WireEndpoint::Label(label.id)) {
                 connected.entry(index).or_default().insert(key);
             } else {
                 bare.insert(key);
@@ -351,11 +365,15 @@ fn verify_nets(source: Vec<BTreeSet<Contact>>, project: &Project) -> Result<(), 
     if actual == expected {
         return Ok(());
     }
-    let display = |group: &BTreeSet<(u64, String)>| {
+    let display = |group: &BTreeSet<Contact>| {
         let mut labels: Vec<_> = group
             .iter()
             .take(8)
-            .filter_map(|(part, pin)| project.components.get(part).map(|component| format!("{}.{}", component.reference(), pin)))
+            .filter_map(|contact| match contact {
+                Contact::Terminal(part, pin) => project.components.get(part).map(|component| format!("{}.{}", component.reference(), pin)),
+                Contact::Interface(id) => port_names.get(id).map(|name| format!("port {name}")),
+                _ => None,
+            })
             .collect();
         if group.len() > 8 {
             labels.push(format!("and {} more", group.len() - 8));
@@ -371,7 +389,7 @@ fn verify_nets(source: Vec<BTreeSet<Contact>>, project: &Project) -> Result<(), 
             Some(format!(" (source: {}; native: {})", display(group), display(found)))
         })
         .unwrap_or_default();
-    Err(CommandError::InvalidParams(format!("The imported hierarchy's terminal connections differ from the KiCad sources{detail}.")))
+    Err(CommandError::InvalidParams(format!("The imported hierarchy's terminal or port connections differ from the KiCad sources{detail}.")))
 }
 
 struct Loader<F> {

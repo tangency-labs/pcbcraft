@@ -428,3 +428,38 @@ fn joining_power_flags_are_refused_with_only_hierarchical_contacts() {
         matches!(imported, Err(CommandError::InvalidParams(message)) if message.contains("child.kicad_sch") && message.contains("power flag #FLG01 sits"))
     );
 }
+
+#[test]
+fn coincident_symbol_pins_and_hierarchy_ports_are_refused_on_either_side() {
+    const LIBRARY: &str = r#"(lib_symbols (symbol "Fixture:Tap" (property "Reference" "X")
+        (symbol "Tap_1_1" (pin passive line (at 0 0 0) (length 2.54) (number "1")))))"#;
+    const PORT: &str = r#"(hierarchical_label "IN" (shape input) (at 10 25 0))"#;
+    const PART: &str = r#"(symbol (lib_id "Fixture:Tap") (at 10 25 0) (unit 1) (property "Reference" "X1"))"#;
+    let block = format!(
+        r#"(sheet (uuid "{A}") (at 10 20) (size 25 25)
+        (property "Sheetname" "Child") (property "Sheetfile" "child.kicad_sch")
+        (pin "IN" input (at 10 25 180)))"#
+    );
+    for parent in [true, false] {
+        let (parent_part, child_part) = if parent { (PART, "") } else { ("", PART) };
+        let root = project(&format!("{LIBRARY} {block} {parent_part}"));
+        let child = format!("(kicad_sch {LIBRARY} {PORT} {child_part})");
+        let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+        let error = import(&sheets, "Touching port").unwrap_err().to_string();
+        let source = if parent { format!("root.kicad_sch (/{ROOT})") } else { format!("child.kicad_sch (/{ROOT}/{A})") };
+        assert!(error.contains(&source), "{error}");
+        assert!(error.contains("symbol pin directly touches a hierarchy port at (10.000, 25.000) mm"), "{error}");
+    }
+
+    // With the pin and port apart the import is valid. A verifier input claiming
+    // a join must still fail even with just one terminal on the port's net.
+    let root = project(&block);
+    let child = format!("(kicad_sch {LIBRARY} {PORT} {})", PART.replace("(at 10 25 0)", "(at 5 25 0)"));
+    let sheets = load("root.kicad_sch", |file, _| Ok(if file == "root.kicad_sch" { root.clone() } else { child.clone() })).unwrap();
+    let imported = import(&sheets, "Separate endpoints").unwrap();
+    let part = imported.project.all_symbols().next().unwrap();
+    let port = imported.project.sheets[1].labels[0].id;
+    let claims_join = vec![BTreeSet::from([Contact::Terminal(part.component, "1".into()), Contact::Interface(port)])];
+    let error = verify_nets(claims_join, &imported.project).unwrap_err().to_string();
+    assert!(error.contains("terminal or port connections") && error.contains("port Child / IN"), "{error}");
+}

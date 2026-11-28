@@ -37,6 +37,10 @@ finishes; a live request may also be at most 64 KiB. Offering it there needs the
 and checked again against the request, the project and unsaved work before it
 replaces anything. There is no desktop menu entry yet.
 
+A symbol pin placed directly on a sheet pin or hierarchical port requires a
+wire between separate endpoints before import. The importer reports the source
+file, sheet occurrence, and contact coordinates.
+
 ## What is imported
 
 | KiCad | PCBcraft |
