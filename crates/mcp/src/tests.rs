@@ -1949,6 +1949,47 @@ fn mcp_slices_wires_and_deletes_segments() {
     assert_eq!(refused["isError"], true);
 }
 
+/// MCP discovers the crossing join through the shared catalog. A dry run with inspection off
+/// keeps its report and edits nothing, Apply joins the two wires at their crossing as one undo
+/// step, and a stale preview revision is refused.
+#[test]
+fn mcp_joins_crossing_wires_after_a_preview() {
+    let mut server = server();
+    let described = body(&call(&mut server, "describe_command", json!({"command":pcbcraft_engine::JOIN_WIRES})));
+    assert_eq!(described["params"]["required"], json!(["wire", "other", "expected_revision"]));
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"demo-join"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    let mut state = Value::Null;
+    for (from, to) in [(point(-8, 0), point(8, 0)), (point(0, -8), point(0, 8)), (point(4, -8), point(4, 8))] {
+        let revision = if state.is_null() { json!(1) } else { state["revision"].clone() };
+        state = body(&call(
+            &mut server,
+            "execute",
+            json!({"command":pcbcraft_engine::DRAW_WIRE,"params":{"from":from,"to":to,"bends":[],"expected_revision":revision}}),
+        ));
+    }
+    let wires: Vec<_> = state["project"]["schematic"]["wires"].as_array().unwrap().iter().map(|wire| wire["id"].clone()).collect();
+    let nets = |state: &Value| state["project"]["schematic"]["netlist"]["nets"].as_array().unwrap().len();
+    let params = json!({"wire":wires[0],"other":wires[1],"expected_revision":state["revision"]});
+    let mut preview_params = params.clone();
+    preview_params["dry_run"] = json!(true);
+    let preview = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::JOIN_WIRES,"inspect":false,"params":preview_params})));
+    assert_eq!(preview["at"], point(0, 0));
+    assert_eq!(preview["revision"], state["revision"]);
+    let unchanged = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(unchanged["project"], state["project"], "a preview edits nothing");
+    let applied = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::JOIN_WIRES,"inspect":false,"params":params})));
+    assert_eq!(applied["at"], preview["at"]);
+    assert_eq!(applied["junction"]["junction"].as_str().map(|id| id.starts_with("junction-")), Some(true));
+    let joined = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(nets(&joined), nets(&state) - 1, "only the chosen pair joins; the other crossing stays separate");
+    let stale = call(&mut server, "execute", json!({"command":pcbcraft_engine::JOIN_WIRES,"params":params}));
+    assert_eq!(stale["isError"], true);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["schematic"]["netlist"], state["project"]["schematic"]["netlist"]);
+    assert_eq!(undone["project"]["schematic"]["wires"], state["project"]["schematic"]["wires"]);
+}
+
 /// Agents reshape wires with the same three commands the canvas drags use: slide a segment,
 /// move a corner and move a free end. Each keeps the wire's endpoints and its net.
 #[test]

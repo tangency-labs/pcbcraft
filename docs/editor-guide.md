@@ -301,6 +301,20 @@ and **Delete Wire** the whole route. Hovering a row previews what it changes. An
 point where three or more wires meet shows a dot, and two wires meeting end to end read as one
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
+
+To connect two wires where they cross, select both (click one, Shift-click the other),
+right-click their crossing and choose **Join at Crossing**. The row's tooltip names the nets
+that would join; hovering it highlights both wires and shows the junction dot. Clicking joins
+them there as one undo step: both routes keep their shape, the crossing gets a junction dot,
+and other wires at nearby crossings stay separate. Pressing **Esc** closes the menu without a
+change. The row is disabled, with the reason in its tooltip, when the wires do not cross at an
+ordinary point (each passes straight through the inside of one of its legs), when another wire
+or pin also touches that point, or when both wires are on nets with different authored names.
+An edit made after the menu opened makes the join fail with a message instead of changing the
+project. Agents use `schematic.join_wires` with `wire`, `other`, `expected_revision` and, when
+the wires cross more than once, the crossing point `at`. `dry_run` returns the same report
+without editing: the point, both wires, whether they are already connected, and each wire's
+net with its authored names and terminal count. Applying also returns the new junction.
 `schematic.move_wire_segment` takes `wire`, `at`, `to` and `expected_revision`;
 `to` moves the point at `at` in both axes for a detached straight wire, or perpendicular
 to the segment when its ends are anchored. It uses the same

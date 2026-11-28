@@ -25,7 +25,7 @@ struct SymbolChoices {
 mod tests;
 
 pub(crate) use crate::canvas_camera::Camera;
-pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
+pub(crate) use wires::{Draft, JoinTarget, LegTarget, ReshapeDrag};
 
 use crate::{canvas_camera::pointer_release, preferences::Navigation};
 use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -184,6 +184,8 @@ pub(crate) enum Click {
     Edit(SymbolAction, String),
     /// A row of a wire's context menu, with the leg it was opened on.
     WireEdit(WireAction, wires::LegTarget),
+    /// Join at Crossing from the menu of two selected wires, with the target it was opened on.
+    JoinWires(wires::JoinTarget),
     /// A native symbol template dragged from the catalog was released at this snapped point.
     Drop(PartDrag, Point),
 }
@@ -876,6 +878,18 @@ pub(crate) fn show(
             });
         }
         let leg = ui.data(|data| data.get_temp::<wires::LegTarget>(leg_id)).filter(|_| filters.wires && target.is_none() && !group);
+        // Two selected wires keep the crossing their group menu was opened at until it closes.
+        let join_id = response.id.with("join_menu_target");
+        if let Some(pointer) = pressed {
+            let join = group.then(|| wires::JoinTarget::at(project, camera, rect, pointer, selected, revision)).flatten();
+            ui.data_mut(|data| match join {
+                Some(join) => {
+                    data.insert_temp(join_id, join);
+                }
+                None => data.remove::<wires::JoinTarget>(join_id),
+            });
+        }
+        let join = ui.data(|data| data.get_temp::<wires::JoinTarget>(join_id)).filter(|_| group);
         let grab = leg.as_ref().filter(|leg| leg.revision == revision).and_then(|leg| {
             let pointer = ui.data(|data| data.get_temp::<Pos2>(origin_id))?;
             let mut drag = wires::reshape_at(project, camera, rect, &leg.wire, pointer, camera.snap(pointer, rect))?;
@@ -926,6 +940,11 @@ pub(crate) fn show(
             }
             menu::separator(ui);
             if group {
+                if let Some(join) = join.clone()
+                    && let Some(click) = join_row(ui, &painter, rect, camera, join)
+                {
+                    return Some(click);
+                }
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
             }
             if let Some(leg) = leg.clone() {
@@ -1190,6 +1209,20 @@ fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: w
     }
     wires::paint_leg_preview(painter, rect, camera, &leg, hovered);
     picked.map(|action| Click::WireEdit(action, leg))
+}
+
+/// The Join at Crossing row of two selected wires. Its tooltip says which nets would join, or why
+/// the join is refused, in which case the row is disabled. Hovering an enabled row previews both
+/// routes and the junction dot; a click returns the target captured when the menu opened.
+fn join_row(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, join: wires::JoinTarget) -> Option<Click> {
+    let row = MenuItem::new("Join at Crossing").enabled(join.outcome.is_ok());
+    let response = row.show_response(ui).on_hover_text(match &join.outcome {
+        Ok(text) | Err(text) => text.as_str(),
+    });
+    if response.hovered() && row.enabled {
+        wires::paint_join_preview(painter, rect, camera, &join);
+    }
+    response.clicked().then_some(Click::JoinWires(join))
 }
 
 /// Preserve the chosen stacked symbol under the press, otherwise pick the nearest body.

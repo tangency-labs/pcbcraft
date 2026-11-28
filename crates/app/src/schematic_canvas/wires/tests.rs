@@ -1,6 +1,7 @@
 mod attachment;
 mod detachment;
 mod healing;
+mod joining;
 mod redraws;
 mod segments;
 mod snapping;

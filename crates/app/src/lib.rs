@@ -943,6 +943,21 @@ impl PcbApp {
         }
     }
 
+    /// Join two selected wires at the crossing their menu was opened on, through the shared
+    /// command at that revision, so an edit made meanwhile fails visibly. Success clears the
+    /// selection, whose wires were split at the junction.
+    fn join_wires(&mut self, join: &schematic_canvas::JoinTarget) {
+        let [wire, other] = &join.wires;
+        let mut params = json!({"wire": wire, "other": other, "expected_revision": join.revision});
+        if let Some(at) = join.at {
+            params["at"] = json!(at);
+        }
+        self.run(pcbcraft_engine::JOIN_WIRES, &params);
+        if self.message.is_none() {
+            self.select(Selection::default());
+        }
+    }
+
     /// Commit a finished reshape drag through the matching shared command at the revision the
     /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
     /// new geometry when unambiguous, otherwise clear; corner/junction edits retain the
@@ -2091,6 +2106,7 @@ impl PcbApp {
             }
 
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
+            (None, Click::JoinWires(join)) => self.join_wires(&join),
             (None, Click::Edit(action, symbol)) => {
                 self.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);

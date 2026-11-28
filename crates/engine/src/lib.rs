@@ -1058,6 +1058,8 @@ pub const DRAW_WIRE: &str = "schematic.draw_wire";
 pub const DELETE_WIRE: &str = "schematic.delete_wire";
 /// Split a wire into two at a point on it, still connected through a new junction.
 pub const SLICE_WIRE: &str = "schematic.slice_wire";
+/// Connect two wires at one ordinary crossing through a new shared junction, keeping their routes.
+pub const JOIN_WIRES: &str = "schematic.join_wires";
 pub const MOVE_WIRE_SEGMENT: &str = "schematic.move_wire_segment";
 pub const MOVE_WIRE_CORNER: &str = "schematic.move_wire_corner";
 pub const MOVE_JUNCTION: &str = "schematic.move_junction";
@@ -1698,6 +1700,28 @@ const CATALOG: &[Command] = &[
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point on the wire's drawn route, not at either end", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: JOIN_WIRES,
+        title: "Join Crossing Wires",
+        summary: "Connect two wires where they cross through one new junction; both routes keep their geometry and other wires at nearby crossings stay separate. Refused before any edit when the wires do not cross at exactly one ordinary point (or at `at`), another wire or pin is there, or both nets carry different authored names. Returns the point, both wires and their nets; dry_run returns the same report without editing. Undoable.",
+        params: &[
+            WIRE,
+            Param { required: true, name: "other", summary: "The second wire ID from inspection", kind: ParamKind::WireId },
+            Param {
+                required: false,
+                name: "at",
+                summary: "The crossing to join, needed when the wires cross more than once",
+                kind: ParamKind::Point,
+            },
+            Param {
+                required: false,
+                name: "dry_run",
+                summary: "Check and describe the join without editing the project or history",
+                kind: ParamKind::Flag,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -3957,6 +3981,7 @@ impl Session {
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
+            | JOIN_WIRES
             | BREAK_WIRE
             | DELETE_WIRE_SEGMENT
             | MOVE_WIRE_SEGMENT
@@ -4109,6 +4134,9 @@ impl Session {
         }
         if id == part_instances::SET_FIELDS {
             return self.set_part_fields(params);
+        }
+        if id == JOIN_WIRES {
+            return self.join_wires(params);
         }
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
@@ -4288,6 +4316,10 @@ impl Session {
         }
         if id == part_instances::SET_FIELDS {
             self.set_part_fields(params)?;
+            return Ok(self.revision);
+        }
+        if id == JOIN_WIRES {
+            self.join_wires(params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -4527,6 +4559,7 @@ impl Session {
                 | DRAW_WIRE
                 | DELETE_WIRE
                 | SLICE_WIRE
+                | JOIN_WIRES
                 | BREAK_WIRE
                 | DELETE_WIRE_SEGMENT
                 | MOVE_WIRE_SEGMENT
@@ -4699,6 +4732,7 @@ impl Session {
             DRAW_WIRE => self.draw_wire(params)?,
             DELETE_WIRE => self.delete_wire(params)?,
             SLICE_WIRE => self.slice_wire(params)?,
+            JOIN_WIRES => self.join_crossing(params)?,
             MOVE_WIRE_SEGMENT => self.move_wire_segment(params)?,
             MOVE_WIRE_CORNER => self.move_wire_corner(params)?,
             MOVE_JUNCTION => self.move_junction(params)?,

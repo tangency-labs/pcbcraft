@@ -14,6 +14,8 @@ use crate::{
 
 mod heal;
 pub use heal::normalized_path;
+mod join;
+pub use join::WireJoin;
 mod reshape;
 pub use reshape::Reshape;
 
