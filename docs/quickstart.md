@@ -57,12 +57,19 @@ net identities unchanged.
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
+
+[![The Start screen offers New Schematic, New PCB, and Open Project.](book/images/home.png)](book/images/home.png)
+
 On desktop you can also name the project on the command line:
 `cargo run --locked -p pcbcraft -- crates/app/tests/fixtures/split/two-resistors`
 opens it as the app starts.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
-fixture intact. **View → Fit** brings the circuit into view. On desktop, use the
+fixture intact.
+
+[![Save Project As offers a working project folder or a packed .pc project.](book/images/save-as.png)](book/images/save-as.png)
+
+**View → Fit** brings the circuit into view. On desktop, use the
 house button to return to Home: **Recent projects** lists successful opens and
 saves as compact cards with saved schematic previews, including this copy. The
 previews adjust their height to the card width as the window resizes. Clicking
@@ -114,6 +121,8 @@ name. Hover a symbol and press **E** to edit, **G** to move with wires attached,
 **M** to disconnect and move, or **Delete** to remove it. Held dragging also
 retains wire contacts, including contacts made by placing onto an existing wire;
 Undo reverses the complete edit. Local/global labels retain their label properties.
+
+[![The Parts Catalog opened to the Power library, listing GND and the bundled supply symbols.](book/images/power-catalog.png)](book/images/power-catalog.png)
 See [named nets](schematic/net-labels.md) for contact rules and current limits.
 
 **VCC (bar)** uses the flat-bar drawing; **VCC** keeps the arrow. Both default to
@@ -165,6 +174,8 @@ the same `VCC` net name, which can be changed before placement.
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can
    be floated or docked at either edge from its **…** menu.
+
+   [![The Parts Catalog filtered to resistor, with the symbol preview and Place button.](book/images/find-resistor.png)](book/images/find-resistor.png)
 3. Click an unconnected pin or free wire end to start directly, or press **W**
    or choose **Capture → Wire** to activate the tool, then click a pin, wire or
    grid point to choose the start. Connected nodes require the Wire tool. The green wire cursor
@@ -178,6 +189,8 @@ the same `VCC` net name, which can be changed before placement.
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
    path when the old alternative has no intermediate pin or branch.
+
+   [![Wire tool preview from R1 to R2, with a green ring around the destination pin.](book/images/wire-preview.png)](book/images/wire-preview.png)
    For an intentionally unused pin or open wire end, hover its lead or endpoint
    and press **Q**, or use **Capture → No connect** and click several targets.
    The X snaps to each attachment. Press **Esc**, select a placed X, then press
@@ -185,6 +198,11 @@ the same `VCC` net name, which can be changed before placement.
    **Esc** cancels the drag. Right-click **Delete** also removes the marker. **Analyze → Electrical menu → No-connect check** inspects
    this intent and any saved wiring conflicts. Remove the X before adding a wire;
    marked endpoints block new connections, including with **W**.
+
+   On this three-pin power header, pin 1 carries +3V3, pin 2 is ground,
+   and pin 3 is deliberately left spare.
+
+   [![J1 has wires from pins 1 and 2 to +3V3 and GND, with a blue no-connect X on the spare third pin.](book/images/spare-connector-pin.png)](book/images/spare-connector-pin.png)
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
@@ -372,6 +390,8 @@ pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+[![R1 Symbol properties with reference, value, footprint, and placement fields.](book/images/symbol-properties.png)](book/images/symbol-properties.png)
+
 With nothing selected on a schematic sheet, use **Properties → Paper** to change
 the sheet's paper size, orientation, or frame.
 
@@ -424,6 +444,8 @@ placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
+[![Schematic and PCB Layout open side by side on the same LED flasher project.](book/images/split.png)](book/images/split.png)
+
 Generate an original example into a directory that does not already exist. This
 command uses a relative path beside your checkout, which works the same in
 PowerShell, cmd and POSIX shells:
@@ -438,9 +460,8 @@ resistor, a two-pin connector, two connections and two generic footprint
 placements. It draws no board outline and is an inspection fixture, not a
 fabrication-ready board. The generic placements have no assigned package, so each
 footprint appears only as pad-center markers, without copper pad shapes, body
-outlines, courtyards or silkscreen. The [sensor node demo](../examples/README.md)
-and [transistor flasher](../examples/flasher.md) described at the end of this
-section show complete packages.
+outlines, courtyards or silkscreen. The [transistor flasher](../examples/flasher.md)
+described below shows complete packages.
 
 Click the workspace tile and choose **PCB layout** to switch the focused pane.
 To select several footprints, start a drag on empty canvas. Dragging left to right
@@ -538,11 +559,10 @@ made during that move; both the schematic and PCB views share that history.
 Save and reopen the folder/archive to check the stored position and orientation.
 A concurrent edit or a change of focused view cancels unfinished input.
 
-The [sensor node demo](../examples/README.md) contains a small MCU, an I²C
-temperature sensor, two status LEDs and a routed two-layer board. The
-[transistor flasher](../examples/flasher.md) is a second example. Its pinned SMD packages include rounded copper pads, body outlines,
-courtyards and silkscreen. Older generic
-placements retain pad-center markers; opening them does not assign a package.
+The [transistor flasher](../examples/flasher.md) is a routed two-layer board.
+Its pinned SMD packages include rounded copper pads, body outlines, courtyards
+and silkscreen. Older generic placements retain their pad-center markers when
+you open the project.
 Board-wide text height, stroke width and pad clearance are in **Board setup →
 Silkscreen**, where **Apply board setup** applies them together with any staged layer
 or stackup edits. A new setup starts from a two-layer 1.6 mm FR-4 draft with
@@ -566,6 +586,8 @@ recorded accepted state, changing a placed package records a proposal for the
 next reviewed update. See the
 [footprint contract](libraries/footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
+
+[![Assign Footprint shows Resistor 0402 and maps terminal 1 to pad 1 and terminal 2 to pad 2.](book/images/footprint-assignment.png)](book/images/footprint-assignment.png)
 
 Click a placed reference designator to select its text and open **Properties**.
 The owning footprint highlights in lighter layer colors, and a dashed leader

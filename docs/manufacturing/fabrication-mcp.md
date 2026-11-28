@@ -34,6 +34,8 @@ support byte checks, not source identity, configuration or check freshness. See
 
 ## Review a fabrication ZIP
 
+[![Manufacturing workspace showing the LED flasher archive's verified layers, preflight, and drill counts.](../book/images/manufacturing-review.png)](../book/images/manufacturing-review.png)
+
 To review a PCBcraft fabrication ZIP, use `app.set_workspace` with
 `workspace: "manufacturing"` and the desired pane placement, then call
 `app.open_fabrication_package` with that view ID and an absolute ZIP path.

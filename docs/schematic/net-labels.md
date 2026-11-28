@@ -24,6 +24,8 @@ the preview. E opens an existing label's properties.
 M picks up the complete label, R rotates it and Delete removes it. A held drag
 moves the complete label; cancellation leaves the document unchanged.
 
+[![Place net label form with Net name, Scope, Rotation, and Place controls.](../book/images/label-form.png)](../book/images/label-form.png)
+
 A text label or a definition-declared power terminal connects exact coincident
 pins and every wire segment through its anchor, so either contact at a crossing
 joins all routes there. Wire legs referencing the same electrical endpoint, such

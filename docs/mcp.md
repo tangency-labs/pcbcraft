@@ -41,6 +41,8 @@ into its own window. **Dock Assistant** returns it to the workspace.
 Minimize folds the panel into the bottom-right strip. Close hides the panel
 and keeps the conversation available when you reopen it.
 
+[![The native Assistant panel with the agent chooser and Connect button.](book/images/assistant.png)](book/images/assistant.png)
+
 The Assistant talks to a coding agent you already have, over the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP), as SolidCraft's agent chat does.
 PCBCraft finds installed agents by itself: Claude Code (through

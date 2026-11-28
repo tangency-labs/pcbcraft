@@ -1,0 +1,16 @@
+[book]
+title = "PCBcraft Documentation"
+description = "Guides and reference for the PCBcraft schematic and PCB editor."
+language = "en"
+
+[build]
+create-missing = false
+use-default-preprocessors = false
+
+[output.html]
+git-repository-url = "https://github.com/tangency-labs/pcbcraft"
+edit-url-template = "https://github.com/tangency-labs/pcbcraft/edit/main/{path}"
+no-section-label = true
+
+[output.html.print]
+enable = false

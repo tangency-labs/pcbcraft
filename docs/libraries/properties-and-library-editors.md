@@ -36,6 +36,8 @@ reuse separately licensed content.
 
 ## Properties behavior
 
+[![Symbol properties for R1, showing its reference, value, footprint and placement fields.](../book/images/symbol-properties.png)](../book/images/symbol-properties.png)
+
 The compact inspector belongs to the focused editor's selection. Counterpart
 highlights do not grant edit authority. Reference, value and orientation are
 applied atomically; typing in a draft does not change the project. Expanding the
@@ -105,6 +107,8 @@ and reviewed library-to-project updates need their own supported contracts and
 acceptance evidence.
 
 ## Authoring basics
+
+[![An editable copy of the Resistor 0603 footprint, showing numbered pads, the reference text, and its Properties.](../book/images/footprint-editor.png)](../book/images/footprint-editor.png)
 
 Choose **Symbol Editor** or **Footprint Editor** from the workspace picker.
 The picker remains accessible in compact headers, and each editor's **Library → New**

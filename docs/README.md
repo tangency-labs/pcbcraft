@@ -5,11 +5,14 @@ The [capability inventory](capabilities.md) records implemented support and limi
 design pages also contain planned behavior. Their scope and version notes matter
 when deciding what the current application supports.
 
+See [Build the documentation book](book/README.md) to preview the searchable
+user and developer guides locally.
+
 ## Start here
 
 | Task | Reading path |
 | --- | --- |
-| Try the application | [Quickstart](quickstart.md) → [Dual LED editing example](../examples/README.md) → [Editor guide](editor-guide.md) |
+| Try the application | [Quickstart](quickstart.md) → [Dual LED editing example](../examples/flasher.md) → [Editor guide](editor-guide.md) |
 | Edit a PCB | [PCB layout workflow](pcb-layout-workflow.md) and [Editor guide](editor-guide.md), with current limits in [Capabilities](capabilities.md) |
 | Connect an AI agent | [Assistant and MCP](mcp.md) · [Headless MCP](automation/headless-mcp.md) · [UI automation](automation/ui-automation.md) |
 | Review or export manufacturing files | [Fabrication drill files](manufacturing/drill-files.md) · [Generate files or review a ZIP through MCP](manufacturing/fabrication-mcp.md) |
