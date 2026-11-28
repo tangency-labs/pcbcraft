@@ -1,5 +1,6 @@
 use super::*;
 use pcbcraft_engine::{net_labels, schematic::WireEndpoint};
+use super::super::JoinTarget;
 use std::sync::Arc;
 
 /// Click a model point with `modifiers`, preserving hover, press and release frames.
@@ -101,4 +102,38 @@ fn refused_and_stale_joins_change_nothing() {
     click(&mut h, "Join at Crossing");
     assert!(h.state().message.is_some(), "a stale menu reports the refusal");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The row's tooltip counts the pins a net reaches on another sheet through a global label.
+#[test]
+fn join_tooltip_counts_pins_on_other_sheets() {
+    let mut h = harness();
+    let s = &mut h.state_mut().session;
+    s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+    for (from, to) in [(grid(-8, 0), grid(12, 0)), (grid(0, -6), grid(0, 6))] {
+        s.apply(DRAW_WIRE, &json!({"from":from,"to":to,"bends":[],"expected_revision":s.revision()})).unwrap();
+    }
+    let label = |s: &mut pcbcraft_engine::Session, sheet: String, at: Point| {
+        s.apply(net_labels::ADD, &json!({"sheet":sheet,"name":"demo-x","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":s.revision()}))
+            .unwrap();
+    };
+    s.apply(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"demo-other","expected_revision":s.revision()})).unwrap();
+    let [first, other] = [0, 1].map(|index| s.project().unwrap().sheets().nth(index).unwrap().target);
+    label(s, first.id().to_string(), grid(-8, 0));
+    s.apply(PLACE_RESISTOR, &json!({"sheet":other.id(),"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let symbol = s.project().unwrap().for_sheet(other).unwrap().symbols()[0].clone();
+    let (pin, at) = symbol.terminals().into_iter().zip(symbol.pins()).next().unwrap();
+    let end = Point { x_nm: at.x_nm + 10 * GRID_NM, y_nm: at.y_nm };
+    s.apply(DRAW_WIRE, &json!({"sheet":other.id(),"from":pin.inspect(),"to":end,"bends":[],"expected_revision":s.revision()})).unwrap();
+    label(s, other.id().to_string(), end);
+    h.run();
+
+    let state = h.state();
+    let project = state.session.project().unwrap().for_sheet(first).unwrap();
+    let selection = pcbcraft_engine::selection::Selection { wires: project.wires().iter().map(|wire| wire.id()).collect(), ..Default::default() };
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let camera = &state.views.active.camera;
+    let join = JoinTarget::at(&project, camera, rect, camera.screen(grid(0, 0), rect), &selection, state.session.revision()).unwrap();
+    let text = join.outcome.unwrap();
+    assert!(text.contains("demo-x (1 pin)") && text.contains("Unconnected (0 pins)"), "{text}");
 }

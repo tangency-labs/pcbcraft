@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{OnPath, heal, locate, path_contains_point, valid_point};
 use crate::{
     CommandError, JOIN_WIRES, Project, Session,
-    schematic::{Point, Wire, WireEndpoint},
+    schematic::{Connectivity, Point, Wire, WireEndpoint},
 };
 
 /// The refusal for a point where the wires touch without an ordinary crossing.
@@ -27,6 +27,9 @@ pub struct WireJoin {
     pub wires: [u64; 2],
     /// The exact crossing point that becomes a junction.
     pub at: Point,
+    /// The command's reply shape for this join, taken from project-wide electrical connectivity
+    /// so nets that continue through global labels or sheet ports count every pin.
+    pub report: Value,
 }
 
 impl Project {
@@ -34,8 +37,9 @@ impl Project {
     /// passes straight through the inside of one leg at right angles to the other. Without `at`
     /// the wires must cross exactly once. Refused when no other wire, pin or sheet pin may share
     /// that point (the junction dot would look connected to it), or when both wires carry authored
-    /// net names and none is shared, since the joined net would then have two names. Nothing is
-    /// edited.
+    /// net names and none is shared, since the joined net would then have two names. Names and
+    /// pins come from the whole project's electrical connectivity, cloned once per call from the
+    /// snapshot's cached graph, so links through other sheets count. Nothing is edited.
     pub fn wire_join(&self, wire: &str, other: &str, at: Option<Point>) -> Result<WireJoin, CommandError> {
         let find =
             |id: &str| self.wires.iter().find(|candidate| candidate.id() == id).ok_or_else(|| CommandError::NotFound("wire does not exist".into()));
@@ -64,8 +68,9 @@ impl Project {
         if busy {
             return Err(CommandError::InvalidParams("another wire or pin is at this crossing; move it away to join only the chosen wires".into()));
         }
-        self.check_join_names(a, b)?;
-        Ok(WireJoin { wires: [a.ordinal, b.ordinal], at })
+        let graph = self.electrical_connectivity();
+        Self::check_join_names(&graph, a, b)?;
+        Ok(WireJoin { wires: [a.ordinal, b.ordinal], at, report: Self::join_report(&graph, [a, b], at) })
     }
 
     /// The ordinary crossings of two wires in route order, so an editor can offer the one
@@ -80,9 +85,9 @@ impl Project {
 
     /// Refuse a join of two differently named nets. A net with authored names shows one of
     /// them and keeps the others as aliases; that presentation does not resolve an electrical
-    /// conflict, so a deliberate join leaves such a choice to the designer.
-    fn check_join_names(&self, a: &Wire, b: &Wire) -> Result<(), CommandError> {
-        let graph = self.connectivity();
+    /// conflict, so a deliberate join leaves such a choice to the designer. `graph` is the
+    /// project-wide electrical connectivity, so names reached through other sheets count.
+    fn check_join_names(graph: &Connectivity, a: &Wire, b: &Wire) -> Result<(), CommandError> {
         let [Some(first), Some(second)] = [a, b].map(|wire| graph.net_index_for_endpoint(wire.endpoints[0])) else {
             return Ok(());
         };
@@ -99,13 +104,11 @@ impl Project {
 
     /// Describe a checked join in the command's reply shape: the wires, the point, whether they
     /// are already connected elsewhere, and each wire's net with its authored names and terminal
-    /// count. Counts keep the reply small for nets with many pins.
-    pub fn inspect_wire_join(&self, join: &WireJoin) -> Value {
-        let graph = self.connectivity();
-        let indexes =
-            join.wires.map(|id| self.wires.iter().find(|wire| wire.ordinal == id).and_then(|wire| graph.net_index_for_endpoint(wire.endpoints[0])));
-        let nets: Vec<_> = join
-            .wires
+    /// count across every sheet of `graph`. Counts keep the reply small for nets with many pins.
+    fn join_report(graph: &Connectivity, wires: [&Wire; 2], at: Point) -> Value {
+        let ids = wires.map(|wire| wire.ordinal);
+        let indexes = wires.map(|wire| graph.net_index_for_endpoint(wire.endpoints[0]));
+        let nets: Vec<_> = ids
             .iter()
             .zip(indexes)
             .map(|(id, index)| {
@@ -118,7 +121,7 @@ impl Project {
             })
             .collect();
         let connected = indexes[0].is_some() && indexes[0] == indexes[1];
-        json!({"wires": join.wires.map(|id| format!("wire-{id}")), "at": join.at, "already_connected": connected, "nets": nets})
+        json!({"wires": ids.map(|id| format!("wire-{id}")), "at": at, "already_connected": connected, "nets": nets})
     }
 }
 
@@ -184,7 +187,8 @@ impl Session {
     /// `dry_run`. The request is checked on its sheet first, then the edit is built in a
     /// disposable sheet transaction and the whole candidate is checked with the native encoder,
     /// so a refused join or a dry run leaves the project, revision and history unchanged. The
-    /// reply is [`Project::inspect_wire_join`] with the revision and, once applied, the junction.
+    /// reply is the checked join's [`WireJoin::report`] with the revision and, once applied, the
+    /// junction.
     pub(crate) fn join_wires(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(JOIN_WIRES)?;
         self.refuse_stale(JOIN_WIRES, params)?;
@@ -195,7 +199,7 @@ impl Session {
         let sheet = project.for_sheet(target).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?;
         let [wire, other] = wire_params(params);
         let join = sheet.wire_join(wire, other, at_param(params)?)?;
-        let mut reply = sheet.inspect_wire_join(&join);
+        let mut reply = join.report.clone();
         let mut transaction = Self {
             project: self.project.clone(),
             libraries: self.libraries.clone(),

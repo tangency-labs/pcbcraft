@@ -568,7 +568,7 @@ impl JoinTarget {
             .min_by_key(|point| (point.x_nm - click.x_nm).abs().saturating_add((point.y_nm - click.y_nm).abs()));
         let outcome = project
             .wire_join(&wires[0], &wires[1], at)
-            .map(|join| describe_join(&project.inspect_wire_join(&join)))
+            .map(|join| describe_join(&join.report))
             .map_err(|error| error.to_string());
         let route = |id: &str| project.wires().iter().find(|wire| wire.id() == id).map(|wire| project.wire_path(wire)).unwrap_or_default();
         Some(Self { routes: [route(&wires[0]), route(&wires[1])], wires, at, outcome, revision })

@@ -286,7 +286,7 @@ fn wires_sharing_an_end_join_where_they_cross_again() {
     run(&mut s, DRAW_WIRE, json!({"from":start.inspect(),"to":p(5, 2),"bends":[p(-2, 0), p(-2, -2), p(5, -2)],"auto_heal":false})).unwrap();
     let b = s.project().unwrap().wires().last().unwrap().id();
     let before = s.snapshot().unwrap();
-    let check = before.wire_join(&a, &b, None).map(|join| before.inspect_wire_join(&join));
+    let check = before.wire_join(&a, &b, None).map(|join| join.report);
     assert_eq!(check.as_ref().map(|report| report["already_connected"].clone()).ok(), Some(json!(true)), "{check:?}");
 
     let preview = run(&mut s, JOIN, json!({"wire":a,"other":b,"dry_run":true}));
@@ -331,4 +331,106 @@ fn wires_connected_through_a_third_wire_report_already_connected() {
     let applied = run(&mut s, JOIN, json!({"wire":a,"other":b})).unwrap();
     assert_eq!(applied["already_connected"], true);
     assert_eq!(applied["at"], json!(p(0, 0)));
+}
+
+/// Run a command on one sheet of a project with several.
+fn on(s: &mut Session, sheet: &str, id: &str, mut params: Value) -> Value {
+    params["sheet"] = json!(sheet);
+    run(s, id, params).unwrap()
+}
+
+/// Place a label of `style` named `name` at `at` on `sheet`.
+fn label_on(s: &mut Session, sheet: &str, style: &str, name: &str, at: Point) {
+    on(s, sheet, net_labels::ADD, json!({"name":name,"style":style,"x_nm":at.x_nm,"y_nm":at.y_nm}));
+}
+
+/// A first sheet where wire `a` crosses wire `b` once, each with one free end left for a label,
+/// and a second, empty top-level sheet.
+struct TwoSheets {
+    s: Session,
+    a: String,
+    b: String,
+    first: String,
+    second: String,
+}
+
+/// Build [`TwoSheets`]. `a` runs from (-10, 0) to (20, 0); `b` from (0, -6) to (0, 8).
+fn two_sheets() -> TwoSheets {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"name":"demo-join"})).unwrap();
+    let a = wire(&mut s, &[p(-10, 0), p(20, 0)]);
+    let b = wire(&mut s, &[p(0, -6), p(0, 8)]);
+    run(&mut s, crate::sheets::CREATE_SHEET, json!({"name":"demo-other"})).unwrap();
+    let mut sheets = s.project().unwrap().sheets().map(|sheet| sheet.target.id().to_string()).collect::<Vec<_>>().into_iter();
+    let (first, second) = (sheets.next().unwrap(), sheets.next().unwrap());
+    TwoSheets { s, a, b, first, second }
+}
+
+/// On `sheet`, place a resistor and run a wire from one pin to a free point labelled `name`.
+fn remote_pin(s: &mut Session, sheet: &str, name: &str) {
+    on(s, sheet, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0,"rotation":90}));
+    let target = s.project().unwrap().sheets().find(|found| found.target.id().to_string() == sheet).unwrap().target;
+    let projection = s.project().unwrap().for_sheet(target).unwrap();
+    let symbol = projection.symbols().last().unwrap();
+    let (pin, at) = symbol.terminals().into_iter().zip(symbol.pins()).next().unwrap();
+    let end = Point { x_nm: at.x_nm + 10 * G, y_nm: at.y_nm };
+    on(s, sheet, DRAW_WIRE, json!({"from":pin.inspect(),"to":end,"bends":[],"auto_heal":false}));
+    label_on(s, sheet, "global", name, end);
+}
+
+/// A net that reaches another sheet through a global label counts that sheet's pins, in the
+/// dry run and in the applied reply.
+#[test]
+fn pins_on_another_sheet_count_toward_the_joined_net() {
+    let TwoSheets { mut s, a, b, first, second } = two_sheets();
+    label_on(&mut s, &first, "global", "demo-x", p(-10, 0));
+    remote_pin(&mut s, &second, "demo-x");
+    let preview = on(&mut s, &first, JOIN, json!({"wire":a,"other":b,"dry_run":true}));
+    assert_eq!(preview["nets"][0]["net"], "demo-x");
+    assert_eq!(preview["nets"][0]["terminals"], 1, "{preview}");
+    assert_eq!(preview["already_connected"], false);
+    let applied = on(&mut s, &first, JOIN, json!({"wire":a,"other":b}));
+    assert_eq!(applied["nets"][0]["terminals"], 1, "{applied}");
+}
+
+/// Wires whose nets meet only on another sheet are already connected.
+#[test]
+fn wires_connected_through_another_sheet_report_already_connected() {
+    let TwoSheets { mut s, a, b, first, second } = two_sheets();
+    label_on(&mut s, &first, "global", "demo-x", p(-10, 0));
+    label_on(&mut s, &first, "global", "demo-y", p(0, 8));
+    let bridge = [p(0, 0), p(10, 0)];
+    on(&mut s, &second, DRAW_WIRE, json!({"from":bridge[0],"to":bridge[1],"bends":[],"auto_heal":false}));
+    label_on(&mut s, &second, "global", "demo-x", bridge[0]);
+    label_on(&mut s, &second, "global", "demo-y", bridge[1]);
+    let preview = on(&mut s, &first, JOIN, json!({"wire":a,"other":b,"dry_run":true}));
+    assert_eq!(preview["already_connected"], true, "{preview}");
+}
+
+/// A name that reaches a wire only through a child sheet's port still conflicts with the other
+/// wire's name, and the refusal edits nothing.
+#[test]
+fn a_name_reached_through_a_child_sheet_conflicts() {
+    use crate::{hierarchy, schematic::WireEndpoint};
+    let TwoSheets { mut s, a, b, first, .. } = two_sheets();
+    label_on(&mut s, &first, "global", "demo-x", p(-10, 0));
+    on(&mut s, &first, hierarchy::CREATE_CHILD, json!({"name":"demo-child","x_nm":40 * G,"y_nm":20 * G}));
+    let child = s.project().unwrap().sheets().find(|found| found.name == "demo-child").unwrap().target;
+    on(&mut s, &child.id().to_string(), hierarchy::ADD_LABEL, json!({"name":"demo-port","direction":"input","x_nm":0,"y_nm":0}));
+    let port = s.project().unwrap().for_sheet(child).unwrap().labels[0].id;
+    let root = s.project().unwrap().sheets().find(|found| found.target.id().to_string() == first).unwrap().target;
+    let pin = s.project().unwrap().for_sheet(root).unwrap().endpoint_position(WireEndpoint::SheetPin(port)).unwrap();
+    let start = p(0, 8);
+    let bends = if pin.x_nm != start.x_nm && pin.y_nm != start.y_nm { vec![Point { x_nm: pin.x_nm, y_nm: start.y_nm }] } else { vec![] };
+    let end = ends(&s, &b)[1];
+    on(&mut s, &first, DRAW_WIRE, json!({"from":end.inspect(),"to":WireEndpoint::SheetPin(port).inspect(),"bends":bends,"auto_heal":false}));
+    let inside = p(10, 0);
+    on(&mut s, &child.id().to_string(), DRAW_WIRE, json!({"from":WireEndpoint::Label(port).inspect(),"to":inside,"bends":[],"auto_heal":false}));
+    label_on(&mut s, &child.id().to_string(), "local", "demo-y", inside);
+    let before = s.snapshot().unwrap();
+    let mut params = json!({"wire":a,"other":b,"dry_run":true,"sheet":first});
+    params["expected_revision"] = json!(s.revision());
+    let error = s.execute(JOIN, &params).unwrap_err().to_string();
+    assert!(error.contains("demo-x") && error.contains("two names"), "{error}");
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }

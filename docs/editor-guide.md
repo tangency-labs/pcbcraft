@@ -304,7 +304,8 @@ line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 
 To connect two wires where they cross, select both (click one, Shift-click the other),
 right-click their crossing and choose **Join at Crossing**. The row's tooltip names the nets
-that would join; hovering it highlights both wires and shows the junction dot. Clicking joins
+that would join and counts their pins on every sheet, including pins reached through global
+labels and sheet ports; hovering it highlights both wires and shows the junction dot. Clicking joins
 them there as one undo step: both routes keep their shape, the crossing gets a junction dot,
 and other wires at nearby crossings stay separate. Pressing **Esc** closes the menu without a
 change. The row is disabled, with the reason in its tooltip, when the wires do not cross at an
